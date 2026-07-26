@@ -80,6 +80,9 @@ case "ax-probe":
 case "capture":
     await runCapture(args)
 
+case "record":
+    runRecord(args)
+
 case "help", "--help", "-h":
     Emit.log(usage)
 
@@ -204,6 +207,57 @@ func runAXProbe(_ args: Args) async {
             await probeOnce()
         }
     }
+}
+
+/// Push-to-talk session recorder. Unlike the other subcommands this needs a
+/// real AppKit run loop — the overlay is a window, and the event tap delivers
+/// on a run loop source. `.accessory` keeps it out of the Dock and the app
+/// switcher: it is an input peripheral, not an app you switch to.
+@MainActor
+func runRecord(_ args: Args) {
+    guard AXProbe.ensureTrusted(prompt: true) else {
+        Emit.event(ErrorEvent(
+            "not trusted for Accessibility",
+            hint: "System Settings → Privacy & Security → Accessibility. Grant the TERMINAL you launched from. An active event tap requires it — there is no partial mode."
+        ))
+        exit(1)
+    }
+
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+
+    let sessionId = args.string("session") ?? "session-\(Int(Date().timeIntervalSince1970))"
+    let outputDir = args.string("out")
+
+    let recorder = Recorder(
+        sessionId: sessionId,
+        outputDir: outputDir,
+        captureCrops: !args.has("no-crop")
+    )
+    if let radius = args.double("settle-radius") { recorder.settleRadius = radius }
+    if let dwell = args.double("dwell") { recorder.dwellMs = dwell }
+
+    guard recorder.start() else {
+        Emit.event(ErrorEvent(
+            "could not create the event tap",
+            hint: "Accessibility is granted but the tap was refused — try Input Monitoring for the same terminal, or relaunch it."
+        ))
+        exit(1)
+    }
+
+    Emit.log("""
+    fovea-capture record — session \(sessionId)
+
+      HOLD Right Option    to start a session
+      point and pause      → a candidate referent
+      hold mouse + circle  → a region referent (the drag is swallowed, so the
+                             app underneath is never touched)
+      release Right Option to end the session
+
+      Ctrl-C to quit.
+    """)
+
+    app.run()
 }
 
 /// Tier 1 in isolation: crop + OCR with no Accessibility involvement at all.

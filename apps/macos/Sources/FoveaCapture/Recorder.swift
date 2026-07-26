@@ -1,0 +1,236 @@
+import AppKit
+import Foundation
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE RECORDER
+//
+// Holds a session together: hotkey → overlay → cursor sampling → candidates and
+// region referents → events on stdout.
+//
+// The governing decision is that it does NOT decide. Every settle is emitted as
+// a candidate with its features; which candidates are real referents is the
+// alignment engine's call, made against the narration. Over-capturing is cheap;
+// discarding a real referent at capture time is unrecoverable.
+// ─────────────────────────────────────────────────────────────────────────────
+
+@MainActor
+final class Recorder {
+
+    // Settle detection. Deliberately the same numbers as `ax-probe --watch`,
+    // and deliberately tunable — T0.2 exists partly to tell us they're wrong.
+    var settleRadius: Double = 8
+    var dwellMs: Double = 300
+
+    /// Cursor sampling rate. 60Hz because the overlay draws from the same
+    /// samples; the aligner needs far less.
+    private let sampleInterval = 1.0 / 60.0
+
+    private let hotkey = Hotkey()
+    private let overlay = Overlay()
+    private let sessionId: String
+    private let outputDir: String?
+    private let captureCrops: Bool
+
+    private var sampler: Timer?
+    private var trail: [TrailPoint] = []
+    private var pulses: [Pulse] = []
+
+    private var lassoPath: [Point]?
+    private var referentCount = 0
+
+    // Settle state
+    private var lastPosition = Point(x: 0, y: 0)
+    private var stationarySince = Clock.nowMs()
+    private var hasMoved = false
+    private var firedForThisRest = false
+    private var recentSpeeds: [(t: Double, speed: Double)] = []
+
+    // Noise context
+    private var lastAppSwitchT: Double?
+    private var lastScrollT: Double?
+    private var lastFrontPid: pid_t?
+
+    init(sessionId: String, outputDir: String?, captureCrops: Bool) {
+        self.sessionId = sessionId
+        self.outputDir = outputDir
+        self.captureCrops = captureCrops
+    }
+
+    func start() -> Bool {
+        hotkey.onEvent = { [weak self] event in self?.handle(event) }
+        guard hotkey.start() else { return false }
+        return true
+    }
+
+    // ── Gesture handling ────────────────────────────────────────────────────
+
+    private func handle(_ event: HotkeyEvent) {
+        switch event {
+        case .pressed:
+            beginSession()
+        case .released:
+            endSession()
+        case .dragBegan(let p):
+            lassoPath = [p]
+        case .dragMoved(let p):
+            lassoPath?.append(p)
+        case .dragEnded(let p):
+            lassoPath?.append(p)
+            commitLasso()
+        case .scrolled:
+            lastScrollT = Clock.nowMs()
+        }
+    }
+
+    private func beginSession() {
+        Emit.event(SessionEvent.start(id: sessionId))
+        Emit.log("● recording — point, or hold the mouse button and circle an area")
+
+        referentCount = 0
+        trail.removeAll()
+        pulses.removeAll()
+        recentSpeeds.removeAll()
+        hasMoved = false
+        firedForThisRest = false
+        lastPosition = AXProbe.cursorLocation()
+        stationarySince = Clock.nowMs()
+
+        // Get Chromium's tree built before the first referent needs it, rather
+        // than making that referent wait ~300ms for it.
+        lastFrontPid = AXProbe.prePokeFrontmost()
+
+        overlay.show()
+        sampler = Timer.scheduledTimer(withTimeInterval: sampleInterval, repeats: true) { _ in
+            MainActor.assumeIsolated { self.sample() }
+        }
+    }
+
+    private func endSession() {
+        sampler?.invalidate()
+        sampler = nil
+        overlay.hide()
+        lassoPath = nil
+        Emit.event(SessionEvent.end(id: sessionId, referentCount: referentCount))
+        Emit.log("○ stopped — \(referentCount) referent(s)")
+    }
+
+    // ── Sampling ────────────────────────────────────────────────────────────
+
+    private func sample() {
+        let now = Clock.nowMs()
+        let position = AXProbe.cursorLocation()
+        Emit.event(CursorEvent(position))
+
+        // App-switch detection rides on the sampler rather than a notification
+        // observer: it only needs to be accurate to a frame, and this keeps the
+        // whole session on one clock.
+        let frontPid = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        if frontPid != lastFrontPid {
+            lastFrontPid = frontPid
+            lastAppSwitchT = now
+            if let frontPid { AXProbe.enableManualAccessibility(pid: frontPid) }
+        }
+
+        let moved = hypot(position.x - lastPosition.x, position.y - lastPosition.y)
+        let speed = moved / sampleInterval
+        recentSpeeds.append((now, speed))
+        recentSpeeds.removeAll { now - $0.t > 200 }
+
+        trail.append(TrailPoint(position: position, t: now))
+        trail.removeAll { now - $0.t > 700 }
+        pulses.removeAll { now - $0.t > 450 }
+
+        if lassoPath == nil {
+            detectSettle(position: position, moved: moved, now: now)
+        }
+
+        overlay.update(cursor: position, trail: trail, lasso: lassoPath, pulses: pulses)
+    }
+
+    private func detectSettle(position: Point, moved: Double, now: Double) {
+        if moved > settleRadius {
+            lastPosition = position
+            stationarySince = now
+            hasMoved = true
+            firedForThisRest = false
+            return
+        }
+
+        guard hasMoved, !firedForThisRest, now - stationarySince >= dwellMs else { return }
+        firedForThisRest = true
+        commitPoint(at: position, dwell: now - stationarySince, now: now)
+    }
+
+    // ── Committing referents ────────────────────────────────────────────────
+
+    private func commitPoint(at position: Point, dwell: Double, now: Double) {
+        // Approach speed over the window BEFORE the stop, which is what
+        // separates decelerating-to-point from pausing-mid-sweep.
+        let approach = recentSpeeds.map(\.speed).max() ?? 0
+
+        let features = CandidateFeatures(
+            dwellMs: dwell,
+            approachSpeed: approach,
+            msSinceAppSwitch: lastAppSwitchT.map { now - $0 },
+            msSinceScroll: lastScrollT.map { now - $0 }
+        )
+
+        let app = NSWorkspace.shared.frontmostApplication.map {
+            AppIdentity(
+                pid: $0.processIdentifier,
+                bundleId: $0.bundleIdentifier,
+                name: $0.localizedName
+            )
+        }
+        Emit.event(CandidateEvent(position: position, features: features, app: app))
+
+        pulses.append(Pulse(position: position, t: now, isRegion: false))
+        referentCount += 1
+        resolve(shape: Shape.point(position))
+    }
+
+    private func commitLasso() {
+        guard let path = lassoPath, path.count >= 3 else {
+            lassoPath = nil
+            return
+        }
+        lassoPath = nil
+
+        let shape = Shape.region(path: path)
+        pulses.append(Pulse(position: shape.origin, t: Clock.nowMs(), isRegion: true))
+        referentCount += 1
+        resolve(shape: shape)
+    }
+
+    /// AX + crop, off the sampling path. Resolution can take a few hundred
+    /// milliseconds; blocking here would freeze the overlay and drop cursor
+    /// samples mid-gesture — the two things the user can actually see.
+    private func resolve(shape: Shape) {
+        let index = referentCount
+        Task.detached { [captureCrops, outputDir] in
+            var event = shape.kind == .region
+                ? AXProbe.probeRegion(shape)
+                : AXProbe.probePoint(shape.origin)
+
+            if captureCrops {
+                let (rect, fromAX) = Capture.rect(
+                    for: shape, snapshot: event.snapshot, screenArea: AXProbe.screenArea()
+                )
+                let path = outputDir.map {
+                    "\($0)/crops/referent-\(String(format: "%03d", index)).png"
+                }
+                let crop = await Capture.crop(
+                    shape: shape,
+                    snapshot: event.snapshot,
+                    outputPath: path,
+                    runOCR: OCR.isNeeded(for: event.snapshot),
+                    rectFromAX: fromAX,
+                    rect: rect
+                )
+                event = event.with(crop: crop)
+            }
+
+            Emit.event(event)
+        }
+    }
+}

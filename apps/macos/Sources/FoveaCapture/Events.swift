@@ -52,6 +52,96 @@ enum EventType: String, Codable {
     case hello
     case probe
     case error
+    case sessionStart
+    case sessionEnd
+    case cursor
+    case candidate
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Candidates
+//
+// Every cursor settle is logged as a CANDIDATE, never filtered at capture time.
+// Cursor data alone cannot tell a pointing act from a resting hand — but cursor
+// data plus narration can, trivially: a settle with "yeh dekho" on it is a
+// referent, a settle inside three seconds of silence is you thinking.
+//
+// So the recorder over-captures and records the features that let the alignment
+// engine judge later. A candidate that never binds to speech simply never
+// becomes a referent, and costs nothing.
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct CandidateFeatures: Codable {
+    /// How long the cursor stayed put. Longer reads as more deliberate.
+    let dwellMs: Double
+
+    /// Speed over the 200ms before the stop, px/s. A deceleration INTO the stop
+    /// is a deliberate point; a slow drift that pauses is transit.
+    let approachSpeed: Double
+
+    /// Time since the frontmost app changed. The first settle after a switch is
+    /// usually the cursor arriving, not pointing.
+    let msSinceAppSwitch: Double?
+
+    /// Time since the last scroll. A settle while content moves underneath is
+    /// not a new pointing act — the cursor never moved, the page did.
+    let msSinceScroll: Double?
+}
+
+struct CandidateEvent: Codable {
+    let type: EventType
+    let t: Double
+    let position: Point
+    let features: CandidateFeatures
+    let app: AppIdentity?
+
+    init(position: Point, features: CandidateFeatures, app: AppIdentity?) {
+        self.type = .candidate
+        self.t = Clock.nowMs()
+        self.position = position
+        self.features = features
+        self.app = app
+    }
+}
+
+/// Raw cursor sample. Kept at full rate so the aligner can re-derive settles
+/// with different thresholds without re-recording the session — the settle
+/// parameters are exactly what T0.2 expects to tune.
+struct CursorEvent: Codable {
+    let type: EventType
+    let t: Double
+    let x: Double
+    let y: Double
+
+    init(_ p: Point) {
+        self.type = .cursor
+        self.t = Clock.nowMs()
+        self.x = p.x
+        self.y = p.y
+    }
+}
+
+struct SessionEvent: Codable {
+    let type: EventType
+    let t: Double
+    let id: String
+    let epochWall: String?
+    let referentCount: Int?
+
+    static func start(id: String) -> SessionEvent {
+        SessionEvent(
+            type: .sessionStart, t: Clock.nowMs(), id: id,
+            epochWall: ISO8601DateFormatter().string(from: Date()),
+            referentCount: nil
+        )
+    }
+
+    static func end(id: String, referentCount: Int) -> SessionEvent {
+        SessionEvent(
+            type: .sessionEnd, t: Clock.nowMs(), id: id,
+            epochWall: nil, referentCount: referentCount
+        )
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
