@@ -197,8 +197,15 @@ enum AXProbe {
             }
         }
 
-        let elements = hits
-            .map { describe($0.element, withAncestors: false) }
+        let described = hits.map { describe($0.element, withAncestors: false) }
+
+        // Drop containers that carry nothing. Circling one Compass document
+        // resolved 24 elements of which 16 were empty `AXGroup`s — they inflate
+        // the payload sent to the model and overstate what was actually
+        // captured. `uniqueElements` below still reports the pre-filter count,
+        // so the samples→elements granularity signal is preserved.
+        let elements = described
+            .filter { carriesMeaning($0) }
             .sorted { a, b in
                 guard let fa = a.frame, let fb = b.frame else { return a.frame != nil }
                 return Frame.readingOrder(fa, fb)
@@ -213,7 +220,12 @@ enum AXProbe {
                 resolved: !elements.isEmpty,
                 elements: elements,
                 samplesTested: samples.count,
-                uniqueElements: elements.count,
+                // PRE-filter count, deliberately. This feeds the granularity
+                // measurement (how many distinct nodes a circled area resolves
+                // to); using the filtered count instead would make an app that
+                // exposes lots of empty containers look identical to one whose
+                // tree is genuinely too coarse to ground a region.
+                uniqueElements: described.count,
                 manualAccessibilityApplied: poked,
                 elapsedMs: Clock.nowMs() - started,
                 error: elements.isEmpty ? "no elements resolved in region" : nil
@@ -468,6 +480,24 @@ enum AXProbe {
         AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
         AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
         return true
+    }
+
+    /// Whether an element is worth putting in front of the model at all.
+    /// Text is the obvious case; a control with no text still matters because
+    /// "the Save button" is a real referent even when its label is an icon.
+    static func carriesMeaning(_ e: AXElement) -> Bool {
+        let hasText = [e.value, e.title, e.elementDescription, e.selectedText]
+            .contains { ($0?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false) }
+        if hasText { return true }
+
+        switch e.role {
+        case "AXButton", "AXCheckBox", "AXRadioButton", "AXPopUpButton",
+             "AXTextField", "AXTextArea", "AXSlider", "AXLink", "AXMenuItem",
+             "AXImage", "AXDisclosureTriangle":
+            return true
+        default:
+            return false
+        }
     }
 
     /// Heuristic for "AX answered, but told us nothing useful" — the shape of

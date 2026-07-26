@@ -27,6 +27,7 @@ final class Recorder {
 
     private let hotkey = Hotkey()
     private let overlay = Overlay()
+    private let audio = Audio()
     private let sessionId: String
     private let outputDir: String?
     private let captureCrops: Bool
@@ -36,7 +37,24 @@ final class Recorder {
     private var pulses: [Pulse] = []
 
     private var lassoPath: [Point]?
+
+    /// Referents in the CURRENT hold — reported in `sessionEnd`.
     private var referentCount = 0
+
+    /// Which hold we're on, and a counter that never resets for the life of the
+    /// process. Crop filenames are built from both.
+    ///
+    /// Every press of the hotkey is a new session, so a per-session counter
+    /// restarted at 1 each time and five holds all wrote `referent-001.png`
+    /// over each other: 30 referents produced 12 files and 18 crops were
+    /// destroyed. The hold number is kept in the name because it is also the
+    /// natural grouping for the referent stack later.
+    private var holdIndex = 0
+    private var globalReferentIndex = 0
+
+    /// A drag smaller than this is a flick, not a circle. One recorded "region"
+    /// was 170x1 points from a single grid sample.
+    private let minimumRegionArea: Double = 400
 
     // Settle state
     private var lastPosition = Point(x: 0, y: 0)
@@ -83,10 +101,29 @@ final class Recorder {
     }
 
     private func beginSession() {
-        Emit.event(SessionEvent.start(id: sessionId))
+        referentCount = 0
+        holdIndex += 1
+
+        // One WAV per hold. Holds are separate utterances, and keeping them
+        // separate means each transcript's word timings are offsets from that
+        // hold's own t0 rather than from a stitched timeline.
+        var audioPath: String?
+        if let outputDir {
+            let path = "\(outputDir)/audio/hold-\(String(format: "%02d", holdIndex)).wav"
+            do {
+                try audio.start(path: path)
+                audioPath = path
+            } catch {
+                Emit.event(ErrorEvent(
+                    "audio capture failed: \(error.localizedDescription)",
+                    hint: "System Settings → Privacy & Security → Microphone. Grant the terminal you launched from. Capture continues without narration, but the session cannot be aligned."
+                ))
+            }
+        }
+
+        Emit.event(SessionEvent.start(id: sessionId, hold: holdIndex, audioPath: audioPath))
         Emit.log("● recording — point, or hold the mouse button and circle an area")
 
-        referentCount = 0
         trail.removeAll()
         pulses.removeAll()
         recentSpeeds.removeAll()
@@ -110,8 +147,14 @@ final class Recorder {
         sampler = nil
         overlay.hide()
         lassoPath = nil
-        Emit.event(SessionEvent.end(id: sessionId, referentCount: referentCount))
-        Emit.log("○ stopped — \(referentCount) referent(s)")
+
+        let audioT0 = audio.stop()
+        Emit.event(SessionEvent.end(
+            id: sessionId, hold: holdIndex,
+            referentCount: referentCount, audioT0: audioT0
+        ))
+        Emit.log("○ stopped — \(referentCount) referent(s)"
+            + (audioT0 == nil ? " (no audio)" : ""))
     }
 
     // ── Sampling ────────────────────────────────────────────────────────────
@@ -196,8 +239,18 @@ final class Recorder {
         }
         lassoPath = nil
 
-        let shape = Shape.region(path: path)
-        pulses.append(Pulse(position: shape.origin, t: Clock.nowMs(), isRegion: true))
+        var shape = Shape.region(path: path)
+
+        // A drag too small to enclose anything is a flick, not a circle — it
+        // grid-samples to a single point and produces a 1px-tall "region".
+        // Treat it as what the user actually did: point at somewhere.
+        if shape.bounds.width * shape.bounds.height < minimumRegionArea {
+            shape = Shape.point(shape.origin)
+        }
+
+        pulses.append(
+            Pulse(position: shape.origin, t: Clock.nowMs(), isRegion: shape.kind == .region)
+        )
         referentCount += 1
         resolve(shape: shape)
     }
@@ -206,7 +259,10 @@ final class Recorder {
     /// milliseconds; blocking here would freeze the overlay and drop cursor
     /// samples mid-gesture — the two things the user can actually see.
     private func resolve(shape: Shape) {
-        let index = referentCount
+        globalReferentIndex += 1
+        let hold = holdIndex
+        let index = globalReferentIndex
+
         Task.detached { [captureCrops, outputDir] in
             var event = shape.kind == .region
                 ? AXProbe.probeRegion(shape)
@@ -217,13 +273,21 @@ final class Recorder {
                     for: shape, snapshot: event.snapshot, screenArea: AXProbe.screenArea()
                 )
                 let path = outputDir.map {
-                    "\($0)/crops/referent-\(String(format: "%03d", index)).png"
+                    "\($0)/crops/h\(String(format: "%02d", hold))-r\(String(format: "%03d", index)).png"
                 }
+
+                // A region ALWAYS gets OCR. "Capture this whole area" cannot be
+                // represented by one AX string, and relying on the conditional
+                // rule here silently lost referents: a git-blame annotation
+                // ("You, 6 hours ago") counted as "AX has text" and suppressed
+                // OCR for an entire circled region of code.
+                let runOCR = shape.kind == .region || OCR.isNeeded(for: event.snapshot)
+
                 let crop = await Capture.crop(
                     shape: shape,
                     snapshot: event.snapshot,
                     outputPath: path,
-                    runOCR: OCR.isNeeded(for: event.snapshot),
+                    runOCR: runOCR,
                     rectFromAX: fromAX,
                     rect: rect
                 )

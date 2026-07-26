@@ -155,7 +155,67 @@ export interface ErrorEvent {
   hint?: string;
 }
 
-export type CaptureEvent = HelloEvent | ProbeEvent | ErrorEvent;
+/**
+ * Why a cursor settle was logged, and what surrounded it.
+ *
+ * Every settle is recorded as a CANDIDATE and nothing is filtered at capture
+ * time. Cursor data alone cannot separate a pointing act from a resting hand —
+ * cursor data plus narration can. A candidate that never binds to speech simply
+ * never becomes a referent, and costs nothing.
+ */
+export interface CandidateFeatures {
+  /** How long the cursor stayed put. Longer reads as more deliberate. */
+  dwellMs: number;
+  /** Peak speed (px/s) in the 200ms before the stop. Deceleration INTO a stop
+   *  is a deliberate point; a pause mid-sweep is transit. */
+  approachSpeed: number;
+  /** The first settle after an app switch is usually the cursor arriving. */
+  msSinceAppSwitch?: number;
+  /** A settle while the page scrolls underneath is not a new pointing act. */
+  msSinceScroll?: number;
+}
+
+export interface CandidateEvent {
+  type: "candidate";
+  t: number;
+  position: Point;
+  features: CandidateFeatures;
+  app?: AppIdentity;
+}
+
+/** Raw cursor sample, kept at full rate so settle thresholds can be re-derived
+ *  from a recording without re-recording it. */
+export interface CursorEvent {
+  type: "cursor";
+  t: number;
+  x: number;
+  y: number;
+}
+
+export interface SessionEvent {
+  type: "sessionStart" | "sessionEnd";
+  t: number;
+  id: string;
+  /** Which hold of the hotkey this is, 1-based. The natural grouping for the
+   *  referent stack, and part of every crop filename. */
+  hold?: number;
+  epochWall?: string;
+  referentCount?: number;
+  audioPath?: string;
+  /** Monotonic reading at the FIRST captured audio buffer. Every word timestamp
+   *  the ASR returns is an offset from this — not from `t`, because the mic
+   *  takes a few ms to start delivering and that gap would become a constant
+   *  skew in every binding. */
+  audioT0?: number;
+}
+
+export type CaptureEvent =
+  | HelloEvent
+  | ProbeEvent
+  | ErrorEvent
+  | CandidateEvent
+  | CursorEvent
+  | SessionEvent;
 
 /** Parse one JSON Lines chunk from the capture binary's stdout. */
 export function parseEventLine(line: string): CaptureEvent | null {

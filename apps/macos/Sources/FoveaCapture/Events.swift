@@ -125,21 +125,34 @@ struct SessionEvent: Codable {
     let type: EventType
     let t: Double
     let id: String
+    /// Which hold of the hotkey this is, 1-based. The natural grouping for the
+    /// referent stack, and part of every crop filename.
+    let hold: Int?
     let epochWall: String?
     let referentCount: Int?
+    /// Where the narration was written, relative to the session directory.
+    let audioPath: String?
+    /// `Clock.nowMs()` at the first captured audio buffer. Every word timestamp
+    /// the ASR returns is an offset from THIS — not from `t`, because the mic
+    /// takes a few milliseconds to start delivering and that gap would become a
+    /// constant skew in every binding.
+    let audioT0: Double?
 
-    static func start(id: String) -> SessionEvent {
+    static func start(id: String, hold: Int, audioPath: String?) -> SessionEvent {
         SessionEvent(
-            type: .sessionStart, t: Clock.nowMs(), id: id,
+            type: .sessionStart, t: Clock.nowMs(), id: id, hold: hold,
             epochWall: ISO8601DateFormatter().string(from: Date()),
-            referentCount: nil
+            referentCount: nil, audioPath: audioPath, audioT0: nil
         )
     }
 
-    static func end(id: String, referentCount: Int) -> SessionEvent {
+    static func end(
+        id: String, hold: Int, referentCount: Int, audioT0: Double?
+    ) -> SessionEvent {
         SessionEvent(
-            type: .sessionEnd, t: Clock.nowMs(), id: id,
-            epochWall: nil, referentCount: referentCount
+            type: .sessionEnd, t: Clock.nowMs(), id: id, hold: hold,
+            epochWall: nil, referentCount: referentCount,
+            audioPath: nil, audioT0: audioT0
         )
     }
 }
