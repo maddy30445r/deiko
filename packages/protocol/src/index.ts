@@ -87,13 +87,53 @@ export interface AXSnapshot {
   error?: string;
 }
 
+/**
+ * One line of recognised text, positioned in global screen coordinates so it
+ * can be related to the shape and to AX element frames — not a bag of words.
+ */
+export interface OCRLine {
+  text: string;
+  confidence: number;
+  frame: Frame;
+}
+
+/**
+ * The Tier 1 base. Captured for EVERY referent, never as a fallback: the review
+ * UI needs a thumbnail per plan step, and the highest-frequency use case (the
+ * frontend visual loop) is about how something looks, which no accessibility
+ * tree can express.
+ *
+ * `ocr` is the conditional half — populated only when AX returned no usable
+ * text, because Vision costs a few hundred ms and AX strings are exact.
+ */
+export interface CropResult {
+  /** Where the PNG was written; absent when captured in memory only. */
+  path?: string;
+  /** The region actually captured, in global screen coordinates. */
+  rect: Frame;
+  /** True when clipped to the freehand path rather than left rectangular. */
+  masked: boolean;
+  /** Backing scale of the source display (2.0 on Retina). */
+  scale: number;
+  /** True when `rect` came from an AX element frame rather than a default box.
+   *  This is where a "failed" AX hit still pays: an app can give no text but
+   *  still give the row's rectangle, which crops far better than a fixed box. */
+  rectFromAX: boolean;
+  ocr: OCRLine[];
+  captureElapsedMs: number;
+  ocrElapsedMs?: number;
+  error?: string;
+}
+
 export interface ProbeEvent {
   type: "probe";
+  /** The moment the user POINTED — not when the screenshot finished. */
   t: number;
   shape: Shape;
   app?: AppIdentity;
   windowTitle?: string;
   snapshot: AXSnapshot;
+  crop?: CropResult;
 }
 
 export interface HelloEvent {
@@ -144,4 +184,24 @@ export function parseEventLine(line: string): CaptureEvent | null {
  */
 export function elementText(el: AXElement): string | undefined {
   return el.value ?? el.title ?? el.elementDescription ?? el.selectedText;
+}
+
+/**
+ * All the text a referent grounded, best source first.
+ *
+ * AX text is authoritative where it exists: it is the literal string the app is
+ * rendering. OCR has to *decide* between `l`, `1` and `I`, and it reads editor
+ * chrome — whitespace dots, gutter line numbers — as characters. In a plan that
+ * Claude Code will execute, one wrong character is a wrong edit, so OCR is a
+ * fallback for where AX is silent, never a substitute for it.
+ */
+export function referentText(event: ProbeEvent): { text: string; source: "ax" | "ocr" }[] {
+  const ax = event.snapshot.elements
+    .map(elementText)
+    .filter((t): t is string => !!t && t.trim().length > 0)
+    .map((text) => ({ text, source: "ax" as const }));
+
+  if (ax.length > 0) return ax;
+
+  return (event.crop?.ocr ?? []).map((line) => ({ text: line.text, source: "ocr" as const }));
 }

@@ -226,6 +226,47 @@ struct AXSnapshot: Codable {
     let error: String?
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Crop + OCR — the Tier 1 base
+//
+// The crop is taken for EVERY referent, not as a fallback. Three reasons it is
+// never optional: the review UI shows a thumbnail per plan step; the highest
+// frequency use case (frontend visual loop) is entirely about how something
+// LOOKS, which no accessibility tree can express; and it is local and cheap.
+//
+// OCR is the conditional half — it runs only when AX returned no usable text,
+// because Vision costs 50-200ms and AX text is exact where it exists.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// One line of recognised text, positioned in global screen coordinates so it
+/// can be related to the shape and to AX element frames — not dumped as a blob.
+struct OCRLine: Codable {
+    let text: String
+    let confidence: Double
+    let frame: Frame
+}
+
+struct CropResult: Codable {
+    /// Where the PNG was written. Nil when capture ran in memory only.
+    let path: String?
+    /// The region actually captured, in global screen coordinates.
+    let rect: Frame
+    /// True when the image was clipped to the freehand path rather than left as
+    /// the bounding rectangle.
+    let masked: Bool
+    /// Backing scale of the display it came from (2.0 on Retina).
+    let scale: Double
+    /// Whether `rect` came from an AX element frame rather than a default box.
+    /// This is where a "failed" AX hit still pays: Compass gives no text but it
+    /// does give the row's rectangle, which is a far better crop than a fixed
+    /// box around the cursor.
+    let rectFromAX: Bool
+    let ocr: [OCRLine]
+    let captureElapsedMs: Double
+    let ocrElapsedMs: Double?
+    let error: String?
+}
+
 /// One probe of one shape, with its context. This is the raw material of a
 /// referent — T1.3 will wrap it, not replace it.
 struct ProbeEvent: Codable {
@@ -235,14 +276,58 @@ struct ProbeEvent: Codable {
     let app: AppIdentity?
     let windowTitle: String?
     let snapshot: AXSnapshot
+    let crop: CropResult?
 
-    init(shape: Shape, app: AppIdentity?, windowTitle: String?, snapshot: AXSnapshot) {
+    init(
+        shape: Shape,
+        app: AppIdentity?,
+        windowTitle: String?,
+        snapshot: AXSnapshot,
+        crop: CropResult? = nil
+    ) {
+        self.init(
+            t: Clock.nowMs(),
+            shape: shape,
+            app: app,
+            windowTitle: windowTitle,
+            snapshot: snapshot,
+            crop: crop
+        )
+    }
+
+    private init(
+        t: Double,
+        shape: Shape,
+        app: AppIdentity?,
+        windowTitle: String?,
+        snapshot: AXSnapshot,
+        crop: CropResult?
+    ) {
         self.type = .probe
-        self.t = Clock.nowMs()
+        self.t = t
         self.shape = shape
         self.app = app
         self.windowTitle = windowTitle
         self.snapshot = snapshot
+        self.crop = crop
+    }
+
+    /// Attach a crop to an already-built probe. Capture is async and AX is not,
+    /// so the two are produced in separate steps and joined here.
+    ///
+    /// `t` is carried over deliberately: it must stay the moment the user
+    /// POINTED, not the moment the screenshot finished. Re-stamping it here
+    /// would shift every referent later by the capture duration and quietly
+    /// corrupt the alignment measurement.
+    func with(crop: CropResult?) -> ProbeEvent {
+        ProbeEvent(
+            t: t,
+            shape: shape,
+            app: app,
+            windowTitle: windowTitle,
+            snapshot: snapshot,
+            crop: crop
+        )
     }
 }
 

@@ -68,7 +68,10 @@ case "hello":
     Emit.event(HelloEvent(axTrusted: AXProbe.isTrusted()))
 
 case "ax-probe":
-    runAXProbe(args)
+    await runAXProbe(args)
+
+case "capture":
+    await runCapture(args)
 
 case "help", "--help", "-h":
     Emit.log(usage)
@@ -81,7 +84,7 @@ default:
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-func runAXProbe(_ args: Args) {
+func runAXProbe(_ args: Args) async {
     guard AXProbe.ensureTrusted(prompt: true) else {
         Emit.event(ErrorEvent(
             "not trusted for Accessibility",
@@ -98,12 +101,18 @@ func runAXProbe(_ args: Args) {
 
     if let delay = args.double("delay") {
         Emit.log("waiting \(delay)s — switch to the app you want to probe…")
-        Thread.sleep(forTimeInterval: delay)
+        try? await Task.sleep(for: .seconds(delay))
     }
 
-    func probeOnce() {
+    // Crop + OCR: the Tier 1 base. Opt-in here so the AX matrix stays a clean
+    // measurement of AX alone; the recorder will always run it.
+    let wantsCrop = args.has("crop") || args.has("crop-dir")
+    let cropDir = args.string("crop-dir") ?? "sessions/crops"
+    var cropIndex = 0
+
+    func probeOnce() async {
         let cursor = AXProbe.cursorLocation()
-        let event: ProbeEvent
+        var event: ProbeEvent
         if let radius = regionRadius {
             event = AXProbe.probeRegion(
                 Shape.region(path: circlePath(around: cursor, radius: radius)),
@@ -112,12 +121,32 @@ func runAXProbe(_ args: Args) {
         } else {
             event = AXProbe.probePoint(cursor, allowManualRetry: allowManual)
         }
+
+        if wantsCrop {
+            let (rect, fromAX) = Capture.rect(
+                for: event.shape,
+                snapshot: event.snapshot,
+                screenArea: AXProbe.screenArea()
+            )
+            cropIndex += 1
+            let crop = await Capture.crop(
+                shape: event.shape,
+                snapshot: event.snapshot,
+                outputPath: "\(cropDir)/probe-\(String(format: "%03d", cropIndex)).png",
+                // Only pay Vision's 50-200ms when AX gave us nothing to read.
+                runOCR: OCR.isNeeded(for: event.snapshot),
+                rectFromAX: fromAX,
+                rect: rect
+            )
+            event = event.with(crop: crop)
+        }
+
         Emit.event(event)
         if args.has("verbose") { Emit.log(summarize(event)) }
     }
 
     guard args.has("watch") else {
-        probeOnce()
+        await probeOnce()
         return
     }
 
@@ -151,7 +180,74 @@ func runAXProbe(_ args: Args) {
         let restedFor = Clock.nowMs() - stationarySince
         if hasMoved, !firedForThisRest, restedFor >= dwellMs {
             firedForThisRest = true
-            probeOnce()
+            await probeOnce()
+        }
+    }
+}
+
+/// Tier 1 in isolation: crop + OCR with no Accessibility involvement at all.
+/// Exists so the base path can be verified independently of AX — if this works
+/// and ax-probe doesn't, the problem is a permission, not the capture code.
+func runCapture(_ args: Args) async {
+    if let delay = args.double("delay") {
+        Emit.log("waiting \(delay)s…")
+        try? await Task.sleep(for: .seconds(delay))
+    }
+
+    let cursor = AXProbe.cursorLocation()
+    let shape: Shape
+    // An explicit --rect must be captured verbatim, not run through the
+    // point-referent heuristics that would replace it with a default box.
+    var explicitRect: Frame?
+
+    if let radius = args.double("region") {
+        shape = Shape.region(path: circlePath(around: cursor, radius: radius))
+    } else if let spec = args.string("rect") {
+        let parts = spec.split(separator: ",").compactMap { Double($0) }
+        guard parts.count == 4 else {
+            Emit.event(ErrorEvent("--rect needs x,y,w,h"))
+            exit(2)
+        }
+        let f = Frame(x: parts[0], y: parts[1], width: parts[2], height: parts[3])
+        explicitRect = f
+        shape = Shape(kind: .point, origin: f.center, bounds: f, path: nil)
+    } else {
+        shape = Shape.point(cursor)
+    }
+
+    // An empty snapshot: no AX consulted, so `rect(for:)` falls back to the
+    // default box and OCR always runs. That is exactly the Tier 1 path an app
+    // with no accessibility tree would take.
+    let empty = AXSnapshot(
+        resolved: false, elements: [], samplesTested: nil, uniqueElements: nil,
+        manualAccessibilityApplied: false, elapsedMs: 0, error: nil
+    )
+    let (rect, fromAX) = explicitRect.map { ($0, false) }
+        ?? Capture.rect(for: shape, snapshot: empty, screenArea: AXProbe.screenArea())
+
+    let out = args.string("out") ?? "sessions/crops/capture.png"
+    let crop = await Capture.crop(
+        shape: shape, snapshot: empty, outputPath: out,
+        runOCR: !args.has("no-ocr"), rectFromAX: fromAX, rect: rect
+    )
+
+    Emit.event(ProbeEvent(
+        shape: shape, app: nil, windowTitle: nil, snapshot: empty, crop: crop
+    ))
+
+    if let err = crop.error {
+        Emit.log("✗ \(err)")
+        Emit.log("  Screen Recording is a SEPARATE permission from Accessibility.")
+        Emit.log("  System Settings → Privacy & Security → Screen & System Audio Recording")
+        Emit.log("  Grant the terminal you launched from, then relaunch that terminal.")
+        exit(1)
+    }
+
+    Emit.log("✓ \(Int(crop.rect.width))×\(Int(crop.rect.height)) → \(crop.path ?? "(not written)") in \(Int(crop.captureElapsedMs))ms")
+    if let ms = crop.ocrElapsedMs {
+        Emit.log("  ocr: \(crop.ocr.count) lines in \(Int(ms))ms")
+        for line in crop.ocr.prefix(12) {
+            Emit.log(String(format: "    %.2f  %@", line.confidence, line.text))
         }
     }
 }
@@ -171,23 +267,58 @@ func summarize(_ event: ProbeEvent) -> String {
     let flag = snap.manualAccessibilityApplied ? " [poked]" : ""
     let timing = String(format: "%.0fms", snap.elapsedMs)
 
+    // Crop line, when one was taken. `ax-rect` vs `box` is the interesting bit:
+    // it shows whether AX gave us precise geometry even where it gave no text.
+    var cropLine = ""
+    if let crop = event.crop {
+        if let err = crop.error {
+            cropLine = "\n      crop ✗ \(err)"
+        } else {
+            let source = crop.rectFromAX ? "ax-rect" : "box"
+            let size = "\(Int(crop.rect.width))×\(Int(crop.rect.height))"
+            let ocr = crop.ocr.isEmpty
+                ? ""
+                : " · ocr \(crop.ocr.count) lines in \(Int(crop.ocrElapsedMs ?? 0))ms: \"\(crop.ocr.prefix(3).map(\.text).joined(separator: " ⏐ ").prefix(60))…\""
+            let masked = crop.masked ? " masked" : ""
+            cropLine = "\n      crop \(size) \(source)\(masked) \(Int(crop.captureElapsedMs))ms\(ocr)"
+        }
+    }
+
     guard snap.resolved, let first = snap.elements.first else {
-        return "  ✗ \(app): \(snap.error ?? "unresolved") (\(timing))\(flag)"
+        return "  ✗ \(app): \(snap.error ?? "unresolved") (\(timing))\(flag)\(cropLine)"
     }
 
     let text = [first.value, first.title, first.elementDescription, first.selectedText]
         .compactMap { $0 }
         .first ?? "—"
     let clipped = text.count > 70 ? String(text.prefix(70)) + "…" : text
-    let counts = snap.samplesTested.map { "\(snap.uniqueElements ?? 0) elems / \($0) samples" } ?? (first.role ?? "?")
 
-    return "  ✓ \(app): \(counts) · \(first.role ?? "?") · \"\(clipped.replacingOccurrences(of: "\n", with: "⏎"))\" (\(timing))\(flag)"
+    // Points show the ancestor chain — a bare AXScrollArea under AXGroup/AXGroup
+    // is the signature of an unbridged Electron window, and you want to see that
+    // live rather than discover it in the JSON afterwards.
+    // Regions show the sample→element collapse, which is the granularity signal.
+    let context: String
+    if let samples = snap.samplesTested {
+        context = "\(snap.uniqueElements ?? 0) elems / \(samples) samples · \(first.role ?? "?")"
+    } else {
+        let chain = first.ancestors.compactMap { $0.role }.joined(separator: "/")
+        context = chain.isEmpty ? (first.role ?? "?") : "\(first.role ?? "?") ← \(chain)"
+    }
+
+    return "  ✓ \(app): \(context) · \"\(clipped.replacingOccurrences(of: "\n", with: "⏎"))\" (\(timing))\(flag)\(cropLine)"
 }
 
 let usage = """
 fovea-capture \(FoveaVersion.current)
 
   hello                       Handshake event on stdout (checks AX trust).
+
+  capture [options]           Tier 1 only: crop + OCR, no Accessibility.
+    --delay <sec>             Wait before capturing.
+    --region <radius>         Capture a circular lasso, masked to the path.
+    --rect <x,y,w,h>          Capture an explicit rectangle.
+    --out <path>              PNG destination (sessions/crops/capture.png).
+    --no-ocr                  Skip Vision text recognition.
 
   ax-probe [options]          Resolve what the cursor is pointing at.
     --watch                   Probe continuously, on each cursor settle.
@@ -198,6 +329,10 @@ fovea-capture \(FoveaVersion.current)
                               that distinction is the whole AX gate.
     --settle-radius <px>      Movement under this counts as stationary (6).
     --dwell <ms>              Rest time before a settle fires (350).
+    --crop                    Also capture the screen crop (Tier 1 base), and
+                              OCR it when AX returned no usable text. Prefers
+                              the AX element rectangle over a fixed box.
+    --crop-dir <path>         Where crops are written (sessions/crops).
     --verbose                 Human summary on stderr alongside the JSON.
 
 Events go to stdout as JSON Lines. Logs go to stderr.

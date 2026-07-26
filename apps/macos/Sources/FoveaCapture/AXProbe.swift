@@ -57,6 +57,12 @@ enum AXProbe {
 
     // ── Cursor ──────────────────────────────────────────────────────────────
 
+    /// Total area of all displays, in points. Used to reject AX rectangles that
+    /// are really whole-window containers rather than the thing pointed at.
+    static func screenArea() -> Double {
+        NSScreen.screens.reduce(0) { $0 + $1.frame.width * $1.frame.height }
+    }
+
     /// Cursor position already in AX coordinate space. Using CGEvent rather
     /// than NSEvent.mouseLocation avoids the bottom-left→top-left flip entirely,
     /// which is the failure mode that returns a mirrored element and no error.
