@@ -40,6 +40,10 @@ clean:
 	@rm -rf $(CAPTURE_DIR)/.build node_modules packages/*/dist
 
 ## record — push-to-talk session recorder (hold Right Option)
+## Events go to sessions/<stamp>/events.jsonl, crops to sessions/<stamp>/crops.
 record: $(DEBUG_BIN)
-	@mkdir -p sessions/$(shell date +%Y%m%d-%H%M%S)
-	@$(DEBUG_BIN) record --out sessions/latest
+	@stamp=$$(date +%Y%m%d-%H%M%S); \
+	dir=sessions/$$stamp; \
+	mkdir -p $$dir/crops; \
+	echo "session → $$dir"; \
+	$(DEBUG_BIN) record --out $$dir --session $$stamp > $$dir/events.jsonl
