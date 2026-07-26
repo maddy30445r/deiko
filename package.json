@@ -1,0 +1,21 @@
+{
+  "name": "fovea",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Point-and-speak task capture for macOS. Eyes for Claude Code.",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "tsc --build",
+    "test": "npm test --workspaces --if-present",
+    "hello": "node scripts/hello.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

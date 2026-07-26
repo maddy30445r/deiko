@@ -1,0 +1,19 @@
+# secrets
+.env
+
+# node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# swift
+.build/
+.swiftpm/
+*.o
+
+# captured sessions — never commit crops, audio, or transcripts
+sessions/
+!sessions/.gitkeep
+
+# macOS
+.DS_Store
