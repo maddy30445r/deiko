@@ -84,11 +84,11 @@ case "record":
     runRecord(args)
 
 case "help", "--help", "-h":
-    Emit.log(usage)
+    Emit.log(Usage.text)
 
 default:
     Emit.event(ErrorEvent("unknown subcommand '\(args.subcommand)'", hint: "try: fovea-capture help"))
-    Emit.log(usage)
+    Emit.log(Usage.text)
     exit(2)
 }
 
@@ -397,7 +397,13 @@ func summarize(_ event: ProbeEvent) -> String {
     return "  ✓ \(app): \(context) · \"\(clipped.replacingOccurrences(of: "\n", with: "⏎"))\" (\(timing))\(flag)\(cropLine)"
 }
 
-let usage = """
+/// Held in a type rather than as a top-level `let`. Globals in main.swift are
+/// initialised in source order as execution reaches them, so a top-level
+/// `let usage` declared below the dispatch switch read back as an EMPTY STRING
+/// — `fovea-capture help` printed nothing and exited 0. Static members are
+/// initialised lazily on first access, so declaration order stops mattering.
+enum Usage {
+    static let text = """
 fovea-capture \(FoveaVersion.current)
 
   hello                       Handshake event on stdout (checks AX trust).
@@ -432,3 +438,4 @@ fovea-capture \(FoveaVersion.current)
 
 Events go to stdout as JSON Lines. Logs go to stderr.
 """
+}
