@@ -156,13 +156,29 @@ enum Capture {
 
     // ── ScreenCaptureKit ────────────────────────────────────────────────────
 
+    /// Cached display list. `SCShareableContent` is a system query that costs
+    /// well over 100ms, and it was being paid on every single crop — measurable
+    /// as a flat ~208ms whether the region was 10×10 or 460×220, which is the
+    /// signature of fixed overhead rather than work. The display layout only
+    /// changes when a monitor is plugged in, so cache it and refresh on miss.
+    nonisolated(unsafe) private static var cachedDisplays: [SCDisplay] = []
+
     private static func display(containing rect: Frame) async throws -> SCDisplay {
+        let center = rect.center
+
+        if let hit = cachedDisplays.first(where: { $0.frameInScreenSpace.contains(center) }) {
+            return hit
+        }
+
+        // Cache miss: either first call, or the layout changed under us.
         let content = try await SCShareableContent.excludingDesktopWindows(
             false, onScreenWindowsOnly: true
         )
-        let center = rect.center
-        let hit = content.displays.first { $0.frameInScreenSpace.contains(center) }
-        guard let display = hit ?? content.displays.first else {
+        cachedDisplays = content.displays
+
+        guard let display = content.displays.first(where: {
+            $0.frameInScreenSpace.contains(center)
+        }) ?? content.displays.first else {
             throw CaptureError.noDisplay
         }
         return display
@@ -171,30 +187,28 @@ enum Capture {
     private static func screenshot(
         of rect: Frame, on display: SCDisplay, scale: Double
     ) async throws -> CGImage {
-        // Capture the whole display, then crop. SCStreamConfiguration.sourceRect
-        // is expressed relative to the display and interacts awkwardly with
-        // scaling; cropping the resulting image is exact and costs one memcpy.
+        // Capture ONLY the region, via sourceRect, rather than grabbing the
+        // whole display and cropping. sourceRect is in points relative to the
+        // display's top-left, which is the same space `rect` is already in.
         let filter = SCContentFilter(display: display, excludingWindows: [])
         let config = SCStreamConfiguration()
-        config.width = Int(Double(display.width) * scale)
-        config.height = Int(Double(display.height) * scale)
+
+        let origin = display.frameInScreenSpace
+        config.sourceRect = CGRect(
+            x: rect.x - origin.x,
+            y: rect.y - origin.y,
+            width: rect.width,
+            height: rect.height
+        )
+        config.width = max(1, Int(rect.width * scale))
+        config.height = max(1, Int(rect.height * scale))
         config.captureResolution = .best
         config.showsCursor = false
         config.scalesToFit = false
 
-        let full = try await SCScreenshotManager.captureImage(
+        return try await SCScreenshotManager.captureImage(
             contentFilter: filter, configuration: config
         )
-
-        let local = CGRect(
-            x: (rect.x - display.frameInScreenSpace.x) * scale,
-            y: (rect.y - display.frameInScreenSpace.y) * scale,
-            width: rect.width * scale,
-            height: rect.height * scale
-        ).integral
-
-        guard let cropped = full.cropping(to: local) else { return full }
-        return cropped
     }
 
     private static func backingScale(for displayID: CGDirectDisplayID) -> Double {

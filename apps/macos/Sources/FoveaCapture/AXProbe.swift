@@ -57,10 +57,19 @@ enum AXProbe {
 
     // ── Cursor ──────────────────────────────────────────────────────────────
 
-    /// Total area of all displays, in points. Used to reject AX rectangles that
-    /// are really whole-window containers rather than the thing pointed at.
+    /// Area of the LARGEST single display, in points. Used to reject AX
+    /// rectangles that are really whole-window containers rather than the thing
+    /// pointed at.
+    ///
+    /// Summing all displays would be wrong: the guard is "is this rect an
+    /// implausibly large share of a screen", and on a three-monitor setup a
+    /// summed total makes a rect covering an entire display look small enough
+    /// to pass. The threshold has to mean the same thing regardless of how many
+    /// monitors are plugged in.
     static func screenArea() -> Double {
-        NSScreen.screens.reduce(0) { $0 + $1.frame.width * $1.frame.height }
+        NSScreen.screens
+            .map { $0.frame.width * $0.frame.height }
+            .max() ?? 0
     }
 
     /// Cursor position already in AX coordinate space. Using CGEvent rather
@@ -238,17 +247,20 @@ enum AXProbe {
     /// So walk down: at each level pick the smallest child whose frame contains
     /// the point, and remember the deepest one that actually carried text.
     ///
-    /// Bounded on three axes, because every frame read is a Mach IPC round-trip
-    /// and a full tree walk on Electron is thousands of them:
-    ///   • depth (`maxDepth`)
-    ///   • children examined per level (`maxChildrenPerLevel`)
-    ///   • an early exit as soon as a leaf with text is found
+    /// Bounded by a wall-clock DEADLINE, not just by shape. Depth and per-level
+    /// caps bound each axis but not their product: 8 levels × 160 children ×
+    /// five IPC round-trips per child (two for the frame, three for the text)
+    /// is ~2500 synchronous calls into another process — seconds, on a probe
+    /// that has a few hundred milliseconds to spend. The caps stop pathological
+    /// trees; the deadline is what actually keeps us inside the budget.
     static func refine(
         _ element: AXUIElement,
         at p: Point,
         maxDepth: Int = 8,
-        maxChildrenPerLevel: Int = 160
+        maxChildrenPerLevel: Int = 160,
+        budgetMs: Double = 120
     ) -> AXUIElement {
+        let deadline = Clock.nowMs() + budgetMs
         // If the hit already carries text, the app answered properly — don't
         // pay for a descent that can only make the referent less specific.
         if hasText(element) { return element }
@@ -257,12 +269,16 @@ enum AXProbe {
         var deepestWithText: AXUIElement?
 
         for _ in 0..<maxDepth {
+            if Clock.nowMs() > deadline { break }
             guard let children = childrenOf(current), !children.isEmpty else { break }
 
             var best: AXUIElement?
             var bestArea = Double.greatestFiniteMagnitude
 
             for child in children.prefix(maxChildrenPerLevel) {
+                // Checked inside the scan too: one wide level can exhaust the
+                // budget on its own.
+                if Clock.nowMs() > deadline { break }
                 guard let f = frame(of: child), f.contains(p) else { continue }
                 // Smallest containing child = most specific. Overlapping
                 // siblings are common in web content; area is the tiebreak.

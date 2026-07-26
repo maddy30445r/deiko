@@ -27,22 +27,28 @@ struct Args {
             rest = rest.dropFirst()
         }
 
-        var iterator = Array(rest).makeIterator()
-        while let token = iterator.next() {
+        // Index-based with a PEEK, never a consume. An earlier version pulled
+        // the next token to test it, and when that token was itself a flag it
+        // registered it as a bool — so `--no-ocr --region 90` silently dropped
+        // the 90 and captured a point. Flag order must not change behaviour.
+        let tokens = Array(rest)
+        var i = 0
+        while i < tokens.count {
+            let token = tokens[i]
+            i += 1
             guard token.hasPrefix("--") else { continue }
             let name = String(token.dropFirst(2))
-            // `--flag=value` and `--flag value` both work; a bare `--flag` is a bool.
+
+            // `--flag=value`
             if let eq = name.firstIndex(of: "=") {
                 flags[String(name[name.startIndex..<eq])] = String(name[name.index(after: eq)...])
-            } else if let next = iterator.next() {
-                if next.hasPrefix("--") {
-                    bools.insert(name)
-                    if let inner = String(next.dropFirst(2)).split(separator: "=").first {
-                        bools.insert(String(inner))
-                    }
-                } else {
-                    flags[name] = next
-                }
+                continue
+            }
+
+            // `--flag value` — only when the next token isn't itself a flag.
+            if i < tokens.count, !tokens[i].hasPrefix("--") {
+                flags[name] = tokens[i]
+                i += 1
             } else {
                 bools.insert(name)
             }
@@ -241,10 +247,24 @@ func runCapture(_ args: Args) async {
         ?? Capture.rect(for: shape, snapshot: empty, screenArea: AXProbe.screenArea())
 
     let out = args.string("out") ?? "sessions/crops/capture.png"
-    let crop = await Capture.crop(
-        shape: shape, snapshot: empty, outputPath: out,
-        runOCR: !args.has("no-ocr"), rectFromAX: fromAX, rect: rect
-    )
+
+    // Repeat in-process. The display cache and ScreenCaptureKit's own warm-up
+    // only pay off after the first call, so measuring cost by running the
+    // binary N times measures N cold starts. The <4s release-to-plan budget is
+    // a stated gate, so this needs to be measurable.
+    let repeats = max(1, Int(args.string("repeat") ?? "1") ?? 1)
+    var crop: CropResult!
+    var timings: [Double] = []
+    for _ in 0..<repeats {
+        crop = await Capture.crop(
+            shape: shape, snapshot: empty, outputPath: out,
+            runOCR: !args.has("no-ocr"), rectFromAX: fromAX, rect: rect
+        )
+        timings.append(crop.captureElapsedMs)
+    }
+    if repeats > 1 {
+        Emit.log("  capture ms: " + timings.map { String(Int($0)) }.joined(separator: " → "))
+    }
 
     Emit.event(ProbeEvent(
         shape: shape, app: nil, windowTitle: nil, snapshot: empty, crop: crop
@@ -334,6 +354,9 @@ fovea-capture \(FoveaVersion.current)
     --rect <x,y,w,h>          Capture an explicit rectangle.
     --out <path>              PNG destination (sessions/crops/capture.png).
     --no-ocr                  Skip Vision text recognition.
+    --repeat <n>              Capture n times in-process and print each timing.
+                              First call is cold (~200ms); steady state is what
+                              the <4s release-to-plan budget actually pays.
 
   ax-probe [options]          Resolve what the cursor is pointing at.
     --watch                   Probe continuously, on each cursor settle.

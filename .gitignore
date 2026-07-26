@@ -11,9 +11,16 @@ dist/
 .swiftpm/
 *.o
 
-# captured sessions — never commit crops, audio, or transcripts
+# Captured content — never commit crops, audio, transcripts or probe logs.
+# These carry whatever was on screen: DB ids, tokens, customer data, scrollback.
+#
+# Matched by PATTERN, not just by directory: a probe log written to the wrong
+# folder is still a leak, and that is exactly how ax-poked.jsonl reached a
+# commit. Anything ignored here is ignored wherever it lands.
 sessions/
-!sessions/.gitkeep
+*.jsonl
+crops/
+*.wav
 
 # macOS
 .DS_Store

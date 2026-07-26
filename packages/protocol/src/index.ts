@@ -157,18 +157,6 @@ export interface ErrorEvent {
 
 export type CaptureEvent = HelloEvent | ProbeEvent | ErrorEvent;
 
-export function isProbeEvent(e: CaptureEvent): e is ProbeEvent {
-  return e.type === "probe";
-}
-
-export function isHelloEvent(e: CaptureEvent): e is HelloEvent {
-  return e.type === "hello";
-}
-
-export function isErrorEvent(e: CaptureEvent): e is ErrorEvent {
-  return e.type === "error";
-}
-
 /** Parse one JSON Lines chunk from the capture binary's stdout. */
 export function parseEventLine(line: string): CaptureEvent | null {
   const trimmed = line.trim();
