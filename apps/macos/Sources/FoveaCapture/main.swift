@@ -408,6 +408,18 @@ fovea-capture \(FoveaVersion.current)
 
   hello                       Handshake event on stdout (checks AX trust).
 
+  record [options]            Push-to-talk session recorder (the real thing).
+                              HOLD Right Option to record. Point and pause for
+                              a candidate referent; hold the mouse button and
+                              circle an area for a region referent. Release to
+                              stop. An overlay shows the cursor, its trace and
+                              the lasso while the key is down — and only then.
+    --out <dir>               Session directory (crops land in <dir>/crops).
+    --session <id>            Session id (default: session-<unix time>).
+    --settle-radius <px>      Movement under this counts as stationary (8).
+    --dwell <ms>              Rest time before a settle fires (300).
+    --no-crop                 Skip the Tier 1 crop + OCR per referent.
+
   capture [options]           Tier 1 only: crop + OCR, no Accessibility.
     --delay <sec>             Wait before capturing.
     --region <radius>         Capture a circular lasso, masked to the path.

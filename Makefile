@@ -38,3 +38,8 @@ region: $(DEBUG_BIN)
 
 clean:
 	@rm -rf $(CAPTURE_DIR)/.build node_modules packages/*/dist
+
+## record — push-to-talk session recorder (hold Right Option)
+record: $(DEBUG_BIN)
+	@mkdir -p sessions/$(shell date +%Y%m%d-%H%M%S)
+	@$(DEBUG_BIN) record --out sessions/latest
