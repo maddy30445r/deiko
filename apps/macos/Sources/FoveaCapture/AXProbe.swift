@@ -76,11 +76,13 @@ enum AXProbe {
     // ── Public entry points ─────────────────────────────────────────────────
 
     /// "What is under this pixel." One hit-test plus ancestors.
-    static func probePoint(_ p: Point, allowManualRetry: Bool = true) -> ProbeEvent {
+    static func probePoint(
+        _ p: Point, allowManualRetry: Bool = true, descend: Bool = true
+    ) -> ProbeEvent {
         let started = Clock.nowMs()
         let shape = Shape.point(p)
 
-        guard var hit = hitTest(p) else {
+        guard var hit = hitTest(p, descend: descend) else {
             return ProbeEvent(
                 shape: shape,
                 app: nil,
@@ -109,7 +111,7 @@ enum AXProbe {
             poked = enableManualAccessibility(pid: ownerPid)
             if poked {
                 usleep(300_000)
-                if let retry = hitTest(p) {
+                if let retry = hitTest(p, descend: descend) {
                     hit = retry
                     pid = pidOf(hit) ?? ownerPid
                     element = describe(hit, withAncestors: true)
@@ -145,7 +147,8 @@ enum AXProbe {
         maxSamples: Int = 120,
         minStride: Double = 12,
         maxElements: Int = 40,
-        allowManualRetry: Bool = true
+        allowManualRetry: Bool = true,
+        descend: Bool = true
     ) -> ProbeEvent {
         let started = Clock.nowMs()
 
@@ -167,36 +170,36 @@ enum AXProbe {
             )
         }
 
-        var hits = collect(samples: samples, maxElements: maxElements)
+        var hits = collect(samples: samples, maxElements: maxElements, descend: descend)
 
         // Same Electron bridge as the point path. We judge "ungrounded" on a
         // cheap describe of the first hit rather than the whole set, so we
         // don't pay for full attribute reads before deciding to retry.
         var poked = false
-        let firstPid = hits.first.flatMap { pidOf($0) }
+        let firstPid = hits.first.flatMap { pidOf($0.element) }
         if allowManualRetry,
            let firstPid,
-           hits.count <= 1 || looksUngrounded(describe(hits[0], withAncestors: false)) {
+           hits.count <= 1 || looksUngrounded(describe(hits[0].element, withAncestors: false)) {
             poked = enableManualAccessibility(pid: firstPid)
             if poked {
                 usleep(300_000)
                 samples = gridSamples(in: shape, maxSamples: maxSamples, minStride: minStride)
-                hits = collect(samples: samples, maxElements: maxElements)
+                hits = collect(samples: samples, maxElements: maxElements, descend: descend)
             }
         }
 
         let elements = hits
-            .map { describe($0, withAncestors: false) }
+            .map { describe($0.element, withAncestors: false) }
             .sorted { a, b in
                 guard let fa = a.frame, let fb = b.frame else { return a.frame != nil }
                 return Frame.readingOrder(fa, fb)
             }
 
-        let pid = hits.first.flatMap { pidOf($0) }
+        let pid = hits.first.flatMap { pidOf($0.element) }
         return ProbeEvent(
             shape: shape,
             app: pid.map(appIdentity(pid:)),
-            windowTitle: hits.first.flatMap { windowTitle(for: $0) },
+            windowTitle: hits.first.flatMap { windowTitle(for: $0.element) },
             snapshot: AXSnapshot(
                 resolved: !elements.isEmpty,
                 elements: elements,
@@ -211,7 +214,7 @@ enum AXProbe {
 
     // ── Hit-testing ─────────────────────────────────────────────────────────
 
-    private static func hitTest(_ p: Point) -> AXUIElement? {
+    private static func hitTest(_ p: Point, descend: Bool = true) -> AXUIElement? {
         let systemWide = AXUIElementCreateSystemWide()
         AXUIElementSetMessagingTimeout(systemWide, messagingTimeout)
 
@@ -221,7 +224,83 @@ enum AXProbe {
         )
         guard err == .success, let element else { return nil }
         AXUIElementSetMessagingTimeout(element, messagingTimeout)
-        return element
+
+        guard descend else { return element }
+        return refine(element, at: p)
+    }
+
+    /// `AXUIElementCopyElementAtPosition` returns whatever node the app decides
+    /// to answer with, and Chromium often answers with a container — Compass and
+    /// Chrome both hand back an empty `AXGroup`/`AXWebArea` even once the bridge
+    /// is on. The leaf text nodes are in the tree; hit-testing just doesn't
+    /// reach them.
+    ///
+    /// So walk down: at each level pick the smallest child whose frame contains
+    /// the point, and remember the deepest one that actually carried text.
+    ///
+    /// Bounded on three axes, because every frame read is a Mach IPC round-trip
+    /// and a full tree walk on Electron is thousands of them:
+    ///   • depth (`maxDepth`)
+    ///   • children examined per level (`maxChildrenPerLevel`)
+    ///   • an early exit as soon as a leaf with text is found
+    static func refine(
+        _ element: AXUIElement,
+        at p: Point,
+        maxDepth: Int = 8,
+        maxChildrenPerLevel: Int = 160
+    ) -> AXUIElement {
+        // If the hit already carries text, the app answered properly — don't
+        // pay for a descent that can only make the referent less specific.
+        if hasText(element) { return element }
+
+        var current = element
+        var deepestWithText: AXUIElement?
+
+        for _ in 0..<maxDepth {
+            guard let children = childrenOf(current), !children.isEmpty else { break }
+
+            var best: AXUIElement?
+            var bestArea = Double.greatestFiniteMagnitude
+
+            for child in children.prefix(maxChildrenPerLevel) {
+                guard let f = frame(of: child), f.contains(p) else { continue }
+                // Smallest containing child = most specific. Overlapping
+                // siblings are common in web content; area is the tiebreak.
+                let area = f.width * f.height
+                if area < bestArea {
+                    bestArea = area
+                    best = child
+                }
+            }
+
+            guard let next = best else { break }
+            current = next
+
+            if hasText(next) {
+                deepestWithText = next
+                // Keep going: a text-bearing container may still have a more
+                // specific text child under the cursor.
+            }
+        }
+
+        return deepestWithText ?? current
+    }
+
+    private static func childrenOf(_ el: AXUIElement) -> [AXUIElement]? {
+        guard let ref = copyAttr(el, kAXChildrenAttribute as String) else { return nil }
+        return ref as? [AXUIElement]
+    }
+
+    /// Cheap-ish text check: three attribute reads, and only on elements we are
+    /// already considering.
+    private static func hasText(_ el: AXUIElement) -> Bool {
+        for attr in [kAXValueAttribute, kAXTitleAttribute, kAXDescriptionAttribute] {
+            if let s = stringify(copyAttr(el, attr as String)),
+               !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return true
+            }
+        }
+        return false
     }
 
     /// Grid of sample points that fall INSIDE the drawn path — not merely
@@ -253,15 +332,34 @@ enum AXProbe {
     /// Hit-test every sample, keeping only distinct elements. CFEqual is the
     /// correct identity test for AXUIElement — pointer comparison is not, since
     /// separate copies can reference the same UI node.
-    private static func collect(samples: [Point], maxElements: Int) -> [AXUIElement] {
-        var unique: [AXUIElement] = []
+    ///
+    /// Descent is deliberately OFF during sampling and applied afterwards to the
+    /// survivors only. Descending at every sample would multiply the most
+    /// expensive operation by the sample count; doing it after dedupe pays for
+    /// it once per distinct element. Each survivor keeps the sample point that
+    /// found it, since descent needs a point to aim at.
+    private static func collect(
+        samples: [Point], maxElements: Int, descend: Bool
+    ) -> [(element: AXUIElement, at: Point)] {
+        var unique: [(element: AXUIElement, at: Point)] = []
         for p in samples {
-            guard let el = hitTest(p) else { continue }
-            if unique.contains(where: { CFEqual($0, el) }) { continue }
-            unique.append(el)
+            guard let el = hitTest(p, descend: false) else { continue }
+            if unique.contains(where: { CFEqual($0.element, el) }) { continue }
+            unique.append((el, p))
             if unique.count >= maxElements { break }
         }
-        return unique
+
+        guard descend else { return unique }
+
+        var refined: [(element: AXUIElement, at: Point)] = []
+        for (el, p) in unique {
+            let deep = refine(el, at: p)
+            // Descent can collapse two containers onto the same leaf, so dedupe
+            // again afterwards.
+            if refined.contains(where: { CFEqual($0.element, deep) }) { continue }
+            refined.append((deep, p))
+        }
+        return refined
     }
 
     // ── Describing an element (the expensive part) ───────────────────────────
@@ -325,6 +423,22 @@ enum AXProbe {
     }
 
     // ── Electron bridge ─────────────────────────────────────────────────────
+
+    /// Turn the bridge on for the frontmost app BEFORE anything is pointed at,
+    /// so no referent pays the ~300ms tree-build we measured on first hit.
+    ///
+    /// Called at hotkey-down and on app switch during a session — never at
+    /// launch, and never for apps the user isn't currently in. Poking builds an
+    /// accessibility tree the app then maintains, which costs that app memory
+    /// and a little CPU; doing it to every running app because we might one day
+    /// be pointed at it is not ours to spend.
+    @discardableResult
+    static func prePokeFrontmost() -> pid_t? {
+        guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
+        let pid = app.processIdentifier
+        enableManualAccessibility(pid: pid)
+        return pid
+    }
 
     /// Chromium's private opt-in. Set on the APPLICATION element, not the hit
     /// element. Returns whether we actually issued it (false if already poked).

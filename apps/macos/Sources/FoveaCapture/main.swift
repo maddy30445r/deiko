@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -98,6 +99,7 @@ func runAXProbe(_ args: Args) async {
     // recorder's drawing UI exists, and exercises the identical code path.
     let regionRadius = args.double("region")
     let allowManual = !args.has("no-manual")
+    let descend = !args.has("no-descend")
 
     if let delay = args.double("delay") {
         Emit.log("waiting \(delay)s — switch to the app you want to probe…")
@@ -116,10 +118,13 @@ func runAXProbe(_ args: Args) async {
         if let radius = regionRadius {
             event = AXProbe.probeRegion(
                 Shape.region(path: circlePath(around: cursor, radius: radius)),
-                allowManualRetry: allowManual
+                allowManualRetry: allowManual,
+                descend: descend
             )
         } else {
-            event = AXProbe.probePoint(cursor, allowManualRetry: allowManual)
+            event = AXProbe.probePoint(
+                cursor, allowManualRetry: allowManual, descend: descend
+            )
         }
 
         if wantsCrop {
@@ -164,8 +169,18 @@ func runAXProbe(_ args: Args) async {
     var hasMoved = false
     var firedForThisRest = false
 
+    // Pre-poke the app you're in, and again whenever you switch. Stands in for
+    // what the recorder does at hotkey-down: get Chromium's tree built before
+    // the first referent, rather than making that referent wait ~300ms for it.
+    var lastFrontPid = allowManual ? AXProbe.prePokeFrontmost() : nil
+
     while true {
         usleep(pollMs * 1000)
+
+        if allowManual, NSWorkspace.shared.frontmostApplication?.processIdentifier != lastFrontPid {
+            lastFrontPid = AXProbe.prePokeFrontmost()
+        }
+
         let now = AXProbe.cursorLocation()
         let moved = hypot(now.x - last.x, now.y - last.y)
 
@@ -324,9 +339,12 @@ fovea-capture \(FoveaVersion.current)
     --watch                   Probe continuously, on each cursor settle.
     --delay <sec>             Wait before probing (time to switch apps).
     --region <radius>         Probe a circular region instead of a point.
-    --no-manual               Do NOT set AXManualAccessibility. Use this to
-                              tell "works natively" from "works once poked" —
-                              that distinction is the whole AX gate.
+    --no-manual               Do NOT set AXManualAccessibility (also disables
+                              pre-poking). Use this to tell "works natively"
+                              from "works once poked".
+    --no-descend              Do NOT walk down into children when the hit
+                              element carries no text. Use this to measure what
+                              descent is actually buying per app.
     --settle-radius <px>      Movement under this counts as stationary (6).
     --dwell <ms>              Rest time before a settle fires (350).
     --crop                    Also capture the screen crop (Tier 1 base), and
