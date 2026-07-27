@@ -52,8 +52,12 @@ enum EventType: String, Codable {
     case hello
     case probe
     case error
+    /// The whole recording — opened by the first hold, closed by "Stop session".
     case sessionStart
     case sessionEnd
+    /// One press-and-release of the hotkey. A session contains many.
+    case holdStart
+    case holdEnd
     case cursor
     case candidate
 }
@@ -121,16 +125,36 @@ struct CursorEvent: Codable {
     }
 }
 
-struct SessionEvent: Codable {
+// ─────────────────────────────────────────────────────────────────────────────
+// Sessions and holds
+//
+// Two nested levels, and keeping them apart matters more than it looks:
+//
+//   HOLD    one press-and-release of Right Option. One utterance, one WAV, its
+//           own `audioT0`. Word timings are offsets from that hold's t0, which
+//           is the only reason per-hold audio files exist.
+//
+//   SESSION everything from the first hold until "Stop session" — one directory,
+//           one referent stack, one plan. It is the unit the user thinks in:
+//           point in the editor, release, switch to Compass, point again, and
+//           all of it is still the same description of the same problem.
+//
+// These were one event type called `sessionStart`/`sessionEnd` fired per hold,
+// from when a session WAS a hold. Once holds accumulate into a session that the
+// user closes explicitly, that name described the wrong boundary.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// One press-and-release of the hotkey.
+struct HoldEvent: Codable {
     let type: EventType
     let t: Double
     let id: String
     /// Which hold of the hotkey this is, 1-based. The natural grouping for the
     /// referent stack, and part of every crop filename.
-    let hold: Int?
+    let hold: Int
     let epochWall: String?
     let referentCount: Int?
-    /// Where the narration was written, relative to the session directory.
+    /// Where the narration was written.
     let audioPath: String?
     /// `Clock.nowMs()` at the first captured audio buffer. Every word timestamp
     /// the ASR returns is an offset from THIS — not from `t`, because the mic
@@ -138,9 +162,9 @@ struct SessionEvent: Codable {
     /// constant skew in every binding.
     let audioT0: Double?
 
-    static func start(id: String, hold: Int, audioPath: String?) -> SessionEvent {
-        SessionEvent(
-            type: .sessionStart, t: Clock.nowMs(), id: id, hold: hold,
+    static func start(id: String, hold: Int, audioPath: String?) -> HoldEvent {
+        HoldEvent(
+            type: .holdStart, t: Clock.nowMs(), id: id, hold: hold,
             epochWall: ISO8601DateFormatter().string(from: Date()),
             referentCount: nil, audioPath: audioPath, audioT0: nil
         )
@@ -148,11 +172,40 @@ struct SessionEvent: Codable {
 
     static func end(
         id: String, hold: Int, referentCount: Int, audioT0: Double?
-    ) -> SessionEvent {
-        SessionEvent(
-            type: .sessionEnd, t: Clock.nowMs(), id: id, hold: hold,
+    ) -> HoldEvent {
+        HoldEvent(
+            type: .holdEnd, t: Clock.nowMs(), id: id, hold: hold,
             epochWall: nil, referentCount: referentCount,
             audioPath: nil, audioT0: audioT0
+        )
+    }
+}
+
+/// The recording as a whole. Exactly one `sessionStart` and one `sessionEnd`
+/// per `events.jsonl`, first line and last.
+struct SessionEvent: Codable {
+    let type: EventType
+    let t: Double
+    let id: String
+    let epochWall: String?
+    let directory: String?
+    /// Totals across every hold, present only on `sessionEnd`.
+    let holdCount: Int?
+    let referentCount: Int?
+
+    static func start(id: String, directory: String) -> SessionEvent {
+        SessionEvent(
+            type: .sessionStart, t: Clock.nowMs(), id: id,
+            epochWall: ISO8601DateFormatter().string(from: Date()),
+            directory: directory, holdCount: nil, referentCount: nil
+        )
+    }
+
+    static func end(id: String, holdCount: Int, referentCount: Int) -> SessionEvent {
+        SessionEvent(
+            type: .sessionEnd, t: Clock.nowMs(), id: id,
+            epochWall: ISO8601DateFormatter().string(from: Date()),
+            directory: nil, holdCount: holdCount, referentCount: referentCount
         )
     }
 }
@@ -511,8 +564,14 @@ enum Emit {
     ///
     /// An app launched from Finder has no terminal attached, so the JSON Lines
     /// stream has nowhere to go. Rather than teach every call site about a
-    /// destination, redirect once at startup — `event()` stays a one-argument
-    /// call everywhere and the session directory becomes the real output.
+    /// destination, redirect — `event()` stays a one-argument call everywhere
+    /// and the session directory becomes the real output.
+    ///
+    /// Called more than once per process now: the menu-bar app opens on a
+    /// diagnostics log, swings to the session's `events.jsonl` when a session
+    /// starts, and swings back when it stops. Hence the close — the old handle
+    /// used to be dropped still open, which on a long-lived app leaks a file
+    /// descriptor per session and leaves the last writes unflushed.
     nonisolated(unsafe) private static var sink: FileHandle?
 
     static func redirectToFile(_ path: String) {
@@ -520,7 +579,14 @@ enum Emit {
         try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true
         )
-        FileManager.default.createFile(atPath: path, contents: nil)
-        sink = try? FileHandle(forWritingTo: url)
+        // Append rather than truncate: the diagnostics log is meant to survive
+        // across launches, and a session file is only ever written once anyway.
+        if !FileManager.default.fileExists(atPath: path) {
+            FileManager.default.createFile(atPath: path, contents: nil)
+        }
+        let next = try? FileHandle(forWritingTo: url)
+        next?.seekToEndOfFile()
+        try? sink?.close()
+        sink = next
     }
 }

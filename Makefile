@@ -1,4 +1,17 @@
-.PHONY: dev build test probe watch region clean setup
+.PHONY: dev build test probe watch region clean setup bundle record transcribe align signing-setup reset-permissions
+
+# Code-signing identity for the bundle.
+#
+# This matters far more than it looks. TCC stores a permission grant against the
+# app's code-signing requirement, and for an AD-HOC signature that requirement
+# pins the binary's cdhash — which changes on every single rebuild. The result
+# is that all four permissions silently die every time you run `make bundle`,
+# and the Accessibility entry stays visibly ticked while being dead.
+#
+# Signing with a stable self-signed certificate instead keys the grant to the
+# certificate, so the permissions survive rebuilds. See `make signing-setup`.
+SIGN_NAME  ?= Fovea Local
+SIGN_FOUND := $(shell security find-identity -v -p codesigning 2>/dev/null | grep -c '"$(SIGN_NAME)"')
 
 CAPTURE_DIR := apps/capture
 DEBUG_BIN   := $(CAPTURE_DIR)/.build/debug/fovea-capture
@@ -56,22 +69,62 @@ bundle: $(DEBUG_BIN)
 	@/usr/libexec/PlistBuddy -c "Add :CFBundleExecutable string fovea-capture" $(APP)/Contents/Info.plist >/dev/null 2>&1 || true
 	@/usr/libexec/PlistBuddy -c "Add :CFBundlePackageType string APPL" $(APP)/Contents/Info.plist >/dev/null 2>&1 || true
 	@/usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" $(APP)/Contents/Info.plist >/dev/null 2>&1 || true
+ifeq ($(SIGN_FOUND),0)
 	@codesign --force --deep --sign - $(APP) 2>/dev/null
-	@echo "built $(APP)"
+	@echo "built $(APP)  ⚠ AD-HOC SIGNED"
+	@echo "   macOS will drop all four permissions on the next rebuild."
+	@echo "   Fix it once:  make signing-setup"
+else
+	@codesign --force --deep --sign "$(SIGN_NAME)" $(APP) 2>/dev/null
+	@echo "built $(APP)  (signed: $(SIGN_NAME) — permissions survive rebuilds)"
+endif
 	@echo "launch it:  open $(APP)      (menu-bar app; permissions attach to Fovea)"
 	@echo "subcommand: $(APP)/Contents/MacOS/fovea-capture <cmd>"
+
+## signing-setup — check for the stable signing identity, explain it if absent
+signing-setup:
+ifeq ($(SIGN_FOUND),0)
+	@echo "✗ no code-signing identity named '$(SIGN_NAME)'."
+	@echo ""
+	@echo "  Without one, Fovea.app is ad-hoc signed and macOS revokes all four"
+	@echo "  permissions every time you rebuild it. One-time fix, ~2 minutes:"
+	@echo ""
+	@echo "    1. Open Keychain Access"
+	@echo "    2. Menu: Keychain Access → Certificate Assistant →"
+	@echo "                               Create a Certificate…"
+	@echo "    3. Name:          $(SIGN_NAME)"
+	@echo "       Identity Type: Self Signed Root"
+	@echo "       Certificate Type: Code Signing        ← not the default"
+	@echo "    4. Create, Continue through the warning, Done"
+	@echo ""
+	@echo "  Then:  make signing-setup && make reset-permissions && make bundle"
+	@exit 1
+else
+	@echo "✓ signing identity '$(SIGN_NAME)' found — permissions will survive rebuilds"
+endif
+
+## reset-permissions — clear Fovea's TCC grants
+##
+## Needed ONCE when moving off ad-hoc signing: the old grants are pinned to a
+## cdhash that no longer exists, so they linger as entries that look granted and
+## behave as denied. Also the way out if the permission state ever gets stuck.
+reset-permissions:
+	@for svc in Accessibility ScreenCapture Microphone SpeechRecognition; do \
+		tccutil reset $$svc com.fovea.capture >/dev/null 2>&1 \
+			&& echo "  reset $$svc" || echo "  reset $$svc (nothing to reset)"; \
+	done
+	@echo "now: open $(APP)  →  Grant permissions…"
 
 clean:
 	@rm -rf $(CAPTURE_DIR)/.build node_modules packages/*/dist build
 
-## record — push-to-talk session recorder (hold Right Option)
-## Events go to sessions/<stamp>/events.jsonl, crops to sessions/<stamp>/crops.
+## record — push-to-talk session recorder (hold Right Option, Ctrl-C to stop)
+##
+## The binary mints and names the session directory itself now (sessions/<stamp>),
+## on the FIRST hold — so a run where you never record leaves nothing behind.
+## It writes events.jsonl into that directory, hence no shell redirect here.
 record: $(DEBUG_BIN)
-	@stamp=$$(date +%Y%m%d-%H%M%S); \
-	dir=sessions/$$stamp; \
-	mkdir -p $$dir/crops; \
-	echo "session → $$dir"; \
-	$(DEBUG_BIN) record --out $$dir --session $$stamp > $$dir/events.jsonl
+	@$(DEBUG_BIN) record --out sessions
 
 ## transcribe — narration → words on the session clock (needs SARVAM_API_KEY)
 transcribe:

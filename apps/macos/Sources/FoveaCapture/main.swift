@@ -236,29 +236,24 @@ func runApp(_ args: Args) {
     // not something you alt-tab to.
     app.setActivationPolicy(.accessory)
 
-    let stamp = Int(Date().timeIntervalSince1970)
-    let sessionId = args.string("session") ?? "session-\(stamp)"
-    let outputDir = args.string("out")
-        ?? "\(NSHomeDirectory())/Documents/Fovea/\(stamp)"
+    // A ROOT, not a session directory. The session folder is minted on the
+    // first hold and named `20260728-011253` — see `Recorder.startSessionIfNeeded`.
+    let root = args.string("out") ?? "\(NSHomeDirectory())/Documents/Fovea"
 
-    let recorder = Recorder(
-        sessionId: sessionId,
-        outputDir: outputDir,
-        captureCrops: !args.has("no-crop")
-    )
+    let recorder = Recorder(sessionRoot: root, captureCrops: !args.has("no-crop"))
     if let radius = args.double("settle-radius") { recorder.settleRadius = radius }
     if let dwell = args.double("dwell") { recorder.dwellMs = dwell }
 
     // Events go to a file rather than stdout: an app launched from Finder has
-    // nowhere to print. The session directory is the product's real output.
-    Emit.redirectToFile("\(outputDir)/events.jsonl")
+    // nowhere to print. Until a session exists they go to a launch log, so a
+    // permission failure at startup is still recoverable after the fact.
+    Emit.redirectToFile(Paths.launchLog)
 
     let menu = MenuBar(recorder: recorder)
     app.delegate = menu
     menu.install()
-    menu.armIfReady()
 
-    Emit.log("Fovea running in the menu bar — session \(sessionId) → \(outputDir)")
+    Emit.log("Fovea running in the menu bar — sessions → \(root)")
     app.run()
 }
 
@@ -331,14 +326,11 @@ func runRecord(_ args: Args) {
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
 
-    let sessionId = args.string("session") ?? "session-\(Int(Date().timeIntervalSince1970))"
-    let outputDir = args.string("out")
+    // Same session model as the app: a root that session folders are minted
+    // under, one folder per session, named by timestamp.
+    let root = args.string("out") ?? "sessions"
 
-    let recorder = Recorder(
-        sessionId: sessionId,
-        outputDir: outputDir,
-        captureCrops: !args.has("no-crop")
-    )
+    let recorder = Recorder(sessionRoot: root, captureCrops: !args.has("no-crop"))
     if let radius = args.double("settle-radius") { recorder.settleRadius = radius }
     if let dwell = args.double("dwell") { recorder.dwellMs = dwell }
 
@@ -350,16 +342,34 @@ func runRecord(_ args: Args) {
         exit(1)
     }
 
-    Emit.log("""
-    fovea-capture record — session \(sessionId)
+    // Ctrl-C is this command's "Stop session" button, so it must close the
+    // session out properly rather than killing the process mid-write: default
+    // SIGINT would leave the last crops unwritten and no `sessionEnd` line.
+    // The default handler has to be disabled explicitly — a DispatchSource for
+    // a signal observes it, it does not replace it.
+    signal(SIGINT, SIG_IGN)
+    let interrupt = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
+    interrupt.setEventHandler {
+        Task { @MainActor in
+            if let dir = await recorder.stopSession() {
+                Emit.log("session → \(dir)")
+            }
+            await recorder.stop()
+            exit(0)
+        }
+    }
+    interrupt.resume()
 
-      HOLD Right Option    to start a session
+    Emit.log("""
+    fovea-capture record — sessions → \(root)
+
+      HOLD Right Option    start recording (the first hold opens a session)
       point and pause      → a candidate referent
       hold mouse + circle  → a region referent (the drag is swallowed, so the
                              app underneath is never touched)
-      release Right Option to end the session
+      release Right Option end the hold; the session stays open
 
-      Ctrl-C to quit.
+      Ctrl-C               stop the session and write it out.
     """)
 
     app.run()
@@ -511,24 +521,32 @@ enum Usage {
     static let text = """
 fovea-capture \(FoveaVersion.current)
 
-  app                         The product: menu-bar app, hotkey armed, events
+  app                         The product: menu-bar app, hotkey live, events
                               written to a session folder. This is what runs
                               when Fovea.app is launched — and launching it that
                               way is what makes macOS attribute permissions to
                               Fovea rather than to your terminal.
-    --out <dir>               Session directory (~/Documents/Fovea/<stamp>).
+    --out <dir>               Where sessions are minted (~/Documents/Fovea).
     --no-crop                 Skip the Tier 1 crop + OCR per referent.
 
   hello                       Handshake event on stdout (checks AX trust).
 
-  record [options]            Push-to-talk session recorder (the real thing).
+  record [options]            The same recorder without the menu bar.
+
                               HOLD Right Option to record. Point and pause for
                               a candidate referent; hold the mouse button and
                               circle an area for a region referent. Release to
-                              stop. An overlay shows the cursor, its trace and
-                              the lasso while the key is down — and only then.
-    --out <dir>               Session directory (crops land in <dir>/crops).
-    --session <id>            Session id (default: session-<unix time>).
+                              end the hold. An overlay shows the cursor, its
+                              trace and the lasso while the key is down — and
+                              only then.
+
+                              A SESSION spans many holds: it opens on the first
+                              hold and closes on Ctrl-C, which writes it out
+                              properly rather than killing it mid-crop. The
+                              directory <root>/<stamp> is created on that first
+                              hold, so a run that records nothing leaves
+                              nothing behind.
+    --out <dir>               Where sessions are minted (default: sessions).
     --settle-radius <px>      Movement under this counts as stationary (8).
     --dwell <ms>              Rest time before a settle fires (300).
     --no-crop                 Skip the Tier 1 crop + OCR per referent.

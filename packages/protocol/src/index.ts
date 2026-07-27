@@ -192,13 +192,19 @@ export interface CursorEvent {
   y: number;
 }
 
-export interface SessionEvent {
-  type: "sessionStart" | "sessionEnd";
+/** One press-and-release of the hotkey: one utterance, one WAV, its own t0.
+ *
+ *  These were emitted as `sessionStart`/`sessionEnd` back when a session WAS a
+ *  hold. A session now spans many holds and is closed explicitly by the user,
+ *  so that name described the wrong boundary. Readers should accept the old
+ *  names too — sessions recorded before the split are still valid data. */
+export interface HoldEvent {
+  type: "holdStart" | "holdEnd" | "sessionStart" | "sessionEnd";
   t: number;
   id: string;
   /** Which hold of the hotkey this is, 1-based. The natural grouping for the
    *  referent stack, and part of every crop filename. */
-  hold?: number;
+  hold: number;
   epochWall?: string;
   referentCount?: number;
   audioPath?: string;
@@ -209,12 +215,28 @@ export interface SessionEvent {
   audioT0?: number;
 }
 
+/** The recording as a whole — first and last line of `events.jsonl`. Told apart
+ *  from a legacy per-hold event by the ABSENCE of `hold`. */
+export interface SessionEvent {
+  type: "sessionStart" | "sessionEnd";
+  t: number;
+  id: string;
+  hold?: undefined;
+  epochWall?: string;
+  /** Where the session was written. `sessionStart` only. */
+  directory?: string;
+  /** Totals across every hold. `sessionEnd` only. */
+  holdCount?: number;
+  referentCount?: number;
+}
+
 export type CaptureEvent =
   | HelloEvent
   | ProbeEvent
   | ErrorEvent
   | CandidateEvent
   | CursorEvent
+  | HoldEvent
   | SessionEvent;
 
 /** Parse one JSON Lines chunk from the capture binary's stdout. */

@@ -98,7 +98,14 @@ enum Permission: String, CaseIterable {
 final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private let recorder: Recorder
-    private var isArmed = false
+
+    /// Set once the event tap is up. Not a user-facing concept and deliberately
+    /// not a toggle: there used to be Pause/Resume here, and it was both
+    /// meaningless ("pause what? I'm not recording") and broken — `menuWillOpen`
+    /// re-armed automatically, so a pause silently undid itself the next time
+    /// the menu was opened. Fovea listens whenever it has permission to, and
+    /// Quit is how you stop it.
+    private var isListening = false
 
     init(recorder: Recorder) {
         self.recorder = recorder
@@ -107,26 +114,31 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func install() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        setIcon(recording: false)
-        rebuildMenu()
 
-        // The recorder drives the icon: filled while a session is live, hollow
-        // when merely armed. The menu bar is the one indicator visible even
-        // when the overlay is not.
-        recorder.onSessionStateChange = { [weak self] recording in
-            self?.setIcon(recording: recording)
-            self?.rebuildMenu()
+        // Any change in the recorder — hold started, hold ended, session
+        // opened — redraws both the icon and the menu from `recorder` itself.
+        // Nothing about session state is mirrored into this class, so there is
+        // nothing to fall out of sync.
+        recorder.onStateChange = { [weak self] in
+            self?.refresh()
         }
+        refresh()
+        startListeningIfPermitted()
     }
 
-    private func setIcon(recording: Bool) {
+    private func refresh() {
+        setIcon()
+        rebuildMenu()
+    }
+
+    private func setIcon() {
         guard let button = statusItem.button else { return }
-        // SF Symbols: a filled eye while capturing, an outline when idle.
+        // SF Symbols: a filled eye while the key is down, an outline otherwise.
         // "Fovea" is the part of the retina that sees detail — the icon is the
         // product's whole thesis in one glyph.
-        let name = recording ? "eye.fill" : "eye"
+        let recording = recorder.isRecording
         button.image = NSImage(
-            systemSymbolName: name,
+            systemSymbolName: recording ? "eye.fill" : "eye",
             accessibilityDescription: recording ? "Fovea — recording" : "Fovea — ready"
         )
         button.image?.isTemplate = true
@@ -138,54 +150,17 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let missing = Permission.allCases.filter { !$0.isGranted }
 
         if missing.isEmpty {
-            let state = NSMenuItem(
-                title: isArmed
-                    ? (recorder.isRecording ? "Recording…" : "Hold Right Option to capture")
-                    : "Paused",
-                action: nil,
-                keyEquivalent: ""
-            )
-            state.isEnabled = false
-            menu.addItem(state)
-
-            menu.addItem(NSMenuItem(
-                title: isArmed ? "Pause capture" : "Resume capture",
-                action: #selector(toggleArmed),
-                keyEquivalent: ""
-            ))
+            addCaptureItems(to: menu)
         } else {
-            // Missing permissions are the whole menu when present — there is
-            // nothing else worth showing until they are resolved, and each one
-            // states what it is FOR rather than just naming itself (PRD §10:
-            // every permission explained with its exact use).
-            let header = NSMenuItem(title: "Fovea needs permission to:", action: nil, keyEquivalent: "")
-            header.isEnabled = false
-            menu.addItem(header)
-
-            for permission in missing {
-                let item = NSMenuItem(
-                    title: "  \(permission.rawValue) — \(permission.purpose)",
-                    action: #selector(requestPermission(_:)),
-                    keyEquivalent: ""
-                )
-                item.representedObject = permission.rawValue
-                menu.addItem(item)
-            }
-            menu.addItem(.separator())
-            menu.addItem(NSMenuItem(
-                title: "Re-check permissions",
-                action: #selector(recheck),
-                keyEquivalent: ""
-            ))
+            addPermissionItems(missing, to: menu)
         }
 
         menu.addItem(.separator())
-        let sessions = NSMenuItem(
+        menu.addItem(NSMenuItem(
             title: "Open sessions folder",
-            action: #selector(openSessions),
+            action: #selector(openSessionRoot),
             keyEquivalent: ""
-        )
-        menu.addItem(sessions)
+        ))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Fovea", action: #selector(quit), keyEquivalent: "q"))
 
@@ -198,15 +173,116 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.menu = menu
     }
 
+    /// The normal menu. Exactly one button ever appears here — Stop session —
+    /// and only when there is a session to stop.
+    private func addCaptureItems(to menu: NSMenu) {
+        if let id = recorder.sessionId {
+            menu.addItem(disabled("Session \(id)"))
+
+            let holds = recorder.holdCount
+            let referents = recorder.referentCount
+            menu.addItem(disabled(
+                recorder.isRecording
+                    ? "  ● Recording — hold \(holds)"
+                    : "  \(holds) hold\(holds == 1 ? "" : "s") · \(referents) referent\(referents == 1 ? "" : "s")"
+            ))
+
+            menu.addItem(NSMenuItem(
+                title: "Stop session",
+                action: #selector(stopSession),
+                keyEquivalent: ""
+            ))
+            menu.addItem(.separator())
+            menu.addItem(NSMenuItem(
+                title: "Reveal this session",
+                action: #selector(revealSession),
+                keyEquivalent: ""
+            ))
+        } else {
+            menu.addItem(disabled(
+                isListening
+                    ? "Hold Right Option to capture"
+                    : "Not listening — could not create the event tap"
+            ))
+        }
+    }
+
+    /// Missing permissions are the whole menu when present — there is nothing
+    /// else worth showing until they are resolved, and each one states what it
+    /// is FOR rather than just naming itself (PRD §10: every permission
+    /// explained with its exact use).
+    private func addPermissionItems(_ missing: [Permission], to menu: NSMenu) {
+        menu.addItem(disabled("Fovea needs permission to:"))
+
+        for permission in missing {
+            let item = NSMenuItem(
+                title: "  \(permission.rawValue) — \(permission.purpose)",
+                action: #selector(requestPermission(_:)),
+                keyEquivalent: ""
+            )
+            item.representedObject = permission.rawValue
+            menu.addItem(item)
+        }
+
+        menu.addItem(.separator())
+        // One click for the whole set. Four rows to work through one at a time
+        // was the friction being reported — this asks for each in turn and only
+        // falls back to Settings for the ones a prompt cannot grant.
+        menu.addItem(NSMenuItem(
+            title: "Grant permissions…",
+            action: #selector(grantAll),
+            keyEquivalent: ""
+        ))
+        // Screen Recording in particular only takes effect after a relaunch,
+        // and there was previously no way to relaunch from inside the app.
+        menu.addItem(NSMenuItem(
+            title: "Relaunch Fovea",
+            action: #selector(relaunch),
+            keyEquivalent: ""
+        ))
+    }
+
+    private func disabled(_ title: String) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        return item
+    }
+
     // ── Actions ─────────────────────────────────────────────────────────────
 
-    @objc private func toggleArmed() {
-        isArmed.toggle()
-        // Pausing tears the event tap down rather than ignoring events. An
-        // input peripheral that claims to be paused should not still be reading
-        // your keystrokes.
-        if isArmed { _ = recorder.start() } else { recorder.stop() }
-        rebuildMenu()
+    /// The one button. Closes the session out — which includes waiting for
+    /// crops still being written — and then shows the user what they made.
+    @objc private func stopSession() {
+        Task { @MainActor in
+            guard let dir = await recorder.stopSession() else { return }
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: dir)])
+        }
+    }
+
+    @objc private func revealSession() {
+        guard let dir = recorder.sessionDir else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: dir)])
+    }
+
+    /// Ask for every missing permission in turn.
+    @objc private func grantAll() {
+        Task { @MainActor in
+            for permission in Permission.allCases where !permission.isGranted {
+                await ask(permission)
+            }
+            refresh()
+            startListeningIfPermitted()
+        }
+    }
+
+    @objc private func requestPermission(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let permission = Permission(rawValue: raw) else { return }
+        Task { @MainActor in
+            await ask(permission)
+            refresh()
+            startListeningIfPermitted()
+        }
     }
 
     /// Ask first, then send them to Settings if asking wasn't enough.
@@ -214,54 +290,67 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Asking is what makes the app appear in the privacy pane at all, so this
     /// must happen even when we expect the prompt to be suppressed — otherwise
     /// the Settings link lands the user on a list Fovea isn't in, with nothing
-    /// to switch on.
-    @objc private func requestPermission(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String,
-              let permission = Permission(rawValue: raw) else { return }
+    /// to switch on. That was the reported bug: Fovea was absent from the
+    /// Microphone pane entirely because nothing had ever requested it.
+    private func ask(_ permission: Permission) async {
+        let granted = await withCheckedContinuation { continuation in
+            permission.request { continuation.resume(returning: $0) }
+        }
+        guard !granted, let url = permission.settingsURL else { return }
+        // Either already denied, or granting needs Settings anyway
+        // (Accessibility and Screen Recording always do).
+        NSWorkspace.shared.open(url)
+    }
 
-        permission.request { granted in
-            Task { @MainActor in
-                if granted {
-                    self.rebuildMenu()
-                    self.armIfReady()
-                } else if let url = permission.settingsURL {
-                    // Either already denied, or granting needs Settings anyway
-                    // (Accessibility and Screen Recording always do).
-                    NSWorkspace.shared.open(url)
-                }
-            }
+    @objc private func relaunch() {
+        // Screen Recording is only re-read at process start, so "grant it then
+        // relaunch" is the actual flow — done here rather than left as an
+        // instruction the user has to follow by hand.
+        let bundle = Bundle.main.bundleURL
+        let config = NSWorkspace.OpenConfiguration()
+        config.createsNewApplicationInstance = true
+        NSWorkspace.shared.openApplication(at: bundle, configuration: config) { _, _ in
+            Task { @MainActor in NSApplication.shared.terminate(nil) }
         }
     }
 
-    @objc private func recheck() {
-        rebuildMenu()
-    }
-
-    @objc private func openSessions() {
-        let dir = recorder.outputRoot ?? FileManager.default.currentDirectoryPath
-        NSWorkspace.shared.open(URL(fileURLWithPath: dir))
+    @objc private func openSessionRoot() {
+        // The root, not the open session — "Reveal this session" is the item
+        // for that, and it only exists when there is one.
+        let root = recorder.sessionRoot
+        try? FileManager.default.createDirectory(
+            atPath: root, withIntermediateDirectories: true
+        )
+        NSWorkspace.shared.open(URL(fileURLWithPath: root))
     }
 
     @objc private func quit() {
-        recorder.stop()
-        NSApplication.shared.terminate(nil)
+        // Route through the same close-out as the button, so quitting can never
+        // truncate a session that still has crops in flight.
+        Task { @MainActor in
+            await recorder.stop()
+            NSApplication.shared.terminate(nil)
+        }
     }
 
     func menuWillOpen(_ menu: NSMenu) {
         rebuildMenu()
-        // A permission granted in Settings should arm us without needing a
-        // click here as well.
-        if !isArmed, Permission.allCases.allSatisfy(\.isGranted) { armIfReady() }
+        // A permission granted in Settings should take effect without a click
+        // here as well. This only ever STARTS listening — it can no longer
+        // fight a user decision, because there is no longer a way to pause.
+        startListeningIfPermitted()
     }
 
-    /// Called once at launch: arm automatically when everything is granted, so
-    /// the common case needs no clicks at all.
-    func armIfReady() {
-        guard Permission.allCases.allSatisfy(\.isGranted) else {
-            rebuildMenu()
-            return
+    /// Bring the event tap up once everything is granted. Idempotent.
+    private func startListeningIfPermitted() {
+        guard !isListening, Permission.allCases.allSatisfy(\.isGranted) else { return }
+        isListening = recorder.start()
+        if !isListening {
+            Emit.event(ErrorEvent(
+                "could not create the event tap",
+                hint: "Accessibility is granted but the tap was refused. Quit and relaunch Fovea; if it persists, remove Fovea from Accessibility and add it again."
+            ))
         }
-        isArmed = recorder.start()
         rebuildMenu()
     }
 }
