@@ -434,12 +434,30 @@ enum AXProbe {
         return result
     }
 
-    /// Walks up to the enclosing window. Done from the hit element rather than
-    /// via the app's focused window, because the element we pointed at may not
-    /// live in the focused window at all.
+    /// The enclosing window's title — free, high-value context. For an editor it
+    /// carries the active file and the workspace/repo folder; for a browser, the
+    /// page; for Postman, the request.
+    ///
+    /// Asks the element directly via `kAXWindowAttribute` rather than walking up
+    /// the parent chain. The walk used to work and then silently stopped: once
+    /// hit-test descent started returning deep leaves, the window sat further
+    /// than 12 levels above them and every probe came back with no title —
+    /// 30 of 30 in a real session. A one-hop attribute read has no depth to be
+    /// wrong about, and costs one IPC instead of twelve.
     private static func windowTitle(for el: AXUIElement) -> String? {
+        for attribute in [kAXWindowAttribute, kAXTopLevelUIElementAttribute] {
+            guard let ref = copyAttr(el, attribute as String),
+                  CFGetTypeID(ref) == AXUIElementGetTypeID() else { continue }
+            let window = ref as! AXUIElement
+            if let title = stringify(copyAttr(window, kAXTitleAttribute as String)) {
+                return title
+            }
+        }
+
+        // Fall back to the parent walk for apps that don't advertise the
+        // attribute, now deep enough to survive a descended leaf.
         var current = el
-        for _ in 0..<12 {
+        for _ in 0..<40 {
             if stringify(copyAttr(current, kAXRoleAttribute as String)) == (kAXWindowRole as String) {
                 return stringify(copyAttr(current, kAXTitleAttribute as String))
             }
