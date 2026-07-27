@@ -1,0 +1,13 @@
+{
+  "name": "@fovea/referents",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": { ".": { "types": "./dist/src/index.d.ts", "default": "./dist/src/index.js" } },
+  "scripts": {
+    "build": "tsc --build",
+    "test": "tsc --build && node --test dist/test/*.test.js"
+  }
+}
