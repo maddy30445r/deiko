@@ -60,9 +60,38 @@ const HINGLISH = [
  */
 const EXCLUDED_HOMOGRAPHS = ["is", "us", "use"] as const;
 
+/**
+ * The same words in Devanagari.
+ *
+ * Needed because the script we get back depends on the recogniser and its mode:
+ * Sarvam's `codemix` returns Devanagari, `translit` returns Latin, and a
+ * Hindi-locale on-device recogniser returns Devanagari. Matching only Latin
+ * would silently score a real Hinglish session as having no pointing words at
+ * all — the failure would look like "alignment doesn't work" rather than "we
+ * read the wrong alphabet".
+ *
+ * Verbatim from a real recorded session: "यह जो data है इसमें taxonomy ... उसको
+ * हमको change करना है ... और फिर यहां जो tenant का यह check लगा हुआ है".
+ */
+const DEVANAGARI = [
+  // yeh / this
+  "यह", "ये", "यही",
+  // woh / that
+  "वह", "वो", "वही",
+  // yahan / here
+  "यहां", "यहाँ", "इधर",
+  // wahan / there
+  "वहां", "वहाँ", "उधर",
+  // oblique forms of this
+  "इसमें", "इसको", "इसका", "इसकी", "इसे", "इनको", "इनका",
+  // oblique forms of that
+  "उसमें", "उसको", "उसका", "उसकी", "उसे", "उनको", "उनका",
+] as const;
+
 export const DEICTIC_WORDS: ReadonlySet<string> = new Set<string>([
   ...ENGLISH,
   ...HINGLISH,
+  ...DEVANAGARI,
 ]);
 
 /** Guards the exclusion above against being undone by a careless edit. */
@@ -83,9 +112,18 @@ export const DEICTIC_QUALIFIERS: ReadonlySet<string> = new Set<string>([
   "wala", "wale", "wali", "one", "ones",
 ]);
 
-/** Strip punctuation and case so `"this,"` and `"This"` both match. */
+/**
+ * Strip punctuation and case so `"this,"` and `"This"` both match.
+ *
+ * `\p{M}` — combining marks — is kept, and that is not a detail. Devanagari
+ * vowel signs and anusvara are marks, not letters, so dropping them mangles
+ * every word that has one: `इसमें` became `इसम`, `उसको` became `उसक`, and
+ * `यहां` silently collapsed into `यह` — a different word that happened to be in
+ * the lexicon, which is worse than a miss because it matches the wrong thing.
+ * In Devanagari a matra changes the word; it is not decoration.
+ */
 export function normalizeWord(word: string): string {
-  return word.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+  return word.toLowerCase().replace(/[^\p{L}\p{N}\p{M}]/gu, "");
 }
 
 export function isDeictic(word: string): boolean {

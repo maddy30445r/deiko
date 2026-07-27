@@ -70,6 +70,23 @@ test("Hinglish points as well as English", () => {
   }
 });
 
+test("Devanagari points too — the script depends on the recogniser, not the speaker", () => {
+  // Verbatim deictics from a real recorded session's Sarvam codemix output.
+  for (const word of ["यह", "इसमें", "उसको", "यहां"]) {
+    const { bindings } = align([candidate(1000)], say(word, 1300));
+    assert.equal(
+      bindings[0]?.reason,
+      "deictic",
+      `"${word}" should be recognised as a pointing word`,
+    );
+  }
+});
+
+test("punctuation and case never hide a pointing word", () => {
+  const { bindings } = align([candidate(1000)], say("This,", 1300));
+  assert.equal(bindings[0]?.reason, "deictic");
+});
+
 test("a settle right after an app switch loses to a clean one", () => {
   const arriving = candidate(1000, {
     features: { dwellMs: 400, approachSpeed: 900, msSinceAppSwitch: 150 },

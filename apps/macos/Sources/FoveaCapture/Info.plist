@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>com.fovea.capture</string>
+	<key>CFBundleName</key>
+	<string>Fovea Capture</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.0.1</string>
+
+	<!--
+	  TCC usage descriptions. A SwiftPM executable has no bundle, so this plist
+	  is linked into the binary as a __TEXT,__info_plist section (see
+	  Package.swift). Without it, requesting Speech Recognition does not fail
+	  gracefully — the process is killed with SIGABRT.
+
+	  These strings are shown in the permission prompts, so they say exactly
+	  what the capability is used for. PRD §10 makes that a product commitment,
+	  not just good manners.
+	-->
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Fovea transcribes your narration on-device to work out which moment you were pointing at. Audio never leaves your Mac for this step.</string>
+
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Fovea records your narration only while you hold the push-to-talk key.</string>
+</dict>
+</plist>

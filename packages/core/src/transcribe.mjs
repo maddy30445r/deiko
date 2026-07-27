@@ -16,8 +16,11 @@
  * as a real risk; Whisper or Apple Speech drop in without the aligner noticing.
  */
 
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
-import { resolve, join } from "node:path";
+import { readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
+import { resolve, join, dirname } from "node:path";
+import { execFileSync } from "node:child_process";
+import { setTimeout as sleep } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 
 const SARVAM_STT_URL = "https://api.sarvam.ai/speech-to-text";
 
@@ -28,20 +31,67 @@ const SARVAM_STT_URL = "https://api.sarvam.ai/speech-to-text";
  * @typedef {{ name: string, transcribe: (wavPath: string, opts: {language?: string}) => Promise<{words: Word[], text: string, raw: unknown}> }} Transcriber
  */
 
+/**
+ * Sarvam's REST endpoint rejects anything over 30 seconds ("please use the
+ * batch API"), and the batch API returns chunk-level timestamps only — useless
+ * for binding individual words to pointing events. So split long holds here.
+ *
+ * Production will use the streaming WebSocket API instead, which has no such
+ * limit and gives partials during capture (PRD §9's latency budget assumes
+ * exactly that). This is the gate harness, not the shipping path.
+ */
+const CHUNK_SECONDS = 25;
+const SAMPLE_RATE = 16000;
+const BYTES_PER_SAMPLE = 2;
+
 /** @returns {Transcriber} */
 function sarvamTranscriber(apiKey) {
   return {
     name: "sarvam",
     async transcribe(wavPath, { language = "unknown" } = {}) {
-      const audio = readFileSync(wavPath);
+      const file = readFileSync(wavPath);
+      const pcm = file.subarray(44);
+      const totalSeconds = pcm.length / (SAMPLE_RATE * BYTES_PER_SAMPLE);
+
+      if (totalSeconds <= CHUNK_SECONDS) {
+        return this._one(pcm, language);
+      }
+
+      const chunks = splitAtSilence(pcm, CHUNK_SECONDS);
+      process.stderr.write(`(${totalSeconds.toFixed(0)}s → ${chunks.length} chunks) `);
+
+      const words = [];
+      const texts = [];
+      const raws = [];
+      for (const { data, offsetMs } of chunks) {
+        const part = await this._one(data, language);
+        // Each chunk's word times are offsets into that chunk; shift them back
+        // onto the whole file's timeline before anyone else sees them.
+        words.push(...part.words.map((w) => ({
+          ...w,
+          start: w.start + offsetMs,
+          end: w.end + offsetMs,
+        })));
+        if (part.text) texts.push(part.text);
+        raws.push(part.raw);
+      }
+      return { words, text: texts.join(" "), raw: raws };
+    },
+
+    async _one(pcm, language) {
+      const audio = wrapWav(pcm);
       const form = new FormData();
       form.append("file", new Blob([audio], { type: "audio/wav" }), "audio.wav");
       form.append("model", "saaras:v3");
-      // codemix keeps Hinglish as Hinglish instead of translating it to
-      // English — we need the words the user actually said, because the
-      // deictic lexicon matches on "yeh"/"isko", not on their translations.
-      form.append("mode", "codemix");
+      // `translit` returns Latin script — "Yeh jo data hai ismein taxonomy ke
+      // andar board ka naam" — matching the on-device timings and the Latin
+      // half of the deictic lexicon. `codemix` returns Devanagari for the same
+      // audio, which the lexicon also handles but which reads worse in a plan.
+      form.append("mode", "translit");
       form.append("language_code", language);
+      // Asked for even though Sarvam only ever returns one span for the whole
+      // clip: harmless, and the day they add real word timings we get them.
+      form.append("with_timestamps", "true");
 
       const response = await fetch(SARVAM_STT_URL, {
         method: "POST",
@@ -64,6 +114,74 @@ function sarvamTranscriber(apiKey) {
       return { words: normalizeWords(raw), text: extractText(raw), raw };
     },
   };
+}
+
+/**
+ * Split PCM into chunks at the QUIETEST point near each boundary rather than at
+ * a fixed offset. A fixed cut lands mid-word roughly as often as not, and a
+ * word sliced in half is either dropped or mis-transcribed at every boundary —
+ * which would show up in the gate as an alignment failure rather than as an
+ * audio-handling one.
+ */
+function splitAtSilence(pcm, chunkSeconds) {
+  const bytesPerChunk = chunkSeconds * SAMPLE_RATE * BYTES_PER_SAMPLE;
+  const searchRadius = 2 * SAMPLE_RATE * BYTES_PER_SAMPLE; // ±2s
+  const windowBytes = 0.1 * SAMPLE_RATE * BYTES_PER_SAMPLE; // 100ms
+
+  const chunks = [];
+  let start = 0;
+
+  while (start < pcm.length) {
+    let end = start + bytesPerChunk;
+    if (end >= pcm.length) {
+      end = pcm.length;
+    } else {
+      // Scan a window either side of the nominal boundary for the lowest energy.
+      let quietestAt = end;
+      let quietest = Infinity;
+      const from = Math.max(start + bytesPerChunk / 2, end - searchRadius);
+      const to = Math.min(pcm.length - windowBytes, end + searchRadius);
+
+      for (let at = from; at < to; at += windowBytes) {
+        let energy = 0;
+        for (let i = at; i < at + windowBytes; i += 64) {
+          energy += Math.abs(pcm.readInt16LE(i & ~1));
+        }
+        if (energy < quietest) {
+          quietest = energy;
+          quietestAt = at;
+        }
+      }
+      end = quietestAt & ~1; // keep 16-bit sample alignment
+    }
+
+    chunks.push({
+      data: pcm.subarray(start, end),
+      offsetMs: (start / (SAMPLE_RATE * BYTES_PER_SAMPLE)) * 1000,
+    });
+    start = end;
+  }
+
+  return chunks;
+}
+
+/** Wrap raw 16kHz mono PCM in a minimal WAV header. */
+function wrapWav(pcm) {
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0);
+  header.writeUInt32LE(36 + pcm.length, 4);
+  header.write("WAVE", 8);
+  header.write("fmt ", 12);
+  header.writeUInt32LE(16, 16); // PCM chunk size
+  header.writeUInt16LE(1, 20); // format = PCM
+  header.writeUInt16LE(1, 22); // channels
+  header.writeUInt32LE(SAMPLE_RATE, 24);
+  header.writeUInt32LE(SAMPLE_RATE * BYTES_PER_SAMPLE, 28); // byte rate
+  header.writeUInt16LE(BYTES_PER_SAMPLE, 32); // block align
+  header.writeUInt16LE(16, 34); // bits per sample
+  header.write("data", 36);
+  header.writeUInt32LE(pcm.length, 40);
+  return Buffer.concat([header, pcm]);
 }
 
 /**
@@ -110,11 +228,11 @@ function normalizeWords(raw) {
       .filter((w) => w.text && Number.isFinite(w.start));
   }
 
-  const err = new Error(
-    "could not find word timestamps in the Sarvam response — see raw payload above",
-  );
-  err.raw = raw;
-  throw err;
+  // No throw. Sarvam is the TEXT source now — on-device Apple Speech supplies
+  // the timings — so a response without usable word times is the normal case,
+  // not a failure. Returning empty here keeps a perfectly good transcript from
+  // sinking the whole hold.
+  return [];
 }
 
 /** Seconds or milliseconds in, milliseconds out. Values under 1000 are almost
@@ -129,6 +247,53 @@ function toMs(value) {
 function extractText(raw) {
   return String(raw?.transcript ?? raw?.text ?? raw?.output?.transcript ?? "").trim();
 }
+
+// ── On-device word timings ──────────────────────────────────────────────────
+
+/**
+ * Apple's Speech framework, via the app bundle, for WORD TIMINGS.
+ *
+ * Sarvam gives far better Hinglish text but no usable timings — its REST API
+ * returns one timestamp spanning the whole clip on every model and parameter
+ * combination. So the two split the work: Sarvam says WHAT was said, Apple says
+ * WHEN, and the aligner runs on Apple's clock.
+ *
+ * Launched with `open -n` rather than executed directly, because TCC blames the
+ * RESPONSIBLE process: a binary exec'd from a terminal inherits that terminal's
+ * identity (inside an IDE, that is Electron), whose Info.plist has no speech
+ * usage description — and the request is killed with SIGABRT before our own
+ * plist is ever read. Going through LaunchServices makes the app answer for
+ * itself. `-n` forces a new instance; without it `open` silently hands the
+ * request to an already-running process.
+ */
+async function appleTimings(wavPath, { locale = "en-IN", timeoutMs = 90_000 } = {}) {
+  const app = resolve(REPO_ROOT, "build/Fovea.app");
+  if (!existsSync(app)) {
+    throw new Error("build/Fovea.app is missing — run `make bundle`");
+  }
+
+  const out = `${wavPath}.timing.json`;
+  if (existsSync(out)) rmSync(out);
+
+  execFileSync("open", [
+    "-n", "-a", app, "--args",
+    "timing", "--wav", wavPath, "--locale", locale, "--out", out,
+  ]);
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (existsSync(out)) {
+      const result = JSON.parse(readFileSync(out, "utf8"));
+      rmSync(out);
+      if (result.error) throw new Error(`speech timing: ${result.error}`);
+      return result;
+    }
+    await sleep(500);
+  }
+  throw new Error(`speech timing timed out after ${timeoutMs / 1000}s`);
+}
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 // ── Session driver ──────────────────────────────────────────────────────────
 
@@ -164,6 +329,8 @@ async function main() {
 
   const langFlag = process.argv.indexOf("--language");
   const language = langFlag > -1 ? process.argv[langFlag + 1] : "unknown";
+  const locFlag = process.argv.indexOf("--locale");
+  const args = { locale: locFlag > -1 ? process.argv[locFlag + 1] : "en-IN" };
 
   const dir = resolve(sessionDir);
   const events = loadEvents(dir);
@@ -194,36 +361,58 @@ async function main() {
   }
 
   const allWords = [];
+  const holdTexts = [];
+
   for (const { hold, audioPath, audioT0 } of holds) {
     const wav = resolve(audioPath);
-    process.stderr.write(`  hold ${hold} → ${transcriber.name} … `);
 
-    let result;
+    // Timings first — without them there is nothing to align, so a failure here
+    // is fatal for the hold in a way a missing Sarvam transcript is not.
+    process.stderr.write(`  hold ${hold} → on-device timings … `);
+    let timing;
     try {
-      result = await transcriber.transcribe(wav, { language });
+      timing = await appleTimings(wav, { locale: args.locale });
     } catch (err) {
       console.error(`FAILED\n    ${err.message}`);
-      if (err.raw) console.error(`    raw: ${JSON.stringify(err.raw).slice(0, 600)}`);
       continue;
     }
+    console.error(`${timing.words.length} segments`);
 
-    // THE SHIFT. Offsets into the wav become session-clock times.
-    const shifted = result.words.map((w) => ({
+    // THE SHIFT. Offsets into the wav become session-clock times, so words and
+    // cursor events share one timeline.
+    allWords.push(...timing.words.map((w) => ({
       text: w.text,
       start: w.start + audioT0,
       end: w.end + audioT0,
       hold,
-    }));
-    allWords.push(...shifted);
+    })));
 
-    console.error(`${shifted.length} words`);
-    if (result.text) console.error(`    "${result.text.slice(0, 100)}"`);
+    // Sarvam for readable text. Best-effort: the plan prompt wants it, the
+    // aligner does not, so a failure here must not sink the hold.
+    process.stderr.write(`  hold ${hold} → ${transcriber.name} text … `);
+    try {
+      const result = await transcriber.transcribe(wav, { language });
+      holdTexts.push({ hold, text: result.text });
+      console.error(`ok`);
+      if (result.text) console.error(`    "${result.text.slice(0, 110)}"`);
+    } catch (err) {
+      console.error(`failed (${err.message.slice(0, 80)}) — continuing on timings alone`);
+      holdTexts.push({ hold, text: timing.transcript });
+    }
   }
 
   allWords.sort((a, b) => a.start - b.start);
 
+  if (allWords.length === 0) {
+    // Never write an empty transcript and call it success — the next step would
+    // report "alignment found nothing" for what is actually a transcription
+    // failure, and the gate would be measuring the wrong thing.
+    console.error("\n✗ no words transcribed — not writing transcript.json");
+    process.exit(1);
+  }
+
   const out = join(dir, "transcript.json");
-  writeFileSync(out, JSON.stringify({ words: allWords }, null, 2));
+  writeFileSync(out, JSON.stringify({ words: allWords, holdTexts }, null, 2));
   console.error(`\n✓ ${allWords.length} words on the session clock → ${out}`);
 }
 

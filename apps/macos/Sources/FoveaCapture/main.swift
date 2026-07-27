@@ -83,6 +83,9 @@ case "capture":
 case "record":
     runRecord(args)
 
+case "timing":
+    await runTiming(args)
+
 case "help", "--help", "-h":
     Emit.log(Usage.text)
 
@@ -206,6 +209,58 @@ func runAXProbe(_ args: Args) async {
             firedForThisRest = true
             await probeOnce()
         }
+    }
+}
+
+/// Word timings for a recorded WAV, on-device. Emits JSON on stdout so the
+/// Node side can merge these times with Sarvam's better text.
+func runTiming(_ args: Args) async {
+    guard let path = args.string("wav") else {
+        Emit.event(ErrorEvent("timing needs --wav <path>"))
+        exit(2)
+    }
+
+    let status = await SpeechTiming.requestAuthorization()
+    guard status == .authorized else {
+        Emit.event(ErrorEvent(
+            "speech recognition not authorized (\(status.rawValue))",
+            hint: "System Settings → Privacy & Security → Speech Recognition. Grant the terminal you launched from."
+        ))
+        exit(1)
+    }
+
+    let result = await SpeechTiming.transcribe(
+        url: URL(fileURLWithPath: path),
+        localeIdentifier: args.string("locale") ?? "hi-IN",
+        forceOnDevice: !args.has("allow-network")
+    )
+
+    // Writing to a file rather than only stdout, because this has to be
+    // launchable via `open -a`: TCC blames the RESPONSIBLE process, and a
+    // binary exec'd from a terminal inherits that terminal's identity — inside
+    // an IDE that is Electron, whose Info.plist has no speech key, so the
+    // request is killed before our own plist is ever consulted. Going through
+    // LaunchServices makes the app responsible for itself, and then it has no
+    // stdout to write to.
+    if let out = args.string("out") {
+        let url = URL(fileURLWithPath: out)
+        try? FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        if let data = try? JSONEncoder().encode(result) {
+            try? data.write(to: url)
+        }
+    }
+
+    Emit.event(result)
+
+    if let error = result.error {
+        Emit.log("✗ \(error)")
+        exit(1)
+    }
+    Emit.log("✓ \(result.words.count) words with timings (\(result.locale), on-device: \(result.onDevice))")
+    if !result.transcript.isEmpty {
+        Emit.log("  \"\(result.transcript.prefix(120))\"")
     }
 }
 
