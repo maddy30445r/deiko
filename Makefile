@@ -10,8 +10,13 @@
 #
 # Signing with a stable self-signed certificate instead keys the grant to the
 # certificate, so the permissions survive rebuilds. See `make signing-setup`.
+#
+# Deliberately NOT `find-identity -v`. The -v flag lists only certificates macOS
+# considers valid, which for a self-signed one means added to your trust store —
+# an authorisation prompt and a root certificate, bought for nothing, since
+# codesign signs perfectly well with an untrusted local identity.
 SIGN_NAME  ?= Fovea Local
-SIGN_FOUND := $(shell security find-identity -v -p codesigning 2>/dev/null | grep -c '"$(SIGN_NAME)"')
+SIGN_FOUND := $(shell security find-identity -p codesigning 2>/dev/null | grep -c '"$(SIGN_NAME)"')
 
 CAPTURE_DIR := apps/capture
 DEBUG_BIN   := $(CAPTURE_DIR)/.build/debug/fovea-capture
@@ -81,27 +86,13 @@ endif
 	@echo "launch it:  open $(APP)      (menu-bar app; permissions attach to Fovea)"
 	@echo "subcommand: $(APP)/Contents/MacOS/fovea-capture <cmd>"
 
-## signing-setup — check for the stable signing identity, explain it if absent
+## signing-setup — create the local signing certificate (idempotent)
+##
+## Creates it rather than telling you to open Keychain Access, because that app
+## was removed in macOS 26 and the certificate assistant went with it.
 signing-setup:
-ifeq ($(SIGN_FOUND),0)
-	@echo "✗ no code-signing identity named '$(SIGN_NAME)'."
-	@echo ""
-	@echo "  Without one, Fovea.app is ad-hoc signed and macOS revokes all four"
-	@echo "  permissions every time you rebuild it. One-time fix, ~2 minutes:"
-	@echo ""
-	@echo "    1. Open Keychain Access"
-	@echo "    2. Menu: Keychain Access → Certificate Assistant →"
-	@echo "                               Create a Certificate…"
-	@echo "    3. Name:          $(SIGN_NAME)"
-	@echo "       Identity Type: Self Signed Root"
-	@echo "       Certificate Type: Code Signing        ← not the default"
-	@echo "    4. Create, Continue through the warning, Done"
-	@echo ""
-	@echo "  Then:  make signing-setup && make reset-permissions && make bundle"
-	@exit 1
-else
-	@echo "✓ signing identity '$(SIGN_NAME)' found — permissions will survive rebuilds"
-endif
+	@bash scripts/create-signing-cert.sh "$(SIGN_NAME)"
+	@echo "  next:  make reset-permissions && make bundle"
 
 ## reset-permissions — clear Fovea's TCC grants
 ##
