@@ -47,3 +47,12 @@ record: $(DEBUG_BIN)
 	mkdir -p $$dir/crops; \
 	echo "session → $$dir"; \
 	$(DEBUG_BIN) record --out $$dir --session $$stamp > $$dir/events.jsonl
+
+## transcribe — narration → words on the session clock (needs SARVAM_API_KEY)
+transcribe:
+	@node scripts/transcribe.mjs $(SESSION)
+
+## align — run the T0.2 gate harness over a transcribed session
+align:
+	@npm run build -w @fovea/alignment --silent
+	@node scripts/align-session.mjs $(SESSION)

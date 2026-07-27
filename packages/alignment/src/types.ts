@@ -14,6 +14,13 @@ export interface Word {
   /** Session-clock milliseconds, NOT an offset into the audio file. */
   start: number;
   end: number;
+  /**
+   * Which hotkey hold this word was spoken in. A hold boundary is a HARD
+   * utterance boundary — the user released the key and stopped talking — so
+   * words from different holds must never be joined into one utterance, no
+   * matter how close their timestamps are.
+   */
+  hold?: number;
 }
 
 /** A cursor settle the recorder logged. Not yet a referent. */

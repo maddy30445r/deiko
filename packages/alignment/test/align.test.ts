@@ -157,6 +157,25 @@ test("speech overlapping a dwell binds without a deictic word, but weakly", () =
   );
 });
 
+test("an utterance never spans a hold boundary", () => {
+  // Two holds whose words happen to sit close together on the session clock.
+  // Releasing the hotkey ended the first sentence; they must not merge.
+  const words: Word[] = [
+    ...say("expose this field", 1000).map((w) => ({ ...w, hold: 1 })),
+    ...say("refactor karo", 1900).map((w) => ({ ...w, hold: 2 })),
+  ];
+
+  const { bindings } = align([candidate(800)], words);
+  const bound = bindings.find((b) => b.reason === "deictic")!;
+
+  assert.match(bound.utterance, /expose this field/);
+  assert.doesNotMatch(
+    bound.utterance,
+    /refactor/,
+    "words from the next hold must not be pulled into this utterance",
+  );
+});
+
 test("two deictic words claim two different candidates", () => {
   const first = candidate(1000);
   const second = candidate(4000);

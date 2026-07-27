@@ -164,11 +164,25 @@ function utteranceAround(
   index: number,
   gapMs = 700,
 ): { utterance: string; utteranceStart: number; utteranceEnd: number } {
+  const hold = words[index]!.hold;
+  // A hold boundary stops the walk unconditionally: releasing the hotkey ends
+  // the utterance, so two holds can never merge into one sentence however close
+  // their timestamps happen to be.
+  const sameHold = (w: Word) => w.hold === hold;
+
   let start = index;
-  while (start > 0 && words[start]!.start - words[start - 1]!.end < gapMs) start--;
+  while (
+    start > 0 &&
+    sameHold(words[start - 1]!) &&
+    words[start]!.start - words[start - 1]!.end < gapMs
+  ) start--;
 
   let end = index;
-  while (end < words.length - 1 && words[end + 1]!.start - words[end]!.end < gapMs) end++;
+  while (
+    end < words.length - 1 &&
+    sameHold(words[end + 1]!) &&
+    words[end + 1]!.start - words[end]!.end < gapMs
+  ) end++;
 
   const span = words.slice(start, end + 1);
   return {
