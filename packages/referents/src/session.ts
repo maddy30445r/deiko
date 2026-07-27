@@ -58,6 +58,9 @@ export function loadSession(events: RawEvent[]): ReferentStack {
       window: probe?.windowTitle,
       text: extractText(probe),
       cropPath: probe?.crop?.path,
+      // Carried through verbatim: these are the recorder's honest notes on how
+      // suspicious the settle was, and the aligner is what decides.
+      capture: candidate.features,
     });
   }
 

@@ -46,16 +46,20 @@ export interface Referent {
   /**
    * Which VISIT to an app this referent belongs to — a counter that increments
    * every time the frontmost app changes. Compass → VS Code → back to Compass
-   * produces visits 1, 2, 3, so the two Compass runs are distinguishable even
-   * though `app` is identical.
+   * produces visits 1, 2, 3, so the two Compass excursions are distinguishable
+   * even though `app` is identical.
    *
-   * `index` alone handles coming back to an app perfectly well — it is global
-   * and chronological, so a later referent is simply later. Visits exist for
-   * one specific job: BACK-REFERENCE. When you say "that key we showed
-   * earlier" while in your third visit, "earlier" almost never means the
-   * referent you captured eight seconds ago in this same visit — it means a
-   * previous excursion. Without visits, recency scoring confidently returns
-   * the wrong Compass field.
+   * `index` alone already handles returning to an app: it is global and
+   * chronological, so a later referent is simply later. Visits add the *shape*
+   * of the session — "you were in Compass, then the editor, then Compass
+   * again" — which is what `byVisit()` renders into the plan prompt so the
+   * model can see the excursions rather than a flat list.
+   *
+   * They are descriptive only. An earlier version scored back-references by
+   * penalising the current visit; it was cut because the model resolves such
+   * references from the referent text perfectly well, and the heuristic broke
+   * on long visits (point at a field early in a two-minute Compass session,
+   * refer back to it later, and it is still the same visit).
    */
   visit: number;
   /** Session-clock milliseconds — the same monotonic clock as audio and cursor. */
@@ -79,23 +83,26 @@ export interface Referent {
   text: ReferentText;
   cropPath?: string;
 
+  /**
+   * How the pointing act itself happened — recorded at capture, never judged
+   * there. The alignment engine uses these to discount settles that were
+   * probably not deliberate: a cursor arriving after an app switch, a pause
+   * while the page scrolled underneath, a drift-to-a-halt rather than a
+   * decelerate-to-a-stop.
+   *
+   * Absent for regions, which need no such defence — nobody draws a loop by
+   * accident.
+   */
+  capture?: {
+    dwellMs: number;
+    approachSpeed: number;
+    msSinceAppSwitch?: number;
+    msSinceScroll?: number;
+  };
+
   // ── filled by alignment, absent at capture time ──
   utterance?: string;
   confidence?: number;
   reason?: "deictic" | "overlap" | "unbound";
 }
 
-/** A phrase that reaches back to something indicated earlier. */
-export interface BackReference {
-  /** The phrase as spoken: "that key we showed earlier". */
-  phrase: string;
-  /** When it was said, on the session clock. */
-  t: number;
-  /**
-   * Ranked candidates from the past. Deliberately a SHORTLIST, not an answer:
-   * scoring can rank by recency and word overlap, but it cannot know that "the
-   * key" means the field named `identifier`. Code narrows, the model picks, and
-   * the review UI can show what it chose between.
-   */
-  candidates: Array<{ referentId: string; score: number; why: string }>;
-}

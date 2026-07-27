@@ -1,16 +1,5 @@
-import type { BackReference, Referent } from "./types.js";
+import type { Referent } from "./types.js";
 
-/**
- * Words that make a phrase a back-reference but identify nothing: the deictics
- * and past markers themselves, plus ordinary filler. Excluded from content
- * matching — see `resolveBackReference`.
- */
-const TRIGGER_WORDS = new Set([
-  "that", "those", "the", "this", "these", "it",
-  "earlier", "before", "previously", "showed", "saw", "were", "was",
-  "wala", "wale", "jo", "woh", "usko", "uska", "pehle", "dikhaya", "tha",
-  "humne", "maine", "karo", "hai", "and", "from", "with", "for",
-]);
 
 /**
  * The session store. Ordered, queryable, and it survives app switches — which
@@ -79,90 +68,6 @@ export class ReferentStack {
   ): void {
     const r = this.get(id);
     if (r) Object.assign(r, binding);
-  }
-
-  /**
-   * Rank past referents for a back-reference phrase.
-   *
-   * Returns a SHORTLIST, never a verdict. Scoring can tell that a referent is
-   * older, in a different app, and shares a word with the phrase; it cannot
-   * tell that "the key" means the field called `identifier`. That last step
-   * needs the model — so code narrows the field and the model chooses, and the
-   * review UI can show what it was choosing between.
-   */
-  resolveBackReference(phrase: string, atTime: number, limit = 3): BackReference {
-    // Strip the words that made this a back-reference in the first place.
-    // "that key we showed earlier" is triggered by "that" and "earlier", but
-    // the only word that IDENTIFIES anything is "key". Leaving the triggers in
-    // divides the match score across filler, so matching the one distinctive
-    // term scored lower than a mild recency difference — and a referent that
-    // matched nothing won.
-    const words = phrase
-      .toLowerCase()
-      .split(/\s+/)
-      .map((w) => w.replace(/[^\p{L}\p{N}\p{M}]/gu, ""))
-      .filter((w) => w.length > 2 && !TRIGGER_WORDS.has(w));
-
-    // Only things indicated BEFORE the phrase can be referred back to.
-    const past = this.items.filter((r) => r.t < atTime);
-    if (past.length === 0) return { phrase, t: atTime, candidates: [] };
-
-    const currentVisit = past[past.length - 1]!.visit;
-    const newest = past[past.length - 1]!.t;
-    const oldest = past[0]!.t;
-    const timeSpan = Math.max(newest - oldest, 1);
-
-    const scored = past.map((r) => {
-      const why: string[] = [];
-
-      // Recency is the WEAKEST term, and deliberately so: the phrase says
-      // "earlier", which is an explicit instruction not to pick the newest
-      // thing. It breaks ties between otherwise equal candidates, nothing more.
-      const recency = (r.t - oldest) / timeSpan;
-      let score = 0.15 * recency;
-
-      // The visit rule. A phrase saying "earlier" while you are mid-visit is
-      // almost never pointing at something from this same visit — you would
-      // have just pointed at it instead of describing it.
-      if (r.visit !== currentVisit) {
-        score += 0.3;
-        why.push("earlier visit");
-      } else {
-        score -= 0.15;
-        why.push("same visit as the phrase");
-      }
-
-      // Word overlap against whatever we grounded. AX text is exact, so a hit
-      // there is worth more than a hit in OCR's guesswork.
-      const axText = r.text.ax.join(" ").toLowerCase();
-      const ocrText = r.text.ocr.join(" ").toLowerCase();
-      const axHits = words.filter((w) => axText.includes(w));
-      const ocrHits = words.filter((w) => ocrText.includes(w) && !axText.includes(w));
-      // Content match dominates everything else: if you named the thing, that
-      // is far stronger evidence than when or where you were standing.
-      if (words.length > 0 && axHits.length) {
-        score += 0.5 * Math.min(axHits.length / words.length, 1);
-        why.push(`matches ${axHits.join(", ")} (ax)`);
-      }
-      if (words.length > 0 && ocrHits.length) {
-        score += 0.25 * Math.min(ocrHits.length / words.length, 1);
-        why.push(`matches ${ocrHits.join(", ")} (ocr)`);
-      }
-
-      // A referent that grounded nothing is a poor thing to refer back to.
-      if (r.text.ax.length === 0 && r.text.ocr.length === 0) {
-        score -= 0.2;
-        why.push("grounded nothing");
-      }
-
-      return { referentId: r.id, score: Math.max(score, 0), why: why.join("; ") };
-    });
-
-    return {
-      phrase,
-      t: atTime,
-      candidates: scored.sort((a, b) => b.score - a.score).slice(0, limit),
-    };
   }
 
   /** PRD §10: a session is discarded unless the user saves it. */

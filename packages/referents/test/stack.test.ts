@@ -3,7 +3,6 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { ReferentStack } from "../src/stack.js";
-import { detectBackReferences } from "../src/backref.js";
 import { loadSession } from "../src/session.js";
 import type { Referent } from "../src/types.js";
 
@@ -43,75 +42,10 @@ test("a return visit is a NEW visit, even though the app is identical", () => {
   assert.equal(s.byVisit().length, 3, "three excursions, not two apps");
 });
 
-test('"earlier" prefers a previous visit over the one you are standing in', () => {
-  const s = new ReferentStack();
-  // First Compass visit — the field actually being referred back to.
-  s.add(ref(1000, "Compass", { text: { ax: ["identifier", "CBSE"], ocr: [] } }));
-  s.add(ref(5000, "Code", { text: { ax: ["tenantService"], ocr: [] } }));
-  // Second Compass visit — recent, and mentions the same word.
-  s.add(ref(9000, "Compass", { text: { ax: ["identifier", "Telangana"], ocr: [] } }));
 
-  const back = s.resolveBackReference("that identifier we showed earlier", 10_000);
 
-  assert.equal(
-    back.candidates[0]?.referentId,
-    "r1",
-    "the earlier visit should outrank the one we are currently in",
-  );
-  assert.match(back.candidates[0]!.why, /earlier visit/);
-});
 
-test("exact accessibility text outranks an OCR guess", () => {
-  const s = new ReferentStack();
-  // Both candidates sit in EARLIER visits, so the visit term cancels out and
-  // the only thing separating them is where their text came from. (An earlier
-  // version of this test had the AX candidate in the current visit, so it was
-  // measuring two signals at once and asserting on the wrong one.)
-  s.add(ref(1000, "Compass", { text: { ax: [], ocr: ["identifier"] } }));
-  s.add(ref(2000, "Code", { text: { ax: ["identifier"], ocr: [] } }));
-  s.add(ref(8000, "Postman")); // where the phrase is spoken
 
-  const back = s.resolveBackReference("that identifier from before", 9000);
-  assert.equal(back.candidates[0]?.referentId, "r2");
-  assert.match(back.candidates[0]!.why, /\(ax\)/);
-});
-
-test("nothing can be referred back to before it existed", () => {
-  const s = new ReferentStack();
-  s.add(ref(5000, "Compass", { text: { ax: ["identifier"], ocr: [] } }));
-
-  const back = s.resolveBackReference("that identifier earlier", 3000);
-  assert.deepEqual(back.candidates, [], "the referent is in the phrase's future");
-});
-
-test("a back-reference needs BOTH a distal word and a past marker", () => {
-  const say = (text: string) =>
-    text.split(" ").map((w, i) => ({ text: w, start: 1000 + i * 250, end: 1200 + i * 250 }));
-
-  assert.equal(
-    detectBackReferences(say("expose that key we showed earlier as status")).length,
-    1,
-    "distal + past marker → back-reference",
-  );
-  assert.equal(
-    detectBackReferences(say("change that field to Telangana")).length,
-    0,
-    "distal alone is ordinary pointing, not a callback",
-  );
-  assert.equal(
-    detectBackReferences(say("we showed the response body")).length,
-    0,
-    "a past marker alone is narration, not a reference",
-  );
-});
-
-test("Hinglish back-references are detected too", () => {
-  const say = (text: string) =>
-    text.split(" ").map((w, i) => ({ text: w, start: 1000 + i * 250, end: 1200 + i * 250 }));
-
-  const found = detectBackReferences(say("wo jo key pehle dikhaya tha usko expose karo"));
-  assert.ok(found.length >= 1, "should detect the Hinglish callback");
-});
 
 test("loads the real recorded session into an ordered stack", () => {
   const path = new URL(
@@ -159,8 +93,4 @@ test("loads the real recorded session into an ordered stack", () => {
     regions.every((r) => r.span && r.span.end > r.span.start),
     "every region has a real drag duration",
   );
-
-  // The founding-example query, against real captured data.
-  const back = stack.resolveBackReference("that identifier we showed earlier", 40_000);
-  assert.ok(back.candidates.length > 0, "should shortlist something");
 });
