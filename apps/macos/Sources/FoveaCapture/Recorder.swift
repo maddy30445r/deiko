@@ -74,10 +74,27 @@ final class Recorder {
         self.captureCrops = captureCrops
     }
 
+    /// Where sessions are written — the menu bar's "Open sessions folder".
+    var outputRoot: String? { outputDir }
+
+    /// True while the hotkey is actually held, not merely while armed.
+    private(set) var isRecording = false
+
+    /// Fired when a session starts or ends, so the menu-bar icon can reflect
+    /// what is genuinely happening rather than what was last clicked.
+    var onSessionStateChange: ((Bool) -> Void)?
+
     func start() -> Bool {
         hotkey.onEvent = { [weak self] event in self?.handle(event) }
         guard hotkey.start() else { return false }
         return true
+    }
+
+    /// Tear the tap down rather than ignoring events. "Paused" has to mean the
+    /// keyboard is no longer being read, or the word is a lie.
+    func stop() {
+        if isRecording { endSession() }
+        hotkey.stop()
     }
 
     // ── Gesture handling ────────────────────────────────────────────────────
@@ -101,6 +118,8 @@ final class Recorder {
     }
 
     private func beginSession() {
+        isRecording = true
+        onSessionStateChange?(true)
         referentCount = 0
         holdIndex += 1
 
@@ -143,6 +162,8 @@ final class Recorder {
     }
 
     private func endSession() {
+        isRecording = false
+        onSessionStateChange?(false)
         sampler?.invalidate()
         sampler = nil
         overlay.hide()

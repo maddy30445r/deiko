@@ -19,7 +19,14 @@ struct Args {
     init(_ argv: [String]) {
         var flags: [String: String] = [:]
         var bools: Set<String> = []
-        var subcommand = "hello"
+        var subcommand: String
+
+        // Double-clicking Fovea.app passes no subcommand. Inside a bundle the
+        // sensible default is the product itself; from a terminal it is the
+        // handshake, which is what a developer poking at the binary wants.
+        var subcommandDefault = "hello"
+        if Bundle.main.bundleIdentifier != nil { subcommandDefault = "app" }
+        subcommand = subcommandDefault
 
         var rest = argv.dropFirst()
         if let first = rest.first, !first.hasPrefix("--") {
@@ -82,6 +89,9 @@ case "capture":
 
 case "record":
     runRecord(args)
+
+case "app":
+    runApp(args)
 
 case "timing":
     await runTiming(args)
@@ -210,6 +220,46 @@ func runAXProbe(_ args: Args) async {
             await probeOnce()
         }
     }
+}
+
+/// The product: a menu-bar app that arms the hotkey and stays out of the way.
+///
+/// This is what `Fovea.app` runs when double-clicked, and the difference from
+/// `record` is not cosmetic — launched through LaunchServices, macOS holds
+/// Fovea responsible for its own privacy requests. Run the same binary from a
+/// terminal and the permissions attach to the terminal instead, which is why
+/// `record` needs four things granted to whatever shell you happened to use.
+@MainActor
+func runApp(_ args: Args) {
+    let app = NSApplication.shared
+    // .accessory: no Dock icon, no app switcher. It is an input peripheral,
+    // not something you alt-tab to.
+    app.setActivationPolicy(.accessory)
+
+    let stamp = Int(Date().timeIntervalSince1970)
+    let sessionId = args.string("session") ?? "session-\(stamp)"
+    let outputDir = args.string("out")
+        ?? "\(NSHomeDirectory())/Documents/Fovea/\(stamp)"
+
+    let recorder = Recorder(
+        sessionId: sessionId,
+        outputDir: outputDir,
+        captureCrops: !args.has("no-crop")
+    )
+    if let radius = args.double("settle-radius") { recorder.settleRadius = radius }
+    if let dwell = args.double("dwell") { recorder.dwellMs = dwell }
+
+    // Events go to a file rather than stdout: an app launched from Finder has
+    // nowhere to print. The session directory is the product's real output.
+    Emit.redirectToFile("\(outputDir)/events.jsonl")
+
+    let menu = MenuBar(recorder: recorder)
+    app.delegate = menu
+    menu.install()
+    menu.armIfReady()
+
+    Emit.log("Fovea running in the menu bar — session \(sessionId) → \(outputDir)")
+    app.run()
 }
 
 /// Word timings for a recorded WAV, on-device. Emits JSON on stdout so the
@@ -460,6 +510,14 @@ func summarize(_ event: ProbeEvent) -> String {
 enum Usage {
     static let text = """
 fovea-capture \(FoveaVersion.current)
+
+  app                         The product: menu-bar app, hotkey armed, events
+                              written to a session folder. This is what runs
+                              when Fovea.app is launched — and launching it that
+                              way is what makes macOS attribute permissions to
+                              Fovea rather than to your terminal.
+    --out <dir>               Session directory (~/Documents/Fovea/<stamp>).
+    --no-crop                 Skip the Tier 1 crop + OCR per referent.
 
   hello                       Handshake event on stdout (checks AX trust).
 

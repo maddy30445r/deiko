@@ -494,12 +494,33 @@ enum Emit {
             log("failed to encode event")
             return
         }
-        print(line)
-        fflush(stdout)
+        if let sink {
+            sink.write(Data("\(line)\n".utf8))
+        } else {
+            print(line)
+            fflush(stdout)
+        }
     }
 
     /// Human-facing output. stderr only — stdout is reserved for the contract.
     static func log(_ message: String) {
         FileHandle.standardError.write(Data("\(message)\n".utf8))
+    }
+
+    /// Send events to a file instead of stdout.
+    ///
+    /// An app launched from Finder has no terminal attached, so the JSON Lines
+    /// stream has nowhere to go. Rather than teach every call site about a
+    /// destination, redirect once at startup — `event()` stays a one-argument
+    /// call everywhere and the session directory becomes the real output.
+    nonisolated(unsafe) private static var sink: FileHandle?
+
+    static func redirectToFile(_ path: String) {
+        let url = URL(fileURLWithPath: path)
+        try? FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        FileManager.default.createFile(atPath: path, contents: nil)
+        sink = try? FileHandle(forWritingTo: url)
     }
 }

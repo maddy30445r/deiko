@@ -58,7 +58,8 @@ bundle: $(DEBUG_BIN)
 	@/usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" $(APP)/Contents/Info.plist >/dev/null 2>&1 || true
 	@codesign --force --deep --sign - $(APP) 2>/dev/null
 	@echo "built $(APP)"
-	@echo "run it as: $(APP)/Contents/MacOS/fovea-capture <subcommand>"
+	@echo "launch it:  open $(APP)      (menu-bar app; permissions attach to Fovea)"
+	@echo "subcommand: $(APP)/Contents/MacOS/fovea-capture <cmd>"
 
 clean:
 	@rm -rf $(CAPTURE_DIR)/.build node_modules packages/*/dist build
