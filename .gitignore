@@ -11,6 +11,12 @@ dist/
 .swiftpm/
 *.o
 
+# The assembled app bundle. Rebuilt by `make bundle` from sources that ARE
+# tracked, so committing it only churns a 1MB binary on every build — and a
+# stale committed copy is worse than none, since it is what `open build/Fovea.app`
+# would launch.
+build/
+
 # Captured content — never commit crops, audio, transcripts or probe logs.
 # These carry whatever was on screen: DB ids, tokens, customer data, scrollback.
 #
