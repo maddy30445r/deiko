@@ -118,10 +118,15 @@ record: $(DEBUG_BIN)
 	@$(DEBUG_BIN) record --out sessions
 
 ## transcribe — narration → words on the session clock (needs SARVAM_API_KEY)
+## Builds alignment first: the script imports the deictic normaliser from its
+## dist/, and a fresh clone (or a `make clean`) has no dist at all.
 transcribe:
+	@npm run build -w @fovea/alignment --silent
 	@node scripts/transcribe.mjs $(SESSION)
 
 ## align — run the T0.2 gate harness over a transcribed session
+## Needs BOTH packages built: the script imports alignment's aligner and
+## referents' session loader from their dist/ directories.
 align:
-	@npm run build -w @fovea/alignment --silent
+	@npm run build -w @fovea/alignment -w @fovea/referents --silent
 	@node scripts/align-session.mjs $(SESSION)

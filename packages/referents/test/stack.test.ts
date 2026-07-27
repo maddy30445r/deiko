@@ -48,8 +48,13 @@ test("a return visit is a NEW visit, even though the app is identical", () => {
 
 
 test("loads the real recorded session into an ordered stack", () => {
+  // Four levels up, not three: this file RUNS from dist/test/, one directory
+  // deeper than it is written. The three-level path resolved to
+  // packages/sessions/… (which never exists), so the catch below turned the
+  // whole test into a silent no-op that still reported ok — and the pairing
+  // bug it would have caught shipped.
   const path = new URL(
-    "../../../sessions/20260727-220359/events.jsonl",
+    "../../../../sessions/20260727-220359/events.jsonl",
     import.meta.url,
   );
   let raw: string;
@@ -74,7 +79,11 @@ test("loads the real recorded session into an ordered stack", () => {
   const stack = loadSession(events);
   const all = stack.all();
 
-  assert.equal(all.length, 9, "5 point candidates + 4 lassos");
+  // 5 settled candidates + 4 regions + 1 flick-demoted point probe. The tenth
+  // is the `CBSE` probe: it has no candidate (its lasso was demoted to a point
+  // by the recorder), and the old time-only pairing let it steal a nearby
+  // settle's slot — a real grounded referent fell off the stack entirely.
+  assert.equal(all.length, 10, "5 paired candidates + 4 lassos + 1 bare probe");
   assert.ok(
     all.every((r, i) => i === 0 || all[i - 1]!.t <= r.t),
     "referents are in chronological order",

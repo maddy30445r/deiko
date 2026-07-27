@@ -27,7 +27,10 @@ export interface Word {
 export interface Candidate {
   id: string;
   t: number;
-  position: { x: number; y: number };
+  /** Which hotkey hold produced this candidate. Same hard-boundary rule as
+   *  `Word.hold`: a word and a candidate from different holds must never
+   *  bind, however close their timestamps sit across the release. */
+  hold?: number;
   features: {
     dwellMs: number;
     approachSpeed: number;
@@ -47,10 +50,9 @@ export interface Binding {
   /** The word that pointed, when one did. */
   deicticWord?: string;
   deicticAt?: number;
-  /** The utterance span assigned to this referent. */
+  /** The utterance assigned to this referent. */
   utterance: string;
   utteranceStart: number;
-  utteranceEnd: number;
   /** 0-1. Driven mostly by the margin over the runner-up — see `align.ts`. */
   confidence: number;
   /** Why this binding was made, for the review UI and for debugging the gate. */
@@ -73,12 +75,9 @@ export interface AlignmentOptions {
    *  side; real session data disagreed ("usko" spoken 1.4s before the settle
    *  on the CBSE cell it named), so it is now the larger one. */
   lookAheadMs: number;
-  /** Below this, a binding is flagged for review rather than trusted. */
-  lowConfidence: number;
 }
 
 export const DEFAULT_OPTIONS: AlignmentOptions = {
   lookBackMs: 1500,
   lookAheadMs: 2000,
-  lowConfidence: 0.5,
 };

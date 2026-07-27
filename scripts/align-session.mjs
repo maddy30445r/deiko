@@ -47,12 +47,16 @@ function toCandidates(events) {
     .all()
     .map((r) => ({
       id: r.id,
-      t: r.t,
-      position: { x: 0, y: 0 },
+      hold: r.hold,
+      // Regions anchor at the drag's END with a dwell equal to the full span,
+      // so the overlap window is exactly [dragStart, dragEnd]. Anchoring at
+      // the midpoint shifted the window a half-span EARLY: it covered the
+      // silence before the lasso and missed the drag's whole second half —
+      // where the narration actually is.
+      t: r.span ? r.span.end : r.t,
       features: r.capture ?? {
-        // Regions carry no capture features — a deliberate drag needs no
-        // defence against being mistaken for a resting hand. Its dwell is the
-        // real gesture duration.
+        // A deliberate drag needs no defence against being mistaken for a
+        // resting hand. Its dwell is the real gesture duration.
         dwellMs: r.span ? r.span.end - r.span.start : 600,
         approachSpeed: 0,
       },
@@ -97,6 +101,9 @@ if (!words?.length) {
 const candidates = toCandidates(events);
 const { bindings, unbound } = align(candidates, words);
 
+/** Below this a binding is flagged for review rather than trusted. */
+const LOW_CONFIDENCE = 0.5;
+
 const byId = new Map(candidates.map((c) => [c.id, c]));
 
 console.log(`session: ${sessionDir}`);
@@ -104,7 +111,7 @@ console.log(`candidates: ${candidates.length}  words: ${words.length}\n`);
 
 for (const b of bindings) {
   const c = byId.get(b.candidateId);
-  const flag = b.confidence < 0.5 ? "  ⚠ LOW" : "";
+  const flag = b.confidence < LOW_CONFIDENCE ? "  ⚠ LOW" : "";
   console.log(`[${b.confidence.toFixed(2)}] ${b.reason.padEnd(8)} ${c?.kind.padEnd(6)} ${c?.app?.name ?? "?"}${flag}`);
   console.log(`   said:      "${b.utterance}"`);
   if (b.deicticWord) console.log(`   pointed:   "${b.deicticWord}" at ${Math.round(b.deicticAt)}ms`);
@@ -115,7 +122,7 @@ for (const b of bindings) {
 console.log(`bound: ${bindings.length}/${candidates.length}`);
 console.log(`unbound (expected — the recorder over-captures on purpose): ${unbound.length}`);
 
-const low = bindings.filter((b) => b.confidence < 0.5).length;
+const low = bindings.filter((b) => b.confidence < LOW_CONFIDENCE).length;
 if (low) console.log(`low-confidence bindings needing review: ${low}`);
 
 console.log(`

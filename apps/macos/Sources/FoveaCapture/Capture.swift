@@ -154,20 +154,28 @@ enum Capture {
         }
 
         var writtenPath: String?
+        var writeError: String?
         if let outputPath {
-            writtenPath = writePNG(image, to: outputPath) ? outputPath : nil
+            if writePNG(image, to: outputPath) {
+                writtenPath = outputPath
+            } else {
+                // Say so. `path: nil, error: nil` is the contract for "capture
+                // ran in memory only" — a full disk or missing directory used
+                // to masquerade as exactly that, and a session whose every
+                // crop failed read as a legitimately crop-less recording.
+                writeError = "could not write \(outputPath)"
+            }
         }
 
         return CropResult(
             path: writtenPath,
             rect: clamped,
             masked: masked,
-            scale: scale,
             rectFromAX: rectFromAX,
             ocr: ocrLines,
             captureElapsedMs: captureElapsed,
             ocrElapsedMs: ocrElapsed,
-            error: nil
+            error: writeError
         )
     }
 
@@ -175,7 +183,7 @@ enum Capture {
         rect: Frame, fromAX: Bool, started: Double, error: String
     ) -> CropResult {
         CropResult(
-            path: nil, rect: rect, masked: false, scale: 1, rectFromAX: fromAX,
+            path: nil, rect: rect, masked: false, rectFromAX: fromAX,
             ocr: [], captureElapsedMs: Clock.nowMs() - started,
             ocrElapsedMs: nil, error: error
         )
@@ -187,21 +195,53 @@ enum Capture {
     /// well over 100ms, and it was being paid on every single crop — measurable
     /// as a flat ~208ms whether the region was 10×10 or 460×220, which is the
     /// signature of fixed overhead rather than work. The display layout only
-    /// changes when a monitor is plugged in, so cache it and refresh on miss.
+    /// changes when a monitor is plugged in, so cache it and invalidate on the
+    /// system's own reconfiguration signal.
+    ///
+    /// Locked because crops resolve on concurrent detached tasks — two early
+    /// referents both missing the cache used to assign this array from two
+    /// threads at once. The lock is never held across an await.
     nonisolated(unsafe) private static var cachedDisplays: [SCDisplay] = []
+    private static let displayLock = NSLock()
+
+    /// CGDisplayRegisterReconfigurationCallback fires on ANY arrangement
+    /// change. Coordinate-coverage checks alone could not see a swap: two
+    /// monitors trading places keeps every point covered while every cached
+    /// `frameInScreenSpace` becomes wrong — and `sourceRect` computed from a
+    /// stale origin crops unrelated screen content with `error: nil`.
+    private static let reconfigurationHook: Void = {
+        CGDisplayRegisterReconfigurationCallback({ _, _, _ in
+            displayLock.lock()
+            cachedDisplays = []
+            displayLock.unlock()
+        }, nil)
+    }()
+
+    /// Synchronous accessors: `NSLock` may not be taken directly in an async
+    /// function, and these critical sections must never span an await anyway.
+    private static func cachedDisplay(containing center: Point) -> SCDisplay? {
+        displayLock.lock()
+        defer { displayLock.unlock() }
+        return cachedDisplays.first { $0.frameInScreenSpace.contains(center) }
+    }
+
+    private static func storeDisplays(_ displays: [SCDisplay]) {
+        displayLock.lock()
+        defer { displayLock.unlock() }
+        cachedDisplays = displays
+    }
 
     private static func display(containing rect: Frame) async throws -> SCDisplay {
+        _ = reconfigurationHook
         let center = rect.center
 
-        if let hit = cachedDisplays.first(where: { $0.frameInScreenSpace.contains(center) }) {
-            return hit
-        }
+        if let cached = cachedDisplay(containing: center) { return cached }
 
         // Cache miss: either first call, or the layout changed under us.
         let content = try await SCShareableContent.excludingDesktopWindows(
             false, onScreenWindowsOnly: true
         )
-        cachedDisplays = content.displays
+        storeDisplays(content.displays)
 
         guard let display = content.displays.first(where: {
             $0.frameInScreenSpace.contains(center)

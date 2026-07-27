@@ -122,8 +122,8 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         recorder.onStateChange = { [weak self] in
             self?.refresh()
         }
-        refresh()
         startListeningIfPermitted()
+        refresh()
     }
 
     private func refresh() {
@@ -270,8 +270,8 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
             for permission in Permission.allCases where !permission.isGranted {
                 await ask(permission)
             }
-            refresh()
             startListeningIfPermitted()
+            refresh()
         }
     }
 
@@ -280,8 +280,8 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
               let permission = Permission(rawValue: raw) else { return }
         Task { @MainActor in
             await ask(permission)
-            refresh()
             startListeningIfPermitted()
+            refresh()
         }
     }
 
@@ -334,14 +334,18 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func menuWillOpen(_ menu: NSMenu) {
-        rebuildMenu()
         // A permission granted in Settings should take effect without a click
         // here as well. This only ever STARTS listening — it can no longer
         // fight a user decision, because there is no longer a way to pause.
+        // Listening first, ONE rebuild after: each rebuild costs four tccd
+        // round-trips for the permission checks, and this path used to do it
+        // twice per menu open.
         startListeningIfPermitted()
+        rebuildMenu()
     }
 
-    /// Bring the event tap up once everything is granted. Idempotent.
+    /// Bring the event tap up once everything is granted. Idempotent. The
+    /// caller rebuilds the menu.
     private func startListeningIfPermitted() {
         guard !isListening, Permission.allCases.allSatisfy(\.isGranted) else { return }
         isListening = recorder.start()
@@ -351,6 +355,5 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 hint: "Accessibility is granted but the tap was refused. Quit and relaunch Fovea; if it persists, remove Fovea from Accessibility and add it again."
             ))
         }
-        rebuildMenu()
     }
 }

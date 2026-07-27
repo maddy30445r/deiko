@@ -49,6 +49,9 @@ final class Recorder {
     private var pulses: [Pulse] = []
 
     private var lassoPath: [Point]?
+    /// When the current lasso's drag began — the recorder sees `dragBegan`
+    /// directly, so the span it emits is measured, not reconstructed.
+    private var lassoStartT: Double?
 
     /// Referents in the CURRENT hold, reported in `holdEnd`; and across the
     /// whole session, reported in `sessionEnd`.
@@ -76,6 +79,12 @@ final class Recorder {
     private var hasMoved = false
     private var firedForThisRest = false
     private var recentSpeeds: [(t: Double, speed: Double)] = []
+    /// The previous SAMPLE, distinct from `lastPosition` (the settle anchor).
+    /// Speed must come from per-tick displacement: the anchor only re-bases
+    /// after 8px of accumulated drift, so dividing distance-from-anchor by one
+    /// frame's duration reported a steady 150px/s glide as ~450px/s — worst
+    /// for exactly the slow deliberate approaches the feature exists to spot.
+    private var previousSample: Point?
 
     // Noise context
     private var lastAppSwitchT: Double?
@@ -116,6 +125,13 @@ final class Recorder {
     /// still being written is a folder the user sees as incomplete.
     private var pendingResolves: [Int: Task<Void, Never>] = [:]
 
+    /// The close-out in progress, if any. One task, shared: `stopSession` from
+    /// the menu, Quit, and a second Ctrl-C all await the SAME close rather than
+    /// racing it — a second caller used to pass the `sessionDir` guard, see an
+    /// already-drained task list, and finalise the session out from under the
+    /// first caller while its crops were still being written.
+    private var stopTask: Task<String?, Never>?
+
     func start() -> Bool {
         hotkey.onEvent = { [weak self] event in self?.handle(event) }
         return hotkey.start()
@@ -128,8 +144,12 @@ final class Recorder {
     /// Creating it at launch instead meant every run of the app left a folder
     /// behind with a 0-byte `events.jsonl`, whether or not anything was ever
     /// recorded — three of them accumulated in a single evening.
-    private func startSessionIfNeeded() {
-        guard sessionDir == nil else { return }
+    ///
+    /// Returns false when the directory cannot be created (denied Documents
+    /// access, read-only volume) — in which case NO session starts, rather than
+    /// a session that silently writes to nowhere.
+    private func startSessionIfNeeded() -> Bool {
+        guard sessionDir == nil else { return true }
 
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyyMMdd-HHmmss"
@@ -140,12 +160,20 @@ final class Recorder {
         let stamp = formatter.string(from: Date())
 
         let dir = "\(sessionRoot)/\(stamp)"
-        try? FileManager.default.createDirectory(
-            atPath: "\(dir)/crops", withIntermediateDirectories: true
-        )
-        try? FileManager.default.createDirectory(
-            atPath: "\(dir)/audio", withIntermediateDirectories: true
-        )
+        do {
+            try FileManager.default.createDirectory(
+                atPath: "\(dir)/crops", withIntermediateDirectories: true
+            )
+            try FileManager.default.createDirectory(
+                atPath: "\(dir)/audio", withIntermediateDirectories: true
+            )
+        } catch {
+            Emit.event(ErrorEvent(
+                "could not create session directory \(dir): \(error.localizedDescription)",
+                hint: "Check that Fovea can write to \(sessionRoot) — System Settings → Privacy & Security → Files and Folders."
+            ))
+            return false
+        }
 
         sessionDir = dir
         sessionId = stamp
@@ -155,21 +183,36 @@ final class Recorder {
 
         // Events now belong to this session's file rather than the launch log.
         Emit.redirectToFile("\(dir)/events.jsonl")
-        Emit.event(SessionEvent.start(id: stamp, directory: dir))
+        Emit.event(SessionEvent.start(id: stamp))
         Emit.log("▶ session \(stamp) → \(dir)")
+        return true
     }
 
     /// Close the session out. Returns its directory so the caller can reveal it.
     ///
-    /// Safe to call with no session open (the menu's Quit path does), and safe
-    /// to call mid-hold — the hold is ended first so its WAV is finalised and
-    /// its `audioT0` recorded.
+    /// Safe to call with no session open (the menu's Quit path does), safe to
+    /// call mid-hold — the hold is ended first so its WAV is finalised and its
+    /// `audioT0` recorded — and safe to call twice: concurrent callers await
+    /// the same close.
     func stopSession() async -> String? {
+        if let stopTask { return await stopTask.value }
+        guard sessionDir != nil else { return nil }
+
+        let task = Task { await self.closeSession() }
+        stopTask = task
+        let dir = await task.value
+        stopTask = nil
+        return dir
+    }
+
+    private func closeSession() async -> String? {
         if isRecording { endHold() }
         guard let dir = sessionDir, let id = sessionId else { return nil }
 
         // Wait for AX + crop + OCR still in flight. Awaiting releases the main
         // actor, so the tasks' own completion hops back here are free to run.
+        // No NEW work can join the list meanwhile — `beginHold` refuses while
+        // `stopTask` is set.
         let outstanding = pendingResolves
         pendingResolves = [:]
         if !outstanding.isEmpty {
@@ -210,6 +253,7 @@ final class Recorder {
             endHold()
         case .dragBegan(let p):
             lassoPath = [p]
+            lassoStartT = Clock.nowMs()
         case .dragMoved(let p):
             lassoPath?.append(p)
         case .dragEnded(let p):
@@ -221,9 +265,15 @@ final class Recorder {
     }
 
     private func beginHold() {
+        // A press while the session is closing is ignored. `closeSession` is
+        // suspended on the crop drain at that moment, so a hold started here
+        // would attach to a session in the middle of being finalised — its
+        // events split across two files and its crops written to a directory
+        // the user has already been shown as complete.
+        guard stopTask == nil, !isRecording else { return }
+
         // The first hold is what brings a session into existence.
-        startSessionIfNeeded()
-        guard let sessionDir, let sessionId else { return }
+        guard startSessionIfNeeded(), let sessionDir, let sessionId else { return }
 
         isRecording = true
         holdReferentCount = 0
@@ -254,6 +304,7 @@ final class Recorder {
         hasMoved = false
         firedForThisRest = false
         lastPosition = AXProbe.cursorLocation()
+        previousSample = nil
         stationarySince = Clock.nowMs()
 
         // Get Chromium's tree built before the first referent needs it, rather
@@ -267,14 +318,19 @@ final class Recorder {
     }
 
     private func endHold() {
-        guard isRecording, let sessionId else { return }
+        guard isRecording else { return }
+        // Teardown FIRST, unconditionally. The sampler, overlay and microphone
+        // must stop on key-release no matter what state the session is in — a
+        // guard that returned before this once left the mic recording after
+        // the key was up, which is the one promise this product cannot break.
         isRecording = false
         sampler?.invalidate()
         sampler = nil
         overlay.hide()
         lassoPath = nil
-
         let audioT0 = audio.stop()
+
+        guard let sessionId else { return }
         Emit.event(HoldEvent.end(
             id: sessionId, hold: holdIndex,
             referentCount: holdReferentCount, audioT0: audioT0
@@ -302,8 +358,11 @@ final class Recorder {
         }
 
         let moved = hypot(position.x - lastPosition.x, position.y - lastPosition.y)
-        let speed = moved / sampleInterval
-        recentSpeeds.append((now, speed))
+        let step = previousSample.map {
+            hypot(position.x - $0.x, position.y - $0.y)
+        } ?? 0
+        previousSample = position
+        recentSpeeds.append((now, step / sampleInterval))
         recentSpeeds.removeAll { now - $0.t > 200 }
 
         trail.append(TrailPoint(position: position, t: now))
@@ -357,10 +416,12 @@ final class Recorder {
         pulses.append(Pulse(position: position, t: now, isRegion: false))
         holdReferentCount += 1
         sessionReferentCount += 1
-        resolve(shape: Shape.point(position))
+        resolve(shape: Shape.point(position), span: nil)
     }
 
     private func commitLasso() {
+        let startT = lassoStartT
+        lassoStartT = nil
         guard let path = lassoPath, path.count >= 3 else {
             lassoPath = nil
             return
@@ -376,12 +437,19 @@ final class Recorder {
             shape = Shape.point(shape.origin)
         }
 
+        let now = Clock.nowMs()
         pulses.append(
-            Pulse(position: shape.origin, t: Clock.nowMs(), isRegion: shape.kind == .region)
+            Pulse(position: shape.origin, t: now, isRegion: shape.kind == .region)
         )
         holdReferentCount += 1
         sessionReferentCount += 1
-        resolve(shape: shape)
+        // The measured drag interval rides along for regions: the narration for
+        // a lasso happens while DRAWING it, and downstream needs the real span,
+        // not a reconstruction.
+        let span = shape.kind == .region
+            ? startT.map { TimeSpan(start: $0, end: now) }
+            : nil
+        resolve(shape: shape, span: span)
     }
 
     /// AX + crop, off the sampling path. Resolution can take a few hundred
@@ -391,7 +459,7 @@ final class Recorder {
     /// The task handle is retained so `stopSession` can wait on it. The session
     /// directory is read HERE and captured by value, not read inside the task —
     /// by the time a slow OCR finishes, `sessionDir` may already be nil.
-    private func resolve(shape: Shape) {
+    private func resolve(shape: Shape, span: TimeSpan?) {
         globalReferentIndex += 1
         let hold = holdIndex
         let index = globalReferentIndex
@@ -401,6 +469,7 @@ final class Recorder {
             var event = shape.kind == .region
                 ? AXProbe.probeRegion(shape)
                 : AXProbe.probePoint(shape.origin)
+            if let span { event = event.with(span: span) }
 
             if captureCrops {
                 let (rect, fromAX) = Capture.rect(

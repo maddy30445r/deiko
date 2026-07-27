@@ -58,7 +58,17 @@ final class Audio {
     /// recorded without audio is useless for alignment, and the user should
     /// find out at the start rather than at transcription time.
     func start(path: String) throws {
-        guard !isRecording else { return }
+        // Self-heal rather than silently succeed: returning early here while
+        // recording meant the caller recorded an `audioPath` for a file that
+        // was never created — the mic kept writing into the PREVIOUS hold's
+        // WAV, and transcription later failed on a path that does not exist.
+        if isRecording { stop() }
+
+        // Reset the origin FIRST, before anything can throw. It used to be
+        // reset after the file was opened, so a throwing `start` left the
+        // previous hold's t0 in place — and `stop()` then reported that stale
+        // origin for a hold that recorded nothing.
+        t0 = nil
 
         let url = URL(fileURLWithPath: path)
         try FileManager.default.createDirectory(
@@ -89,22 +99,32 @@ final class Audio {
         )
         self.converter = converter
         self.targetFormat = target
-        self.t0 = nil
 
         input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
             self?.append(buffer)
         }
 
         engine.prepare()
-        try engine.start()
+        do {
+            try engine.start()
+        } catch {
+            // Unwind the tap. Leaving it installed meant the NEXT hold's
+            // `installTap` hit AVAudioEngine's one-tap-per-bus precondition
+            // and aborted the whole process mid-session.
+            input.removeTap(onBus: 0)
+            self.file = nil
+            self.converter = nil
+            throw error
+        }
         isRecording = true
     }
 
     /// Stops and returns the audio origin, so the caller can record it against
-    /// the same clock everything else uses.
+    /// the same clock everything else uses. Nil when nothing was recorded —
+    /// never a previous hold's origin.
     @discardableResult
     func stop() -> Double? {
-        guard isRecording else { return t0 }
+        guard isRecording else { return nil }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         isRecording = false

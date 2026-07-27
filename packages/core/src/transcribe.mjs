@@ -32,8 +32,7 @@ const SARVAM_STT_URL = "https://api.sarvam.ai/speech-to-text";
 // ── The interface ───────────────────────────────────────────────────────────
 
 /**
- * @typedef {{ text: string, start: number, end: number }} Word
- * @typedef {{ name: string, transcribe: (wavPath: string, opts: {language?: string}) => Promise<{words: Word[], text: string, raw: unknown}> }} Transcriber
+ * @typedef {{ name: string, transcribe: (wavPath: string, opts: {language?: string}) => Promise<{text: string}> }} Transcriber
  */
 
 /**
@@ -65,22 +64,12 @@ function sarvamTranscriber(apiKey) {
       const chunks = splitAtSilence(pcm, CHUNK_SECONDS);
       process.stderr.write(`(${totalSeconds.toFixed(0)}s → ${chunks.length} chunks) `);
 
-      const words = [];
       const texts = [];
-      const raws = [];
-      for (const { data, offsetMs } of chunks) {
+      for (const data of chunks) {
         const part = await this._one(data, language);
-        // Each chunk's word times are offsets into that chunk; shift them back
-        // onto the whole file's timeline before anyone else sees them.
-        words.push(...part.words.map((w) => ({
-          ...w,
-          start: w.start + offsetMs,
-          end: w.end + offsetMs,
-        })));
         if (part.text) texts.push(part.text);
-        raws.push(part.raw);
       }
-      return { words, text: texts.join(" "), raw: raws };
+      return { text: texts.join(" ") };
     },
 
     async _one(pcm, language) {
@@ -94,9 +83,6 @@ function sarvamTranscriber(apiKey) {
       // audio, which the lexicon also handles but which reads worse in a plan.
       form.append("mode", "translit");
       form.append("language_code", language);
-      // Asked for even though Sarvam only ever returns one span for the whole
-      // clip: harmless, and the day they add real word timings we get them.
-      form.append("with_timestamps", "true");
 
       const response = await fetch(SARVAM_STT_URL, {
         method: "POST",
@@ -116,7 +102,12 @@ function sarvamTranscriber(apiKey) {
         throw new Error(`Sarvam returned non-JSON: ${bodyText.slice(0, 400)}`);
       }
 
-      return { words: normalizeWords(raw), text: extractText(raw), raw };
+      // TEXT only. Sarvam returns no word-level timings on any model or
+      // parameter combination we tried — one span for the whole clip — so the
+      // timeline comes from on-device Apple Speech and Sarvam supplies the
+      // words. There used to be a 60-line tolerant extractor here for timings
+      // that never arrived, feeding a field nothing read.
+      return { text: extractText(raw) };
     },
   };
 }
@@ -160,10 +151,7 @@ function splitAtSilence(pcm, chunkSeconds) {
       end = quietestAt & ~1; // keep 16-bit sample alignment
     }
 
-    chunks.push({
-      data: pcm.subarray(start, end),
-      offsetMs: (start / (SAMPLE_RATE * BYTES_PER_SAMPLE)) * 1000,
-    });
+    chunks.push(pcm.subarray(start, end));
     start = end;
   }
 
@@ -187,66 +175,6 @@ function wrapWav(pcm) {
   header.write("data", 36);
   header.writeUInt32LE(pcm.length, 40);
   return Buffer.concat([header, pcm]);
-}
-
-/**
- * Pull word timings out of the response.
- *
- * Written tolerantly on purpose: Sarvam's published docs do not pin the exact
- * nesting for word timestamps, and their model names and URLs have moved
- * before. Rather than hard-code one guess and silently produce an empty
- * transcript, try the plausible shapes and throw with the raw payload attached
- * if none match — so the fix takes one look instead of a debugging session.
- */
-function normalizeWords(raw) {
-  const candidates = [
-    raw?.words,
-    raw?.timestamps,
-    raw?.word_timestamps,
-    raw?.output?.words,
-    raw?.transcript?.words,
-    raw?.results?.[0]?.words,
-    raw?.diarized_transcript?.entries?.flatMap((e) => e.words ?? []),
-  ].filter(Array.isArray);
-
-  for (const list of candidates) {
-    const words = list
-      .map((w) => ({
-        text: String(w.word ?? w.text ?? w.token ?? "").trim(),
-        start: toMs(w.start ?? w.start_time ?? w.start_time_seconds ?? w.startTime),
-        end: toMs(w.end ?? w.end_time ?? w.end_time_seconds ?? w.endTime),
-      }))
-      .filter((w) => w.text && Number.isFinite(w.start) && Number.isFinite(w.end));
-    if (words.length > 0) return words;
-  }
-
-  // Sarvam's `timestamps` block is sometimes parallel arrays rather than
-  // objects: {words: [...], start_time_seconds: [...], end_time_seconds: [...]}
-  const t = raw?.timestamps;
-  if (t && Array.isArray(t.words) && Array.isArray(t.start_time_seconds)) {
-    return t.words
-      .map((word, i) => ({
-        text: String(word).trim(),
-        start: toMs(t.start_time_seconds[i]),
-        end: toMs(t.end_time_seconds?.[i] ?? t.start_time_seconds[i]),
-      }))
-      .filter((w) => w.text && Number.isFinite(w.start));
-  }
-
-  // No throw. Sarvam is the TEXT source now — on-device Apple Speech supplies
-  // the timings — so a response without usable word times is the normal case,
-  // not a failure. Returning empty here keeps a perfectly good transcript from
-  // sinking the whole hold.
-  return [];
-}
-
-/** Seconds or milliseconds in, milliseconds out. Values under 1000 are almost
- *  certainly seconds: no single word runs for 1000ms of *offset* in a clip this
- *  short, and treating seconds as ms would compress a 7s hold into 7ms. */
-function toMs(value) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return NaN;
-  return n < 1000 ? n * 1000 : n;
 }
 
 function extractText(raw) {
@@ -380,13 +308,25 @@ async function appleTimings(wavPath, { locale = "en-IN", timeoutMs = 90_000 } = 
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (existsSync(out)) {
-      const result = JSON.parse(readFileSync(out, "utf8"));
+      let result;
+      try {
+        result = JSON.parse(readFileSync(out, "utf8"));
+      } catch {
+        // The writer is atomic now, but belt-and-braces: a half-visible file
+        // is "not ready yet", not "this hold is lost". One thrown parse here
+        // used to discard the hold's audio entirely.
+        await sleep(200);
+        continue;
+      }
       rmSync(out);
       if (result.error) throw new Error(`speech timing: ${result.error}`);
       return result;
     }
     await sleep(500);
   }
+  // The app may still write the file after we stop waiting. Don't leave a
+  // verbatim transcript of the user's narration lying around unmanaged.
+  if (existsSync(out)) rmSync(out);
   throw new Error(`speech timing timed out after ${timeoutMs / 1000}s`);
 }
 
@@ -424,10 +364,17 @@ async function main() {
     process.exit(1);
   }
 
-  const langFlag = process.argv.indexOf("--language");
-  const language = langFlag > -1 ? process.argv[langFlag + 1] : "unknown";
-  const locFlag = process.argv.indexOf("--locale");
-  const args = { locale: locFlag > -1 ? process.argv[locFlag + 1] : "en-IN" };
+  // Accepts both `--language hi-IN` and `--language=hi-IN`. The indexOf form
+  // alone silently ignored the `=` spelling — Sarvam then got
+  // `language_code=unknown` with nothing to say the flag was dropped.
+  const flag = (name, fallback) => {
+    const eq = process.argv.find((a) => a.startsWith(`${name}=`));
+    if (eq) return eq.slice(name.length + 1);
+    const i = process.argv.indexOf(name);
+    return i > -1 ? process.argv[i + 1] : fallback;
+  };
+  const language = flag("--language", "unknown");
+  const args = { locale: flag("--locale", "en-IN") };
 
   const dir = resolve(sessionDir);
   const events = loadEvents(dir);
@@ -468,7 +415,15 @@ async function main() {
   const holdTexts = [];
 
   for (const { hold, audioPath, audioT0 } of holds) {
-    const wav = resolve(audioPath);
+    // The event's audioPath was recorded relative to the recorder's cwd, which
+    // is not necessarily ours. Resolve against cwd first (works when run from
+    // the repo root, as documented), then fall back to the session directory —
+    // the WAVs always live in <session>/audio/.
+    let wav = resolve(audioPath);
+    if (!existsSync(wav)) {
+      const inSession = join(dir, "audio", audioPath.split("/").pop());
+      if (existsSync(inSession)) wav = inSession;
+    }
 
     // Timings first — without them there is nothing to align, so a failure here
     // is fatal for the hold in a way a missing Sarvam transcript is not.

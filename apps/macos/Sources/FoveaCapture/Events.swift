@@ -152,7 +152,6 @@ struct HoldEvent: Codable {
     /// Which hold of the hotkey this is, 1-based. The natural grouping for the
     /// referent stack, and part of every crop filename.
     let hold: Int
-    let epochWall: String?
     let referentCount: Int?
     /// Where the narration was written.
     let audioPath: String?
@@ -165,7 +164,6 @@ struct HoldEvent: Codable {
     static func start(id: String, hold: Int, audioPath: String?) -> HoldEvent {
         HoldEvent(
             type: .holdStart, t: Clock.nowMs(), id: id, hold: hold,
-            epochWall: ISO8601DateFormatter().string(from: Date()),
             referentCount: nil, audioPath: audioPath, audioT0: nil
         )
     }
@@ -175,37 +173,36 @@ struct HoldEvent: Codable {
     ) -> HoldEvent {
         HoldEvent(
             type: .holdEnd, t: Clock.nowMs(), id: id, hold: hold,
-            epochWall: nil, referentCount: referentCount,
+            referentCount: referentCount,
             audioPath: nil, audioT0: audioT0
         )
     }
 }
 
 /// The recording as a whole. Exactly one `sessionStart` and one `sessionEnd`
-/// per `events.jsonl`, first line and last.
+/// per `events.jsonl`, first line and last. `epochWall` on the start is the
+/// session's ONE wall-clock reading — everything else stays monotonic.
 struct SessionEvent: Codable {
     let type: EventType
     let t: Double
     let id: String
     let epochWall: String?
-    let directory: String?
     /// Totals across every hold, present only on `sessionEnd`.
     let holdCount: Int?
     let referentCount: Int?
 
-    static func start(id: String, directory: String) -> SessionEvent {
+    static func start(id: String) -> SessionEvent {
         SessionEvent(
             type: .sessionStart, t: Clock.nowMs(), id: id,
             epochWall: ISO8601DateFormatter().string(from: Date()),
-            directory: directory, holdCount: nil, referentCount: nil
+            holdCount: nil, referentCount: nil
         )
     }
 
     static func end(id: String, holdCount: Int, referentCount: Int) -> SessionEvent {
         SessionEvent(
             type: .sessionEnd, t: Clock.nowMs(), id: id,
-            epochWall: ISO8601DateFormatter().string(from: Date()),
-            directory: nil, holdCount: holdCount, referentCount: referentCount
+            epochWall: nil, holdCount: holdCount, referentCount: referentCount
         )
     }
 }
@@ -410,8 +407,6 @@ struct CropResult: Codable {
     /// True when the image was clipped to the freehand path rather than left as
     /// the bounding rectangle.
     let masked: Bool
-    /// Backing scale of the display it came from (2.0 on Retina).
-    let scale: Double
     /// Whether `rect` came from an AX element frame rather than a default box.
     /// This is where a "failed" AX hit still pays: Compass gives no text but it
     /// does give the row's rectangle, which is a far better crop than a fixed
@@ -429,6 +424,13 @@ struct ProbeEvent: Codable {
     let type: EventType
     let t: Double
     let shape: Shape
+    /// For regions: when the drag actually began and ended, on the session
+    /// clock. Emitted because the recorder KNOWS this — it saw `dragBegan` —
+    /// while the TS loader used to reconstruct it from frozen cursor samples,
+    /// which could not tell "cursor frozen mid-drag" from "cursor parked here
+    /// before pressing" and once recovered a 9.7-second phantom drag. Nil for
+    /// points.
+    let span: TimeSpan?
     let app: AppIdentity?
     let windowTitle: String?
     let snapshot: AXSnapshot
@@ -444,6 +446,7 @@ struct ProbeEvent: Codable {
         self.init(
             t: Clock.nowMs(),
             shape: shape,
+            span: nil,
             app: app,
             windowTitle: windowTitle,
             snapshot: snapshot,
@@ -454,6 +457,7 @@ struct ProbeEvent: Codable {
     private init(
         t: Double,
         shape: Shape,
+        span: TimeSpan?,
         app: AppIdentity?,
         windowTitle: String?,
         snapshot: AXSnapshot,
@@ -462,6 +466,7 @@ struct ProbeEvent: Codable {
         self.type = .probe
         self.t = t
         self.shape = shape
+        self.span = span
         self.app = app
         self.windowTitle = windowTitle
         self.snapshot = snapshot
@@ -479,12 +484,32 @@ struct ProbeEvent: Codable {
         ProbeEvent(
             t: t,
             shape: shape,
+            span: span,
             app: app,
             windowTitle: windowTitle,
             snapshot: snapshot,
             crop: crop
         )
     }
+
+    /// Attach the drag span the recorder measured. Same t-preservation rule.
+    func with(span: TimeSpan) -> ProbeEvent {
+        ProbeEvent(
+            t: t,
+            shape: shape,
+            span: span,
+            app: app,
+            windowTitle: windowTitle,
+            snapshot: snapshot,
+            crop: crop
+        )
+    }
+}
+
+/// An interval on the session clock, in milliseconds.
+struct TimeSpan: Codable {
+    let start: Double
+    let end: Double
 }
 
 struct HelloEvent: Codable {
@@ -547,6 +572,14 @@ enum Emit {
             log("failed to encode event")
             return
         }
+        // Locked, and it matters: crop resolution runs on detached tasks, so
+        // two multi-KB ProbeEvents can hit this concurrently — and concurrently
+        // with `redirectToFile` swinging the handle on the main actor. Without
+        // the lock, lines interleave mid-JSON (both loaders silently drop
+        // unparseable lines, so the referent just vanishes) or a write lands on
+        // a just-closed descriptor.
+        sinkLock.lock()
+        defer { sinkLock.unlock() }
         if let sink {
             sink.write(Data("\(line)\n".utf8))
         } else {
@@ -573,6 +606,7 @@ enum Emit {
     /// used to be dropped still open, which on a long-lived app leaks a file
     /// descriptor per session and leaves the last writes unflushed.
     nonisolated(unsafe) private static var sink: FileHandle?
+    private static let sinkLock = NSLock()
 
     static func redirectToFile(_ path: String) {
         let url = URL(fileURLWithPath: path)
@@ -584,8 +618,16 @@ enum Emit {
         if !FileManager.default.fileExists(atPath: path) {
             FileManager.default.createFile(atPath: path, contents: nil)
         }
-        let next = try? FileHandle(forWritingTo: url)
-        next?.seekToEndOfFile()
+        guard let next = try? FileHandle(forWritingTo: url) else {
+            // Keep the CURRENT sink. Swapping to nil here would close the one
+            // destination that still works and silently discard every event
+            // after it — including the error describing this very failure.
+            log("✗ could not open \(path) — events continue to the previous destination")
+            return
+        }
+        next.seekToEndOfFile()
+        sinkLock.lock()
+        defer { sinkLock.unlock() }
         try? sink?.close()
         sink = next
     }

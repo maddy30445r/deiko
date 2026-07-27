@@ -36,7 +36,14 @@ enum AXProbe {
     ]
 
     /// Apps we've already poked with AXManualAccessibility this run.
+    ///
+    /// Locked: the 60Hz sampler pokes on app switch from the main actor while
+    /// detached crop tasks poke from `probePoint`'s ungrounded retry — two
+    /// unsynchronised inserts into one Set is CoW buffer corruption. Trivially
+    /// reachable by pointing at something in VS Code and Cmd-Tabbing while the
+    /// crop still resolves.
     nonisolated(unsafe) private static var pokedPids: Set<pid_t> = []
+    private static let pokedPidsLock = NSLock()
 
     // ── Permission ──────────────────────────────────────────────────────────
 
@@ -490,8 +497,10 @@ enum AXProbe {
     /// element. Returns whether we actually issued it (false if already poked).
     @discardableResult
     static func enableManualAccessibility(pid: pid_t) -> Bool {
-        if pokedPids.contains(pid) { return false }
-        pokedPids.insert(pid)
+        pokedPidsLock.lock()
+        let alreadyPoked = !pokedPids.insert(pid).inserted
+        pokedPidsLock.unlock()
+        if alreadyPoked { return false }
 
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(app, messagingTimeout)

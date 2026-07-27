@@ -274,10 +274,12 @@ func runTiming(_ args: Args) async {
         exit(1)
     }
 
+    // No network fallback and no flag for one. The only thing such a flag
+    // could do is ship narration to Apple's servers — the exact thing
+    // SpeechTiming's guard exists to refuse (PRD §10).
     let result = await SpeechTiming.transcribe(
         url: URL(fileURLWithPath: path),
-        localeIdentifier: args.string("locale") ?? "hi-IN",
-        forceOnDevice: !args.has("allow-network")
+        localeIdentifier: args.string("locale") ?? "hi-IN"
     )
 
     // Writing to a file rather than only stdout, because this has to be
@@ -293,7 +295,11 @@ func runTiming(_ args: Args) async {
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true
         )
         if let data = try? JSONEncoder().encode(result) {
-            try? data.write(to: url)
+            // Atomic: transcribe.mjs polls for this file's existence and reads
+            // it the instant it appears. A plain write is create-then-fill, so
+            // the poller could catch it at zero bytes and JSON.parse("") threw
+            // the whole hold away.
+            try? data.write(to: url, options: .atomic)
         }
     }
 

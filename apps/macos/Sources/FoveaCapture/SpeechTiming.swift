@@ -32,7 +32,6 @@ struct TimedWord: Codable {
     /// caller adds `audioT0` — see `scripts/transcribe.mjs`.
     let start: Double
     let end: Double
-    let confidence: Double
 }
 
 struct TimingResult: Codable {
@@ -106,15 +105,18 @@ enum SpeechTiming {
             )
         }
 
+        // Opened once; both the deadline and the completeness check need it.
+        let durationMs = audioDurationSeconds(url).map { $0 * 1000 }
+
         return await withCheckedContinuation { continuation in
-            let collector = SegmentCollector()
+            let collector = SegmentCollector(audioDurationMs: durationMs)
 
             // Hard deadline. The recogniser signals completion inconsistently —
             // sometimes an error at end-of-audio, sometimes a final result,
             // sometimes neither — and without this the task simply never
             // returns. Whatever segments have arrived by the deadline are worth
             // more than hanging forever.
-            let deadline = (audioDurationSeconds(url) ?? 60) + 20
+            let deadline = (durationMs.map { $0 / 1000 } ?? 60) + 20
             Task {
                 try? await Task.sleep(for: .seconds(deadline))
                 if let final = collector.finish() {
@@ -155,7 +157,7 @@ enum SpeechTiming {
                 // is a signal to keep the segments — not to stop listening.
                 // The task ends by calling back with an error (end of audio),
                 // which is handled above.
-                if result.isFinal, collector.isComplete(url: url) {
+                if result.isFinal, collector.isComplete() {
                     if let final = collector.finish() {
                         continuation.resume(returning: TimingResult(
                             words: final.words, transcript: final.transcript,
@@ -187,21 +189,41 @@ private final class SegmentCollector: @unchecked Sendable {
     private var segments: [Int: TimedWord] = [:]
     private var resumed = false
     private let lock = NSLock()
+    /// Measured once by the caller — this class used to reopen the WAV on
+    /// every `isFinal`, parsing the same header dozens of times per hold.
+    private let audioDurationMs: Double?
+
+    init(audioDurationMs: Double?) {
+        self.audioDurationMs = audioDurationMs
+    }
 
     func absorb(_ transcription: SFTranscription) {
         lock.lock()
         defer { lock.unlock() }
-        for segment in transcription.segments {
+
+        let placed = transcription.segments.filter { $0.timestamp > 0 }
+        guard !placed.isEmpty else { return }
+
+        // Evict everything inside the span this hypothesis covers before
+        // inserting it. Keying by start time alone left GHOSTS: a revision
+        // that merged "is"+"mein" into "ismein" at a nudged timestamp added
+        // the new word but kept the superseded ones, and the transcript read
+        // "ismein mein" — a phantom token the aligner then treated as really
+        // spoken. Utterances never overlap in time, so the eviction can only
+        // remove earlier hypotheses of THIS utterance, never another one.
+        let spanStart = placed.map { $0.timestamp * 1000 }.min()!
+        let spanEnd = placed.map { ($0.timestamp + $0.duration) * 1000 }.max()!
+        for key in segments.keys
+        where Double(key) >= spanStart - 1 && Double(key) <= spanEnd + 1 {
+            segments.removeValue(forKey: key)
+        }
+
+        for segment in placed {
             let startMs = segment.timestamp * 1000
-            // Segments with a zero timestamp are the recogniser's in-progress
-            // guesses before it has placed them in time; they would all collide
-            // at key 0 and displace real content.
-            guard segment.timestamp > 0 || startMs > 0 else { continue }
             segments[Int(startMs.rounded())] = TimedWord(
                 text: segment.substring,
                 start: startMs,
-                end: (segment.timestamp + segment.duration) * 1000,
-                confidence: Double(segment.confidence)
+                end: (segment.timestamp + segment.duration) * 1000
             )
         }
     }
@@ -209,11 +231,11 @@ private final class SegmentCollector: @unchecked Sendable {
     /// Whether we have plausibly covered the whole file — used to decide if an
     /// `isFinal` is the last one. Compares the furthest segment against the
     /// audio's duration.
-    func isComplete(url: URL) -> Bool {
+    func isComplete() -> Bool {
         lock.lock()
         defer { lock.unlock() }
         guard let furthest = segments.values.map(\.end).max() else { return false }
-        guard let durationMs = audioDurationMs(url) else { return true }
+        guard let durationMs = audioDurationMs else { return true }
         return furthest >= durationMs - 1500
     }
 
@@ -232,10 +254,5 @@ private final class SegmentCollector: @unchecked Sendable {
         resumed = true
         let words = segments.keys.sorted().compactMap { segments[$0] }
         return (words, words.map(\.text).joined(separator: " "))
-    }
-
-    private func audioDurationMs(_ url: URL) -> Double? {
-        guard let file = try? AVAudioFile(forReading: url) else { return nil }
-        return Double(file.length) / file.fileFormat.sampleRate * 1000
     }
 }

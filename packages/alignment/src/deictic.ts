@@ -107,15 +107,6 @@ for (const word of EXCLUDED_HOMOGRAPHS) {
 }
 
 /**
- * Words that frequently precede a pointing word and tighten the reference:
- * "is wale ko", "that one". Their presence raises confidence but never creates
- * a binding on its own.
- */
-export const DEICTIC_QUALIFIERS: ReadonlySet<string> = new Set<string>([
-  "wala", "wale", "wali", "one", "ones",
-]);
-
-/**
  * Strip punctuation and case so `"this,"` and `"This"` both match.
  *
  * `\p{M}` — combining marks — is kept, and that is not a detail. Devanagari
@@ -131,8 +122,4 @@ export function normalizeWord(word: string): string {
 
 export function isDeictic(word: string): boolean {
   return DEICTIC_WORDS.has(normalizeWord(word));
-}
-
-export function isQualifier(word: string): boolean {
-  return DEICTIC_QUALIFIERS.has(normalizeWord(word));
 }

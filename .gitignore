@@ -27,6 +27,10 @@ sessions/
 *.jsonl
 crops/
 *.wav
+# Crops are screenshots of whatever was on screen, and both crop destinations
+# are user-settable (`capture --out`, `ax-probe --crop-dir`) — so the pattern,
+# not just the folders. No source imagery exists in this repo to collide with.
+*.png
 
 # macOS
 .DS_Store

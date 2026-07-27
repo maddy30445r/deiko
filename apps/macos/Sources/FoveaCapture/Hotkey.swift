@@ -25,6 +25,15 @@ import Foundation
 /// emoji picker and input-source switching.
 private let kRightOptionKeyCode: Int64 = 61
 
+/// NX_DEVICERALTKEYMASK — the device-specific flag bit for the RIGHT Option
+/// key. `.maskAlternate` is set while EITHER Option key is down, so testing it
+/// alone meant that releasing Right Option while Left Option happened to be
+/// held produced no `.released`: the release event carries keycode 61, but the
+/// combined mask was still set, so the state machine saw no change — and the
+/// left key's own release is keycode 58, rejected by the keycode guard. Result:
+/// a hold that never ended. The device bit tracks the right key alone.
+private let kRightOptionFlagMask: UInt64 = 0x40
+
 enum HotkeyEvent {
     case pressed
     case released
@@ -114,9 +123,21 @@ final class Hotkey {
     private func handle(type: CGEventType, event: CGEvent) -> Bool {
         // The system disables a tap that takes too long in its callback. Work
         // here must stay trivial — re-enable and carry on rather than dying
-        // silently mid-session.
+        // silently mid-session. And RECONCILE: while the tap was dead, the
+        // release may have happened unobserved. Without this check, `isHeld`
+        // stays true forever — mouse clicks swallowed system-wide and the mic
+        // recording — until the user happens to press Right Option again.
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            let flags = CGEventSource.flagsState(.combinedSessionState)
+            if isHeld, flags.rawValue & kRightOptionFlagMask == 0 {
+                isHeld = false
+                if isDragging {
+                    isDragging = false
+                    emit(.dragEnded(Point(x: event.location.x, y: event.location.y)))
+                }
+                emit(.released)
+            }
             return false
         }
 
@@ -128,9 +149,8 @@ final class Hotkey {
             guard event.getIntegerValueField(.keyboardEventKeycode) == kRightOptionKeyCode
             else { return pass }
 
-            // `.maskAlternate` is set for either Option key, so the keycode
-            // check above is what makes this Right Option specifically.
-            let nowHeld = event.flags.contains(.maskAlternate)
+            // The DEVICE bit, not `.maskAlternate` — see kRightOptionFlagMask.
+            let nowHeld = event.flags.rawValue & kRightOptionFlagMask != 0
             if nowHeld != isHeld {
                 isHeld = nowHeld
                 emit(nowHeld ? .pressed : .released)
@@ -173,7 +193,17 @@ final class Hotkey {
         }
     }
 
+    /// Deliver on the next main-queue turn, NOT inline. The tap callback must
+    /// return fast — the system disables a tap whose callback dawdles — and
+    /// `.pressed` triggers real work: directory creation, AVAudioEngine start,
+    /// the Chromium pre-poke (two AX calls with 250ms timeouts each), overlay
+    /// window creation. Inline, a slow disk or busy Electron app could kill
+    /// the tap mid-session. The swallow decision above stays synchronous; only
+    /// the reaction is deferred. `DispatchQueue.main` is FIFO, so gesture
+    /// ordering is preserved exactly.
     private func emit(_ event: HotkeyEvent) {
-        onEvent?(event)
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated { self.onEvent?(event) }
+        }
     }
 }

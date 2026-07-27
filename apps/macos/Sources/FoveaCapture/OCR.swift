@@ -77,9 +77,15 @@ enum OCR {
     /// that keeps the 50-200ms Vision cost off the common path.
     static func isNeeded(for snapshot: AXSnapshot) -> Bool {
         guard snapshot.resolved else { return true }
+        // Trimmed, matching `carriesMeaning` and `Capture.rect` — untrimmed,
+        // a whitespace-only AX value (a padded cell, an indentation-only line)
+        // counted as "AX has text" and suppressed OCR for a referent that then
+        // reached the aligner with no text at all.
         let hasText = snapshot.elements.contains { el in
             [el.value, el.title, el.elementDescription, el.selectedText]
-                .contains { ($0?.isEmpty == false) }
+                .contains {
+                    $0?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                }
         }
         return !hasText
     }

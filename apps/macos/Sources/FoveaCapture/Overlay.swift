@@ -72,6 +72,13 @@ final class Overlay {
 
         let view = OverlayView(frame: NSRect(origin: .zero, size: canvas.size))
         view.canvas = canvas
+        // The top-left↔bottom-left flip pivots on the MAIN screen's top edge —
+        // CG's global origin is the main display's top-left — not on the
+        // canvas height. The two coincide only when every screen shares the
+        // main screen's vertical extent; with a taller external monitor the
+        // difference put every ring and lasso a few hundred points from the
+        // real cursor.
+        view.flipY = NSScreen.screens.first?.frame.maxY ?? canvas.height
         window.contentView = view
         window.orderFrontRegardless()
 
@@ -107,6 +114,8 @@ final class Overlay {
 @MainActor
 final class OverlayView: NSView {
     var canvas: NSRect = .zero
+    /// The main screen's Cocoa maxY — the pivot for the y-flip. See `show()`.
+    var flipY: CGFloat = 0
     var cursor: Point = Point(x: 0, y: 0)
     var trail: [TrailPoint] = []
     var lasso: [Point]?
@@ -115,8 +124,9 @@ final class OverlayView: NSView {
     override var isFlipped: Bool { false }
 
     /// The single top-left → bottom-left conversion in the drawing layer.
+    /// Cocoa global y = flipY − CG y; view y subtracts the window's origin.
     private func viewPoint(from p: Point) -> NSPoint {
-        NSPoint(x: p.x - canvas.minX, y: canvas.height - (p.y - canvas.minY))
+        NSPoint(x: p.x - canvas.minX, y: flipY - p.y - canvas.minY)
     }
 
     override func draw(_ dirtyRect: NSRect) {

@@ -13,7 +13,16 @@
  *     act at different granularity.
  */
 
-export type EventType = "hello" | "probe" | "error";
+export type EventType =
+  | "hello"
+  | "probe"
+  | "error"
+  | "sessionStart"
+  | "sessionEnd"
+  | "holdStart"
+  | "holdEnd"
+  | "cursor"
+  | "candidate";
 
 export interface Point {
   x: number;
@@ -113,8 +122,6 @@ export interface CropResult {
   rect: Frame;
   /** True when clipped to the freehand path rather than left rectangular. */
   masked: boolean;
-  /** Backing scale of the source display (2.0 on Retina). */
-  scale: number;
   /** True when `rect` came from an AX element frame rather than a default box.
    *  This is where a "failed" AX hit still pays: an app can give no text but
    *  still give the row's rectangle, which crops far better than a fixed box. */
@@ -130,6 +137,8 @@ export interface ProbeEvent {
   /** The moment the user POINTED — not when the screenshot finished. */
   t: number;
   shape: Shape;
+  /** Regions only: when the drag began and ended, measured by the recorder. */
+  span?: { start: number; end: number };
   app?: AppIdentity;
   windowTitle?: string;
   snapshot: AXSnapshot;
@@ -205,7 +214,6 @@ export interface HoldEvent {
   /** Which hold of the hotkey this is, 1-based. The natural grouping for the
    *  referent stack, and part of every crop filename. */
   hold: number;
-  epochWall?: string;
   referentCount?: number;
   audioPath?: string;
   /** Monotonic reading at the FIRST captured audio buffer. Every word timestamp
@@ -222,9 +230,8 @@ export interface SessionEvent {
   t: number;
   id: string;
   hold?: undefined;
+  /** ISO8601, `sessionStart` only — the session's one wall-clock reading. */
   epochWall?: string;
-  /** Where the session was written. `sessionStart` only. */
-  directory?: string;
   /** Totals across every hold. `sessionEnd` only. */
   holdCount?: number;
   referentCount?: number;

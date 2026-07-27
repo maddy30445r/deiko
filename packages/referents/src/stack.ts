@@ -42,10 +42,6 @@ export class ReferentStack {
     return this.items;
   }
 
-  get(id: string): Referent | undefined {
-    return this.items.find((r) => r.id === id);
-  }
-
   byHold(hold: number): Referent[] {
     return this.items.filter((r) => r.hold === hold);
   }
@@ -59,35 +55,5 @@ export class ReferentStack {
       else out.push({ visit: r.visit, app: r.app.name ?? "unknown", referents: [r] });
     }
     return out;
-  }
-
-  /** Attach what the user said, once alignment has worked it out. */
-  bind(
-    id: string,
-    binding: Pick<Referent, "utterance" | "confidence" | "reason">,
-  ): void {
-    const r = this.get(id);
-    if (r) Object.assign(r, binding);
-  }
-
-  /** PRD §10: a session is discarded unless the user saves it. */
-  discard(): void {
-    this.items = [];
-    this.visitCounter = 0;
-    this.lastAppKey = undefined;
-  }
-
-  toJSON(): Referent[] {
-    return this.items;
-  }
-
-  static fromJSON(referents: Referent[]): ReferentStack {
-    const stack = new ReferentStack();
-    stack.items = [...referents];
-    stack.visitCounter = referents.reduce((max, r) => Math.max(max, r.visit), 0);
-    stack.lastAppKey =
-      referents[referents.length - 1]?.app.bundleId ??
-      referents[referents.length - 1]?.app.name;
-    return stack;
   }
 }

@@ -1,4 +1,4 @@
-import { isDeictic, isQualifier, normalizeWord } from "./deictic.js";
+import { isDeictic, normalizeWord } from "./deictic.js";
 import {
   type AlignmentOptions,
   type AlignmentResult,
@@ -58,12 +58,14 @@ export function align(
     const margin = (best.score - runnerUp) / best.score;
     const confidence = clamp01(best.score * (0.6 + 0.4 * margin));
 
+    const around = utteranceAround(words, i);
     claimed.add(best.candidate.id);
     bindings.push({
       candidateId: best.candidate.id,
       deicticWord: word.text,
       deicticAt: word.start,
-      ...utteranceAround(words, i),
+      utterance: around.utterance,
+      utteranceStart: around.utteranceStart,
       confidence,
       reason: "deictic",
     });
@@ -73,9 +75,14 @@ export function align(
   for (const candidate of candidates) {
     if (claimed.has(candidate.id)) continue;
 
-    // What was being said while the cursor rested here?
+    // What was being said while the cursor rested here? Bounded by the same
+    // hard hold rule as everywhere else — without the check, a candidate just
+    // after a release once absorbed the previous hold's trailing words into
+    // its "utterance", the exact merge pass 1 forbids.
     const dwellStart = candidate.t - candidate.features.dwellMs;
-    const spoken = words.filter((w) => w.end >= dwellStart && w.start <= candidate.t);
+    const spoken = words.filter(
+      (w) => w.end >= dwellStart && w.start <= candidate.t && sameHold(w, candidate),
+    );
     if (spoken.length === 0) continue;
 
     claimed.add(candidate.id);
@@ -83,7 +90,6 @@ export function align(
       candidateId: candidate.id,
       utterance: spoken.map((w) => w.text).join(" "),
       utteranceStart: spoken[0]!.start,
-      utteranceEnd: spoken[spoken.length - 1]!.end,
       // Capped below the deictic path on purpose: overlapping speech is real
       // evidence but weaker than a word that explicitly points.
       confidence: clamp01(0.45 * noiseMultiplier(candidate)),
@@ -101,11 +107,24 @@ export function align(
  * How well one candidate explains one deictic word. Zero means "outside the
  * window, not a possibility at all".
  */
+/** The hold rule, shared by both passes: unknown holds bind freely (legacy
+ *  data), known-and-different never do. */
+function sameHold(word: Word, candidate: Candidate): boolean {
+  return (
+    word.hold === undefined ||
+    candidate.hold === undefined ||
+    word.hold === candidate.hold
+  );
+}
+
 function scoreCandidate(
   candidate: Candidate,
   word: Word,
   opts: AlignmentOptions,
 ): number {
+  // Across a hold boundary, no score at all — the key came up in between.
+  if (!sameHold(word, candidate)) return 0;
+
   const delta = word.start - candidate.t;
 
   // Asymmetric on purpose: people move the cursor first and speak as they
@@ -188,7 +207,6 @@ function utteranceAround(
   return {
     utterance: span.map((w) => w.text).join(" "),
     utteranceStart: span[0]!.start,
-    utteranceEnd: span[span.length - 1]!.end,
   };
 }
 
@@ -196,5 +214,5 @@ function clamp01(n: number): number {
   return Math.max(0, Math.min(1, n));
 }
 
-export { isDeictic, isQualifier, normalizeWord };
+export { isDeictic, normalizeWord };
 export * from "./types.js";

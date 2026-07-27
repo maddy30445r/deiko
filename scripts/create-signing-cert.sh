@@ -69,12 +69,21 @@ openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
     -keyout "$work/key.pem" -out "$work/cert.pem" \
     -config "$work/cert.cnf" 2>/dev/null
 
-# -legacy is required. OpenSSL 3 defaults to AES-256-CBC with a SHA-256 MAC,
-# which macOS's `security import` cannot read — it fails with the thoroughly
-# misleading "MAC verification failed during PKCS12 import (wrong password?)".
-openssl pkcs12 -export -legacy \
+# -legacy matters, WHERE IT EXISTS. OpenSSL 3 defaults to AES-256-CBC with a
+# SHA-256 MAC, which macOS's `security import` cannot read — it fails with the
+# thoroughly misleading "MAC verification failed during PKCS12 import (wrong
+# password?)", and -legacy selects the older ciphers `security` accepts.
+# macOS's stock /usr/bin/openssl, however, is LibreSSL: it has no -legacy flag
+# (the invocation dies, and dies silently under 2>/dev/null) — but it also
+# never switched defaults, so its plain output is already the legacy format.
+# Probe for the flag instead of assuming either implementation.
+LEGACY=""
+if openssl pkcs12 -help 2>&1 | grep -q -- -legacy; then
+    LEGACY="-legacy"
+fi
+openssl pkcs12 -export $LEGACY \
     -inkey "$work/key.pem" -in "$work/cert.pem" \
-    -out "$work/bundle.p12" -passout pass:fovea -name "$NAME" 2>/dev/null
+    -out "$work/bundle.p12" -passout pass:fovea -name "$NAME"
 
 # -A lets any app use the key without a per-use authorisation dialog. The
 # alternative (-T /usr/bin/codesign) needs `set-key-partition-list`, which wants
