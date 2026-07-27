@@ -31,6 +31,17 @@ enum Capture {
     /// default box rather than screenshotting half the screen.
     static let maxAXRectScreenFraction: Double = 0.35
 
+    /// How much bigger than the default box a TEXTLESS element's rect may be
+    /// before we stop believing it describes what was pointed at.
+    ///
+    /// A text-bearing element is self-evidently the thing under the cursor, so
+    /// its rect is trusted at any sane size. A textless container is not: it is
+    /// just the nearest node the app was willing to answer with. Compass's
+    /// `AXRow` (~1000x30) and a Chrome breadcrumb bar (932x80, 5% of screen)
+    /// are worth keeping; a VS Code `AXGroup` measured 601x646 — 26% of the
+    /// screen, 52 OCR lines — and that is a page, not a referent.
+    static let maxTextlessRectMultiple: Double = 2.5
+
     // ── Choosing what to capture ────────────────────────────────────────────
 
     /// Region referents crop their own bounds. Point referents prefer the AX
@@ -45,14 +56,30 @@ enum Capture {
             return (padded(shape.bounds, by: 8), false)
         }
 
-        if let axFrame = snapshot.elements.first?.frame,
+        let s = defaultPointSize
+
+        if let element = snapshot.elements.first,
+           let axFrame = element.frame,
            axFrame.width > 8, axFrame.height > 8,
            axFrame.width * axFrame.height < screenArea * maxAXRectScreenFraction,
            axFrame.contains(shape.origin) {
-            return (padded(axFrame, by: axPadding), true)
+
+            // A text-bearing element IS the thing under the cursor, so trust
+            // its rect at any sane size. A textless container is merely the
+            // nearest node the app chose to answer with, so trust it only while
+            // it stays near the default box: one VS Code `AXGroup` measured
+            // 601x646 — 26% of the screen, 52 OCR lines — which is a page, not
+            // a referent.
+            let hasText = [
+                element.value, element.title, element.elementDescription, element.selectedText
+            ].contains { ($0?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false) }
+
+            if hasText
+                || axFrame.width * axFrame.height <= s.width * s.height * maxTextlessRectMultiple {
+                return (padded(axFrame, by: axPadding), true)
+            }
         }
 
-        let s = defaultPointSize
         return (
             Frame(
                 x: shape.origin.x - s.width / 2,

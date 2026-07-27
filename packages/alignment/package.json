@@ -1,0 +1,18 @@
+{
+  "name": "@fovea/alignment",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/align.js",
+  "types": "./dist/align.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/align.d.ts",
+      "default": "./dist/align.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "test": "tsc --build && node --test dist/test/*.test.js"
+  }
+}
