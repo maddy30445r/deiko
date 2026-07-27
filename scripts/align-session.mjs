@@ -76,20 +76,39 @@ function toCandidates(events) {
 
   // Regions never produce a `candidate` event — a drag is explicit, so it goes
   // straight to a referent. They still have to reach the aligner.
+  //
+  // A region's probe is stamped at mouse-UP, but the user talks while DRAWING —
+  // in a real session "Yeh" was spoken 4.6s before commit, mid-gesture. The
+  // drag's start is recoverable because swallowing the drag events freezes the
+  // OS cursor at the drag origin: the cursor samples sit at exactly path[0]
+  // for the whole gesture, so the frozen run's first sample is the drag start.
+  // The candidate's time becomes the gesture's midpoint, and its dwell the
+  // full gesture duration.
+  const cursorSamples = events.filter((e) => e.type === "cursor");
   const regions = probes
     .filter((p) => p.shape.kind === "region")
-    .map((p, i) => ({
-      id: `region-${i}`,
-      t: p.t,
-      position: p.shape.origin,
-      // A deliberate drag has no dwell to measure; give it a dwell that
-      // reflects intent so the overlap fallback has a window to work with.
-      features: { dwellMs: 600, approachSpeed: 0 },
-      app: p.app,
-      kind: "region",
-      grounded: grounded(p),
-      text: bestText(p),
-    }));
+    .map((p, i) => {
+      const origin = p.shape.path?.[0] ?? p.shape.origin;
+      let dragStart = p.t;
+      for (let s = cursorSamples.length - 1; s >= 0; s--) {
+        const c = cursorSamples[s];
+        if (c.t >= p.t) continue;
+        if (p.t - c.t > 30_000) break;
+        if (Math.hypot(c.x - origin.x, c.y - origin.y) < 4) dragStart = c.t;
+        else if (dragStart !== p.t) break; // walked past the frozen run
+      }
+      const duration = p.t - dragStart;
+      return {
+        id: `region-${i}`,
+        t: dragStart + duration / 2,
+        position: p.shape.origin,
+        features: { dwellMs: Math.max(duration, 600), approachSpeed: 0 },
+        app: p.app,
+        kind: "region",
+        grounded: grounded(p),
+        text: bestText(p),
+      };
+    });
 
   return [...paired, ...regions].sort((a, b) => a.t - b.t);
 }

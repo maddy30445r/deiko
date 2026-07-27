@@ -16,11 +16,16 @@
  * as a real risk; Whisper or Apple Speech drop in without the aligner noticing.
  */
 
-import { readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, rmSync, statSync } from "node:fs";
 import { resolve, join, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+
+// The \p{M}-preserving normaliser from the aligner — imported, not copied,
+// because the whole point of normalising here is to match what the aligner
+// will match on.
+import { normalizeWord } from "../packages/alignment/dist/src/deictic.js";
 
 const SARVAM_STT_URL = "https://api.sarvam.ai/speech-to-text";
 
@@ -248,6 +253,98 @@ function extractText(raw) {
   return String(raw?.transcript ?? raw?.text ?? raw?.output?.transcript ?? "").trim();
 }
 
+// ── The anchor merge ────────────────────────────────────────────────────────
+
+/**
+ * Put Sarvam's words (right text, no times) onto Apple's timeline (wrong text,
+ * real times).
+ *
+ * Why this works: both recognisers heard the SAME audio, so their token
+ * sequences are two noisy views of one utterance, monotonic in time. The
+ * tokens they agree on — in this session: taxonomy, CBSE, Telangana, tenant,
+ * Yeh, Yahan — become anchors via longest-common-subsequence (monotonic by
+ * construction, so anchors can never cross). Sarvam tokens between two anchors
+ * are spread evenly across the gap.
+ *
+ * The binding window is ±1.5s, so evenly-spread is genuinely good enough: a
+ * word only needs to land within a second or so of when it was said, not on
+ * the exact syllable.
+ */
+function mergeWords(sarvamText, appleWords, audioDurationMs) {
+  const sTokens = sarvamText.split(/\s+/).filter((t) => normalizeWord(t).length > 0);
+  if (sTokens.length === 0 || appleWords.length === 0) {
+    return { words: appleWords, anchors: 0, total: sTokens.length };
+  }
+  const sNorm = sTokens.map(normalizeWord);
+
+  // Apple's "words" are segments that may hold several words ("tenant check
+  // if"); flatten to timed tokens, spreading times within each segment.
+  const aTokens = [];
+  for (const seg of appleWords) {
+    const parts = seg.text.split(/\s+/).filter((t) => normalizeWord(t).length > 0);
+    const span = Math.max(seg.end - seg.start, 1);
+    parts.forEach((p, k) => {
+      aTokens.push({ norm: normalizeWord(p), t: seg.start + (span * k) / parts.length });
+    });
+  }
+
+  // Longest common subsequence over normalized tokens → anchor pairs.
+  // Sequences are tiny (tens of tokens), so the O(n·m) table is nothing.
+  const n = sNorm.length;
+  const m = aTokens.length;
+  const lcs = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      lcs[i][j] =
+        sNorm[i] === aTokens[j].norm
+          ? lcs[i + 1][j + 1] + 1
+          : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+    }
+  }
+  const anchors = [];
+  for (let i = 0, j = 0; i < n && j < m; ) {
+    if (sNorm[i] === aTokens[j].norm) {
+      anchors.push({ idx: i, t: aTokens[j].t });
+      i++; j++;
+    } else if (lcs[i + 1][j] >= lcs[i][j + 1]) i++;
+    else j++;
+  }
+
+  if (anchors.length === 0) {
+    // Nothing agreed — keep Apple's words rather than inventing a timeline.
+    return { words: appleWords, anchors: 0, total: n };
+  }
+
+  // Interpolate: anchored tokens keep their time; the rest spread evenly
+  // between the surrounding anchors (start of audio / end of audio at the
+  // edges).
+  const times = new Array(n);
+  let prevIdx = -1;
+  let prevT = 0;
+  for (const b of [...anchors, { idx: n, t: audioDurationMs }]) {
+    const gap = b.idx - prevIdx;
+    for (let i = prevIdx + 1; i < b.idx; i++) {
+      times[i] = prevT + ((i - prevIdx) / gap) * (b.t - prevT);
+    }
+    if (b.idx < n) times[b.idx] = b.t;
+    prevIdx = b.idx;
+    prevT = b.t;
+  }
+
+  const words = sTokens.map((text, i) => ({
+    text,
+    start: times[i],
+    end: Math.min(times[i] + 300, times[i + 1] ?? times[i] + 300),
+    source: "merged",
+  }));
+  return { words, anchors: anchors.length, total: n };
+}
+
+/** 16kHz mono 16-bit PCM: duration falls straight out of the byte count. */
+function wavDurationMs(wavPath) {
+  return ((statSync(wavPath).size - 44) / (SAMPLE_RATE * BYTES_PER_SAMPLE)) * 1000;
+}
+
 // ── On-device word timings ──────────────────────────────────────────────────
 
 /**
@@ -378,27 +475,39 @@ async function main() {
     }
     console.error(`${timing.words.length} segments`);
 
+    // Sarvam for the words themselves. Best-effort: without it the hold falls
+    // back to Apple's words, which mishear Hindi function words but still bind
+    // English sessions fine.
+    let holdWords = timing.words;
+    process.stderr.write(`  hold ${hold} → ${transcriber.name} text … `);
+    try {
+      const result = await transcriber.transcribe(wav, { language });
+      holdTexts.push({ hold, text: result.text });
+      if (result.text) {
+        const merged = mergeWords(result.text, timing.words, wavDurationMs(wav));
+        if (merged.anchors > 0) {
+          holdWords = merged.words;
+          console.error(`merged ${merged.total} words (anchors ${merged.anchors}/${merged.total})`);
+        } else {
+          console.error(`no anchors — keeping on-device words`);
+        }
+        console.error(`    "${result.text.slice(0, 110)}"`);
+      } else {
+        console.error(`empty — keeping on-device words`);
+      }
+    } catch (err) {
+      console.error(`failed (${err.message.slice(0, 80)}) — continuing on timings alone`);
+      holdTexts.push({ hold, text: timing.transcript });
+    }
+
     // THE SHIFT. Offsets into the wav become session-clock times, so words and
     // cursor events share one timeline.
-    allWords.push(...timing.words.map((w) => ({
+    allWords.push(...holdWords.map((w) => ({
       text: w.text,
       start: w.start + audioT0,
       end: w.end + audioT0,
       hold,
     })));
-
-    // Sarvam for readable text. Best-effort: the plan prompt wants it, the
-    // aligner does not, so a failure here must not sink the hold.
-    process.stderr.write(`  hold ${hold} → ${transcriber.name} text … `);
-    try {
-      const result = await transcriber.transcribe(wav, { language });
-      holdTexts.push({ hold, text: result.text });
-      console.error(`ok`);
-      if (result.text) console.error(`    "${result.text.slice(0, 110)}"`);
-    } catch (err) {
-      console.error(`failed (${err.message.slice(0, 80)}) — continuing on timings alone`);
-      holdTexts.push({ hold, text: timing.transcript });
-    }
   }
 
   allWords.sort((a, b) => a.start - b.start);

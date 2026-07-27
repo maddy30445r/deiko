@@ -45,22 +45,33 @@ test("a deictic word binds to the pointing act that preceded it", () => {
   assert.match(bound!.utterance, /expose this key/);
 });
 
-test("the window is asymmetric: pointing before speaking is normal, after is not", () => {
+test("the window is bounded on both sides, and speak-then-point is allowed", () => {
   // Cursor stops 1.2s BEFORE the word — within lookBack (1500ms).
   const before = align([candidate(800)], say("this", 2000)).bindings;
   assert.equal(before.length, 1, "a point 1.2s before the word should bind");
 
-  // Cursor stops 1.2s AFTER the word — outside lookAhead (1000ms).
-  const after = align([candidate(3200)], say("this", 2000)).bindings;
+  // Cursor stops 1.4s AFTER the word — the real-session case ("usko" spoken
+  // 1.4s before settling on the CBSE cell it named). Within lookAhead (2000ms).
+  const speakThenPoint = align([candidate(3400)], say("this", 2000)).bindings;
+  assert.equal(
+    speakThenPoint.find((b) => b.reason === "deictic")?.deicticWord,
+    "this",
+    "speaking first and pointing 1.4s later must bind — observed in real data",
+  );
+
+  // Cursor stops 2.5s AFTER the word — outside lookAhead.
+  const after = align([candidate(4500)], say("this", 2000)).bindings;
   assert.equal(
     after.find((b) => b.reason === "deictic"),
     undefined,
-    "a point 1.2s after the word should not bind deictically",
+    "a point 2.5s after the word should not bind deictically",
   );
 });
 
 test("Hinglish points as well as English", () => {
-  for (const word of ["yeh", "isko", "wahan", "woh"]) {
+  // "ismein" and "Issko" are verbatim from a live session's Sarvam output —
+  // oblique forms and ASR spellings the lexicon originally missed.
+  for (const word of ["yeh", "isko", "wahan", "woh", "ismein", "Issko", "usmein"]) {
     const { bindings } = align([candidate(1000)], say(word, 1300));
     assert.equal(
       bindings[0]?.reason,

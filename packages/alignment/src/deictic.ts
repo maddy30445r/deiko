@@ -41,10 +41,13 @@ const HINGLISH = [
   "yahan", "yaha", "idhar", "yahaan",
   // wahan / there
   "wahan", "waha", "udhar", "wahaan",
-  // isko / iska — oblique forms of "this"
-  "isko", "iska", "iski", "ise", "inko", "inka", "inhe",
-  // usko / uska — oblique forms of "that"
-  "usko", "uska", "uski", "unko", "unka", "unhe",
+  // isko / iska / ismein — oblique forms of "this"
+  // ("issko" is a real ASR spelling — Sarvam produced it in a live session)
+  "isko", "issko", "iska", "iski", "ise", "inko", "inka", "inhe",
+  "ismein", "isme", "ismei",
+  // usko / uska / usmein — oblique forms of "that"
+  "usko", "ussko", "uska", "uski", "unko", "unka", "unhe",
+  "usmein", "usme", "usmei",
 ] as const;
 
 /**

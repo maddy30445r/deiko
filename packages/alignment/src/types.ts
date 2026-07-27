@@ -65,13 +65,13 @@ export interface AlignmentResult {
 }
 
 export interface AlignmentOptions {
-  /**
-   * How far BEFORE a deictic word a pointing act may sit. Larger than the
-   * lookahead because people move the cursor first and speak as they arrive —
-   * "…and *this* one here" lands well after the cursor stopped.
-   */
+  /** How far BEFORE a deictic word a pointing act may sit — the user points
+   *  first and speaks as they arrive. */
   lookBackMs: number;
-  /** How far AFTER a deictic word a pointing act may sit. */
+  /** How far AFTER a deictic word a pointing act may sit — the user speaks
+   *  first, then moves to the thing. Intuition said this should be the smaller
+   *  side; real session data disagreed ("usko" spoken 1.4s before the settle
+   *  on the CBSE cell it named), so it is now the larger one. */
   lookAheadMs: number;
   /** Below this, a binding is flagged for review rather than trusted. */
   lowConfidence: number;
@@ -79,6 +79,6 @@ export interface AlignmentOptions {
 
 export const DEFAULT_OPTIONS: AlignmentOptions = {
   lookBackMs: 1500,
-  lookAheadMs: 1000,
+  lookAheadMs: 2000,
   lowConfidence: 0.5,
 };
