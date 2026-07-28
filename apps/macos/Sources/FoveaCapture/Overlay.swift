@@ -101,15 +101,13 @@ final class Overlay {
     }
 
     func update(
-        cursor: Point, trail: [TrailPoint], lasso: [Point]?, pulses: [Pulse],
-        locked: Bool
+        cursor: Point, trail: [TrailPoint], lasso: [Point]?, pulses: [Pulse]
     ) {
         guard let view else { return }
         view.cursor = cursor
         view.trail = trail
         view.lasso = lasso
         view.pulses = pulses
-        view.isLocked = locked
     }
 }
 
@@ -124,9 +122,6 @@ final class OverlayView: NSView {
     var trail: [TrailPoint] = []
     var lasso: [Point]?
     var pulses: [Pulse] = []
-    /// Held or hands-free. The badge must name the right exit for each.
-    var isLocked = false
-
     override var isFlipped: Bool { false }
 
     /// The single top-left → bottom-left conversion in the drawing layer.
@@ -156,13 +151,11 @@ final class OverlayView: NSView {
     /// the claim has to be made explicitly and continuously. macOS's own orange
     /// microphone dot says the same thing and cannot be faked or suppressed by
     /// this app; this badge adds what that dot cannot: which app, and how to
-    /// stop it — which differs by mode, hence the two strings.
+    /// stop it.
     private func drawCaptureBadge() {
         guard let screen = NSScreen.screens.first else { return }
 
-        let text = isLocked
-            ? "● Fovea is capturing — tap Right Option to stop"
-            : "● Fovea is capturing — release to stop, double-tap to keep going"
+        let text = "● Fovea is capturing — tap Right Option to stop"
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 12, weight: .medium),
             .foregroundColor: NSColor.white,

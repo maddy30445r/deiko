@@ -1,119 +1,94 @@
 /// THE SESSION GESTURE, as pure logic.
 ///
-/// One modifier key has to mean three things — capture while held, lock
-/// hands-free, draw a lasso — and which one it meant is only knowable from the
-/// sequence: whether a drag happened during the press, and how long since the
-/// last release. That is a state machine, and state machines get subtly wrong.
+/// Right Option controls the session and nothing else:
 ///
-/// It lives here, apart from `Hotkey`, for exactly one reason: `Hotkey` needs a
-/// CGEventTap and Accessibility permission, so nothing in it can be tested. The
-/// first version of this logic shipped a bug where the second tap of a
-/// double-tap locked the session and its own release immediately stopped it
-/// again — invisible by inspection, and only findable by performing the gesture.
-/// Now it is nine lines of test.
+///   double-tap  → start capturing
+///   single tap  → stop
 ///
-/// Timing arrives as a parameter rather than being read from a clock, so the
-/// tests can step through a double-tap without sleeping.
+/// Drawing lives on Left Option, in `Hotkey`, and never reaches this type. That
+/// separation is the point. Both used to be Right Option, told apart by whether
+/// a drag happened during the press — a distinction the user had to feel rather
+/// than see, and one that already shipped a bug where the second tap of a
+/// double-tap locked the session and its own release immediately stopped it.
+///
+/// There is also no "hold to capture" mode any more. It existed for a
+/// ten-second capture, and nobody describes a task worth planning in ten
+/// seconds; every real session so far ran from tens of seconds to minutes.
+///
+/// This lives apart from `Hotkey` because `Hotkey` needs a CGEventTap and
+/// Accessibility permission, so nothing inside it can be tested. Time arrives
+/// as a parameter rather than from a clock, so the tests step through a
+/// double-tap without sleeping.
 public struct SessionGesture: Sendable {
 
-    /// What the caller should do. `stopAfterGrace` is the interesting one: a
-    /// release does not stop capture, it schedules a stop that a second press
-    /// can cancel — which is what keeps audio continuous across a promotion.
     public enum Decision: Equatable, Sendable {
+        /// A first tap, or a second one that came too late. Arms, does nothing.
         case none
         case start
-        case lock
-        case stopAfterGrace
         case stopNow
     }
 
-    /// How soon after a release a press counts as the second half of a
-    /// double-tap. macOS's own double-click default.
+    /// How soon after a tap another one counts as a double-tap. macOS's own
+    /// double-click default.
     public let doubleTapWindowMs: Double
 
     public private(set) var isCapturing = false
-    public private(set) var isLocked = false
 
-    private var lastReleaseAt: Double?
-    private var draggedThisPress = false
-    private var lockedThisPress = false
+    /// When the last unmatched tap happened, if it is still live.
+    private var armedAt: Double?
 
     public init(doubleTapWindowMs: Double = 350) {
         self.doubleTapWindowMs = doubleTapWindowMs
     }
 
-    /// The modifier went down.
+    /// Right Option went down. Releases carry no meaning at all now, so there
+    /// is no counterpart to this.
+    ///
+    /// Measured press-to-press rather than release-to-press: it matches how a
+    /// double-click is defined, and it means holding the first press for a
+    /// while correctly fails to arm the second.
     public mutating func press(at t: Double) -> Decision {
-        draggedThisPress = false
-        lockedThisPress = false
-
-        // Second half of a double-tap: promote rather than restart.
-        if !isLocked, isCapturing,
-           let last = lastReleaseAt, t - last < doubleTapWindowMs {
-            lastReleaseAt = nil
-            isLocked = true
-            lockedThisPress = true
-            return .lock
+        // Stopping is immediate and unconditional. A tap while capturing is
+        // never the first half of anything — there is nothing to start.
+        if isCapturing {
+            isCapturing = false
+            armedAt = nil
+            return .stopNow
         }
 
-        // While locked, a press decides nothing on its own — it is either the
-        // start of a lasso or the tap that stops, and only the release knows.
-        guard !isLocked else { return .none }
-
-        if !isCapturing {
+        if let armed = armedAt, t - armed < doubleTapWindowMs {
+            armedAt = nil
             isCapturing = true
             return .start
         }
-        // Pressed again after the window expired but before the scheduled stop
-        // ran. Continue the session rather than stacking a second one on it.
+
+        // First tap, or too slow to pair with the last one. Re-arm from here
+        // rather than discarding, so a third tap can still pair with a second.
+        armedAt = t
         return .none
     }
 
-    /// A drag began during the current press — this press is drawing a lasso.
-    public mutating func dragStarted() {
-        draggedThisPress = true
-    }
-
-    /// The modifier came up.
-    public mutating func release(at t: Double) -> Decision {
-        defer { lockedThisPress = false }
-
-        if isLocked {
-            // A lasso is just a lasso, and so is the release of the very tap
-            // that locked. Anything else is the tap that ends the session.
-            if draggedThisPress || lockedThisPress { return .none }
-            return stop()
-        }
-
-        // Held mode. A release that drew a lasso cannot begin a double-tap:
-        // finishing a drawing is not half of a promotion gesture.
-        lastReleaseAt = draggedThisPress ? nil : t
-        return .stopAfterGrace
-    }
-
-    /// The grace window elapsed with no second press.
-    public mutating func graceExpired() -> Decision {
-        guard isCapturing, !isLocked else { return .none }
-        return stop()
-    }
-
-    /// The event tap was disabled and re-enabled; the modifier's true state was
-    /// read back afterwards. A release may have gone unobserved in between.
+    /// The session ended without a gesture — a watchdog stopped it, or the
+    /// user quit from the menu.
     ///
-    /// In HELD mode that would leave capture running forever, so end it —
-    /// losing the tail of a sentence beats a stuck microphone. In LOCKED mode
-    /// nothing is owed: the user stops by tapping, and always could.
-    public mutating func tapRecovered(modifierStillDown: Bool) -> Decision {
-        draggedThisPress = false
-        lastReleaseAt = nil
-        guard !modifierStillDown, !isLocked, isCapturing else { return .none }
-        return stop()
+    /// Without this the two halves desync: the gesture still believes it is
+    /// capturing, so the next tap is spent "stopping" a session that already
+    /// ended, and — worse — `Hotkey` goes on swallowing Option-drags when no
+    /// recording is running, breaking box-select and Finder duplicate in apps
+    /// Fovea is not even watching.
+    public mutating func sessionEndedExternally() {
+        isCapturing = false
+        armedAt = nil
     }
 
-    private mutating func stop() -> Decision {
-        isCapturing = false
-        isLocked = false
-        lastReleaseAt = nil
-        return .stopNow
+    /// The event tap was disabled and re-enabled. Presses may have gone
+    /// unobserved, so a half-finished double-tap can no longer be trusted.
+    ///
+    /// Capture itself is left alone deliberately: without a held mode there is
+    /// no state that a missed release could strand, and a session the user
+    /// started should survive a tap hiccup. The watchdogs in `Recorder` are
+    /// what stop a session nobody ends.
+    public mutating func tapRecovered() {
+        armedAt = nil
     }
 }

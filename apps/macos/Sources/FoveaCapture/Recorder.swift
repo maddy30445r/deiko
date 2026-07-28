@@ -145,11 +145,6 @@ final class Recorder {
     /// True while capturing, held or locked.
     private(set) var isRecording = false
 
-    /// True once a double-tap promoted the session to hands-free. Drives the
-    /// badge, which has to name the right exit: releasing the key stops a held
-    /// session, while a locked one waits for a tap.
-    private(set) var isLocked = false
-
     /// Always 1 now — a session is one continuous recording. Kept because the
     /// wire contract and every recorded session so far carry it.
     var holdCount: Int { holdIndex }
@@ -254,6 +249,10 @@ final class Recorder {
     }
 
     private func closeSession() async -> String? {
+        // A lasso still being drawn is a referent the user meant to capture.
+        // Commit it before teardown, or it dies on the `isRecording` guard in
+        // `commitLasso` and the drag is lost.
+        if isRecording, lassoPath != nil { commitLasso() }
         if isRecording { endRecording() }
         guard let dir = sessionDir, let id = sessionId else { return nil }
 
@@ -279,6 +278,10 @@ final class Recorder {
 
         sessionDir = nil
         sessionId = nil
+        // Tell the hotkey, whatever route brought us here. A watchdog stop or
+        // a Quit never passed through the gesture, and leaving it believing a
+        // session is live means Option-drags stay swallowed afterwards.
+        hotkey.noteSessionEnded()
         onStateChange?()
         return dir
     }
@@ -297,11 +300,6 @@ final class Recorder {
         switch event {
         case .recordingStarted:
             beginRecording()
-        case .locked:
-            // Capture is already running — the promotion only changes how it
-            // ends, and what the badge says.
-            isLocked = true
-            onStateChange?()
         case .recordingStopped:
             Task { _ = await self.stopSession() }
         case .dragBegan(let p):
@@ -322,18 +320,26 @@ final class Recorder {
     }
 
     private func beginRecording() {
-        // A tap while the session is closing is ignored. `closeSession` is
-        // suspended on the crop drain at that moment, so a recording started
-        // here would attach to a session in the middle of being finalised —
-        // its events split across two files and its crops written to a
-        // directory the user has already been shown as complete.
-        guard stopTask == nil, !isRecording else { return }
+        guard !isRecording else { return }
+
+        // A start that lands while the previous session is still closing WAITS
+        // for it rather than being dropped. `closeSession` is suspended on the
+        // crop drain at that moment and can take a second or two; silently
+        // ignoring the gesture would look like the hotkey had stopped working,
+        // and starting on top of the closing session would split its events
+        // across two files.
+        if let stopTask {
+            Task { @MainActor in
+                _ = await stopTask.value
+                self.beginRecording()
+            }
+            return
+        }
 
         // The toggle is what brings a session into existence.
         guard startSessionIfNeeded(), let sessionDir, let sessionId else { return }
 
         isRecording = true
-        isLocked = false
         recordingStartedAt = Clock.nowMs()
         holdReferentCount = 0
         holdIndex = 1
@@ -356,8 +362,8 @@ final class Recorder {
         }
 
         Emit.event(HoldEvent.start(id: sessionId, hold: holdIndex, audioPath: audioPath))
-        Emit.log("● recording — point at things and talk. Release to stop, "
-            + "or double-tap Right Option to keep it running hands-free.")
+        Emit.log("● recording — point at things and talk. Hold LEFT Option and "
+            + "drag to circle an area. Tap Right Option to stop.")
         onStateChange?()
 
         trail.removeAll()
@@ -386,7 +392,6 @@ final class Recorder {
         // returned before this once left the mic running, which is the one
         // promise this product cannot break.
         isRecording = false
-        isLocked = false
         recordingStartedAt = nil
         sampler?.invalidate()
         sampler = nil
@@ -452,7 +457,7 @@ final class Recorder {
 
         overlay.update(
             cursor: position, trail: trail, lasso: lassoPath,
-            pulses: pulses, locked: isLocked
+            pulses: pulses
         )
     }
 

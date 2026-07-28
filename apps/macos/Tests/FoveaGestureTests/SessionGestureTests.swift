@@ -1,104 +1,130 @@
 import Testing
 @testable import FoveaGesture
 
-// The gesture is the product's entire input surface: one key meaning capture,
-// lock, and lasso. Every case below is a sequence a user can actually perform,
-// and at least one of them shipped broken.
+// Right Option is the product's entire session control, and it cannot be tested
+// by hand except by performing gestures. Every case below is one a user can
+// actually do; the previous version of this logic shipped a bug that none of
+// them would have survived.
 
-@Test("hold, talk, release — the quick path")
-func quickHold() {
+@Test("a single tap does nothing — it only arms")
+func singleTapDoesNothing() {
     var g = SessionGesture()
-    #expect(g.press(at: 0) == .start)
-    #expect(g.release(at: 900) == .stopAfterGrace)
-    #expect(g.graceExpired() == .stopNow)
+    #expect(g.press(at: 0) == .none)
     #expect(!g.isCapturing)
 }
 
-@Test("double-tap locks, and does NOT stop on the second tap's own release")
-func doubleTapLocks() {
+@Test("a double-tap starts capturing")
+func doubleTapStarts() {
     var g = SessionGesture()
-    #expect(g.press(at: 0) == .start)
-    #expect(g.release(at: 120) == .stopAfterGrace)
-    #expect(g.press(at: 200) == .lock)          // within the 350ms window
-    // The bug: this release used to be read as "a tap while locked" and
-    // stopped the session milliseconds after locking it.
-    #expect(g.release(at: 260) == .none)
-    #expect(g.isCapturing && g.isLocked)
-}
-
-@Test("the scheduled stop is cancelled by the promotion, so capture never pauses")
-func promotionCancelsTheStop() {
-    var g = SessionGesture()
-    _ = g.press(at: 0)
-    _ = g.release(at: 100)
-    _ = g.press(at: 180)
-    // The grace timer still fires — it was scheduled before the second press —
-    // and must now be inert, or it would stop a session the user just locked.
-    #expect(g.graceExpired() == .none)
+    #expect(g.press(at: 0) == .none)
+    #expect(g.press(at: 200) == .start)
     #expect(g.isCapturing)
 }
 
-@Test("a tap while locked stops the session")
-func tapWhileLockedStops() {
+@Test("a second tap outside the window does not start — it re-arms")
+func slowSecondTapDoesNotStart() {
     var g = SessionGesture()
-    _ = g.press(at: 0)
-    _ = g.release(at: 100)
-    _ = g.press(at: 180)
-    _ = g.release(at: 240)
-
-    #expect(g.press(at: 5000) == .none)         // locked: the press decides nothing
-    #expect(g.release(at: 5080) == .stopNow)
-    #expect(!g.isCapturing && !g.isLocked)
+    #expect(g.press(at: 0) == .none)
+    #expect(g.press(at: 900) == .none)
+    #expect(!g.isCapturing)
+    // Re-armed from the LAST tap, so a prompt third one still pairs. Discarding
+    // instead would make a slow-then-fast triple tap do nothing at all.
+    #expect(g.press(at: 1100) == .start)
 }
 
-@Test("a slow second press is a new session, not a promotion")
-func slowSecondPressDoesNotLock() {
+@Test("the window is measured press to press, so holding the first tap does not arm the second")
+func heldFirstTapDoesNotPair() {
     var g = SessionGesture()
-    _ = g.press(at: 0)
-    _ = g.release(at: 100)
-    #expect(g.graceExpired() == .stopNow)
-    #expect(g.press(at: 2000) == .start)        // far outside the window
-    #expect(!g.isLocked)
+    #expect(g.press(at: 0) == .none)
+    // Key held down for two seconds, then tapped again promptly. Press-to-press
+    // is 2100ms, so this is two unrelated taps, not a double-tap.
+    #expect(g.press(at: 2100) == .none)
+    #expect(!g.isCapturing)
 }
 
-@Test("a lasso is not half of a double-tap")
-func lassoDoesNotArmPromotion() {
+@Test("a single tap while capturing stops")
+func tapWhileCapturingStops() {
     var g = SessionGesture()
     _ = g.press(at: 0)
-    g.dragStarted()
-    #expect(g.release(at: 900) == .stopAfterGrace)
-    // Pressing again quickly must NOT lock: the previous release finished a
-    // drawing, and treating it as a tap would promote sessions by accident
-    // every time someone drew two regions in quick succession.
-    #expect(g.press(at: 1000) == .none)
-    #expect(!g.isLocked)
+    _ = g.press(at: 200)
+    #expect(g.isCapturing)
+
+    #expect(g.press(at: 9000) == .stopNow)
+    #expect(!g.isCapturing)
 }
 
-@Test("a lasso while locked leaves the session running")
-func lassoWhileLockedKeepsGoing() {
+@Test("a double-tap while capturing stops on the first press and no more")
+func doubleTapWhileCapturingJustStops() {
     var g = SessionGesture()
     _ = g.press(at: 0)
-    _ = g.release(at: 100)
-    _ = g.press(at: 180)
-    _ = g.release(at: 240)
+    _ = g.press(at: 200)
 
-    _ = g.press(at: 4000)
-    g.dragStarted()
-    #expect(g.release(at: 4600) == .none)
-    #expect(g.isCapturing && g.isLocked)
+    #expect(g.press(at: 5000) == .stopNow)
+    // The second half of the habit lands in idle and merely arms.
+    #expect(g.press(at: 5150) == .none)
+    #expect(!g.isCapturing)
 }
 
-@Test("a release lost to a disabled tap ends a held session but not a locked one")
-func tapRecovery() {
-    var held = SessionGesture()
-    _ = held.press(at: 0)
-    #expect(held.tapRecovered(modifierStillDown: false) == .stopNow)
+@Test("a fast triple tap while capturing ends up capturing again")
+func tripleTapRestarts() {
+    var g = SessionGesture()
+    _ = g.press(at: 0)
+    _ = g.press(at: 200)
 
-    var locked = SessionGesture()
-    _ = locked.press(at: 0)
-    _ = locked.release(at: 100)
-    _ = locked.press(at: 180)
-    _ = locked.release(at: 240)
-    #expect(locked.tapRecovered(modifierStillDown: false) == .none)
-    #expect(locked.isCapturing)
+    #expect(g.press(at: 5000) == .stopNow)   // stop
+    #expect(g.press(at: 5100) == .none)      // arm
+    #expect(g.press(at: 5200) == .start)     // start a new session
+    #expect(g.isCapturing)
+}
+
+@Test("stopping never leaves a half-armed double-tap behind")
+func stopClearsTheArmedWindow() {
+    var g = SessionGesture()
+    _ = g.press(at: 0)
+    _ = g.press(at: 200)
+    _ = g.press(at: 5000)                    // stop, clearing the window
+
+    // If the stop had left `armedAt` set, this lone tap would start a session
+    // the user never asked for.
+    #expect(g.press(at: 5100) == .none)
+    #expect(!g.isCapturing)
+}
+
+@Test("a tap lost to a disabled event tap cannot complete a double-tap")
+func tapRecoveryDisarms() {
+    var g = SessionGesture()
+    #expect(g.press(at: 0) == .none)
+    g.tapRecovered()
+    // Presses went unobserved, so the armed half is no longer trustworthy.
+    #expect(g.press(at: 100) == .none)
+    #expect(!g.isCapturing)
+}
+
+@Test("a live session survives a tap hiccup")
+func tapRecoveryKeepsCapturing() {
+    var g = SessionGesture()
+    _ = g.press(at: 0)
+    _ = g.press(at: 200)
+    g.tapRecovered()
+    // No held mode means no stranded state, and a session the user started
+    // should not vanish because the OS restarted our tap.
+    #expect(g.isCapturing)
+    #expect(g.press(at: 3000) == .stopNow)
+}
+
+@Test("a watchdog stop leaves the gesture idle, not stale")
+func externalStopResets() {
+    var g = SessionGesture()
+    _ = g.press(at: 0)
+    _ = g.press(at: 200)
+    #expect(g.isCapturing)
+
+    // The silence watchdog fired. Without this, the next tap would be spent
+    // "stopping" a session that already ended — and Hotkey would go on
+    // swallowing Option-drags with nothing recording.
+    g.sessionEndedExternally()
+    #expect(!g.isCapturing)
+
+    #expect(g.press(at: 9000) == .none)      // arms, does not stop
+    #expect(g.press(at: 9150) == .start)     // and a double-tap starts cleanly
 }

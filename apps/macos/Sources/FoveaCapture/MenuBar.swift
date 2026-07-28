@@ -181,7 +181,7 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
             let referents = recorder.referentCount
             menu.addItem(disabled(
-                (recorder.isRecording ? (recorder.isLocked ? "  ● Recording (hands-free) · " : "  ● Recording · ") : "  ")
+                (recorder.isRecording ? "  ● Recording · " : "  ")
                     + "\(referents) referent\(referents == 1 ? "" : "s")"
             ))
 
@@ -199,7 +199,7 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             menu.addItem(disabled(
                 isListening
-                    ? "Hold Right Option to capture · double-tap to keep it running"
+                    ? "Double-tap Right Option to start capturing"
                     : "Not listening — could not create the event tap"
             ))
         }

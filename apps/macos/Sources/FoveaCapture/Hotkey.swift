@@ -4,33 +4,27 @@ import Foundation
 import FoveaGesture
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HOLD, OR DOUBLE-TAP TO LOCK
+// TWO KEYS, ONE JOB EACH
 //
-// One modifier, three meanings, told apart by what happens during the press:
+//   double-tap Right Option   → start capturing
+//   tap Right Option          → stop
+//   hold Left Option + drag   → lasso a region
 //
-//   hold Right Option        → capture while held, release to stop
-//   double-tap it            → LOCK: keep capturing hands-free until tapped again
-//   hold it and drag         → lasso a region (that drag alone is swallowed)
+// THEY USED TO BE THE SAME KEY, told apart by whether a drag happened during
+// the press. That distinction is invisible — the user has to feel it — and it
+// shipped a bug where the second tap of a double-tap locked the session and
+// its own release stopped it again. Two keys, no discrimination, no bug.
 //
-// PUSH-TO-TALK ALONE LOST DATA. Session 20260728-152834: 23.2 of 58.7 seconds
-// recorded nothing, because letting go to switch windows also stops the
-// microphone and the sampler — the transcript caught a sentence restarted
-// verbatim across the gap. A PURE TOGGLE fixed that but taxed the common case,
-// where pointing at one thing and saying one sentence became two taps and a
-// decision up front.
-//
-// So: both, with a promotion between them. You start holding, and if it turns
-// out to be long, you double-tap and keep talking. Wispr Flow's model — the
-// same problem, the same answer — adapted for a modifier that also has to draw.
-//
-// THE GRACE WINDOW is the whole trick. A release does not stop the session, it
-// SCHEDULES a stop; a second press cancels it. Recording therefore continues
-// unbroken across the double-tap, because a gap there would land mid-word.
+// There is no "hold to capture" mode either. It existed for a ten-second
+// capture, and nobody describes a task worth planning in ten seconds.
 //
 // The tap is ACTIVE, not listen-only, because the lasso has to be swallowed:
 // dragging with the button down means "select text" in an editor and "drag
-// this" in a table. Drags are swallowed only while the modifier is down, so
-// ordinary clicking and selection keep working all session.
+// this" in a table, so a drag that reached the app underneath would mangle
+// whatever it was drawn around. It swallows ONLY while Left Option is down AND
+// a session is running — with no session, Option-drag keeps doing whatever it
+// does in your apps (box-select in an editor, duplicate in Finder), because
+// Fovea has no business touching input it was not invited to.
 // ───────────────────────────────────────────────────────────────────────────────
 
 /// Right Option. Not `fn`/Globe, which macOS intercepts for dictation, the
@@ -46,14 +40,15 @@ private let kRightOptionKeyCode: Int64 = 61
 /// a hold that never ended. The device bit tracks the right key alone.
 private let kRightOptionFlagMask: UInt64 = 0x40
 
-/// Intent, not mechanics. All the timing lives in `Hotkey` so the Recorder
-/// never has to reason about presses, releases or double-tap windows.
+/// Left Option — the drawing key. Keycode and device bit, same reasoning as
+/// above: `.maskAlternate` cannot tell the two Option keys apart.
+private let kLeftOptionKeyCode: Int64 = 58
+private let kLeftOptionFlagMask: UInt64 = 0x20
+
+/// Intent, not mechanics. The double-tap timing lives in `SessionGesture`, so
+/// the Recorder never reasons about presses or windows.
 enum HotkeyEvent {
-    /// Begin capturing. Held mode until a `.locked` follows.
     case recordingStarted
-    /// Promoted to hands-free. Capture is already running; this is for the UI.
-    case locked
-    /// Stop and write the session out.
     case recordingStopped
     case dragBegan(Point)
     case dragMoved(Point)
@@ -70,19 +65,18 @@ final class Hotkey {
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
 
-    private(set) var isHeld = false
     private(set) var isDragging = false
 
-    /// Every decision about what a press or release MEANS lives in
-    /// `SessionGesture`, which has no CGEvent dependency and is unit-tested.
-    /// This class is then only plumbing: translate events, obey the decision.
+    /// What a Right Option press MEANS lives in `SessionGesture`, which has no
+    /// CGEvent dependency and is unit-tested. This class is only plumbing.
     private var gesture = SessionGesture()
 
-    /// The stop scheduled by a release, cancellable by a second press. This
-    /// indirection is what keeps audio continuous across a promotion.
-    private var pendingStop: Task<Void, Never>?
+    /// Left Option, tracked separately — it draws, and draws only.
+    private var isLeftOptionDown = false
 
-    var isLocked: Bool { gesture.isLocked }
+    /// Set between `.recordingStarted` and `.recordingStopped`. Gates the
+    /// swallowing: no session, no interference with the user's mouse.
+    private var isSessionActive = false
 
     /// Called on the main run loop for every gesture transition.
     var onEvent: ((HotkeyEvent) -> Void)?
@@ -150,22 +144,19 @@ final class Hotkey {
     /// A bool rather than an `Unmanaged<CGEvent>?` so nothing non-Sendable has
     /// to cross back out of the main-actor hop in the callback.
     private func handle(type: CGEventType, event: CGEvent) -> Bool {
-        // The system disables a tap that takes too long in its callback. Work
-        // here must stay trivial — re-enable and carry on rather than dying
-        // silently mid-session. And RECONCILE: while the tap was dead, the
-        // release may have happened unobserved. Without this check, `isHeld`
-        // stays true forever — mouse clicks swallowed system-wide and the mic
-        // recording — until the user happens to press Right Option again.
+        // The system disables a tap that dawdles in its callback. Re-enable and
+        // carry on rather than dying silently mid-session, then RECONCILE what
+        // went unobserved: a half-finished double-tap can no longer be trusted,
+        // and Left Option may have come up while we were deaf — which would
+        // otherwise leave every drag swallowed forever.
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            gesture.tapRecovered()
             let flags = CGEventSource.flagsState(.combinedSessionState)
-            if isHeld, flags.rawValue & kRightOptionFlagMask == 0 {
-                isHeld = false
-                if isDragging {
-                    isDragging = false
-                    emit(.dragEnded(Point(x: event.location.x, y: event.location.y)))
-                }
-                apply(gesture.tapRecovered(modifierStillDown: false))
+            isLeftOptionDown = flags.rawValue & kLeftOptionFlagMask != 0
+            if !isLeftOptionDown, isDragging {
+                isDragging = false
+                emit(.dragEnded(Point(x: event.location.x, y: event.location.y)))
             }
             return false
         }
@@ -175,33 +166,42 @@ final class Hotkey {
 
         switch type {
         case .flagsChanged:
-            guard event.getIntegerValueField(.keyboardEventKeycode) == kRightOptionKeyCode
-            else { return pass }
+            let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
 
-            // The DEVICE bit, not `.maskAlternate` — see kRightOptionFlagMask.
-            let nowHeld = event.flags.rawValue & kRightOptionFlagMask != 0
-            if nowHeld != isHeld {
-                isHeld = nowHeld
-                if nowHeld { pressed() } else { released(at: location) }
+            if keyCode == kRightOptionKeyCode {
+                // The DEVICE bit, not `.maskAlternate` — see the constants.
+                // Only the press means anything; a release carries no meaning
+                // now that there is no held mode.
+                if event.flags.rawValue & kRightOptionFlagMask != 0 {
+                    apply(gesture.press(at: Clock.nowMs()))
+                }
+            } else if keyCode == kLeftOptionKeyCode {
+                isLeftOptionDown = event.flags.rawValue & kLeftOptionFlagMask != 0
+                if !isLeftOptionDown, isDragging {
+                    isDragging = false
+                    emit(.dragEnded(location))
+                }
             }
-            // Always pass the modifier through: swallowing it would break
-            // Option as a normal modifier everywhere else.
+            // Always pass modifiers through: swallowing one would break Option
+            // as a normal modifier everywhere else.
             return pass
 
         case .leftMouseDown:
-            guard isHeld else { return pass }
+            // `isSessionActive` is half the guard on purpose: with no session
+            // running, an Option-drag is the user's own gesture and must reach
+            // their app untouched.
+            guard isLeftOptionDown, isSessionActive else { return pass }
             isDragging = true
-            gesture.dragStarted()
             emit(.dragBegan(location))
             return true                     // swallowed — see file header
 
         case .leftMouseDragged:
-            guard isHeld, isDragging else { return pass }
+            guard isDragging else { return pass }
             emit(.dragMoved(location))
             return true
 
         case .leftMouseUp:
-            guard isHeld, isDragging else { return pass }
+            guard isDragging else { return pass }
             isDragging = false
             emit(.dragEnded(location))
             return true
@@ -221,47 +221,33 @@ final class Hotkey {
         }
     }
 
-    // ── Plumbing onto the tested state machine ──────────────────────────────
-
-    private func pressed() {
-        apply(gesture.press(at: Clock.nowMs()))
-    }
-
-    private func released(at location: Point) {
+    /// Called by the Recorder when a session ends by any route other than a
+    /// tap — a watchdog, or Quit. Keeps the swallow gate honest.
+    func noteSessionEnded() {
+        isSessionActive = false
+        gesture.sessionEndedExternally()
         if isDragging {
             isDragging = false
-            emit(.dragEnded(location))
+            emit(.dragEnded(AXProbe.cursorLocation()))
         }
-        apply(gesture.release(at: Clock.nowMs()))
     }
+
+    // ── Plumbing onto the tested state machine ──────────────────────────────
 
     private func apply(_ decision: SessionGesture.Decision) {
         switch decision {
         case .none:
             break
         case .start:
-            pendingStop?.cancel()
-            pendingStop = nil
+            isSessionActive = true
             emit(.recordingStarted)
-        case .lock:
-            pendingStop?.cancel()
-            pendingStop = nil
-            emit(.locked)
         case .stopNow:
-            pendingStop?.cancel()
-            pendingStop = nil
-            emit(.recordingStopped)
-        case .stopAfterGrace:
-            pendingStop?.cancel()
-            let window = gesture.doubleTapWindowMs
-            pendingStop = Task { [weak self] in
-                try? await Task.sleep(for: .milliseconds(window))
-                guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    guard let self else { return }
-                    self.apply(self.gesture.graceExpired())
-                }
+            isSessionActive = false
+            if isDragging {
+                isDragging = false
+                emit(.dragEnded(AXProbe.cursorLocation()))
             }
+            emit(.recordingStopped)
         }
     }
 

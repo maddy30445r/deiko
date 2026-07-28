@@ -369,15 +369,15 @@ func runRecord(_ args: Args) {
     Emit.log("""
     fovea-capture record — sessions → \(root)
 
-      HOLD Right Option    capture while held — audio and screen, continuously
-      DOUBLE-TAP it        keep capturing hands-free; release the key and walk
-                           through as many windows as you like
-      point and pause      → a candidate referent, when you are talking
-      hold + drag mouse    → a region referent (that drag alone is swallowed;
-                           ordinary clicking and selection keep working)
-      release / tap again  stop, and write the session out
+      DOUBLE-TAP Right Option   start capturing — audio and screen, until you
+                                stop it. Let go of the key and walk through as
+                                many windows as you like.
+      point and pause           → a candidate referent, when you are talking
+      hold LEFT Option + drag   → a region referent (that drag alone is
+                                swallowed, and only while a session is running)
+      TAP Right Option          stop, and write the session out
 
-      Ctrl-C               same as stopping.
+      Ctrl-C                    same as stopping.
     """)
 
     app.run()
@@ -541,17 +541,16 @@ fovea-capture \(FoveaVersion.current)
 
   record [options]            The same recorder without the menu bar.
 
-                              HOLD Right Option to capture; DOUBLE-TAP it to
-                              lock the session hands-free and keep going after
-                              you let go. Holding alone suits a quick remark;
-                              locking suits walking through several windows,
-                              where letting go used to eat the middle of a
+                              DOUBLE-TAP Right Option to start; TAP it to stop.
+                              Capture runs continuously in between — audio and
+                              screen — with the key released, so switching
+                              windows can no longer eat the middle of a
                               sentence.
 
                               Point and pause at something WHILE TALKING for a
                               candidate referent; a settle more than a few
                               seconds from any speech is not recorded at all.
-                              Hold Right Option and drag to circle an area.
+                              Hold LEFT Option and drag to circle an area.
 
                               The directory <root>/<stamp> is created when
                               capture starts, so a run that records nothing
