@@ -16,7 +16,6 @@ function candidate(t: number, over: Partial<Candidate> = {}): Candidate {
   return {
     id: `c${nextId++}`,
     t,
-    position: { x: 0, y: 0 },
     features: { dwellMs: 400, approachSpeed: 900 },
     grounded: true,
     kind: "point",

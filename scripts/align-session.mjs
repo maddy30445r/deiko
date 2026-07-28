@@ -14,6 +14,7 @@ import { resolve, join } from "node:path";
 
 import { align } from "../packages/alignment/dist/src/align.js";
 import { loadSession } from "../packages/referents/dist/src/session.js";
+import { toCandidates } from "../packages/referents/dist/src/candidates.js";
 
 function load(sessionDir, file) {
   const path = join(sessionDir, file);
@@ -35,42 +36,10 @@ function loadEvents(sessionDir) {
     .filter(Boolean);
 }
 
-/**
- * Adapt the referent stack into aligner candidates.
- *
- * Pairing candidate+probe events, recovering a lasso's drag span, and ordering
- * across app visits all live in `@fovea/referents` now — this used to be a
- * second copy of that logic here, which is exactly how the two drift apart.
- */
-function toCandidates(events) {
-  return loadSession(events)
-    .all()
-    .map((r) => ({
-      id: r.id,
-      hold: r.hold,
-      // Regions anchor at the drag's END with a dwell equal to the full span,
-      // so the overlap window is exactly [dragStart, dragEnd]. Anchoring at
-      // the midpoint shifted the window a half-span EARLY: it covered the
-      // silence before the lasso and missed the drag's whole second half —
-      // where the narration actually is.
-      t: r.span ? r.span.end : r.t,
-      features: r.capture ?? {
-        // A deliberate drag needs no defence against being mistaken for a
-        // resting hand. Its dwell is the real gesture duration.
-        dwellMs: r.span ? r.span.end - r.span.start : 600,
-        approachSpeed: 0,
-      },
-      app: r.app,
-      kind: r.kind,
-      grounded: r.text.ax.length > 0 || r.text.ocr.length > 0,
-      text:
-        r.text.ax.length > 0
-          ? r.text.ax.join(" · ").slice(0, 90)
-          : r.text.ocr.length > 0
-            ? `[ocr] ${r.text.ocr.join(" ").slice(0, 90)}`
-            : undefined,
-    }));
-}
+// Pairing candidate+probe events, recovering a lasso's drag span, ordering
+// across app visits, and adapting the result for the aligner all live in
+// `@fovea/referents` — the adaptation used to be a second copy here, and the
+// brief renderer would have made it a third.
 
 // ── Main ────────────────────────────────────────────────────────────────────
 
@@ -98,7 +67,7 @@ if (!words?.length) {
   process.exit(1);
 }
 
-const candidates = toCandidates(events);
+const candidates = toCandidates(loadSession(events).all());
 const { bindings, unbound } = align(candidates, words);
 
 /** Below this a binding is flagged for review rather than trusted. */

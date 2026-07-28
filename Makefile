@@ -1,4 +1,4 @@
-.PHONY: dev build test probe watch region clean setup bundle record transcribe align signing-setup reset-permissions
+.PHONY: dev build test probe watch region clean setup bundle record transcribe align brief signing-setup reset-permissions
 
 # Code-signing identity for the bundle.
 #
@@ -123,6 +123,14 @@ record: $(DEBUG_BIN)
 transcribe:
 	@npm run build -w @fovea/alignment --silent
 	@node scripts/transcribe.mjs $(SESSION)
+
+## brief — render a transcribed session into the brief a coding agent consumes
+##
+## Credentials are stripped and the renderer refuses to write if any survive —
+## Fovea reads the screen, and screens have secrets on them.
+brief:
+	@npm run build -w @fovea/alignment -w @fovea/referents --silent
+	@node scripts/render-brief.mjs $(SESSION)
 
 ## align — run the T0.2 gate harness over a transcribed session
 ## Needs BOTH packages built: the script imports alignment's aligner and

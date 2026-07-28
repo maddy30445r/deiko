@@ -182,7 +182,7 @@ function utteranceAround(
   words: Word[],
   index: number,
   gapMs = 700,
-): { utterance: string; utteranceStart: number; utteranceEnd: number } {
+): { utterance: string; utteranceStart: number } {
   const hold = words[index]!.hold;
   // A hold boundary stops the walk unconditionally: releasing the hotkey ends
   // the utterance, so two holds can never merge into one sentence however close
