@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 import Foundation
+import FoveaGesture
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HOLD, OR DOUBLE-TAP TO LOCK
@@ -72,29 +73,16 @@ final class Hotkey {
     private(set) var isHeld = false
     private(set) var isDragging = false
 
-    /// Whether a drag happened during the CURRENT press of the modifier. This
-    /// separates "hold to capture" from "hold and draw", and also disqualifies
-    /// the release from starting a double-tap — finishing a lasso is not half
-    /// of a promotion gesture.
-    private var draggedThisPress = false
-
-    /// True once promoted to hands-free. Until then, releasing stops.
-    private(set) var isLocked = false
-
-    /// True between `.recordingStarted` and `.recordingStopped`.
-    private var isCapturing = false
-
-    /// When the modifier last came up without having drawn anything. A press
-    /// within `doubleTapWindow` of this is the second half of a double-tap.
-    private var lastReleaseAt: Double?
+    /// Every decision about what a press or release MEANS lives in
+    /// `SessionGesture`, which has no CGEvent dependency and is unit-tested.
+    /// This class is then only plumbing: translate events, obey the decision.
+    private var gesture = SessionGesture()
 
     /// The stop scheduled by a release, cancellable by a second press. This
     /// indirection is what keeps audio continuous across a promotion.
     private var pendingStop: Task<Void, Never>?
 
-    /// macOS's own double-click default. The one timing threshold in the
-    /// gesture layer, and unavoidable — a double-tap has no other definition.
-    private let doubleTapWindow: Double = 350
+    var isLocked: Bool { gesture.isLocked }
 
     /// Called on the main run loop for every gesture transition.
     var onEvent: ((HotkeyEvent) -> Void)?
@@ -177,13 +165,7 @@ final class Hotkey {
                     isDragging = false
                     emit(.dragEnded(Point(x: event.location.x, y: event.location.y)))
                 }
-                // The release went unobserved while the tap was dead. In HELD
-                // mode that means capture would otherwise run forever, so end
-                // it — losing the tail of a sentence beats a stuck microphone.
-                // In LOCKED mode nothing is owed: the user stops by tapping.
-                draggedThisPress = false
-                lastReleaseAt = nil
-                if !isLocked, isCapturing { stopNow() }
+                apply(gesture.tapRecovered(modifierStillDown: false))
             }
             return false
         }
@@ -209,7 +191,7 @@ final class Hotkey {
         case .leftMouseDown:
             guard isHeld else { return pass }
             isDragging = true
-            draggedThisPress = true
+            gesture.dragStarted()
             emit(.dragBegan(location))
             return true                     // swallowed — see file header
 
@@ -239,37 +221,10 @@ final class Hotkey {
         }
     }
 
-    // ── The gesture state machine ───────────────────────────────────────────
+    // ── Plumbing onto the tested state machine ──────────────────────────────
 
     private func pressed() {
-        draggedThisPress = false
-
-        // Second half of a double-tap: promote rather than restart. The
-        // scheduled stop is cancelled, so capture never actually paused.
-        if !isLocked, isCapturing,
-           let last = lastReleaseAt, Clock.nowMs() - last < doubleTapWindow {
-            pendingStop?.cancel()
-            pendingStop = nil
-            lastReleaseAt = nil
-            isLocked = true
-            emit(.locked)
-            return
-        }
-
-        // While locked, a press decides nothing on its own — it is either the
-        // start of a lasso or a tap to stop, and only the release can say.
-        guard !isLocked else { return }
-
-        if !isCapturing {
-            isCapturing = true
-            emit(.recordingStarted)
-        } else {
-            // A press arriving after the window expired but before the stop
-            // ran. Treat it as continuing rather than starting a second
-            // session on top of the first.
-            pendingStop?.cancel()
-            pendingStop = nil
-        }
+        apply(gesture.press(at: Clock.nowMs()))
     }
 
     private func released(at location: Point) {
@@ -277,39 +232,37 @@ final class Hotkey {
             isDragging = false
             emit(.dragEnded(location))
         }
-
-        if isLocked {
-            // A lasso in locked mode is just a lasso; the session continues.
-            // Anything else is the tap that ends it.
-            if !draggedThisPress { stopNow() }
-            return
-        }
-
-        // Held mode. A release that drew a lasso cannot begin a double-tap —
-        // finishing a drawing is not half of a promotion gesture.
-        lastReleaseAt = draggedThisPress ? nil : Clock.nowMs()
-        scheduleStop()
+        apply(gesture.release(at: Clock.nowMs()))
     }
 
-    /// Stop after the grace window, unless a second press arrives first.
-    private func scheduleStop() {
-        pendingStop?.cancel()
-        let window = doubleTapWindow
-        pendingStop = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(window))
-            guard !Task.isCancelled else { return }
-            await MainActor.run { self?.stopNow() }
+    private func apply(_ decision: SessionGesture.Decision) {
+        switch decision {
+        case .none:
+            break
+        case .start:
+            pendingStop?.cancel()
+            pendingStop = nil
+            emit(.recordingStarted)
+        case .lock:
+            pendingStop?.cancel()
+            pendingStop = nil
+            emit(.locked)
+        case .stopNow:
+            pendingStop?.cancel()
+            pendingStop = nil
+            emit(.recordingStopped)
+        case .stopAfterGrace:
+            pendingStop?.cancel()
+            let window = gesture.doubleTapWindowMs
+            pendingStop = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(window))
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard let self else { return }
+                    self.apply(self.gesture.graceExpired())
+                }
+            }
         }
-    }
-
-    private func stopNow() {
-        pendingStop?.cancel()
-        pendingStop = nil
-        lastReleaseAt = nil
-        isLocked = false
-        guard isCapturing else { return }
-        isCapturing = false
-        emit(.recordingStopped)
     }
 
     /// Deliver on the next main-queue turn, NOT inline. The tap callback must

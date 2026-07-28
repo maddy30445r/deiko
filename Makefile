@@ -34,8 +34,9 @@ build:
 	@swift build --package-path $(CAPTURE_DIR) -c release
 	@echo "built $(RELEASE_BIN)"
 
-## test — TypeScript workspace tests
+## test — Swift gesture tests + TypeScript workspace tests
 test:
+	@swift test --package-path $(CAPTURE_DIR)
 	@npm test --workspaces --if-present
 
 ## setup — install node deps

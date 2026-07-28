@@ -8,10 +8,21 @@ let package = Package(
         .executable(name: "fovea-capture", targets: ["FoveaCapture"])
     ],
     targets: [
+        // The gesture state machine, split out for ONE reason: `Hotkey` needs a
+        // CGEventTap and Accessibility permission, so nothing inside it can be
+        // tested. This target has no dependencies at all, so it can.
+        .target(name: "FoveaGesture", path: "Sources/FoveaGesture"),
+        .testTarget(
+            name: "FoveaGestureTests",
+            dependencies: ["FoveaGesture"],
+            path: "Tests/FoveaGestureTests"
+        ),
+
         // No external dependencies on purpose: subcommand parsing is ~30 lines,
         // and a dependency-free build keeps `make dev` offline and fast.
         .executableTarget(
             name: "FoveaCapture",
+            dependencies: ["FoveaGesture"],
             path: "Sources/FoveaCapture",
             exclude: ["Info.plist"],
             linkerSettings: [
