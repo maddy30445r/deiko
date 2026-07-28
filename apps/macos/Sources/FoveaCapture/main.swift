@@ -369,14 +369,15 @@ func runRecord(_ args: Args) {
     Emit.log("""
     fovea-capture record — sessions → \(root)
 
-      TAP Right Option     start capturing — audio and screen, continuously
+      HOLD Right Option    capture while held — audio and screen, continuously
+      DOUBLE-TAP it        keep capturing hands-free; release the key and walk
+                           through as many windows as you like
       point and pause      → a candidate referent, when you are talking
-      hold Right Option
-        + drag the mouse   → a region referent (that drag alone is swallowed;
-                             ordinary clicking and selection keep working)
-      TAP Right Option     stop, and write the session out
+      hold + drag mouse    → a region referent (that drag alone is swallowed;
+                           ordinary clicking and selection keep working)
+      release / tap again  stop, and write the session out
 
-      Ctrl-C               same as tapping to stop.
+      Ctrl-C               same as stopping.
     """)
 
     app.run()
@@ -540,10 +541,12 @@ fovea-capture \(FoveaVersion.current)
 
   record [options]            The same recorder without the menu bar.
 
-                              TAP Right Option to start; tap it again to stop.
-                              The session records continuously in between —
-                              audio and screen — so letting go of a key can no
-                              longer eat the middle of a sentence.
+                              HOLD Right Option to capture; DOUBLE-TAP it to
+                              lock the session hands-free and keep going after
+                              you let go. Holding alone suits a quick remark;
+                              locking suits walking through several windows,
+                              where letting go used to eat the middle of a
+                              sentence.
 
                               Point and pause at something WHILE TALKING for a
                               candidate referent; a settle more than a few

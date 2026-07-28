@@ -3,31 +3,33 @@ import CoreGraphics
 import Foundation
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TOGGLE + GESTURE TAP
+// HOLD, OR DOUBLE-TAP TO LOCK
 //
-// One modifier, two meanings, told apart by whether you dragged:
+// One modifier, three meanings, told apart by what happens during the press:
 //
-//   tap Right Option (no drag)   → toggle the session on, or off
-//   hold Right Option + drag     → lasso a region (the drag is swallowed)
-//   anything else                → passes through untouched
+//   hold Right Option        → capture while held, release to stop
+//   double-tap it            → LOCK: keep capturing hands-free until tapped again
+//   hold it and drag         → lasso a region (that drag alone is swallowed)
 //
-// IT USED TO BE PUSH-TO-TALK, and changing it fixed data loss rather than a
-// preference. A session now spans minutes and many windows, so the key was
-// delimiting something that no longer exists — and the instant the user let go
-// mid-sentence to switch windows, capture stopped dead. Measured on session
-// 20260728-152834: 23.2 of 58.7 seconds recorded NOTHING, and the transcript
-// caught a sentence being restarted verbatim across the gap ("…so similar to
-// addition" / "So similar to addition like here we have to…"). Not only audio,
-// either: with the key up there is no sampler at all, so anything pointed at
-// during those 23 seconds does not exist.
+// PUSH-TO-TALK ALONE LOST DATA. Session 20260728-152834: 23.2 of 58.7 seconds
+// recorded nothing, because letting go to switch windows also stops the
+// microphone and the sampler — the transcript caught a sentence restarted
+// verbatim across the gap. A PURE TOGGLE fixed that but taxed the common case,
+// where pointing at one thing and saying one sentence became two taps and a
+// decision up front.
+//
+// So: both, with a promotion between them. You start holding, and if it turns
+// out to be long, you double-tap and keep talking. Wispr Flow's model — the
+// same problem, the same answer — adapted for a modifier that also has to draw.
+//
+// THE GRACE WINDOW is the whole trick. A release does not stop the session, it
+// SCHEDULES a stop; a second press cancels it. Recording therefore continues
+// unbroken across the double-tap, because a gap there would land mid-word.
 //
 // The tap is ACTIVE, not listen-only, because the lasso has to be swallowed:
 // dragging with the button down means "select text" in an editor and "drag
-// this" in a table. If the drag reached the app underneath, drawing a region
-// would mangle whatever you drew it around. Drags are swallowed ONLY while the
-// modifier is down, so ordinary clicking and selection keep working for the
-// whole session — which is exactly why the lasso needs a modifier now that the
-// session no longer has one.
+// this" in a table. Drags are swallowed only while the modifier is down, so
+// ordinary clicking and selection keep working all session.
 // ───────────────────────────────────────────────────────────────────────────────
 
 /// Right Option. Not `fn`/Globe, which macOS intercepts for dictation, the
@@ -43,9 +45,15 @@ private let kRightOptionKeyCode: Int64 = 61
 /// a hold that never ended. The device bit tracks the right key alone.
 private let kRightOptionFlagMask: UInt64 = 0x40
 
+/// Intent, not mechanics. All the timing lives in `Hotkey` so the Recorder
+/// never has to reason about presses, releases or double-tap windows.
 enum HotkeyEvent {
-    /// Tapped without dragging — start the session, or stop it.
-    case toggled
+    /// Begin capturing. Held mode until a `.locked` follows.
+    case recordingStarted
+    /// Promoted to hands-free. Capture is already running; this is for the UI.
+    case locked
+    /// Stop and write the session out.
+    case recordingStopped
     case dragBegan(Point)
     case dragMoved(Point)
     case dragEnded(Point)
@@ -65,9 +73,28 @@ final class Hotkey {
     private(set) var isDragging = false
 
     /// Whether a drag happened during the CURRENT press of the modifier. This
-    /// is what separates "tap to toggle" from "hold and draw" — the two share
-    /// one key, so the release has to know which act just finished.
+    /// separates "hold to capture" from "hold and draw", and also disqualifies
+    /// the release from starting a double-tap — finishing a lasso is not half
+    /// of a promotion gesture.
     private var draggedThisPress = false
+
+    /// True once promoted to hands-free. Until then, releasing stops.
+    private(set) var isLocked = false
+
+    /// True between `.recordingStarted` and `.recordingStopped`.
+    private var isCapturing = false
+
+    /// When the modifier last came up without having drawn anything. A press
+    /// within `doubleTapWindow` of this is the second half of a double-tap.
+    private var lastReleaseAt: Double?
+
+    /// The stop scheduled by a release, cancellable by a second press. This
+    /// indirection is what keeps audio continuous across a promotion.
+    private var pendingStop: Task<Void, Never>?
+
+    /// macOS's own double-click default. The one timing threshold in the
+    /// gesture layer, and unavoidable — a double-tap has no other definition.
+    private let doubleTapWindow: Double = 350
 
     /// Called on the main run loop for every gesture transition.
     var onEvent: ((HotkeyEvent) -> Void)?
@@ -150,11 +177,13 @@ final class Hotkey {
                     isDragging = false
                     emit(.dragEnded(Point(x: event.location.x, y: event.location.y)))
                 }
-                // Deliberately NOT a toggle. The release went unobserved while
-                // the tap was dead, so we cannot know whether it was a tap or
-                // the end of a lasso — and silently starting or stopping a
-                // recording on a guess is the worst of the options.
+                // The release went unobserved while the tap was dead. In HELD
+                // mode that means capture would otherwise run forever, so end
+                // it — losing the tail of a sentence beats a stuck microphone.
+                // In LOCKED mode nothing is owed: the user stops by tapping.
                 draggedThisPress = false
+                lastReleaseAt = nil
+                if !isLocked, isCapturing { stopNow() }
             }
             return false
         }
@@ -171,20 +200,7 @@ final class Hotkey {
             let nowHeld = event.flags.rawValue & kRightOptionFlagMask != 0
             if nowHeld != isHeld {
                 isHeld = nowHeld
-                if nowHeld {
-                    draggedThisPress = false
-                } else {
-                    if isDragging {
-                        isDragging = false
-                        emit(.dragEnded(location))
-                    }
-                    // A press that drew a lasso is not a toggle. Anything else
-                    // is — with no duration threshold, deliberately: "tap to
-                    // start" that silently does nothing because you held it a
-                    // beat too long is worse than the rare accidental toggle,
-                    // which costs one more tap to undo.
-                    if !draggedThisPress { emit(.toggled) }
-                }
+                if nowHeld { pressed() } else { released(at: location) }
             }
             // Always pass the modifier through: swallowing it would break
             // Option as a normal modifier everywhere else.
@@ -221,6 +237,79 @@ final class Hotkey {
         default:
             return pass
         }
+    }
+
+    // ── The gesture state machine ───────────────────────────────────────────
+
+    private func pressed() {
+        draggedThisPress = false
+
+        // Second half of a double-tap: promote rather than restart. The
+        // scheduled stop is cancelled, so capture never actually paused.
+        if !isLocked, isCapturing,
+           let last = lastReleaseAt, Clock.nowMs() - last < doubleTapWindow {
+            pendingStop?.cancel()
+            pendingStop = nil
+            lastReleaseAt = nil
+            isLocked = true
+            emit(.locked)
+            return
+        }
+
+        // While locked, a press decides nothing on its own — it is either the
+        // start of a lasso or a tap to stop, and only the release can say.
+        guard !isLocked else { return }
+
+        if !isCapturing {
+            isCapturing = true
+            emit(.recordingStarted)
+        } else {
+            // A press arriving after the window expired but before the stop
+            // ran. Treat it as continuing rather than starting a second
+            // session on top of the first.
+            pendingStop?.cancel()
+            pendingStop = nil
+        }
+    }
+
+    private func released(at location: Point) {
+        if isDragging {
+            isDragging = false
+            emit(.dragEnded(location))
+        }
+
+        if isLocked {
+            // A lasso in locked mode is just a lasso; the session continues.
+            // Anything else is the tap that ends it.
+            if !draggedThisPress { stopNow() }
+            return
+        }
+
+        // Held mode. A release that drew a lasso cannot begin a double-tap —
+        // finishing a drawing is not half of a promotion gesture.
+        lastReleaseAt = draggedThisPress ? nil : Clock.nowMs()
+        scheduleStop()
+    }
+
+    /// Stop after the grace window, unless a second press arrives first.
+    private func scheduleStop() {
+        pendingStop?.cancel()
+        let window = doubleTapWindow
+        pendingStop = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(window))
+            guard !Task.isCancelled else { return }
+            await MainActor.run { self?.stopNow() }
+        }
+    }
+
+    private func stopNow() {
+        pendingStop?.cancel()
+        pendingStop = nil
+        lastReleaseAt = nil
+        isLocked = false
+        guard isCapturing else { return }
+        isCapturing = false
+        emit(.recordingStopped)
     }
 
     /// Deliver on the next main-queue turn, NOT inline. The tap callback must

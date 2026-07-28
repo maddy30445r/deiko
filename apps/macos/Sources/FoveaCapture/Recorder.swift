@@ -96,9 +96,17 @@ final class Recorder {
     /// properly rather than discarded.
     private let autoStopSilenceMs: Double = 5 * 60 * 1000
 
-    /// When the current recording began — the fallback clock for auto-stop
-    /// when there is no audio at all (a mic that failed to open would otherwise
-    /// leave `msSinceVoice` nil forever, and the session running with it).
+    /// Absolute ceiling on one session, independent of the microphone.
+    ///
+    /// The silence watchdog only fires if audio is flowing; this one fires
+    /// regardless, which is the point of having both. Wispr Flow caps desktop
+    /// dictation at the same 20 minutes.
+    private let maximumSessionMs: Double = 20 * 60 * 1000
+
+    /// When the current recording began — the clock for the hard ceiling, and
+    /// the fallback for the silence watchdog when there is no audio at all (a
+    /// mic that failed to open would otherwise leave `msSinceVoice` nil
+    /// forever, and the session running with it).
     private var recordingStartedAt: Double?
 
     // Settle state
@@ -134,8 +142,13 @@ final class Recorder {
     /// Folder name of the open session, e.g. `20260728-011253`. Also its id.
     private(set) var sessionId: String?
 
-    /// True while the hotkey is actually held.
+    /// True while capturing, held or locked.
     private(set) var isRecording = false
+
+    /// True once a double-tap promoted the session to hands-free. Drives the
+    /// badge, which has to name the right exit: releasing the key stops a held
+    /// session, while a locked one waits for a tap.
+    private(set) var isLocked = false
 
     /// Always 1 now — a session is one continuous recording. Kept because the
     /// wire contract and every recorded session so far carry it.
@@ -282,12 +295,15 @@ final class Recorder {
 
     private func handle(_ event: HotkeyEvent) {
         switch event {
-        case .toggled:
-            if sessionDir == nil {
-                beginRecording()
-            } else {
-                Task { _ = await self.stopSession() }
-            }
+        case .recordingStarted:
+            beginRecording()
+        case .locked:
+            // Capture is already running — the promotion only changes how it
+            // ends, and what the badge says.
+            isLocked = true
+            onStateChange?()
+        case .recordingStopped:
+            Task { _ = await self.stopSession() }
         case .dragBegan(let p):
             guard isRecording else { break }
             lassoPath = [p]
@@ -317,6 +333,7 @@ final class Recorder {
         guard startSessionIfNeeded(), let sessionDir, let sessionId else { return }
 
         isRecording = true
+        isLocked = false
         recordingStartedAt = Clock.nowMs()
         holdReferentCount = 0
         holdIndex = 1
@@ -339,8 +356,8 @@ final class Recorder {
         }
 
         Emit.event(HoldEvent.start(id: sessionId, hold: holdIndex, audioPath: audioPath))
-        Emit.log("● recording — point at things and talk. "
-            + "Hold Right Option and drag to circle an area. Tap it to stop.")
+        Emit.log("● recording — point at things and talk. Release to stop, "
+            + "or double-tap Right Option to keep it running hands-free.")
         onStateChange?()
 
         trail.removeAll()
@@ -369,6 +386,7 @@ final class Recorder {
         // returned before this once left the mic running, which is the one
         // promise this product cannot break.
         isRecording = false
+        isLocked = false
         recordingStartedAt = nil
         sampler?.invalidate()
         sampler = nil
@@ -422,13 +440,20 @@ final class Recorder {
         // Silence watchdog. `msSinceVoice` is nil until the first buffer lands
         // (and forever if the mic never opened), so fall back to the time since
         // recording began rather than never firing.
-        let quietFor = msSinceVoice ?? recordingStartedAt.map { now - $0 } ?? 0
+        let runningFor = recordingStartedAt.map { now - $0 } ?? 0
+        let quietFor = msSinceVoice ?? runningFor
         if quietFor > autoStopSilenceMs {
             Emit.log("■ stopping — \(Int(autoStopSilenceMs / 60000)) minutes with no narration")
             Task { _ = await self.stopSession() }
+        } else if runningFor > maximumSessionMs {
+            Emit.log("■ stopping — \(Int(maximumSessionMs / 60000))-minute session limit")
+            Task { _ = await self.stopSession() }
         }
 
-        overlay.update(cursor: position, trail: trail, lasso: lassoPath, pulses: pulses)
+        overlay.update(
+            cursor: position, trail: trail, lasso: lassoPath,
+            pulses: pulses, locked: isLocked
+        )
     }
 
     private func detectSettle(position: Point, moved: Double, now: Double) {
