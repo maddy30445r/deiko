@@ -90,6 +90,15 @@ struct CandidateFeatures: Codable {
     /// Time since the last scroll. A settle while content moves underneath is
     /// not a new pointing act — the cursor never moved, the page did.
     let msSinceScroll: Double?
+
+    /// Time since speech was last heard. Nil when there is no audio at all.
+    ///
+    /// This is the strongest of the four, because it is the only one that says
+    /// anything about INTENT rather than mechanics: a cursor that stops while
+    /// somebody is talking is almost always pointing at what they are talking
+    /// about. It also gates capture — a settle further than a few seconds from
+    /// any speech is never recorded at all.
+    let msSinceVoice: Double?
 }
 
 struct CandidateEvent: Codable {

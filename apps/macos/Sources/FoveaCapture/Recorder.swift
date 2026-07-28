@@ -12,15 +12,25 @@ import Foundation
 // alignment engine's call, made against the narration. Over-capturing is cheap;
 // discarding a real referent at capture time is unrecoverable.
 //
-// TWO NESTED LIFETIMES, and the distinction is the reason this file changed:
+// A SESSION IS ONE CONTINUOUS RECORDING, toggled on and off.
 //
-//   HOLD     press Right Option → release. One utterance, one WAV.
-//   SESSION  first hold → "Stop session". One directory, one referent stack.
+//   tap Right Option        → start: audio, cursor sampling, overlay, all of it
+//   point and pause         → a candidate referent, IF you are talking
+//   hold Right Option+drag  → a region referent
+//   tap Right Option        → stop, finish the crops, write it out
 //
-// A session used to be a hold, and the directory was created at launch. That
-// made every app launch mint a folder whether or not anything was recorded, and
-// left the user with no moment that meant "I have finished describing this" —
-// which is exactly the moment plan generation needs to hang off.
+// It was push-to-talk until session 20260728-152834 measured what that costs:
+// 23.2 of 58.7 seconds recorded nothing, because letting go of a key to switch
+// windows also stops the microphone and the sampler. The transcript caught the
+// user restarting a sentence verbatim across the gap.
+//
+// The gate that replaced the held key is SPEECH. With capture always on, every
+// settle would otherwise become a referent — transit, scrolling, reading. A
+// settle more than `silenceGateMs` from any narration is not recorded. This is
+// the same principle the aligner runs on ("narration is the filter"), applied
+// at capture time as well; the difference from the old rule about never
+// deciding at capture time is that this decision is made by the user's own
+// voice rather than by a heuristic about cursor movement.
 // ─────────────────────────────────────────────────────────────────────────────
 
 @MainActor
@@ -73,6 +83,24 @@ final class Recorder {
     /// was 170x1 points from a single grid sample.
     private let minimumRegionArea: Double = 400
 
+    /// How long after speech a settle still counts as pointing. See the gate in
+    /// `detectSettle`. Regions are exempt — nobody draws a loop by accident.
+    private let silenceGateMs: Double = 4000
+
+    /// Stop a forgotten session after this much unbroken silence.
+    ///
+    /// Push-to-talk could not be left running: letting go ended it. A toggle
+    /// can, and "I walked away with the microphone live" is the failure that
+    /// costs trust rather than data. Five minutes is far longer than any
+    /// natural pause while describing something, and the session is written out
+    /// properly rather than discarded.
+    private let autoStopSilenceMs: Double = 5 * 60 * 1000
+
+    /// When the current recording began — the fallback clock for auto-stop
+    /// when there is no audio at all (a mic that failed to open would otherwise
+    /// leave `msSinceVoice` nil forever, and the session running with it).
+    private var recordingStartedAt: Double?
+
     // Settle state
     private var lastPosition = Point(x: 0, y: 0)
     private var stationarySince = Clock.nowMs()
@@ -109,8 +137,15 @@ final class Recorder {
     /// True while the hotkey is actually held.
     private(set) var isRecording = false
 
-    /// Holds completed plus the one in progress — shown in the menu.
+    /// Always 1 now — a session is one continuous recording. Kept because the
+    /// wire contract and every recorded session so far carry it.
     var holdCount: Int { holdIndex }
+
+    /// Milliseconds since speech was last heard, or nil if none yet. Drives
+    /// the capture gate and rides along on every candidate.
+    var msSinceVoice: Double? {
+        audio.lastVoiceMs.map { Clock.nowMs() - $0 }
+    }
 
     /// Referents captured so far this session — shown in the menu.
     var referentCount: Int { sessionReferentCount }
@@ -206,7 +241,7 @@ final class Recorder {
     }
 
     private func closeSession() async -> String? {
-        if isRecording { endHold() }
+        if isRecording { endRecording() }
         guard let dir = sessionDir, let id = sessionId else { return nil }
 
         // Wait for AX + crop + OCR still in flight. Awaiting releases the main
@@ -247,43 +282,52 @@ final class Recorder {
 
     private func handle(_ event: HotkeyEvent) {
         switch event {
-        case .pressed:
-            beginHold()
-        case .released:
-            endHold()
+        case .toggled:
+            if sessionDir == nil {
+                beginRecording()
+            } else {
+                Task { _ = await self.stopSession() }
+            }
         case .dragBegan(let p):
+            guard isRecording else { break }
             lassoPath = [p]
             lassoStartT = Clock.nowMs()
         case .dragMoved(let p):
             lassoPath?.append(p)
         case .dragEnded(let p):
+            guard lassoPath != nil else { break }
             lassoPath?.append(p)
             commitLasso()
         case .scrolled:
-            lastScrollT = Clock.nowMs()
+            // Reported unconditionally by the tap now; only meaningful while
+            // a session is live.
+            if isRecording { lastScrollT = Clock.nowMs() }
         }
     }
 
-    private func beginHold() {
-        // A press while the session is closing is ignored. `closeSession` is
-        // suspended on the crop drain at that moment, so a hold started here
-        // would attach to a session in the middle of being finalised — its
-        // events split across two files and its crops written to a directory
-        // the user has already been shown as complete.
+    private func beginRecording() {
+        // A tap while the session is closing is ignored. `closeSession` is
+        // suspended on the crop drain at that moment, so a recording started
+        // here would attach to a session in the middle of being finalised —
+        // its events split across two files and its crops written to a
+        // directory the user has already been shown as complete.
         guard stopTask == nil, !isRecording else { return }
 
-        // The first hold is what brings a session into existence.
+        // The toggle is what brings a session into existence.
         guard startSessionIfNeeded(), let sessionDir, let sessionId else { return }
 
         isRecording = true
+        recordingStartedAt = Clock.nowMs()
         holdReferentCount = 0
-        holdIndex += 1
+        holdIndex = 1
 
-        // One WAV per hold. Holds are separate utterances, and keeping them
-        // separate means each transcript's word timings are offsets from that
-        // hold's own t0 rather than from a stitched timeline.
+        // ONE WAV for the whole session. It used to be one per hold, because a
+        // hold was an utterance; a session is now a single continuous recording,
+        // so there is one audio timeline and one `audioT0`. The wire still says
+        // `hold: 1` — downstream pairs holdStart/holdEnd to find the audio, and
+        // that pairing is worth keeping stable.
         var audioPath: String?
-        let path = "\(sessionDir)/audio/hold-\(String(format: "%02d", holdIndex)).wav"
+        let path = "\(sessionDir)/audio/session.wav"
         do {
             try audio.start(path: path)
             audioPath = path
@@ -295,7 +339,8 @@ final class Recorder {
         }
 
         Emit.event(HoldEvent.start(id: sessionId, hold: holdIndex, audioPath: audioPath))
-        Emit.log("● recording — point, or hold the mouse button and circle an area")
+        Emit.log("● recording — point at things and talk. "
+            + "Hold Right Option and drag to circle an area. Tap it to stop.")
         onStateChange?()
 
         trail.removeAll()
@@ -317,13 +362,14 @@ final class Recorder {
         }
     }
 
-    private func endHold() {
+    private func endRecording() {
         guard isRecording else { return }
         // Teardown FIRST, unconditionally. The sampler, overlay and microphone
-        // must stop on key-release no matter what state the session is in — a
-        // guard that returned before this once left the mic recording after
-        // the key was up, which is the one promise this product cannot break.
+        // must stop no matter what state the session is in — a guard that
+        // returned before this once left the mic running, which is the one
+        // promise this product cannot break.
         isRecording = false
+        recordingStartedAt = nil
         sampler?.invalidate()
         sampler = nil
         overlay.hide()
@@ -335,7 +381,7 @@ final class Recorder {
             id: sessionId, hold: holdIndex,
             referentCount: holdReferentCount, audioT0: audioT0
         ))
-        Emit.log("○ hold \(holdIndex) — \(holdReferentCount) referent(s)"
+        Emit.log("○ stopped — \(holdReferentCount) referent(s)"
             + (audioT0 == nil ? " (no audio)" : ""))
         onStateChange?()
     }
@@ -373,6 +419,15 @@ final class Recorder {
             detectSettle(position: position, moved: moved, now: now)
         }
 
+        // Silence watchdog. `msSinceVoice` is nil until the first buffer lands
+        // (and forever if the mic never opened), so fall back to the time since
+        // recording began rather than never firing.
+        let quietFor = msSinceVoice ?? recordingStartedAt.map { now - $0 } ?? 0
+        if quietFor > autoStopSilenceMs {
+            Emit.log("■ stopping — \(Int(autoStopSilenceMs / 60000)) minutes with no narration")
+            Task { _ = await self.stopSession() }
+        }
+
         overlay.update(cursor: position, trail: trail, lasso: lassoPath, pulses: pulses)
     }
 
@@ -387,6 +442,25 @@ final class Recorder {
 
         guard hasMoved, !firedForThisRest, now - stationarySince >= dwellMs else { return }
         firedForThisRest = true
+
+        // THE CAPTURE GATE. A settle with no narration anywhere near it is not
+        // a pointing act — it is transit, reading, scrolling, or a hand at
+        // rest. Under push-to-talk the held key said "I am describing
+        // something now"; with the session always on, recent speech says it
+        // instead. "Narration is the filter" was always the design; this
+        // applies it at capture time as well as at alignment time.
+        //
+        // The window is deliberately wide. The aligner allows a referent to
+        // sit up to 2s after the word that named it and 1.5s before, so
+        // anything tighter would drop referents the aligner could still have
+        // bound. Losing one is unrecoverable; an extra crop costs a few
+        // milliseconds and some disk.
+        //
+        // No audio at all (mic denied, or the first buffer not yet in) means
+        // capture EVERYTHING. A silent gate would turn one permission problem
+        // into a session that records nothing and says nothing about why.
+        if let quietFor = msSinceVoice, quietFor > silenceGateMs { return }
+
         commitPoint(at: position, dwell: now - stationarySince, now: now)
     }
 
@@ -401,7 +475,8 @@ final class Recorder {
             dwellMs: dwell,
             approachSpeed: approach,
             msSinceAppSwitch: lastAppSwitchT.map { now - $0 },
-            msSinceScroll: lastScrollT.map { now - $0 }
+            msSinceScroll: lastScrollT.map { now - $0 },
+            msSinceVoice: msSinceVoice
         )
 
         let app = NSWorkspace.shared.frontmostApplication.map {

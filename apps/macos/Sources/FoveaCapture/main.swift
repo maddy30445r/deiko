@@ -369,13 +369,14 @@ func runRecord(_ args: Args) {
     Emit.log("""
     fovea-capture record — sessions → \(root)
 
-      HOLD Right Option    start recording (the first hold opens a session)
-      point and pause      → a candidate referent
-      hold mouse + circle  → a region referent (the drag is swallowed, so the
-                             app underneath is never touched)
-      release Right Option end the hold; the session stays open
+      TAP Right Option     start capturing — audio and screen, continuously
+      point and pause      → a candidate referent, when you are talking
+      hold Right Option
+        + drag the mouse   → a region referent (that drag alone is swallowed;
+                             ordinary clicking and selection keep working)
+      TAP Right Option     stop, and write the session out
 
-      Ctrl-C               stop the session and write it out.
+      Ctrl-C               same as tapping to stop.
     """)
 
     app.run()
@@ -539,19 +540,19 @@ fovea-capture \(FoveaVersion.current)
 
   record [options]            The same recorder without the menu bar.
 
-                              HOLD Right Option to record. Point and pause for
-                              a candidate referent; hold the mouse button and
-                              circle an area for a region referent. Release to
-                              end the hold. An overlay shows the cursor, its
-                              trace and the lasso while the key is down — and
-                              only then.
+                              TAP Right Option to start; tap it again to stop.
+                              The session records continuously in between —
+                              audio and screen — so letting go of a key can no
+                              longer eat the middle of a sentence.
 
-                              A SESSION spans many holds: it opens on the first
-                              hold and closes on Ctrl-C, which writes it out
-                              properly rather than killing it mid-crop. The
-                              directory <root>/<stamp> is created on that first
-                              hold, so a run that records nothing leaves
-                              nothing behind.
+                              Point and pause at something WHILE TALKING for a
+                              candidate referent; a settle more than a few
+                              seconds from any speech is not recorded at all.
+                              Hold Right Option and drag to circle an area.
+
+                              The directory <root>/<stamp> is created when
+                              capture starts, so a run that records nothing
+                              leaves nothing behind.
     --out <dir>               Where sessions are minted (default: sessions).
     --settle-radius <px>      Movement under this counts as stationary (8).
     --dwell <ms>              Rest time before a settle fires (300).

@@ -42,6 +42,29 @@ final class Audio {
 
     private(set) var isRecording = false
 
+    /// `Clock.nowMs()` when speech was last heard. Nil if none yet.
+    ///
+    /// The recorder uses this to decide whether a cursor settle is worth
+    /// capturing at all. With the session always recording, every settle would
+    /// otherwise become a referent — including transit, scrolling, reading and
+    /// getting a coffee. "Narration is the filter" was always the design; this
+    /// applies it at capture time as well as at alignment time.
+    ///
+    /// Written on the audio thread, read on the main actor — a `Double` write
+    /// is atomic on every platform this runs on, and a reader that catches a
+    /// stale value is off by one buffer (~256ms at 16kHz/4096), which the
+    /// multi-second gate absorbs.
+    nonisolated(unsafe) private(set) var lastVoiceMs: Double?
+
+    /// RMS above which a 16-bit buffer counts as speech.
+    ///
+    /// Measured across every recorded hold: silent captures sit at RMS 6–92,
+    /// real speech at 159–440 whole-file, with individual speech buffers well
+    /// above that. 250 sits in the gap with room on both sides — and the gate
+    /// that consumes it is deliberately seconds wide, so a misjudged buffer
+    /// costs nothing.
+    private let voiceRMSThreshold: Double = 250
+
     enum AudioError: LocalizedError {
         case formatUnavailable
         case converterUnavailable
@@ -66,9 +89,10 @@ final class Audio {
 
         // Reset the origin FIRST, before anything can throw. It used to be
         // reset after the file was opened, so a throwing `start` left the
-        // previous hold's t0 in place — and `stop()` then reported that stale
-        // origin for a hold that recorded nothing.
+        // previous recording's t0 in place — and `stop()` then reported that
+        // stale origin for a recording that captured nothing.
         t0 = nil
+        lastVoiceMs = nil
 
         let url = URL(fileURLWithPath: path)
         try FileManager.default.createDirectory(
@@ -167,6 +191,24 @@ final class Audio {
         }
 
         guard error == nil, output.frameLength > 0 else { return }
+        noteVoiceActivity(in: output)
         try? file.write(from: output)
+    }
+
+    /// RMS of the converted buffer, on the audio thread. Cheap on purpose —
+    /// one pass over int16 samples, no allocation — because this runs inside
+    /// the real-time tap callback.
+    private func noteVoiceActivity(in buffer: AVAudioPCMBuffer) {
+        guard let channel = buffer.int16ChannelData?[0] else { return }
+        let count = Int(buffer.frameLength)
+        guard count > 0 else { return }
+
+        var sumOfSquares = 0.0
+        for i in 0..<count {
+            let sample = Double(channel[i])
+            sumOfSquares += sample * sample
+        }
+        let rms = (sumOfSquares / Double(count)).squareRoot()
+        if rms >= voiceRMSThreshold { lastVoiceMs = Clock.nowMs() }
     }
 }

@@ -182,6 +182,11 @@ export interface CandidateFeatures {
   msSinceAppSwitch?: number;
   /** A settle while the page scrolls underneath is not a new pointing act. */
   msSinceScroll?: number;
+  /** Time since speech was last heard; absent when there is no audio at all.
+   *  The only feature that speaks to INTENT rather than mechanics — and the one
+   *  that gates capture, since a settle far from any narration is never
+   *  recorded now that sessions run continuously. */
+  msSinceVoice?: number;
 }
 
 export interface CandidateEvent {

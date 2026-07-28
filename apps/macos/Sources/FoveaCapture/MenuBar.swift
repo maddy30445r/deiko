@@ -36,7 +36,7 @@ enum Permission: String, CaseIterable {
         case .screenRecording:
             "capture the crop around what you point at"
         case .microphone:
-            "record your narration while the key is held"
+            "record your narration while a session is capturing"
         case .speech:
             "work out when each word was said, on-device"
         }
@@ -179,12 +179,10 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let id = recorder.sessionId {
             menu.addItem(disabled("Session \(id)"))
 
-            let holds = recorder.holdCount
             let referents = recorder.referentCount
             menu.addItem(disabled(
-                recorder.isRecording
-                    ? "  ● Recording — hold \(holds)"
-                    : "  \(holds) hold\(holds == 1 ? "" : "s") · \(referents) referent\(referents == 1 ? "" : "s")"
+                (recorder.isRecording ? "  ● Recording · " : "  ")
+                    + "\(referents) referent\(referents == 1 ? "" : "s")"
             ))
 
             menu.addItem(NSMenuItem(
@@ -201,7 +199,7 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             menu.addItem(disabled(
                 isListening
-                    ? "Hold Right Option to capture"
+                    ? "Tap Right Option to start capturing"
                     : "Not listening — could not create the event tap"
             ))
         }

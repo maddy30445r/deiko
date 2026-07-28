@@ -3,23 +3,32 @@ import CoreGraphics
 import Foundation
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PUSH-TO-TALK + GESTURE TAP
+// TOGGLE + GESTURE TAP
 //
-// One modifier, two gestures, separated by the mouse button:
+// One modifier, two meanings, told apart by whether you dragged:
 //
-//   hotkey held, moving, button up    → transit, ignored
-//   hotkey held, still,  button up    → settle    → point candidate
-//   hotkey held, moving, button DOWN  → lasso     → region referent
+//   tap Right Option (no drag)   → toggle the session on, or off
+//   hold Right Option + drag     → lasso a region (the drag is swallowed)
+//   anything else                → passes through untouched
+//
+// IT USED TO BE PUSH-TO-TALK, and changing it fixed data loss rather than a
+// preference. A session now spans minutes and many windows, so the key was
+// delimiting something that no longer exists — and the instant the user let go
+// mid-sentence to switch windows, capture stopped dead. Measured on session
+// 20260728-152834: 23.2 of 58.7 seconds recorded NOTHING, and the transcript
+// caught a sentence being restarted verbatim across the gap ("…so similar to
+// addition" / "So similar to addition like here we have to…"). Not only audio,
+// either: with the key up there is no sampler at all, so anything pointed at
+// during those 23 seconds does not exist.
 //
 // The tap is ACTIVE, not listen-only, because the lasso has to be swallowed:
 // dragging with the button down means "select text" in an editor and "drag
 // this" in a table. If the drag reached the app underneath, drawing a region
-// would mangle whatever you drew it around. While the hotkey is held we
-// consume mouse events entirely and the app never sees them.
-//
-// Nothing is observed when the hotkey is up — the tap sees only modifier
-// changes then, and every other event passes straight through untouched.
-// ─────────────────────────────────────────────────────────────────────────────
+// would mangle whatever you drew it around. Drags are swallowed ONLY while the
+// modifier is down, so ordinary clicking and selection keep working for the
+// whole session — which is exactly why the lasso needs a modifier now that the
+// session no longer has one.
+// ───────────────────────────────────────────────────────────────────────────────
 
 /// Right Option. Not `fn`/Globe, which macOS intercepts for dictation, the
 /// emoji picker and input-source switching.
@@ -35,8 +44,8 @@ private let kRightOptionKeyCode: Int64 = 61
 private let kRightOptionFlagMask: UInt64 = 0x40
 
 enum HotkeyEvent {
-    case pressed
-    case released
+    /// Tapped without dragging — start the session, or stop it.
+    case toggled
     case dragBegan(Point)
     case dragMoved(Point)
     case dragEnded(Point)
@@ -54,6 +63,11 @@ final class Hotkey {
 
     private(set) var isHeld = false
     private(set) var isDragging = false
+
+    /// Whether a drag happened during the CURRENT press of the modifier. This
+    /// is what separates "tap to toggle" from "hold and draw" — the two share
+    /// one key, so the release has to know which act just finished.
+    private var draggedThisPress = false
 
     /// Called on the main run loop for every gesture transition.
     var onEvent: ((HotkeyEvent) -> Void)?
@@ -136,7 +150,11 @@ final class Hotkey {
                     isDragging = false
                     emit(.dragEnded(Point(x: event.location.x, y: event.location.y)))
                 }
-                emit(.released)
+                // Deliberately NOT a toggle. The release went unobserved while
+                // the tap was dead, so we cannot know whether it was a tap or
+                // the end of a lasso — and silently starting or stopping a
+                // recording on a guess is the worst of the options.
+                draggedThisPress = false
             }
             return false
         }
@@ -153,10 +171,19 @@ final class Hotkey {
             let nowHeld = event.flags.rawValue & kRightOptionFlagMask != 0
             if nowHeld != isHeld {
                 isHeld = nowHeld
-                emit(nowHeld ? .pressed : .released)
-                if !nowHeld, isDragging {
-                    isDragging = false
-                    emit(.dragEnded(location))
+                if nowHeld {
+                    draggedThisPress = false
+                } else {
+                    if isDragging {
+                        isDragging = false
+                        emit(.dragEnded(location))
+                    }
+                    // A press that drew a lasso is not a toggle. Anything else
+                    // is — with no duration threshold, deliberately: "tap to
+                    // start" that silently does nothing because you held it a
+                    // beat too long is worse than the rare accidental toggle,
+                    // which costs one more tap to undo.
+                    if !draggedThisPress { emit(.toggled) }
                 }
             }
             // Always pass the modifier through: swallowing it would break
@@ -166,6 +193,7 @@ final class Hotkey {
         case .leftMouseDown:
             guard isHeld else { return pass }
             isDragging = true
+            draggedThisPress = true
             emit(.dragBegan(location))
             return true                     // swallowed — see file header
 
@@ -184,8 +212,10 @@ final class Hotkey {
             // Not swallowed: scrolling to reach the thing you want to point at
             // is legitimate mid-session. Recorded because a "settle" while the
             // content moves underneath is not a pointing act, and the aligner
-            // needs to know that.
-            if isHeld { emit(.scrolled) }
+            // needs to know that. Reported unconditionally now — the modifier
+            // no longer bounds the session, so the Recorder decides whether it
+            // is currently interested.
+            emit(.scrolled)
             return pass
 
         default:

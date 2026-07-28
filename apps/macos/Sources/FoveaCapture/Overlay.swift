@@ -139,6 +139,44 @@ final class OverlayView: NSView {
         if let lasso { drawLasso(ctx, path: lasso) }
         drawPulses(ctx, now: now)
         drawCursor(ctx)
+        drawCaptureBadge()
+    }
+
+    /// A persistent "recording" pill at the top of the main screen.
+    ///
+    /// Push-to-talk was self-evidencing — the overlay existed only while the
+    /// key was down, so its presence WAS the proof that nothing was recorded
+    /// otherwise. A toggled session cannot lean on that, so the claim has to be
+    /// made explicitly and continuously. macOS's own orange microphone dot says
+    /// the same thing and cannot be faked or suppressed by this app; this badge
+    /// adds what that dot cannot: which app, and how to stop it.
+    private func drawCaptureBadge() {
+        guard let screen = NSScreen.screens.first else { return }
+
+        let text = "● Fovea is capturing — tap Right Option to stop"
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 12, weight: .medium),
+            .foregroundColor: NSColor.white,
+        ]
+        let size = (text as NSString).size(withAttributes: attributes)
+
+        let padding: CGFloat = 10
+        let pill = NSRect(
+            x: screen.frame.midX - canvas.minX - (size.width / 2 + padding),
+            // Just below the menu bar, in view coordinates.
+            y: flipY - canvas.minY - 30 - (size.height + padding),
+            width: size.width + padding * 2,
+            height: size.height + padding
+        )
+
+        let path = NSBezierPath(roundedRect: pill, xRadius: pill.height / 2, yRadius: pill.height / 2)
+        NSColor.systemRed.withAlphaComponent(0.92).setFill()
+        path.fill()
+
+        (text as NSString).draw(
+            at: NSPoint(x: pill.minX + padding, y: pill.minY + padding / 2),
+            withAttributes: attributes
+        )
     }
 
     private func drawTrail(_ ctx: CGContext, now: Double) {
