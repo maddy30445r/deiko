@@ -26,6 +26,7 @@ import { fileURLToPath } from "node:url";
 // because the whole point of normalising here is to match what the aligner
 // will match on.
 import { normalizeWord } from "../packages/alignment/dist/src/deictic.js";
+import { loadEvents } from "./lib/session-io.mjs";
 
 const SARVAM_STT_URL = "https://api.sarvam.ai/speech-to-text";
 
@@ -334,21 +335,6 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 // ── Session driver ──────────────────────────────────────────────────────────
 
-function loadEvents(sessionDir) {
-  const path = join(sessionDir, "events.jsonl");
-  if (!existsSync(path)) throw new Error(`no events.jsonl in ${sessionDir}`);
-  return readFileSync(path, "utf8")
-    .split("\n")
-    .filter((l) => l.trim())
-    .map((l) => {
-      try {
-        return JSON.parse(l);
-      } catch {
-        return null;
-      }
-    })
-    .filter(Boolean);
-}
 
 async function main() {
   const sessionDir = process.argv[2];

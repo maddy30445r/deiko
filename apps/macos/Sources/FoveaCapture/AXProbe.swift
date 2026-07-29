@@ -2,6 +2,7 @@ import AppKit
 import ApplicationServices
 import CoreGraphics
 import Foundation
+import FoveaGrounding
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AX RESOLUTION — the grounding layer
@@ -135,13 +136,25 @@ enum AXProbe {
             }
         }
 
+        let neighbours = neighbourhood(around: p, excluding: hit, descend: descend)
+
+        // Order matters: the brief shows the first dozen strings, so whatever
+        // leads had better be what the user meant. The aimed-at element leads
+        // when it grounds something; when it does not — a bare `AXGroup`, a
+        // disclosure triangle — the neighbourhood leads and the hit goes last,
+        // still recorded, because its role is how we know the probe landed on
+        // furniture rather than on nothing.
+        let elements = groundsContent(element)
+            ? [element] + neighbours
+            : neighbours + [element]
+
         return ProbeEvent(
             shape: shape,
             app: pid.map(appIdentity(pid:)),
             windowTitle: windowTitle(for: hit),
             snapshot: AXSnapshot(
                 resolved: true,
-                elements: [element],
+                elements: elements,
                 samplesTested: nil,
                 uniqueElements: nil,
                 manualAccessibilityApplied: poked,
@@ -149,6 +162,75 @@ enum AXProbe {
                 error: nil
             )
         )
+    }
+
+    /// How far a point looks around itself for context. Wide and short because
+    /// text is: a line of a Compass document, a row of a table, a line of code.
+    /// Taller would reach into unrelated rows; narrower would miss the field
+    /// name sitting to the left of the value you pointed at.
+    private static let neighbourhoodWidth: Double = 200
+    private static let neighbourhoodHeight: Double = 44
+
+    /// The elements immediately around a point.
+    ///
+    /// A point used to resolve to exactly one element — whatever
+    /// `AXUIElementCopyElementAtPosition` chose to answer with — and measurement
+    /// showed how thin that is. Session 20260728-230442, MongoDB Compass: the
+    /// twelve points averaged 4.6ms and returned one element each, seven of them
+    /// a childless `AXGroup` carrying no text at all. The four LASSOS in the same
+    /// session, in the same app, seconds apart, spent ~60ms and returned 8–20
+    /// real text elements. The content was in the tree the whole time; the
+    /// hit-test just does not reach it.
+    ///
+    /// So a point now samples a small box the way a region samples a large one,
+    /// through exactly the same machinery. This is not a heuristic bolted on —
+    /// it is the region path, run over a smaller shape.
+    private static func neighbourhood(
+        around p: Point, excluding hit: AXUIElement, descend: Bool
+    ) -> [AXElement] {
+        let box = Shape(
+            kind: .region,
+            origin: p,
+            bounds: Frame(
+                x: p.x - neighbourhoodWidth / 2,
+                y: p.y - neighbourhoodHeight / 2,
+                width: neighbourhoodWidth,
+                height: neighbourhoodHeight
+            ),
+            // No polygon: for a rectangle `Shape.contains` falls through to the
+            // bounds test, which is what we want here.
+            path: nil
+        )
+
+        // A tighter element cap than a region's 40. Descent is per-element and
+        // each one carries its own 120ms deadline, so the cap is what bounds the
+        // worst case — and a 200×44 box that resolves to more than a dozen
+        // distinct nodes is dense enough that another six add nothing.
+        let hits = collect(
+            samples: gridSamples(in: box, maxSamples: 40, minStride: 12),
+            maxElements: 12,
+            descend: descend,
+            // Tighter than a region's: a lasso is an explicit "spend time on
+            // this", a settle is not, and points outnumber regions 3:1.
+            budgetMs: 200
+        )
+
+        // Same application only. The box is OUR invention, not the user's — it
+        // reaches 100pt either side of where they actually pointed, and
+        // `AXUIElementCopyElementAtPosition` is system-wide, so a point near a
+        // window edge would otherwise pull a neighbouring app's text in and
+        // present it as this referent's grounding. A lasso does not need this
+        // guard: crossing a boundary there is a thing the user drew.
+        let ownerPid = pidOf(hit)
+        return hits
+            .filter { !CFEqual($0.element, hit) }
+            .filter { ownerPid == nil || pidOf($0.element) == ownerPid }
+            .map { describe($0.element, withAncestors: false) }
+            .filter { carriesMeaning($0) }
+            .sorted { a, b in
+                guard let fa = a.frame, let fb = b.frame else { return a.frame != nil }
+                return Frame.readingOrder(fa, fb)
+            }
     }
 
     /// "What is inside this shape." AX has no rect query, so we sample a grid
@@ -280,9 +362,15 @@ enum AXProbe {
         budgetMs: Double = 120
     ) -> AXUIElement {
         let deadline = Clock.nowMs() + budgetMs
-        // If the hit already carries text, the app answered properly — don't
+        // If the hit already names CONTENT, the app answered properly — don't
         // pay for a descent that can only make the referent less specific.
-        if hasText(element) { return element }
+        //
+        // The test used to be "has any text", and that is how three referents in
+        // one session came back as `Caret Right Icon`: the hit-tested `AXImage`
+        // had alt text, so the descent stopped on a disclosure triangle while
+        // the row it decorated sat one level down. Furniture no longer counts as
+        // the app having answered.
+        if groundsContent(element) { return element }
 
         var current = element
         var deepestWithText: AXUIElement?
@@ -311,7 +399,7 @@ enum AXProbe {
             guard let next = best else { break }
             current = next
 
-            if hasText(next) {
+            if groundsContent(next) {
                 deepestWithText = next
                 // Keep going: a text-bearing container may still have a more
                 // specific text child under the cursor.
@@ -324,18 +412,6 @@ enum AXProbe {
     private static func childrenOf(_ el: AXUIElement) -> [AXUIElement]? {
         guard let ref = copyAttr(el, kAXChildrenAttribute as String) else { return nil }
         return ref as? [AXUIElement]
-    }
-
-    /// Cheap-ish text check: three attribute reads, and only on elements we are
-    /// already considering.
-    private static func hasText(_ el: AXUIElement) -> Bool {
-        for attr in [kAXValueAttribute, kAXTitleAttribute, kAXDescriptionAttribute] {
-            if let s = stringify(copyAttr(el, attr as String)),
-               !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                return true
-            }
-        }
-        return false
     }
 
     /// Grid of sample points that fall INSIDE the drawn path — not merely
@@ -373,8 +449,15 @@ enum AXProbe {
     /// expensive operation by the sample count; doing it after dedupe pays for
     /// it once per distinct element. Each survivor keeps the sample point that
     /// found it, since descent needs a point to aim at.
+    ///
+    /// `budgetMs` bounds the DESCENT phase as a whole. Each `refine` carries its
+    /// own 120ms deadline, so without this the worst case is the element cap
+    /// times that — 4.8s for a region, and the session's stop waits on these
+    /// tasks. It has never been observed (a region measures 58–67ms in total),
+    /// but "never observed" is not a bound, and a pathological tree on a stop
+    /// gesture is exactly when the user is watching.
     private static func collect(
-        samples: [Point], maxElements: Int, descend: Bool
+        samples: [Point], maxElements: Int, descend: Bool, budgetMs: Double = 400
     ) -> [(element: AXUIElement, at: Point)] {
         var unique: [(element: AXUIElement, at: Point)] = []
         for p in samples {
@@ -386,8 +469,18 @@ enum AXProbe {
 
         guard descend else { return unique }
 
+        let deadline = Clock.nowMs() + budgetMs
         var refined: [(element: AXUIElement, at: Point)] = []
         for (el, p) in unique {
+            // Out of time: keep the remaining elements UNREFINED rather than
+            // dropping them. A container is worse grounding than its leaf, but
+            // both beat a referent that silently lost half its neighbourhood.
+            guard Clock.nowMs() < deadline else {
+                if !refined.contains(where: { CFEqual($0.element, el) }) {
+                    refined.append((el, p))
+                }
+                continue
+            }
             let deep = refine(el, at: p)
             // Descent can collapse two containers onto the same leaf, so dedupe
             // again afterwards.
@@ -507,6 +600,39 @@ enum AXProbe {
         AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
         AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
         return true
+    }
+
+    /// `FoveaGrounding.groundsContent` for an already-described element.
+    ///
+    /// The judgement lives in its own target because it is pure and this file
+    /// is not: asking the question at all needs a live accessibility tree and a
+    /// running app to point at. See `Grounding.swift` for why "has any text" was
+    /// the wrong test.
+    static func groundsContent(_ e: AXElement) -> Bool {
+        FoveaGrounding.groundsContent(
+            role: e.role,
+            value: e.value,
+            title: e.title,
+            description: e.elementDescription,
+            selectedText: e.selectedText
+        )
+    }
+
+    /// The same question against a live element, for the descent — five IPC
+    /// reads instead of `hasText`'s three, paid only on elements we are already
+    /// considering. The extra one is the role, which is the whole point: it is
+    /// what separates a caret's alt text from a cell's contents.
+    private static func groundsContent(_ el: AXUIElement) -> Bool {
+        func read(_ attr: String) -> String? {
+            stringify(copyAttr(el, attr))
+        }
+        return FoveaGrounding.groundsContent(
+            role: read(kAXRoleAttribute as String),
+            value: read(kAXValueAttribute as String),
+            title: read(kAXTitleAttribute as String),
+            description: read(kAXDescriptionAttribute as String),
+            selectedText: read(kAXSelectedTextAttribute as String)
+        )
     }
 
     /// Whether an element is worth putting in front of the model at all.

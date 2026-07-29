@@ -6,6 +6,7 @@ import AVFoundation
 // suppression is scoped to this one import rather than silenced per-warning.
 @preconcurrency import AVFAudio
 import Foundation
+import FoveaVoice
 
 // ─────────────────────────────────────────────────────────────────────────────
 // NARRATION CAPTURE
@@ -56,14 +57,19 @@ final class Audio {
     /// multi-second gate absorbs.
     nonisolated(unsafe) private(set) var lastVoiceMs: Double?
 
-    /// RMS above which a 16-bit buffer counts as speech.
+    /// Decides whether a buffer is speech, relative to the room rather than
+    /// against a fixed number. See `VoiceGate` for why — a fixed threshold was
+    /// measurably losing referents at the volume this app is actually spoken
+    /// at.
     ///
-    /// Measured across every recorded hold: silent captures sit at RMS 6–92,
-    /// real speech at 159–440 whole-file, with individual speech buffers well
-    /// above that. 250 sits in the gap with room on both sides — and the gate
-    /// that consumes it is deliberately seconds wide, so a misjudged buffer
-    /// costs nothing.
-    private let voiceRMSThreshold: Double = 250
+    /// Touched ONLY from the audio thread — including the per-recording reset,
+    /// which happens on the first buffer rather than in `start()`. That is not
+    /// tidiness: unlike `lastVoiceMs`, this holds an array, and `removeTap` does
+    /// not promise an in-flight tap callback has returned. Resetting from the
+    /// caller's thread could mutate a copy-on-write buffer the audio thread was
+    /// reading. Single ownership removes the question instead of reasoning about
+    /// how narrow the window is.
+    nonisolated(unsafe) private var gate = VoiceGate()
 
     enum AudioError: LocalizedError {
         case formatUnavailable
@@ -165,7 +171,14 @@ final class Audio {
         // Stamp the origin on the FIRST buffer, not at engine.start(): the gap
         // between asking for audio and receiving it is real, and guessing it
         // puts a constant offset into every word timestamp.
-        if t0 == nil { t0 = Clock.nowMs() }
+        //
+        // `start()` nils `t0`, so this is also where "a new recording began" is
+        // observable ON THE AUDIO THREAD — which is the only thread allowed to
+        // touch the gate. See its declaration.
+        if t0 == nil {
+            t0 = Clock.nowMs()
+            gate.reset()
+        }
 
         let ratio = targetFormat.sampleRate / buffer.format.sampleRate
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 1024
@@ -209,6 +222,6 @@ final class Audio {
             sumOfSquares += sample * sample
         }
         let rms = (sumOfSquares / Double(count)).squareRoot()
-        if rms >= voiceRMSThreshold { lastVoiceMs = Clock.nowMs() }
+        if gate.note(rms: rms) { lastVoiceMs = Clock.nowMs() }
     }
 }

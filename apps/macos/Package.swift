@@ -18,11 +18,31 @@ let package = Package(
             path: "Tests/FoveaGestureTests"
         ),
 
+        // Split out for the same reason: `Audio` needs a microphone, so the
+        // decision "is this buffer speech?" can only be tested if it lives
+        // somewhere that has never heard of AVFoundation.
+        .target(name: "FoveaVoice", path: "Sources/FoveaVoice"),
+        .testTarget(
+            name: "FoveaVoiceTests",
+            dependencies: ["FoveaVoice"],
+            path: "Tests/FoveaVoiceTests"
+        ),
+
+        // And again: "does this element name something, or is it furniture?" is
+        // a judgement about strings, but every way of ASKING it needs a live
+        // accessibility tree and a running app to point at.
+        .target(name: "FoveaGrounding", path: "Sources/FoveaGrounding"),
+        .testTarget(
+            name: "FoveaGroundingTests",
+            dependencies: ["FoveaGrounding"],
+            path: "Tests/FoveaGroundingTests"
+        ),
+
         // No external dependencies on purpose: subcommand parsing is ~30 lines,
         // and a dependency-free build keeps `make dev` offline and fast.
         .executableTarget(
             name: "FoveaCapture",
-            dependencies: ["FoveaGesture"],
+            dependencies: ["FoveaGesture", "FoveaVoice", "FoveaGrounding"],
             path: "Sources/FoveaCapture",
             exclude: ["Info.plist"],
             linkerSettings: [

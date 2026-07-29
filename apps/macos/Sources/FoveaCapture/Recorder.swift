@@ -68,6 +68,13 @@ final class Recorder {
     private var holdReferentCount = 0
     private var sessionReferentCount = 0
 
+    /// Settles the speech gate threw away. Counted because throwing them away
+    /// is the only unrecoverable thing this app does, and until now it did it
+    /// in silence — a gate calibrated wrong for someone's microphone would have
+    /// looked exactly like a quiet session. Reported at the end so a run that
+    /// dropped half of what you pointed at cannot pass for a normal one.
+    private var gatedSettleCount = 0
+
     /// Which hold we're on, and a counter that runs for the whole session. Crop
     /// filenames are built from both.
     ///
@@ -85,7 +92,15 @@ final class Recorder {
 
     /// How long after speech a settle still counts as pointing. See the gate in
     /// `detectSettle`. Regions are exempt — nobody draws a loop by accident.
-    private let silenceGateMs: Double = 4000
+    ///
+    /// Six seconds, not four, because of what the detector on the other side can
+    /// promise. Simulated over every WAV this project has recorded, `VoiceGate`'s
+    /// worst gap between voice buffers during real narration is 3924ms. Four
+    /// seconds left 76ms of margin, which is not margin — the previous fixed-RMS
+    /// detector opened gaps past four seconds in nine of twenty recordings and
+    /// silently lost referents to it. Six is still far shorter than the pauses
+    /// this is meant to reject: transit, scrolling, reading, walking away.
+    private let silenceGateMs: Double = 6000
 
     /// Stop a forgotten session after this much unbroken silence.
     ///
@@ -223,6 +238,7 @@ final class Recorder {
         holdIndex = 0
         globalReferentIndex = 0
         sessionReferentCount = 0
+        gatedSettleCount = 0
 
         // Events now belong to this session's file rather than the launch log.
         Emit.redirectToFile("\(dir)/events.jsonl")
@@ -271,6 +287,13 @@ final class Recorder {
             id: id, holdCount: holdIndex, referentCount: sessionReferentCount
         ))
         Emit.log("■ session \(id) — \(holdIndex) hold(s), \(sessionReferentCount) referent(s)")
+        if gatedSettleCount > 0 {
+            Emit.log(
+                "  \(gatedSettleCount) settle(s) skipped — no narration within "
+                + "\(Int(silenceGateMs / 1000))s. If you were talking through those, "
+                + "the microphone is not hearing you."
+            )
+        }
 
         // Back to the launch log, so anything emitted between sessions is not
         // silently appended to a session the user considers finished.
@@ -489,7 +512,10 @@ final class Recorder {
         // No audio at all (mic denied, or the first buffer not yet in) means
         // capture EVERYTHING. A silent gate would turn one permission problem
         // into a session that records nothing and says nothing about why.
-        if let quietFor = msSinceVoice, quietFor > silenceGateMs { return }
+        if let quietFor = msSinceVoice, quietFor > silenceGateMs {
+            gatedSettleCount += 1
+            return
+        }
 
         commitPoint(at: position, dwell: now - stationarySince, now: now)
     }
@@ -584,18 +610,15 @@ final class Recorder {
                     "\($0)/crops/h\(String(format: "%02d", hold))-r\(String(format: "%03d", index)).png"
                 }
 
-                // A region ALWAYS gets OCR. "Capture this whole area" cannot be
-                // represented by one AX string, and relying on the conditional
-                // rule here silently lost referents: a git-blame annotation
-                // ("You, 6 hours ago") counted as "AX has text" and suppressed
-                // OCR for an entire circled region of code.
-                let runOCR = shape.kind == .region || OCR.isNeeded(for: event.snapshot)
-
+                // Always. Deciding when accessibility text is "enough" is what
+                // cost us referents twice — see the note where `OCR.isNeeded`
+                // used to live. This runs on a detached task; nothing waits on
+                // it but the end of the session.
                 let crop = await Capture.crop(
                     shape: shape,
                     snapshot: event.snapshot,
                     outputPath: path,
-                    runOCR: runOCR,
+                    runOCR: true,
                     rectFromAX: fromAX,
                     rect: rect
                 )

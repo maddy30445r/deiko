@@ -160,8 +160,10 @@ func runAXProbe(_ args: Args) async {
                 shape: event.shape,
                 snapshot: event.snapshot,
                 outputPath: "\(cropDir)/probe-\(String(format: "%03d", cropIndex)).png",
-                // Only pay Vision's 50-200ms when AX gave us nothing to read.
-                runOCR: OCR.isNeeded(for: event.snapshot),
+                // Unconditional, matching the recorder — this is the tool used
+                // to check what the recorder will capture, so it must not
+                // capture something different.
+                runOCR: true,
                 rectFromAX: fromAX,
                 rect: rect
             )

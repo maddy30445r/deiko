@@ -9,32 +9,12 @@
  * gate: ≥80% and we build M1, below and we stop and reconsider the mechanic.
  */
 
-import { readFileSync, existsSync } from "node:fs";
-import { resolve, join } from "node:path";
+import { resolve } from "node:path";
 
 import { align } from "../packages/alignment/dist/src/align.js";
 import { loadSession } from "../packages/referents/dist/src/session.js";
 import { toCandidates } from "../packages/referents/dist/src/candidates.js";
-
-function load(sessionDir, file) {
-  const path = join(sessionDir, file);
-  if (!existsSync(path)) throw new Error(`missing ${file} in ${sessionDir}`);
-  return readFileSync(path, "utf8");
-}
-
-function loadEvents(sessionDir) {
-  return load(sessionDir, "events.jsonl")
-    .split("\n")
-    .filter((l) => l.trim())
-    .map((l) => {
-      try {
-        return JSON.parse(l);
-      } catch {
-        return null;
-      }
-    })
-    .filter(Boolean);
-}
+import { loadEvents, loadFile as load } from "./lib/session-io.mjs";
 
 // Pairing candidate+probe events, recovering a lasso's drag span, ordering
 // across app visits, and adapting the result for the aligner all live in

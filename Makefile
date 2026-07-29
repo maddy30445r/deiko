@@ -1,4 +1,4 @@
-.PHONY: dev build test probe watch region clean setup bundle record transcribe align brief signing-setup reset-permissions
+.PHONY: dev build test probe watch region clean setup bundle record transcribe align ground brief signing-setup reset-permissions
 
 # Code-signing identity for the bundle.
 #
@@ -26,7 +26,10 @@ RELEASE_BIN := $(CAPTURE_DIR)/.build/release/fovea-capture
 dev: $(DEBUG_BIN)
 	@node scripts/hello.mjs
 
-$(DEBUG_BIN): $(wildcard $(CAPTURE_DIR)/Sources/FoveaCapture/*.swift) $(CAPTURE_DIR)/Package.swift
+# Every Sources subtree, not just FoveaCapture — the pure targets (FoveaGesture,
+# FoveaVoice, FoveaGrounding) are where the testable logic lives, and a rule that
+# does not watch them silently runs the old binary against the new tests.
+$(DEBUG_BIN): $(wildcard $(CAPTURE_DIR)/Sources/*/*.swift) $(CAPTURE_DIR)/Package.swift
 	@swift build --package-path $(CAPTURE_DIR)
 
 ## build — release binary
@@ -132,6 +135,14 @@ transcribe:
 brief:
 	@npm run build -w @fovea/alignment -w @fovea/referents --silent
 	@node scripts/render-brief.mjs $(SESSION)
+
+## ground — score how well a session resolved its referents, and check M1
+##
+## The companion to `align`: that one scores which utterance bound to which
+## referent, this one scores whether the referent knows what it is. Needs no
+## transcript — grounding is decided at capture time.
+ground:
+	@node scripts/ground-report.mjs $(SESSION)
 
 ## align — run the T0.2 gate harness over a transcribed session
 ## Needs BOTH packages built: the script imports alignment's aligner and

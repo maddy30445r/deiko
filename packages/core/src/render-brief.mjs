@@ -25,6 +25,7 @@ import { resolve, join, basename } from "node:path";
 import { align } from "../packages/alignment/dist/src/align.js";
 import { loadSession } from "../packages/referents/dist/src/session.js";
 import { toCandidates } from "../packages/referents/dist/src/candidates.js";
+import { loadEvents } from "./lib/session-io.mjs";
 
 // ── Redaction ───────────────────────────────────────────────────────────────
 
@@ -463,17 +464,7 @@ if (!existsSync(transcriptPath)) {
   process.exit(1);
 }
 
-const events = readFileSync(eventsPath, "utf8")
-  .split("\n")
-  .filter((l) => l.trim())
-  .map((l) => {
-    try {
-      return JSON.parse(l);
-    } catch {
-      return null;
-    }
-  })
-  .filter(Boolean);
+const events = loadEvents(dir);
 
 const { words } = JSON.parse(readFileSync(transcriptPath, "utf8"));
 if (!words?.length) {

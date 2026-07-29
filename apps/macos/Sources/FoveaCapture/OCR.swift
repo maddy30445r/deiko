@@ -73,20 +73,22 @@ enum OCR {
         )
     }
 
-    /// Whether AX gave us enough that OCR would be redundant. This is the switch
-    /// that keeps the 50-200ms Vision cost off the common path.
-    static func isNeeded(for snapshot: AXSnapshot) -> Bool {
-        guard snapshot.resolved else { return true }
-        // Trimmed, matching `carriesMeaning` and `Capture.rect` — untrimmed,
-        // a whitespace-only AX value (a padded cell, an indentation-only line)
-        // counted as "AX has text" and suppressed OCR for a referent that then
-        // reached the aligner with no text at all.
-        let hasText = snapshot.elements.contains { el in
-            [el.value, el.title, el.elementDescription, el.selectedText]
-                .contains {
-                    $0?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-                }
-        }
-        return !hasText
-    }
+    // There used to be an `isNeeded(for:)` here — a predicate that skipped OCR
+    // when accessibility had already produced text. It is gone, and every
+    // referent is now read off its pixels.
+    //
+    // It was deleted rather than fixed because it failed twice, the same way,
+    // for different reasons. First a git-blame annotation ("You, 6 hours ago")
+    // counted as "AX has text" and suppressed OCR for an entire circled region
+    // of code — which is why regions were exempted from it. Then, in session
+    // 20260728-230442, `"Caret Right Icon"` did the same for three point
+    // referents and a tab labelled `"0"` for a fourth; all four reached the
+    // aligner carrying nothing about what the user meant. Any predicate of this
+    // shape has to decide whether a string is meaningful, and it will keep
+    // getting that wrong on content it has never seen.
+    //
+    // What it bought was never worth defending: each referent resolves inside
+    // its own detached `Task`, so the ~163ms measured cost overlaps other work
+    // and nothing waits on it except the end of the session. It was optimising
+    // background time nobody was blocked on, and paying for it in referents.
 }
