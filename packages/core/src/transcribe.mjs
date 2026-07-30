@@ -200,9 +200,14 @@ function extractText(raw) {
  * the exact syllable.
  */
 function mergeWords(sarvamText, appleWords, audioDurationMs) {
+  // Apple's own segments are measurements, so they are anchored by definition.
+  // Labelling them keeps `anchored` meaning the same thing on every path — an
+  // absent field would be indistinguishable from "not anchored".
+  const asAnchored = (ws) => ws.map((w) => ({ ...w, anchored: true }));
+
   const sTokens = sarvamText.split(/\s+/).filter((t) => normalizeWord(t).length > 0);
   if (sTokens.length === 0 || appleWords.length === 0) {
-    return { words: appleWords, anchors: 0, total: sTokens.length };
+    return { words: asAnchored(appleWords), anchors: 0, total: sTokens.length };
   }
   const sNorm = sTokens.map(normalizeWord);
 
@@ -241,7 +246,7 @@ function mergeWords(sarvamText, appleWords, audioDurationMs) {
 
   if (anchors.length === 0) {
     // Nothing agreed — keep Apple's words rather than inventing a timeline.
-    return { words: appleWords, anchors: 0, total: n };
+    return { words: asAnchored(appleWords), anchors: 0, total: n };
   }
 
   // Interpolate: anchored tokens keep their time; the rest spread evenly
@@ -260,11 +265,24 @@ function mergeWords(sarvamText, appleWords, audioDurationMs) {
     prevT = b.t;
   }
 
+  // Which words carry a REAL timing and which were interpolated between two.
+  // The merge already knows; it used to throw the answer away, and that made a
+  // whole class of question unanswerable after the fact — when anchors came out
+  // at 37/223 on good audio there was no way to tell from the transcript whether
+  // they were spread evenly or bunched at one end.
+  //
+  // It is also the confidence signal the aligner is missing. A binding resting
+  // on an anchored word is standing on a measurement; one resting on an
+  // interpolated word is standing on a straight line drawn between two distant
+  // measurements, and those are not equally trustworthy.
+  const anchoredAt = new Set(anchors.map((a) => a.idx));
+
   const words = sTokens.map((text, i) => ({
     text,
     start: times[i],
     end: Math.min(times[i] + 300, times[i + 1] ?? times[i] + 300),
     source: "merged",
+    anchored: anchoredAt.has(i),
   }));
   return { words, anchors: anchors.length, total: n };
 }
@@ -480,6 +498,9 @@ async function main() {
       start: w.start + audioT0,
       end: w.end + audioT0,
       hold,
+      // Carried through, not rebuilt away: this says whether `start` is a
+      // measurement or a point on a line drawn between two of them.
+      anchored: w.anchored === true,
     })));
   }
 
