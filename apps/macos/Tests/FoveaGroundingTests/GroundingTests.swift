@@ -42,7 +42,10 @@ func numericLabelIsNotSpecialCased() {
 func describedImageIsContent() {
     // Only PRESENTATIONAL roles have their description distrusted, and the set
     // is small on purpose. An AXCell describing itself is describing data.
-    #expect(groundsContent(role: "AXCell", description: "identifier: 9b50a7e7"))
+    // Synthetic on purpose. The shape is what the test needs, and captured
+    // session content does not belong in the repository even when it is only a
+    // fragment of an id.
+    #expect(groundsContent(role: "AXCell", description: "identifier: 00000000"))
 }
 
 @Test("whitespace is not text")
