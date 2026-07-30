@@ -15,7 +15,7 @@
  * outbox is empty until you say so.
  */
 
-import { copyFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, renameSync } from "node:fs";
 import { resolve, join, basename } from "node:path";
 import { homedir } from "node:os";
 
@@ -44,11 +44,31 @@ mkdirSync(OUTBOX, { recursive: true });
 
 // One at a time. Two pending briefs means the agent has to choose, and the
 // answer to "which task am I doing" should never come from a directory listing.
-const pending = readdirSync(OUTBOX).filter((f) => f.endsWith(".md") && !f.startsWith(id));
+//
+// Anything already pending is SUPERSEDED, not a reason to refuse. This used to
+// exit non-zero and tell you to clear the outbox by hand, which sounds careful
+// and isn't: a brief only leaves the outbox when the consuming agent calls
+// `mark_brief_done`, and an agent that read a brief and then wandered off never
+// does. One un-marked brief from last week jammed every send after it, with the
+// error surfacing in the review window as a small orange line.
+//
+// The invariant that check protects — exactly one brief pending — still holds.
+// What changes is which one wins: the developer pressing send now, rather than
+// whichever file happened to be left behind.
+const pending = readdirSync(OUTBOX).filter(
+  (f) => (f.endsWith(".md") || f.endsWith(".json")) && !f.startsWith(id),
+);
 if (pending.length) {
-  console.error(`✗ ${pending.length} brief(s) already pending: ${pending.join(", ")}`);
-  console.error(`  finish or clear them first:  rm ${join(OUTBOX, "*.md")}`);
-  process.exit(1);
+  mkdirSync(DONE, { recursive: true });
+  for (const file of pending) {
+    const dot = file.lastIndexOf(".");
+    const superseded = `${file.slice(0, dot)}-superseded${file.slice(dot)}`;
+    renameSync(join(OUTBOX, file), join(DONE, superseded));
+  }
+  // Said out loud, never silently. Superseding is the right default and still a
+  // thing the developer should be able to notice they did.
+  const names = [...new Set(pending.map((f) => f.replace(/\.(md|json)$/, "")))];
+  console.error(`  superseded ${names.join(", ")} → ${DONE}`);
 }
 
 copyFileSync(md, join(OUTBOX, `${id}.md`));

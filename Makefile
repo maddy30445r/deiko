@@ -1,4 +1,4 @@
-.PHONY: dev build test probe watch region clean setup bundle record transcribe align ground brief send bridge-install bridge-test show-brief signing-setup reset-permissions
+.PHONY: dev build test probe watch region clean setup bundle record transcribe align ground brief summarize send bridge-install bridge-test show-brief signing-setup reset-permissions
 
 # Code-signing identity for the bundle.
 #
@@ -135,6 +135,14 @@ transcribe:
 brief:
 	@npm run build -w @fovea/alignment -w @fovea/referents --silent
 	@node scripts/render-brief.mjs $(SESSION)
+
+## summarize — three lines about the session, FOR YOUR SCREEN ONLY
+##
+## Written to review-summary.txt, which `send` does not copy: the coding agent
+## receives evidence and states its own reading back, and an interpretation
+## shipped alongside would undo that. Never fatal — no key, no summary, no fuss.
+summarize:
+	@node scripts/summarize.mjs $(SESSION)
 
 ## send — hand a rendered brief to Claude Code (the approval step)
 ##

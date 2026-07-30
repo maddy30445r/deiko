@@ -12,9 +12,12 @@
  * what goes over the wire.
  */
 
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { existsSync, readdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+  existsSync, readdirSync, readFileSync, writeFileSync, rmSync, mkdirSync, mkdtempSync,
+} from "node:fs";
 
 import { connect } from "./lib/mcp-client.mjs";
 
@@ -129,6 +132,44 @@ check("prompt returns one user message", prompt.messages?.[0]?.role === "user");
     check("a credential-bearing brief is refused, not delivered", true, "refused");
   } finally {
     rmSync(poisoned, { force: true });
+  }
+}
+
+// The review window's summary is the only interpreted text Fovea produces, and
+// the whole design depends on it stopping at the developer's screen: the agent
+// is asked to state its own reading back, which it cannot honestly do if a
+// reading is already sitting in the brief.
+//
+// `send-brief.mjs` copies `brief.md` and `brief.json` and nothing else, so the
+// guarantee is structural — but "structural" is a claim about code that someone
+// will edit. Prove it instead, in a scratch HOME so the real outbox is untouched.
+{
+  const home = mkdtempSync(join(tmpdir(), "fovea-send-"));
+  const session = join(home, "20990101-000000");
+  const sentinel = "SUMMARY-MUST-NOT-TRAVEL-8f3a2c";
+  mkdirSync(session, { recursive: true });
+  writeFileSync(join(session, "brief.md"), "# Task brief — send check\n\nEvidence only.\n");
+  writeFileSync(join(session, "brief.json"), JSON.stringify({ sessionId: "x", referents: [] }));
+  writeFileSync(join(session, "review-summary.txt"), `${sentinel}\n`);
+
+  try {
+    execFileSync(process.execPath, [new URL("./send-brief.mjs", import.meta.url).pathname, session], {
+      env: { ...process.env, HOME: home },
+      stdio: "pipe",
+    });
+    const outbox = join(home, ".fovea", "outbox");
+    const delivered = readdirSync(outbox).filter((f) => !f.startsWith("."));
+    const leaked = delivered
+      .filter((f) => f.endsWith(".md") || f.endsWith(".json"))
+      .some((f) => readFileSync(join(outbox, f), "utf8").includes(sentinel));
+
+    check(
+      "the review summary is not delivered to the agent",
+      !leaked && !delivered.some((f) => f.includes("summary")),
+      leaked ? "SENT THE SUMMARY" : delivered.join(", "),
+    );
+  } finally {
+    rmSync(home, { recursive: true, force: true });
   }
 }
 

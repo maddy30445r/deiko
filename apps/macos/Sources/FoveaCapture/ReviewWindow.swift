@@ -84,8 +84,16 @@ final class ReviewModel: ObservableObject {
     @Published var digest: BriefDigest?
     @Published var narration: String = ""
 
+    /// Fovea's reading of the session, for this screen only — never sent.
+    /// Nil while it is still arriving AND when it never arrives; `summaryPending`
+    /// tells those apart, because a spinner that never resolves is worse than no
+    /// spinner at all.
+    @Published var summary: String?
+    @Published var summaryPending = false
+
     private var sessionDir: String?
     private var task: Task<Void, Never>?
+    private var summaryTask: Task<Void, Never>?
     /// The narration as recognised, so "did the developer change it" is a
     /// comparison rather than a flag that has to be maintained.
     private var originalNarration = ""
@@ -106,6 +114,7 @@ final class ReviewModel: ObservableObject {
                 self.narration = digest.summary.narration
                 self.originalNarration = digest.summary.narration
                 self.phase = .ready
+                self.fetchSummary(sessionDir: sessionDir)
             } catch {
                 guard !Task.isCancelled else { return }
                 self.phase = .failed(error.localizedDescription)
@@ -136,14 +145,30 @@ final class ReviewModel: ObservableObject {
         }
     }
 
+    /// Runs alongside the visible brief, never in front of it. Its own task, so
+    /// cancelling the window does not have to wait on a network call, and so a
+    /// slow round trip cannot delay Good to go.
+    private func fetchSummary(sessionDir: String) {
+        summaryPending = true
+        summaryTask = Task {
+            let text = await BriefPipeline.summary(sessionDir: sessionDir)
+            guard !Task.isCancelled else { return }
+            self.summary = text
+            self.summaryPending = false
+        }
+    }
+
     func retry() {
         guard let sessionDir else { return }
+        summary = nil
         load(sessionDir: sessionDir)
     }
 
     func cancelPendingWork() {
         task?.cancel()
         task = nil
+        summaryTask?.cancel()
+        summaryTask = nil
     }
 }
 
@@ -196,10 +221,51 @@ private struct ReviewView: View {
     private var brief: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
+            summaryCard
             Divider()
             narrationEditor
             Divider()
             footer
+        }
+    }
+
+    /// Fovea's reading of the session — the only interpreted text anywhere in
+    /// the product, and it stops at this window.
+    ///
+    /// Read-only on purpose: it is never sent, so an editable box would invite
+    /// corrections that go nowhere. The narration below is the field that
+    /// travels, and the one worth correcting.
+    ///
+    /// Absent entirely when there is no summary. A card reading "no summary
+    /// available" would take up the same room as the summary while telling the
+    /// developer less than silence does.
+    @ViewBuilder private var summaryCard: some View {
+        if model.summaryPending || model.summary != nil {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    Image(systemName: "eye")
+                    Text("Fovea's reading — for you, not sent")
+                    if model.summaryPending {
+                        ProgressView().controlSize(.small)
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+                if let summary = model.summary {
+                    Text(summary)
+                        .font(.body)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.secondary.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal, 20)
+            .padding(.bottom, 16)
         }
     }
 

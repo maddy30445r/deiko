@@ -495,7 +495,15 @@ const manifest = {
   // summarises it and nothing should: they already said what the task is, out
   // loud, at capture time.
   summary: {
-    narration: narrationOverride ?? utteranceText(words),
+    // Flowing, not pause-split. `utteranceText` breaks a line at every 700ms
+    // gap in speech, which reads correctly as a markdown blockquote in the brief
+    // and reads as BROKEN PARAGRAPHS in the review window's text box — a lone
+    // "ismein" on its own line looks like a bug in the transcript rather than
+    // the shape of someone thinking mid-sentence.
+    //
+    // Only the generated text is collapsed. A developer's own correction keeps
+    // whatever line breaks they typed: those are a choice, not an artefact.
+    narration: narrationOverride ?? utteranceText(words).replace(/\s*\n\s*/g, " "),
     narrationEdited: narrationOverride != null,
     apps: [...new Set(referents.map((r) => r.app?.name).filter(Boolean))],
     repoHints: repoHints(referents.map((r) => r.window).filter(Boolean)),

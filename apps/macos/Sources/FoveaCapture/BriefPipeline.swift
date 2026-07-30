@@ -106,6 +106,29 @@ enum BriefPipeline {
         return try digest(sessionDir: sessionDir)
     }
 
+    /// Three lines about the session, for the developer to glance at. Nil when
+    /// there is no summary — no API key, no network, a bad response.
+    ///
+    /// Separate from `run` on purpose. The brief is what the window exists to
+    /// show, and it is ready in milliseconds once rendering finishes; the summary
+    /// is a network round trip. Folding this into `run` would hold a finished
+    /// brief off screen waiting for a nicety.
+    ///
+    /// Never throws. A missing summary is a smaller thing than an error dialog
+    /// about a missing summary.
+    static func summary(sessionDir: String) async -> String? {
+        guard let repo = repoRoot() else { return nil }
+        try? await shell("make summarize SESSION=\(quoted(sessionDir))", in: repo, stage: "Summarising")
+
+        // Read the file rather than the command's stdout: the script prints
+        // progress and skip reasons there, and a skip must read as "no summary",
+        // not as a summary whose text happens to be an apology.
+        let path = URL(fileURLWithPath: sessionDir).appendingPathComponent("review-summary.txt")
+        guard let text = try? String(contentsOf: path, encoding: .utf8) else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     /// Hand the brief to Claude Code. THE approval step — `send-brief.mjs` owns
     /// the outbox rules (one pending brief at a time, and why), and is spawned
     /// rather than reimplemented so those rules have exactly one home.
