@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import FoveaVoice
 import Speech
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -20,10 +21,15 @@ import Speech
 // right, and enough token overlap to locate the deictic words. Its Hinglish
 // accuracy is mediocre and that is fine.
 //
-// LATENCY: this is why it's Apple rather than another network call. It runs on
-// the audio buffers as they arrive during a session, so the timings are ready
-// when the hotkey is released rather than after an upload — which is exactly
-// what PRD §9's latency budget assumes.
+// LATENCY: this is why it's Apple rather than another network call. It runs
+// on-device at 7–12x realtime, so a 40s recording is transcribed in about 5s
+// with nothing uploaded — which is what PRD §9's latency budget assumes.
+//
+// This comment used to claim recognition ran on the buffers as they ARRIVED,
+// during the session. It never did: the request below is a
+// `SFSpeechURLRecognitionRequest` over a finished file. Live recognition would
+// shave the remaining few seconds, and is worth doing eventually, but it is not
+// what made this slow — see `RecognitionCompletion`.
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct TimedWord: Codable {
@@ -40,6 +46,9 @@ struct TimingResult: Codable {
     let locale: String
     let onDevice: Bool
     let error: String?
+    /// Wall-clock gaps between the recogniser's deliveries. Diagnostic: the idle
+    /// completion threshold has to sit clear of the longest one.
+    var deliveryGapsMs: [Double]? = nil
 }
 
 enum SpeechTiming {
@@ -107,22 +116,47 @@ enum SpeechTiming {
 
         // Opened once; both the deadline and the completeness check need it.
         let durationMs = audioDurationSeconds(url).map { $0 * 1000 }
+        // Completion is judged against the last WORD, not the last sample —
+        // see `speechEndMs`. Falling back to the duration keeps the old, slow
+        // behaviour for a file we cannot measure, rather than finishing early.
+        let targetMs = speechEndMs(url) ?? durationMs
 
         return await withCheckedContinuation { continuation in
-            let collector = SegmentCollector(audioDurationMs: durationMs)
+            let collector = SegmentCollector(speechEndMs: targetMs)
 
-            // Hard deadline. The recogniser signals completion inconsistently —
-            // sometimes an error at end-of-audio, sometimes a final result,
-            // sometimes neither — and without this the task simply never
-            // returns. Whatever segments have arrived by the deadline are worth
-            // more than hanging forever.
+            // The idle half of `RecognitionCompletion` — polled, because nothing
+            // calls back when the recogniser goes quiet. The coverage half is
+            // checked inside the result handler below, where `isFinal` gives it
+            // a natural moment to run.
+            Task {
+                while !collector.isResumed() {
+                    try? await Task.sleep(for: .milliseconds(150))
+                    guard collector.decideCompletion() == .finishedIdle else { continue }
+                    if let final = collector.finish() {
+                        continuation.resume(returning: TimingResult(
+                            words: final.words, transcript: final.transcript,
+                            locale: localeIdentifier, onDevice: onDevice, error: nil,
+                            deliveryGapsMs: collector.gaps().map { $0 * 1000 }
+                        ))
+                    }
+                    return
+                }
+            }
+
+            // Hard deadline, now a backstop rather than the common path. The
+            // recogniser signals completion inconsistently — sometimes an error
+            // at end-of-audio, sometimes a final result, sometimes neither — and
+            // without this a file that yields NO segments at all would hang
+            // forever, since the idle watch above waits for a first segment
+            // that never comes.
             let deadline = (durationMs.map { $0 / 1000 } ?? 60) + 20
             Task {
                 try? await Task.sleep(for: .seconds(deadline))
                 if let final = collector.finish() {
                     continuation.resume(returning: TimingResult(
                         words: final.words, transcript: final.transcript,
-                        locale: localeIdentifier, onDevice: onDevice, error: nil
+                        locale: localeIdentifier, onDevice: onDevice, error: nil,
+                            deliveryGapsMs: collector.gaps().map { $0 * 1000 }
                     ))
                 } else if collector.markResumed() {
                     continuation.resume(returning: failure(
@@ -140,7 +174,8 @@ enum SpeechTiming {
                         // delivered every utterance.
                         continuation.resume(returning: TimingResult(
                             words: final.words, transcript: final.transcript,
-                            locale: localeIdentifier, onDevice: onDevice, error: nil
+                            locale: localeIdentifier, onDevice: onDevice, error: nil,
+                            deliveryGapsMs: collector.gaps().map { $0 * 1000 }
                         ))
                     } else if collector.markResumed() {
                         continuation.resume(returning: failure(
@@ -157,11 +192,12 @@ enum SpeechTiming {
                 // is a signal to keep the segments — not to stop listening.
                 // The task ends by calling back with an error (end of audio),
                 // which is handled above.
-                if result.isFinal, collector.isComplete() {
+                if result.isFinal, collector.decideCompletion() == .finishedCovering {
                     if let final = collector.finish() {
                         continuation.resume(returning: TimingResult(
                             words: final.words, transcript: final.transcript,
-                            locale: localeIdentifier, onDevice: onDevice, error: nil
+                            locale: localeIdentifier, onDevice: onDevice, error: nil,
+                            deliveryGapsMs: collector.gaps().map { $0 * 1000 }
                         ))
                     }
                 }
@@ -177,6 +213,64 @@ enum SpeechTiming {
         guard let file = try? AVAudioFile(forReading: url) else { return nil }
         return Double(file.length) / file.fileFormat.sampleRate
     }
+
+    /// Where the SPEECH ends, which is not where the file ends.
+    ///
+    /// A recording stops when the developer reaches over and presses the hotkey,
+    /// seconds after their last word — the measured session trails 3940ms of
+    /// silence. Completion was being judged against the file's duration, so the
+    /// recogniser could never "reach the end" and every session waited out a
+    /// 97-second deadline for work that took six.
+    ///
+    /// Judged by `VoiceGate`, the same relative-to-the-room test the recorder
+    /// uses live, so "speech" means the same thing on both sides of the pipeline.
+    /// Nil when the file cannot be read or holds no speech at all; callers fall
+    /// back to the duration, which is the old behaviour and still terminates.
+    static func speechEndMs(_ url: URL) -> Double? {
+        guard let file = try? AVAudioFile(forReading: url) else { return nil }
+        let format = file.processingFormat
+        let frames: AVAudioFrameCount = 4096
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else {
+            return nil
+        }
+
+        var gate = VoiceGate()
+        var lastSpeechMs: Double?
+        var readFrames: AVAudioFramePosition = 0
+
+        while true {
+            do { try file.read(into: buffer, frameCount: frames) } catch { break }
+            let count = Int(buffer.frameLength)
+            if count == 0 { break }
+
+            // Float or int16 depending on the processing format, but VoiceGate's
+            // floor is calibrated in int16 units (see its `absoluteFloor`), so
+            // scale float samples up rather than letting a quiet-looking file
+            // read as pure silence.
+            var sumOfSquares = 0.0
+            if let ints = buffer.int16ChannelData?[0] {
+                for i in 0..<count {
+                    let sample = Double(ints[i])
+                    sumOfSquares += sample * sample
+                }
+            } else if let floats = buffer.floatChannelData?[0] {
+                for i in 0..<count {
+                    let sample = Double(floats[i]) * 32767
+                    sumOfSquares += sample * sample
+                }
+            } else {
+                return nil
+            }
+
+            readFrames += AVAudioFramePosition(count)
+            let rms = (sumOfSquares / Double(count)).squareRoot()
+            if gate.note(rms: rms) {
+                lastSpeechMs = Double(readFrames) / format.sampleRate * 1000
+            }
+        }
+
+        return lastSpeechMs
+    }
 }
 
 /// Accumulates segments across every result the recogniser emits.
@@ -189,12 +283,18 @@ private final class SegmentCollector: @unchecked Sendable {
     private var segments: [Int: TimedWord] = [:]
     private var resumed = false
     private let lock = NSLock()
+    /// When `absorb` last took anything. Wall-clock, not the audio clock — the
+    /// question it answers is "has the recogniser gone quiet", which is about
+    /// delivery, not about where we are in the recording.
+    private var lastSegmentAt: Date?
+    private var deliveryGaps: [Double] = []
     /// Measured once by the caller — this class used to reopen the WAV on
     /// every `isFinal`, parsing the same header dozens of times per hold.
-    private let audioDurationMs: Double?
+    private let speechEndMs: Double?
+    private let policy = RecognitionCompletion()
 
-    init(audioDurationMs: Double?) {
-        self.audioDurationMs = audioDurationMs
+    init(speechEndMs: Double?) {
+        self.speechEndMs = speechEndMs
     }
 
     func absorb(_ transcription: SFTranscription) {
@@ -226,17 +326,37 @@ private final class SegmentCollector: @unchecked Sendable {
                 end: (segment.timestamp + segment.duration) * 1000
             )
         }
+        if let previous = lastSegmentAt {
+            deliveryGaps.append(Date().timeIntervalSince(previous))
+        }
+        lastSegmentAt = Date()
     }
 
-    /// Whether we have plausibly covered the whole file — used to decide if an
-    /// `isFinal` is the last one. Compares the furthest segment against the
-    /// audio's duration.
-    func isComplete() -> Bool {
+    /// Wall-clock gaps between deliveries, for tuning the idle threshold.
+    func gaps() -> [Double] {
         lock.lock()
         defer { lock.unlock() }
-        guard let furthest = segments.values.map(\.end).max() else { return false }
-        guard let durationMs = audioDurationMs else { return true }
-        return furthest >= durationMs - 1500
+        return deliveryGaps
+    }
+
+    /// Ask `RecognitionCompletion` whether this recognition is done, from the
+    /// state held right now. One lock, one snapshot: reading "how many segments"
+    /// and "how long since the last" through separate calls would let a delivery
+    /// land between them and answer about two different moments.
+    func decideCompletion() -> RecognitionCompletion.Decision {
+        lock.lock()
+        defer { lock.unlock() }
+        return policy.decide(
+            furthestSegmentEndMs: segments.values.map(\.end).max(),
+            speechEndMs: speechEndMs,
+            secondsSinceLastSegment: lastSegmentAt.map { -$0.timeIntervalSinceNow } ?? 0
+        )
+    }
+
+    func isResumed() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return resumed
     }
 
     func markResumed() -> Bool {

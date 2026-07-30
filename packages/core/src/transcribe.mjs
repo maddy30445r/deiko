@@ -30,6 +30,36 @@ import { loadEvents } from "./lib/session-io.mjs";
 
 const SARVAM_STT_URL = "https://api.sarvam.ai/speech-to-text";
 
+// ── Stage timing ────────────────────────────────────────────────────────────
+//
+// The cost of this pipeline is not where it looks. Recognition runs on the
+// FINISHED file at roughly realtime, so for any session worth recording it
+// dominates everything else put together — and nothing in the output said so
+// until this printed it.
+//
+// Kept after the fact deliberately: it is the regression check. Any change that
+// claims to make transcription faster has to move these numbers, and any change
+// that quietly makes it slower shows up here instead of in a user's patience.
+const stages = new Map();
+
+async function timed(name, fn) {
+  const t0 = performance.now();
+  try {
+    return await fn();
+  } finally {
+    stages.set(name, (stages.get(name) ?? 0) + (performance.now() - t0));
+  }
+}
+
+function timingReport(totalMs) {
+  const secs = (ms) => `${(ms / 1000).toFixed(1)}s`;
+  const parts = [...stages].map(([name, ms]) => `${name} ${secs(ms)}`);
+  // Accounted-for time is not the whole wall clock — event loading, the merge's
+  // callers and process startup sit outside every stage — so print the total
+  // separately rather than implying the parts sum to it.
+  return `  timing: ${parts.join(" · ")}  |  total ${secs(totalMs)}`;
+}
+
 // ── The interface ───────────────────────────────────────────────────────────
 
 /**
@@ -41,9 +71,13 @@ const SARVAM_STT_URL = "https://api.sarvam.ai/speech-to-text";
  * batch API"), and the batch API returns chunk-level timestamps only — useless
  * for binding individual words to pointing events. So split long holds here.
  *
- * Production will use the streaming WebSocket API instead, which has no such
- * limit and gives partials during capture (PRD §9's latency budget assumes
- * exactly that). This is the gate harness, not the shipping path.
+ * These chunks upload CONCURRENTLY, and the whole Sarvam call now runs alongside
+ * on-device recognition rather than after it, so it costs nothing on the clock —
+ * about 2s hidden inside recognition's 12s on a 77s session.
+ *
+ * This comment used to say a streaming WebSocket API was the shipping path and
+ * this was only a gate harness. It is the shipping path. Streaming would remove
+ * the last chunk's round trip; it is not where the latency was.
  */
 const CHUNK_SECONDS = 25;
 const SAMPLE_RATE = 16000;
@@ -59,18 +93,20 @@ function sarvamTranscriber(apiKey) {
       const totalSeconds = pcm.length / (SAMPLE_RATE * BYTES_PER_SAMPLE);
 
       if (totalSeconds <= CHUNK_SECONDS) {
-        return this._one(pcm, language);
+        return timed("sarvam", () => this._one(pcm, language));
       }
 
       const chunks = splitAtSilence(pcm, CHUNK_SECONDS);
       process.stderr.write(`(${totalSeconds.toFixed(0)}s → ${chunks.length} chunks) `);
 
-      const texts = [];
-      for (const data of chunks) {
-        const part = await this._one(data, language);
-        if (part.text) texts.push(part.text);
-      }
-      return { text: texts.join(" ") };
+      // Concurrently, not one after another. The chunks are independent uploads
+      // of a recording that already exists — waiting for each round trip before
+      // starting the next spent four times one chunk's latency to no purpose.
+      // `Promise.all` preserves order, which the join below depends on: these
+      // are consecutive stretches of one sentence, not a set.
+      const parts = await timed("sarvam", () =>
+        Promise.all(chunks.map((data) => this._one(data, language))));
+      return { text: parts.map((p) => p.text).filter(Boolean).join(" ") };
     },
 
     async _one(pcm, language) {
@@ -329,11 +365,27 @@ async function appleTimings(wavPath, { locale = "en-IN", timeoutMs } = {}) {
   const out = `${wavPath}.timing.json`;
   if (existsSync(out)) rmSync(out);
 
-  execFileSync("open", [
-    "-n", "-a", app, "--args",
-    "timing", "--wav", wavPath, "--locale", locale, "--out", out,
-  ]);
+  // Timed apart from the recognition itself: launching a second copy of the app
+  // through LaunchServices is pure overhead that disappears the moment timings
+  // are produced during capture, and it should not be able to hide inside the
+  // recognition number it is not part of.
+  await timed("apple:launch", async () =>
+    execFileSync("open", [
+      "-n", "-a", app, "--args",
+      "timing", "--wav", wavPath, "--locale", locale, "--out", out,
+    ]));
 
+  return await timed("apple:recognise", () => awaitTimingFile(out, { timeoutMs, audioMs }));
+}
+
+/**
+ * Wait for the app to drop its timing file, and clean up if it never does.
+ *
+ * Split out of `appleTimings` so the wait — which IS the recognition, running at
+ * roughly realtime on the finished file — can be measured on its own, apart from
+ * the app launch that precedes it.
+ */
+async function awaitTimingFile(out, { timeoutMs, audioMs }) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (existsSync(out)) {
@@ -380,6 +432,7 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 
 async function main() {
+  const startedAt = performance.now();
   const sessionDir = process.argv[2];
   if (!sessionDir) {
     console.error("usage: node scripts/transcribe.mjs sessions/<id> [--language hi-IN]");
@@ -454,28 +507,46 @@ async function main() {
       if (existsSync(inSession)) wav = inSession;
     }
 
-    // Timings first — without them there is nothing to align, so a failure here
-    // is fatal for the hold in a way a missing Sarvam transcript is not.
-    process.stderr.write(`  hold ${hold} → on-device timings … `);
-    let timing;
-    try {
-      timing = await appleTimings(wav, { locale: args.locale });
-    } catch (err) {
-      console.error(`FAILED\n    ${err.message}`);
+    // Both recognisers at once. They read the same file and never read each
+    // other — one is on-device, the other is a network upload — so running them
+    // in sequence spent Sarvam's whole round trip waiting for work that had
+    // already finished. Started together, Sarvam hides entirely inside Apple's
+    // recognition.
+    //
+    // `allSettled`, not `all`: timings are fatal for the hold (nothing to align
+    // without them) while a missing Sarvam transcript merely falls back to
+    // Apple's own words. `all` would collapse that distinction into one failure.
+    process.stderr.write(`  hold ${hold} → on-device timings + ${transcriber.name} text … `);
+    const [timingOutcome, textOutcome] = await Promise.allSettled([
+      appleTimings(wav, { locale: args.locale }),
+      transcriber.transcribe(wav, { language }),
+    ]);
+
+    if (timingOutcome.status === "rejected") {
+      console.error(`FAILED\n    ${timingOutcome.reason.message}`);
       continue;
     }
+    const timing = timingOutcome.value;
+    // The widest pause between the recogniser's deliveries. It matters because
+    // the app finishes a recognition that stops short by waiting out an idle
+    // threshold; if this ever approaches that threshold, recognition starts
+    // being cut off mid-file, and the only warning is this number creeping up.
+    const widestGap = Math.max(0, ...(timing.deliveryGapsMs ?? [0]));
+    if (widestGap) stages.set("apple:widest-gap", widestGap);
     console.error(`${timing.words.length} segments`);
 
     // Sarvam for the words themselves. Best-effort: without it the hold falls
     // back to Apple's words, which mishear Hindi function words but still bind
     // English sessions fine.
     let holdWords = timing.words;
-    process.stderr.write(`  hold ${hold} → ${transcriber.name} text … `);
+    process.stderr.write(`  hold ${hold} → merging … `);
     try {
-      const result = await transcriber.transcribe(wav, { language });
+      if (textOutcome.status === "rejected") throw textOutcome.reason;
+      const result = textOutcome.value;
       holdTexts.push({ hold, text: result.text });
       if (result.text) {
-        const merged = mergeWords(result.text, timing.words, wavDurationMs(wav));
+        const merged = await timed("merge", async () =>
+          mergeWords(result.text, timing.words, wavDurationMs(wav)));
         if (merged.anchors > 0) {
           holdWords = merged.words;
           console.error(`merged ${merged.total} words (anchors ${merged.anchors}/${merged.total})`);
@@ -515,8 +586,16 @@ async function main() {
   }
 
   const out = join(dir, "transcript.json");
-  writeFileSync(out, JSON.stringify({ words: allWords, holdTexts }, null, 2));
+  await timed("write", async () =>
+    writeFileSync(out, JSON.stringify({ words: allWords, holdTexts }, null, 2)));
+
+  const anchored = allWords.filter((w) => w.anchored).length;
   console.error(`\n✓ ${allWords.length} words on the session clock → ${out}`);
+  // Anchored share, printed where the run happens. It was previously only
+  // discoverable by reading the JSON, which is why a session sat at 37/223 for
+  // a day without anyone noticing.
+  console.error(`  anchored: ${anchored}/${allWords.length} words carry a measured time`);
+  console.error(timingReport(performance.now() - startedAt));
 }
 
 main().catch((err) => {
