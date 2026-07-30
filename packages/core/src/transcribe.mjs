@@ -496,6 +496,22 @@ async function main() {
   const allWords = [];
   const holdTexts = [];
 
+  // Per-hold cache, so extending a session costs only the new audio.
+  //
+  // "Forgot something?" adds a hold and re-runs this script. Without a cache
+  // that re-recognises hold 1 — whose WAV has not changed and cannot change —
+  // paying its full recognition time again for an identical answer, and paying
+  // Sarvam for it too. Keyed on the file's byte length, which is what changes
+  // when audio does.
+  const cachePath = join(dir, "transcript.cache.json");
+  let cache = {};
+  try {
+    cache = JSON.parse(readFileSync(cachePath, "utf8"));
+  } catch {
+    // No cache, an unreadable one, or one from an older shape — all mean the
+    // same thing: transcribe everything. Never fatal.
+  }
+
   for (const { hold, audioPath, audioT0 } of holds) {
     // The event's audioPath was recorded relative to the recorder's cwd, which
     // is not necessarily ours. Resolve against cwd first (works when run from
@@ -505,6 +521,25 @@ async function main() {
     if (!existsSync(wav)) {
       const inSession = join(dir, "audio", audioPath.split("/").pop());
       if (existsSync(inSession)) wav = inSession;
+    }
+
+    const bytes = existsSync(wav) ? statSync(wav).size : 0;
+    const cached = cache[hold];
+    if (cached?.bytes === bytes && cached.words?.length) {
+      // Cached words are stored on the AUDIO clock, before the shift, so the
+      // shift below applies identically whether they were just recognised or
+      // read back. Storing them shifted would bake in an `audioT0` that a
+      // re-render is entitled to recompute.
+      console.error(`  hold ${hold} → cached (${cached.words.length} words)`);
+      holdTexts.push({ hold, text: cached.text ?? "" });
+      allWords.push(...cached.words.map((w) => ({
+        text: w.text,
+        start: w.start + audioT0,
+        end: w.end + audioT0,
+        hold,
+        anchored: w.anchored === true,
+      })));
+      continue;
     }
 
     // Both recognisers at once. They read the same file and never read each
@@ -562,6 +597,15 @@ async function main() {
       holdTexts.push({ hold, text: timing.transcript });
     }
 
+    // Cached before the shift, for the same reason the shift is applied after:
+    // these are offsets into this hold's audio, which is the only form that
+    // stays true if the session is re-rendered later.
+    cache[hold] = {
+      bytes,
+      words: holdWords,
+      text: holdTexts.find((h) => h.hold === hold)?.text ?? "",
+    };
+
     // THE SHIFT. Offsets into the wav become session-clock times, so words and
     // cursor events share one timeline.
     allWords.push(...holdWords.map((w) => ({
@@ -588,6 +632,11 @@ async function main() {
   const out = join(dir, "transcript.json");
   await timed("write", async () =>
     writeFileSync(out, JSON.stringify({ words: allWords, holdTexts }, null, 2)));
+  // Best effort. A cache that cannot be written costs time on the next run and
+  // nothing else — never fail a good transcript over it.
+  try {
+    writeFileSync(cachePath, JSON.stringify(cache));
+  } catch { /* not worth reporting */ }
 
   const anchored = allWords.filter((w) => w.anchored).length;
   console.error(`\n✓ ${allWords.length} words on the session clock → ${out}`);

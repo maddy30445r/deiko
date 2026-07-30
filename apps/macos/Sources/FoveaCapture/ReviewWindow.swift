@@ -33,10 +33,44 @@ final class ReviewWindowController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
     private let model = ReviewModel()
 
+    /// Reopen a finished session and start recording again. Set by `MenuBar`,
+    /// which owns the recorder. Returns false if the session could not be
+    /// reopened, and the window stays where it is.
+    var onExtend: ((String) -> Bool)?
+
+    /// The session currently being extended, if any. What tells the difference
+    /// between "a session ended" and "the session I just added to ended".
+    private var extending: String?
+
     /// Open for a session that has just closed, and run the pipeline behind it.
     func present(sessionDir: String) {
+        // The second stop of an extended session arrives here exactly like the
+        // first. Route it to the extend path so the developer's correction is
+        // kept rather than replaced by a fresh transcript.
+        if let extending, extending == sessionDir {
+            self.extending = nil
+            show()
+            model.reload(afterExtending: sessionDir)
+            return
+        }
         show()
         model.load(sessionDir: sessionDir)
+    }
+
+    /// "Forgot something?" — hand control back to the recorder for another hold.
+    func extendSession() {
+        guard let dir = model.currentSessionDir, let onExtend else { return }
+        model.prepareToExtend()
+        guard onExtend(dir) else {
+            model.noteExtendFailed()
+            return
+        }
+        extending = dir
+        // Out of the way, not closed: you are about to point at another app, and
+        // the window would be sitting on top of the thing you want to show.
+        // `windowWillClose` would also cancel the model's work, which is exactly
+        // wrong here — the recording it is waiting for has just begun.
+        window?.orderOut(nil)
     }
 
     private func show() {
@@ -46,7 +80,9 @@ final class ReviewWindowController: NSObject, NSWindowDelegate {
             return
         }
 
-        let hosting = NSHostingController(rootView: ReviewView(model: model))
+        let hosting = NSHostingController(
+            rootView: ReviewView(model: model) { [weak self] in self?.extendSession() }
+        )
         let window = NSWindow(contentViewController: hosting)
         window.title = "Fovea — review"
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
@@ -94,6 +130,15 @@ final class ReviewModel: ObservableObject {
     private var sessionDir: String?
     private var task: Task<Void, Never>?
     private var summaryTask: Task<Void, Never>?
+
+    /// The session on screen, for the controller to hand back to the recorder.
+    var currentSessionDir: String? { sessionDir }
+
+    /// The recorder refused to reopen the session — the events file is gone, or
+    /// another session is already live. Say so and leave the brief usable.
+    func noteExtendFailed() {
+        phase = .failed("Could not reopen this session to add to it. The brief above is still fine to send.")
+    }
     /// The narration as recognised, so "did the developer change it" is a
     /// comparison rather than a flag that has to be maintained.
     private var originalNarration = ""
@@ -158,6 +203,73 @@ final class ReviewModel: ObservableObject {
         }
     }
 
+    /// What the developer had in the narration box, and which holds already
+    /// existed, at the moment they pressed "Forgot something?". Nil when no
+    /// extension is in flight.
+    private var carriedNarration: String?
+    private var holdsBeforeExtending: Set<Int> = []
+
+    /// Called just before the window hands control back to the recorder.
+    func prepareToExtend() {
+        guard let sessionDir else { return }
+        // Only an ACTUAL edit is carried. Carrying the untouched transcript would
+        // write it back as an override, and the brief would then tell the agent
+        // "corrected by the developer after capture" about text they never
+        // touched — a claim that reads as authority the words have not earned.
+        carriedNarration = narrationEdited ? narration : nil
+        holdsBeforeExtending = Set(BriefPipeline.holdTexts(sessionDir: sessionDir).keys)
+        phase = .working("Recording — tap Right Option to stop")
+    }
+
+    /// Re-run the pipeline over a session that just gained a hold, keeping
+    /// whatever the developer had already written.
+    ///
+    /// Their text wins and the new speech is appended to it. Re-transcribing
+    /// would be simpler and would silently destroy a correction they made
+    /// deliberately — the worst kind of surprise, and the reason this bookkeeping
+    /// exists at all.
+    func reload(afterExtending sessionDir: String) {
+        let carried = carriedNarration
+        let priorHolds = holdsBeforeExtending
+        carriedNarration = nil
+        holdsBeforeExtending = []
+
+        self.sessionDir = sessionDir
+        summary = nil
+        phase = .working("Transcribing what you added…")
+        task = Task {
+            do {
+                var digest = try await BriefPipeline.run(sessionDir: sessionDir)
+                guard !Task.isCancelled else { return }
+
+                // Everything said in a hold that did not exist before the button
+                // was pressed, in hold order.
+                let added = BriefPipeline.holdTexts(sessionDir: sessionDir)
+                    .filter { !priorHolds.contains($0.key) }
+                    .sorted { $0.key < $1.key }
+                    .map(\.value)
+                    .joined(separator: " ")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+
+                let kept = (carried ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                if !kept.isEmpty, !added.isEmpty {
+                    let merged = "\(kept) \(added)"
+                    try BriefPipeline.writeNarrationOverride(merged, sessionDir: sessionDir)
+                    digest = try await BriefPipeline.rerender(sessionDir: sessionDir)
+                }
+
+                self.digest = digest
+                self.narration = digest.summary.narration
+                self.originalNarration = digest.summary.narration
+                self.phase = .ready
+                self.fetchSummary(sessionDir: sessionDir)
+            } catch {
+                guard !Task.isCancelled else { return }
+                self.phase = .failed(error.localizedDescription)
+            }
+        }
+    }
+
     func retry() {
         guard let sessionDir else { return }
         summary = nil
@@ -176,6 +288,9 @@ final class ReviewModel: ObservableObject {
 
 private struct ReviewView: View {
     @ObservedObject var model: ReviewModel
+    /// Reopening the session is the controller's job — it owns the window that
+    /// has to get out of the way, and the recorder handoff.
+    let onExtend: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -347,6 +462,12 @@ private struct ReviewView: View {
                 Text("Nothing has been sent yet.").font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
+            // Left of the primary action and unstyled, because it is the rarer
+            // choice — but it must be reachable from the same place you decide
+            // the brief is not complete.
+            Button("Forgot something?") { onExtend() }
+                .disabled(!isApprovable)
+                .help("Reopen this session and record more — talk and point again, then tap Right Option to stop.")
             Button("Good to go") { model.approve() }
                 .keyboardShortcut(.defaultAction)
                 .disabled(!isApprovable)

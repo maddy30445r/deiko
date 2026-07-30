@@ -232,6 +232,17 @@ final class Hotkey {
         }
     }
 
+    /// Called by the Recorder when a session starts by any route other than a
+    /// tap — today, "Forgot something?" reopening a finished session.
+    ///
+    /// `isSessionActive` is what makes Left Option drags mean "draw a lasso"
+    /// rather than passing through to the app underneath. Setting it here is what
+    /// lets you circle something in the extra hold, exactly as in the first.
+    func noteSessionStarted() {
+        isSessionActive = true
+        gesture.sessionStartedExternally()
+    }
+
     // ── Plumbing onto the tested state machine ──────────────────────────────
 
     private func apply(_ decision: SessionGesture.Decision) {

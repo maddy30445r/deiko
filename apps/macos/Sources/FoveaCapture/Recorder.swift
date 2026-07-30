@@ -225,6 +225,78 @@ final class Recorder {
     /// Returns false when the directory cannot be created (denied Documents
     /// access, read-only volume) — in which case NO session starts, rather than
     /// a session that silently writes to nowhere.
+    /// Reopen a session that has already been closed out, so the next recording
+    /// becomes another HOLD of it rather than a new session.
+    ///
+    /// This is "Forgot something?" — you stop, read the brief, realise you never
+    /// showed the one file that explains the whole task, and add it to the same
+    /// account rather than starting a second one the agent would have to
+    /// reconcile.
+    ///
+    /// The pipeline never stopped supporting this. `transcribe.mjs` pairs each
+    /// hold's start and end to find its audio and shifts each onto the session
+    /// clock; the referent stack attributes what you pointed at to the hold it
+    /// happened in. Only the recorder had been simplified to always write hold 1.
+    ///
+    /// Counters are recovered from `events.jsonl`, not from whatever is still in
+    /// memory. In-memory state is right only if this is the same launch and no
+    /// other session happened in between — and a referent index that restarts
+    /// silently overwrites the first hold's crops.
+    func reopenSession(dir: String) -> Bool {
+        guard sessionDir == nil else { return false }
+        let events = "\(dir)/events.jsonl"
+        guard FileManager.default.fileExists(atPath: events),
+              let raw = try? String(contentsOfFile: events, encoding: .utf8)
+        else { return false }
+
+        var holds = 0
+        var referents = 0
+        for line in raw.split(separator: "\n") {
+            guard let data = line.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let type = obj["type"] as? String
+            else { continue }
+            // `sessionStart` is the pre-rename spelling of `holdStart`; a
+            // session-level event carries no `hold`, which is what tells the two
+            // apart. Same rule the TypeScript loader uses.
+            if (type == "holdStart" || type == "sessionStart"), obj["hold"] != nil { holds += 1 }
+            // `probe`, not `candidate`. One probe is emitted per `resolve` —
+            // which is exactly what increments `globalReferentIndex` — and it
+            // covers lassos as well as settles. Verified against two recorded
+            // sessions: 16 probes / 16 referents, 35 / 35, where the candidate
+            // counts were 10 and 25.
+            if type == "probe" { referents += 1 }
+        }
+        guard holds > 0 else { return false }
+
+        sessionDir = dir
+        sessionId = (dir as NSString).lastPathComponent
+        holdIndex = holds
+        globalReferentIndex = referents
+        sessionReferentCount = referents
+        gatedSettleCount = 0
+
+        // `redirectToFile` seeks to the end, so this appends — the first hold's
+        // events are the other half of this session, not something to overwrite.
+        Emit.redirectToFile(events)
+        Emit.log("↩ reopened \(sessionId ?? dir) — \(holds) hold(s), \(referents) referent(s) so far")
+        onStateChange?()
+        return true
+    }
+
+    /// Reopen a finished session and start recording another hold immediately.
+    ///
+    /// The button does the starting, so the gesture machine has to be told —
+    /// otherwise the tap the user makes to stop reads as the first half of a
+    /// double-tap to start, and the microphone stays live on a session they
+    /// believe they just closed.
+    func resumeForExtraHold(dir: String) -> Bool {
+        guard reopenSession(dir: dir) else { return false }
+        hotkey.noteSessionStarted()
+        beginRecording()
+        return isRecording
+    }
+
     private func startSessionIfNeeded() -> Bool {
         guard sessionDir == nil else { return true }
 
@@ -389,7 +461,10 @@ final class Recorder {
         isRecording = true
         recordingStartedAt = Clock.nowMs()
         holdReferentCount = 0
-        holdIndex = 1
+        // Increment, not assign. A fresh session sets this to 0 and this makes
+        // it hold 1; a session reopened by "Forgot something?" carries its hold
+        // count in and this makes the next one hold 2.
+        holdIndex += 1
 
         // ONE WAV for the whole session. It used to be one per hold, because a
         // hold was an utterance; a session is now a single continuous recording,
@@ -397,7 +472,14 @@ final class Recorder {
         // `hold: 1` — downstream pairs holdStart/holdEnd to find the audio, and
         // that pairing is worth keeping stable.
         var audioPath: String?
-        let path = "\(sessionDir)/audio/session.wav"
+        // Hold 1 keeps the name every recorded session already uses; later holds
+        // get their own file. Both must exist independently — each hold has its
+        // own `audioT0`, and `transcribe.mjs` shifts each onto the session clock
+        // separately. One shared filename would have the second hold silently
+        // overwrite the first, losing the original narration entirely.
+        let path = holdIndex == 1
+            ? "\(sessionDir)/audio/session.wav"
+            : "\(sessionDir)/audio/hold-\(holdIndex).wav"
         do {
             try audio.start(path: path)
             audioPath = path

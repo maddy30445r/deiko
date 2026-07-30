@@ -133,6 +133,13 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         recorder.onSessionClosed = { [weak self] dir in
             self?.review.present(sessionDir: dir)
         }
+        // "Forgot something?" reopens the session the window is showing and
+        // starts another hold. Routed through the recorder rather than done in
+        // the window, because reopening has to restore the session's counters
+        // and tell the hotkey a session is live again.
+        review.onExtend = { [weak self] dir in
+            self?.recorder.resumeForExtraHold(dir: dir) ?? false
+        }
         startListeningIfPermitted()
         refresh()
     }

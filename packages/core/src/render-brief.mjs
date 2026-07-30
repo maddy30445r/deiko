@@ -431,9 +431,19 @@ if (!words?.length) {
 const referents = loadSession(events).all();
 const { bindings, unbound } = align(toCandidates(referents), words);
 const bindingById = new Map(bindings.map((b) => [b.candidateId, b]));
+// Counted from the holds themselves, not read off a `sessionEnd`.
+//
+// A session extended by "Forgot something?" is closed out more than once, so it
+// carries more than one `sessionEnd` — and `find` returns the FIRST, which is
+// the count from before the extra hold existed. The brief would then state a
+// hold count that was true a minute ago, confidently and wrongly, with the
+// evidence for the missing hold sitting right underneath it.
 const holdCount =
-  events.find((e) => e.type === "sessionEnd" && e.holdCount != null)?.holdCount ??
-  new Set(referents.map((r) => r.hold)).size;
+  new Set(
+    events
+      .filter((e) => (e.type === "holdStart" || e.type === "sessionStart") && e.hold != null)
+      .map((e) => e.hold),
+  ).size || new Set(referents.map((r) => r.hold)).size;
 
 // The developer's own correction of the narration, written by the review window
 // before they press Good to go. Absent for a brief rendered straight from the

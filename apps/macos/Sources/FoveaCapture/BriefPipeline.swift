@@ -96,6 +96,24 @@ enum BriefPipeline {
         return try digest(sessionDir: sessionDir)
     }
 
+    /// Which holds a session has already transcribed, and what each one said.
+    ///
+    /// Read before an extra hold is recorded so that afterwards we can tell which
+    /// text is new — that is what gets appended to a narration the developer had
+    /// already corrected, instead of throwing their correction away.
+    static func holdTexts(sessionDir: String) -> [Int: String] {
+        let path = URL(fileURLWithPath: sessionDir).appendingPathComponent("transcript.json")
+        guard let data = try? Data(contentsOf: path),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let holds = obj["holdTexts"] as? [[String: Any]]
+        else { return [:] }
+        var out: [Int: String] = [:]
+        for entry in holds {
+            if let hold = entry["hold"] as? Int { out[hold] = entry["text"] as? String ?? "" }
+        }
+        return out
+    }
+
     /// Re-render only. Used after the narration is edited: the transcript has not
     /// changed, so there is nothing to recognise again.
     static func rerender(sessionDir: String) async throws -> BriefDigest {

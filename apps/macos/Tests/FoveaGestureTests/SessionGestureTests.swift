@@ -128,3 +128,34 @@ func externalStopResets() {
     #expect(g.press(at: 9000) == .none)      // arms, does not stop
     #expect(g.press(at: 9150) == .start)     // and a double-tap starts cleanly
 }
+
+@Test("a session started from a button stops on the next single tap")
+func externalStartStopsOnOneTap() {
+    var g = SessionGesture()
+
+    // "Forgot something?" reopened a finished session and began another hold.
+    // Nobody tapped anything, so without being told, the gesture still believes
+    // it is idle.
+    g.sessionStartedExternally()
+    #expect(g.isCapturing)
+
+    // The tap the user makes to stop must STOP. Read as idle, this would arm the
+    // first half of a double-tap instead, and the microphone would stay live on
+    // a session they believe they just closed.
+    #expect(g.press(at: 1000) == .stopNow)
+    #expect(!g.isCapturing)
+}
+
+@Test("a button start clears a half-finished double-tap")
+func externalStartDiscardsArmedTap() {
+    var g = SessionGesture()
+
+    // One tap lands — the user reaching for the hotkey — and then they press the
+    // button instead. The stale armed tap must not survive: paired with their
+    // stop tap it would read as a double-tap to start, restarting capture on a
+    // session that was being closed.
+    _ = g.press(at: 0)
+    g.sessionStartedExternally()
+
+    #expect(g.press(at: 100) == .stopNow)
+}

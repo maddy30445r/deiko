@@ -81,6 +81,19 @@ public struct SessionGesture: Sendable {
         armedAt = nil
     }
 
+    /// A session started without a gesture — "Forgot something?" in the review
+    /// window reopens a finished session and begins another hold from a button.
+    ///
+    /// The mirror of `sessionEndedExternally`, and it exists for the same reason:
+    /// the halves must not desync. Without it the gesture still believes it is
+    /// idle, so the tap the user makes to stop is read as the first half of a
+    /// double-tap to *start* — arming instead of stopping, and leaving the
+    /// microphone live on a session they thought they had just closed.
+    public mutating func sessionStartedExternally() {
+        isCapturing = true
+        armedAt = nil
+    }
+
     /// The event tap was disabled and re-enabled. Presses may have gone
     /// unobserved, so a half-finished double-tap can no longer be trusted.
     ///
