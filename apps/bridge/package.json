@@ -1,0 +1,12 @@
+{
+  "name": "@fovea/bridge",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP stdio server that hands an approved Fovea brief to Claude Code.",
+  "main": "src/server.mjs",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.0.0"
+  }
+}

@@ -292,11 +292,21 @@ function wavDurationMs(wavPath) {
  * itself. `-n` forces a new instance; without it `open` silently hands the
  * request to an already-running process.
  */
-async function appleTimings(wavPath, { locale = "en-IN", timeoutMs = 90_000 } = {}) {
+async function appleTimings(wavPath, { locale = "en-IN", timeoutMs } = {}) {
   const app = resolve(REPO_ROOT, "build/Fovea.app");
   if (!existsSync(app)) {
     throw new Error("build/Fovea.app is missing — run `make bundle`");
   }
+
+  // Scaled by the recording, not fixed. A flat 90s worked for every session
+  // until one ran 77 seconds: on-device recognition is roughly realtime, it
+  // finished at about 100s, and the script had already given up on a result that
+  // was perfectly good (55 words, 70.6s span). Four times realtime plus 30s of
+  // model load leaves room on the slowest machine without waiting forever on a
+  // hang — and it scales with the 20-minute session ceiling instead of silently
+  // capping how long a session may usefully be.
+  const audioMs = wavDurationMs(wavPath);
+  timeoutMs ??= Math.max(90_000, audioMs * 4 + 30_000);
 
   const out = `${wavPath}.timing.json`;
   if (existsSync(out)) rmSync(out);
@@ -325,10 +335,25 @@ async function appleTimings(wavPath, { locale = "en-IN", timeoutMs = 90_000 } = 
     }
     await sleep(500);
   }
-  // The app may still write the file after we stop waiting. Don't leave a
-  // verbatim transcript of the user's narration lying around unmanaged.
-  if (existsSync(out)) rmSync(out);
-  throw new Error(`speech timing timed out after ${timeoutMs / 1000}s`);
+  // The app may still write the file AFTER we stop waiting, so a single check
+  // here cannot do the job — and it didn't: a timed-out run left a verbatim
+  // transcript of the user's narration sitting in their session directory, which
+  // is exactly what this cleanup exists to prevent. Keep sweeping for a while
+  // after giving up, and say so plainly if it still appears.
+  for (let i = 0; i < 60; i++) {
+    if (existsSync(out)) {
+      rmSync(out);
+      break;
+    }
+    await sleep(1000);
+  }
+  if (existsSync(out)) {
+    console.error(`⚠ could not remove ${out} — it holds a verbatim transcript. Delete it.`);
+  }
+  throw new Error(
+    `speech timing timed out after ${Math.round(timeoutMs / 1000)}s ` +
+      `for ${Math.round(audioMs / 1000)}s of audio`,
+  );
 }
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");

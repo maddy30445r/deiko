@@ -1,4 +1,4 @@
-.PHONY: dev build test probe watch region clean setup bundle record transcribe align ground brief signing-setup reset-permissions
+.PHONY: dev build test probe watch region clean setup bundle record transcribe align ground brief send bridge-install bridge-test show-brief signing-setup reset-permissions
 
 # Code-signing identity for the bundle.
 #
@@ -135,6 +135,33 @@ transcribe:
 brief:
 	@npm run build -w @fovea/alignment -w @fovea/referents --silent
 	@node scripts/render-brief.mjs $(SESSION)
+
+## send — hand a rendered brief to Claude Code (the approval step)
+##
+## Nothing reaches your editor until you run this. A tool that injected itself
+## the moment you stopped talking is a tool you would stop trusting.
+send:
+	@node scripts/send-brief.mjs $(SESSION)
+
+## bridge-install — register the MCP server with Claude Code, once
+bridge-install:
+	@claude mcp add fovea --scope user -- node "$(CURDIR)/apps/bridge/src/server.mjs"
+	@echo "  then, in any repo:  /mcp__fovea__brief"
+
+## bridge-test — drive the bridge over raw JSON-RPC, no Claude Code needed
+bridge-test:
+	@node scripts/bridge-smoke.mjs
+
+## show-brief — print exactly what the bridge would hand Claude Code
+##
+## Not the same as the session's brief.md: the server appends the crop section
+## at delivery. That section is what tells the agent how to treat screenshots,
+## so it is the part you want when asking why it did or didn't open one.
+##
+##   make show-brief              → stdout
+##   make show-brief OUT=/tmp/b.md → a file
+show-brief:
+	@node scripts/show-brief.mjs $(OUT)
 
 ## ground — score how well a session resolved its referents, and check M1
 ##

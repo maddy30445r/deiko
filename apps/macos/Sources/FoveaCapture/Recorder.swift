@@ -130,6 +130,20 @@ final class Recorder {
     private var hasMoved = false
     private var firedForThisRest = false
     private var recentSpeeds: [(t: Double, speed: Double)] = []
+
+    /// How fast the cursor was moving when it came to rest here.
+    ///
+    /// Snapshotted at the moment motion stops, NOT read at commit time — and that
+    /// is the whole fix. `recentSpeeds` keeps a 200ms window, but a settle does
+    /// not fire until the cursor has been still for `dwellMs` (300ms), so by the
+    /// time the old code asked for a maximum, every sample of the approach had
+    /// aged out. Measured on session 20260730-004641: 18 of 25 candidates
+    /// reported exactly 0, and the 7 non-zero ones were jitter inside the 8px
+    /// settle radius rather than an approach at all. The aligner has been
+    /// multiplying confidence by 1.05 on `approachSpeed > 800`, a branch that
+    /// could never fire.
+    private var approachAtRest: Double = 0
+
     /// The previous SAMPLE, distinct from `lastPosition` (the settle anchor).
     /// Speed must come from per-tick displacement: the anchor only re-bases
     /// after 8px of accumulated drift, so dividing distance-from-anchor by one
@@ -392,6 +406,7 @@ final class Recorder {
         trail.removeAll()
         pulses.removeAll()
         recentSpeeds.removeAll()
+        approachAtRest = 0
         hasMoved = false
         firedForThisRest = false
         lastPosition = AXProbe.cursorLocation()
@@ -488,6 +503,10 @@ final class Recorder {
         if moved > settleRadius {
             lastPosition = position
             stationarySince = now
+            // Refreshed on every moving frame, so when the cursor finally stops
+            // this holds the speed it was travelling at just beforehand. Reading
+            // it here is what makes the 200ms window the right window.
+            approachAtRest = recentSpeeds.map(\.speed).max() ?? 0
             hasMoved = true
             firedForThisRest = false
             return
@@ -523,13 +542,13 @@ final class Recorder {
     // ── Committing referents ────────────────────────────────────────────────
 
     private func commitPoint(at position: Point, dwell: Double, now: Double) {
-        // Approach speed over the window BEFORE the stop, which is what
-        // separates decelerating-to-point from pausing-mid-sweep.
-        let approach = recentSpeeds.map(\.speed).max() ?? 0
-
         let features = CandidateFeatures(
             dwellMs: dwell,
-            approachSpeed: approach,
+            // Taken from the moment the cursor stopped, not recomputed now — see
+            // `approachAtRest`. Recomputing here is what made this field a lie:
+            // the window it reads has been full of stationary samples for the
+            // whole dwell.
+            approachSpeed: approachAtRest,
             msSinceAppSwitch: lastAppSwitchT.map { now - $0 },
             msSinceScroll: lastScrollT.map { now - $0 },
             msSinceVoice: msSinceVoice

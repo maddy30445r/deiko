@@ -26,161 +26,7 @@ import { align } from "../packages/alignment/dist/src/align.js";
 import { loadSession } from "../packages/referents/dist/src/session.js";
 import { toCandidates } from "../packages/referents/dist/src/candidates.js";
 import { loadEvents } from "./lib/session-io.mjs";
-
-// ── Redaction ───────────────────────────────────────────────────────────────
-
-/**
- * Strip credentials before anything leaves the machine.
- *
- * This is not defensive tidiness — it is a hard requirement. Fovea reads the
- * screen, and screens have secrets on them. Session 20260728-112323 captured a
- * live Azure Storage account key into `events.jsonl` (via BOTH accessibility and
- * OCR) and burned it into all twelve crops, purely because the developer pointed
- * at a Discord thread. A brief is destined for a cloud model.
- */
-/**
- * Anything that announces a credential is nearby. Matching one of these makes
- * the WHOLE LINE suspect, which is the only approach that survives OCR.
- *
- * Pattern-matching the secret itself does not work. OCR substituted a Cyrillic
- * `І` (U+0406) into the middle of a base64 key, shattering it into fragments
- * that all fell below any sane length threshold — and 22 characters of a live
- * key sailed through a redactor built on `{15,}` and `{40,}` runs. Markers are
- * robust because OCR mangles the *key*, not the English word next to it.
- */
-const SECRET_MARKER =
-  /account\s*key|shared\s*access\s*signature|connection\s*string|\bsecrets?\b|\bpasswords?\b|\bpasswd\b|\bapi[_ -]?keys?\b|\btokens?\b|\bcredentials?\b|\bbearer\b|PRIVATE KEY/i;
-
-/**
- * Does this token look like an opaque blob rather than a word or identifier?
- *
- * Tuned against real captures to keep what a brief needs and drop what it must
- * not carry. Kept: `acmecompanionportal` (no case mix, no digits),
- * `DefaultEndpointsProtocol`, `generateUserSessionSummary`,
- * `acme_topic_completed_event_2026-04-09`. Dropped: `UzvkZx7oHzB3Kj`,
- * `MQULF+AStdFr/lA==`.
- */
-function looksOpaque(token) {
-  if (token.length < 12) return false;
-  if (/[+/]/.test(token)) return true; // base64 punctuation
-  const hasUpper = /[A-Z\u0400-\u04FF]/.test(token);
-  const hasLower = /[a-z]/.test(token);
-  const hasDigit = /\d/.test(token);
-  return hasUpper && hasLower && hasDigit;
-}
-
-/** Split on whitespace and the separators credentials hide behind. */
-const TOKEN_SPLIT = /([\s;,=<>"'`()[\]{}]+)/;
-
-/**
- * Length at which a token is opaque enough to drop even with no credential
- * marker nearby. Above the marker threshold because ordinary code identifiers
- * live down here — `getUserProficiencyV2` must survive a brief.
- */
-const UNMARKED_MIN = 24;
-
-function redactTokens(line, suspect) {
-  return line
-    .split(TOKEN_SPLIT)
-    .map((part) => {
-      if (!looksOpaque(part)) return part;
-      if (suspect) return "<REDACTED>";
-      // Unmarked: only drop base64-shaped or very long runs.
-      if (/[+]/.test(part) || part.length >= UNMARKED_MIN) return "<REDACTED>";
-      return part;
-    })
-    .join("");
-}
-
-/** Credentials that carry their own signature and need no nearby marker. */
-const STANDALONE = [
-  [/\bAKIA[0-9A-Z]{16}\b/g, "<REDACTED-AWS-KEY-ID>"],
-  [/\bgh[pousr]_[A-Za-z0-9]{20,}\b/g, "<REDACTED-GITHUB-TOKEN>"],
-  [/\bxox[abprs]-[A-Za-z0-9-]{10,}\b/g, "<REDACTED-SLACK-TOKEN>"],
-  [/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, "<REDACTED-JWT>"],
-  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, "<REDACTED-PRIVATE-KEY>"],
-  // scheme://user:pass@host
-  [/\b([a-z][a-z0-9+.-]*:\/\/[^\s:/@]+):[^\s@]+@/gi, "$1:<REDACTED>@"],
-  // Long opaque runs anywhere, marker or not.
-  [/[A-Za-z0-9+/=_|\u0400-\u04FF]{40,}/g, "<REDACTED-OPAQUE-STRING>"],
-];
-
-function stripStandalone(text) {
-  let out = text;
-  for (const [pattern, replacement] of STANDALONE) out = out.replace(pattern, replacement);
-  return out;
-}
-
-/** Single string — a window title, an utterance. */
-export function redact(text) {
-  if (typeof text !== "string") return text;
-  const stripped = stripStandalone(text);
-  return redactTokens(stripped, SECRET_MARKER.test(stripped));
-}
-
-/**
- * A referent's captured text, redacted as ONE unit.
- *
- * The block is the right scope, not the line. OCR breaks a connection string
- * across visual lines at arbitrary points, so the line carrying the key's tail
- * (`MQULF+AStdFr/lA==;EndpointSuffix=…`) has no marker on it at all — 17
- * characters of a live key survived line-level redaction. A referent is one
- * screenshot: if a credential is visible anywhere in it, the whole thing is
- * suspect.
- */
-export function redactBlock(lines) {
-  const stripped = lines.map(stripStandalone);
-  const suspect = SECRET_MARKER.test(stripped.join("\n"));
-  return stripped.map((l) => redactTokens(l, suspect));
-}
-
-/**
- * Fail closed. Refuses to write if anything credential-shaped survived.
- *
- * The check that matters is the first one: on any line that *announces* a
- * secret, no opaque token may remain. That is the exact bug class the original
- * guard missed — it only looked for 40+ character runs, so OCR-shattered key
- * fragments passed straight through it.
- */
-function assertNoSecrets(markdown) {
-  const fail = (why, sample) => {
-    throw new Error(
-      `redaction failed — ${why}:\n  ${String(sample).slice(0, 50)}…\n` +
-        `  Refusing to write. Fix looksOpaque / SECRET_MARKER in scripts/render-brief.mjs.`,
-    );
-  };
-
-  // Checked per fenced BLOCK, the same unit the redactor uses. Line-by-line is
-  // what let an OCR-split key tail through: the line carrying it had no marker.
-  let block = null;
-  for (const line of markdown.split("\n")) {
-    if (line.startsWith("```")) {
-      if (block) {
-        const text = block.join("\n");
-        if (SECRET_MARKER.test(text)) {
-          const survivor = text.split(TOKEN_SPLIT).find(looksOpaque);
-          if (survivor) fail("opaque token survived in a block announcing a secret", survivor);
-        }
-        block = null;
-      } else {
-        block = [];
-      }
-      continue;
-    }
-    if (block) block.push(line);
-  }
-
-  for (const [pattern, label] of [
-    [/\bAKIA[0-9A-Z]{16}\b/, "AWS access key id"],
-    [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, "private key block"],
-    [/[A-Za-z0-9+/=_|\u0400-\u04FF]{40,}/, "long opaque string"],
-    // Base64 punctuation anywhere. No identifier a brief needs contains '+'.
-    [/[A-Za-z0-9\u0400-\u04FF]*\+[A-Za-z0-9+/\u0400-\u04FF]{8,}/, "base64-shaped run"],
-  ]) {
-    const hit = markdown.match(pattern);
-    if (hit) fail(`${label} survived into the brief`, hit[0]);
-  }
-}
+import { redact, redactBlock, carriesSecret, assertNoSecrets } from "./lib/redact.mjs";
 
 // ── Repo identity ───────────────────────────────────────────────────────────
 
@@ -226,7 +72,38 @@ function fence(lines) {
   return ["```", ...redactBlock(lines).map((l) => l.slice(0, 500)), "```"].join("\n");
 }
 
-function referentBlock(r, index, binding) {
+/**
+ * Dwell at which a pause becomes a point.
+ *
+ * Measured, not chosen. Session 20260730-004641 recorded 25 point candidates:
+ * SEVENTEEN fired at exactly the 300ms settle floor and the cursor moved on,
+ * while the other eight held for a median of 3.6 SECONDS. There is no continuum
+ * here — an incidental pause while talking and a deliberate point are two
+ * different gestures, and 600ms sits in the empty space between them.
+ */
+const DELIBERATE_DWELL_MS = 600;
+
+/**
+ * Did the developer mean this one?
+ *
+ * Nothing is dropped on the strength of this — it decides which of two sections
+ * a referent appears in, and both sections carry full text. That is the whole
+ * design: capture stays permissive because a lost referent is unrecoverable,
+ * and the brief does the filtering where it can be reversed by reading further.
+ *
+ * Three ways to qualify, any one of which is enough:
+ *   • held past `DELIBERATE_DWELL_MS`
+ *   • a region — drawing a loop around something is not an accident
+ *   • bound to a deictic word ("this", "yeh", "isko"), which is the developer
+ *     telling us, in their own narration, that they were pointing at something
+ */
+function isDeliberate(r, binding) {
+  if (r.kind === "region") return true;
+  if (binding?.deicticWord) return true;
+  return (r.capture?.dwellMs ?? 0) >= DELIBERATE_DWELL_MS;
+}
+
+function referentBlock(r, binding) {
   const out = [];
   const label = r.span
     ? `region, ${((r.span.end - r.span.start) / 1000).toFixed(1)}s drag`
@@ -237,7 +114,13 @@ function referentBlock(r, index, binding) {
   const where = [
     r.app?.name ? `\`${r.app.name}\`` : null,
     r.window ? `window \`${redact(r.window)}\`` : null,
-    r.cropPath ? `crop \`${basename(r.cropPath)}\`` : null,
+    // The image is withheld, not just unnamed. Redaction cleaned the text above
+    // it; the PNG still has the credential in pixels.
+    r.cropPath
+      ? carriesSecret(r)
+        ? "**crop withheld — a credential was visible in this capture**"
+        : `crop \`${basename(r.cropPath)}\``
+      : null,
   ].filter(Boolean);
   out.push(where.join(" · "));
   out.push("");
@@ -265,14 +148,16 @@ function referentBlock(r, index, binding) {
     out.push("OCR text — read off pixels, **approximate**:");
     out.push(fence(r.text.ocr.slice(0, 12)));
   } else {
-    out.push("OCR text: *not run — accessibility text was sufficient*");
+    // Not "not run" any more: OCR is unconditional since the predicate that
+    // skipped it cost referents twice. An empty result now means Vision read the
+    // crop and found no text in it.
+    out.push("OCR text: *none — the crop had no readable text*");
   }
   out.push("");
   return out.join("\n");
 }
 
-function render({ sessionId, referents, bindings, unbound, words, holdCount }) {
-  const byId = new Map(bindings.map((b) => [b.candidateId, b]));
+function render({ sessionId, referents, bindings, byId, unbound, words, holdCount }) {
   const titles = referents.map((r) => r.window).filter(Boolean);
   const hints = repoHints(titles);
   const tickets = ticketIds(titles);
@@ -374,10 +259,40 @@ function render({ sessionId, referents, bindings, unbound, words, holdCount }) {
         " Verify those against the code before relying on them.",
     );
   }
-  p("Referents are in the order they were pointed at.");
+  // Two sections, each CHRONOLOGICAL. Not one list sorted by strength: the
+  // order referents were pointed at IS the explanation, and re-sorting globally
+  // would hand over a pile of evidence with the narrative taken out of it.
+  const indexed = referents.map((r) => ({ r, binding: byId.get(r.id) }));
+  const deliberate = indexed.filter(({ r, binding }) => isDeliberate(r, binding));
+  const incidental = indexed.filter(({ r, binding }) => !isDeliberate(r, binding));
 
-  for (const [i, r] of referents.entries()) {
-    md.push(referentBlock(r, i, byId.get(r.id)), "");
+  p(
+    `**${deliberate.length} of ${referents.length} look deliberate** — held for over` +
+      ` ${DELIBERATE_DWELL_MS}ms, drawn as a region, or named with a word like "this".` +
+      ` The remaining ${incidental.length} are shown after them, in full, but the cursor` +
+      " merely came to rest there for a moment while the developer was talking.",
+  );
+  p(
+    "Weight them accordingly — and if the task seems to hinge on one of the later",
+    "ones, say so rather than assuming it was meant.",
+  );
+
+  p(`### What you indicated (${deliberate.length})`);
+  p("In the order they were pointed at.");
+  for (const { r, binding } of deliberate) {
+    md.push(referentBlock(r, binding), "");
+  }
+
+  if (incidental.length) {
+    p(`### Also captured nearby (${incidental.length})`);
+    p(
+      "Same session, same narration, lower confidence that they were the subject.",
+      "Kept because a referent thrown away is gone for good, and one of these may",
+      "be the thing that makes a later sentence make sense.",
+    );
+    for (const { r, binding } of incidental) {
+      md.push(referentBlock(r, binding), "");
+    }
   }
 
   // 6 — grounding
@@ -474,6 +389,7 @@ if (!words?.length) {
 
 const referents = loadSession(events).all();
 const { bindings, unbound } = align(toCandidates(referents), words);
+const bindingById = new Map(bindings.map((b) => [b.candidateId, b]));
 const holdCount =
   events.find((e) => e.type === "sessionEnd" && e.holdCount != null)?.holdCount ??
   new Set(referents.map((r) => r.hold)).size;
@@ -482,6 +398,7 @@ const markdown = render({
   sessionId: basename(dir),
   referents,
   bindings,
+  byId: bindingById,
   unbound,
   words,
   holdCount,
@@ -490,6 +407,57 @@ const markdown = render({
 assertNoSecrets(markdown);
 writeFileSync(outPath, markdown);
 
+// The sidecar exists for ONE reason the markdown cannot serve: absolute crop
+// paths. The brief names crops by basename so it stays readable and portable,
+// but an agent that wants to look at one needs a path it can open — and that
+// path must never exist for a referent whose capture had a credential in it.
+// Deciding that here, where the redaction rules live, is what keeps the
+// decision from being re-derived (and got wrong) by the bridge.
+// Two conditions, and the second is the one that is easy to miss. A crop is
+// released only if we have READ it — `ocrElapsedMs` is present exactly when
+// Vision ran — because the secret test works on text, and text we never
+// extracted proves nothing about the pixels. Six of the twelve crops in
+// 20260728-112323 were never OCR'd (the old `OCR.isNeeded` skipped them), so a
+// purely marker-based rule would have handed over six unexamined images from
+// the one session known to have had a live key on screen.
+const probeByCrop = new Map(
+  events.filter((e) => e.type === "probe" && e.crop?.path).map((e) => [e.crop.path, e]),
+);
+const cropWasRead = (r) =>
+  r.cropPath != null && probeByCrop.get(r.cropPath)?.crop?.ocrElapsedMs != null;
+
+function cropRelease(r) {
+  if (!r.cropPath) return { path: null, reason: null };
+  if (carriesSecret(r)) return { path: null, reason: "credential visible in this capture" };
+  if (!cropWasRead(r)) return { path: null, reason: "never OCR'd — contents unverified" };
+  return { path: r.cropPath, reason: null };
+}
+
+const manifest = {
+  sessionId: basename(dir),
+  referents: referents.map((r) => {
+    const { path, reason } = cropRelease(r);
+    return {
+      id: r.id,
+      app: r.app?.name ?? null,
+      kind: r.span ? "region" : "point",
+      // Classified once, here. The bridge and any later review UI read this
+      // rather than re-deriving the rule — two implementations of "did they mean
+      // it?" would disagree the first time one of them was tuned.
+      deliberate: isDeliberate(r, bindingById.get(r.id)),
+      // null, never omitted: an absent key reads as "no crop was taken", which
+      // is a different fact from "a crop exists and you may not have it".
+      cropPath: path,
+      cropWithheld: reason,
+    };
+  }),
+};
+const withheld = manifest.referents.filter((r) => r.cropWithheld).length;
+writeFileSync(join(dir, "brief.json"), JSON.stringify(manifest, null, 2) + "\n");
+
 console.error(
   `✓ ${referents.length} referents (${bindings.length} bound, ${unbound.length} unbound) → ${outPath}`,
 );
+if (withheld) {
+  console.error(`  ${withheld} crop(s) withheld — see cropWithheld in brief.json`);
+}
