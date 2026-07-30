@@ -107,6 +107,11 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Quit is how you stop it.
     private var isListening = false
 
+    /// Held for the app's lifetime, not created per session: the window keeps its
+    /// size and position where the developer put it, and a second session while
+    /// the first is still open reuses it rather than stacking windows.
+    private let review = ReviewWindowController()
+
     init(recorder: Recorder) {
         self.recorder = recorder
         super.init()
@@ -121,6 +126,12 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // nothing to fall out of sync.
         recorder.onStateChange = { [weak self] in
             self?.refresh()
+        }
+        // Stop talking and the brief comes to you. Hung off the recorder rather
+        // than the Stop menu item so it fires however the session ended — hotkey
+        // tap, menu, or the silence watchdog.
+        recorder.onSessionClosed = { [weak self] dir in
+            self?.review.present(sessionDir: dir)
         }
         startListeningIfPermitted()
         refresh()
@@ -248,12 +259,14 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // ── Actions ─────────────────────────────────────────────────────────────
 
-    /// The one button. Closes the session out — which includes waiting for
-    /// crops still being written — and then shows the user what they made.
+    /// The one button. Closes the session out — which includes waiting for crops
+    /// still being written — and the review window takes it from there, via
+    /// `onSessionClosed`. This used to reveal the session folder in Finder; a
+    /// folder of JSON and PNGs was the best answer available before there was a
+    /// window that could show what is in it.
     @objc private func stopSession() {
         Task { @MainActor in
-            guard let dir = await recorder.stopSession() else { return }
-            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: dir)])
+            _ = await recorder.stopSession()
         }
     }
 

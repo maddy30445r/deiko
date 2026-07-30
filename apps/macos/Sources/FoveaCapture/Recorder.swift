@@ -191,6 +191,11 @@ final class Recorder {
     /// reflect what is genuinely happening rather than what was last clicked.
     var onStateChange: (() -> Void)?
 
+    /// Fired once with the session directory when a session has fully closed —
+    /// crops written, WAV finalised, `sessionEnd` emitted. The review window
+    /// hangs off this: everything it reads has to exist before it opens.
+    var onSessionClosed: ((String) -> Void)?
+
     /// Crop + AX resolution runs off the sampling path in detached tasks. Their
     /// handles are kept so `stopSession` can wait for them: the stop button
     /// reveals the folder in Finder, and a folder revealed while three crops are
@@ -320,6 +325,11 @@ final class Recorder {
         // session is live means Option-drags stay swallowed afterwards.
         hotkey.noteSessionEnded()
         onStateChange?()
+        // Fired HERE rather than from the menu's stop action, because that is
+        // only one of four ways a session ends — the hotkey tap, the silence
+        // watchdog and Quit all arrive through `stopSession` and would each have
+        // needed their own call. One notification, every route.
+        onSessionClosed?(dir)
         return dir
     }
 

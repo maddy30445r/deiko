@@ -167,7 +167,7 @@ function referentBlock(r, binding) {
   return out.join("\n");
 }
 
-function render({ sessionId, referents, bindings, byId, unbound, words, holdCount }) {
+function render({ sessionId, referents, bindings, byId, unbound, words, holdCount, narrationOverride }) {
   const titles = referents.map((r) => r.window).filter(Boolean);
   const hints = repoHints(titles);
   const tickets = ticketIds(titles);
@@ -251,8 +251,26 @@ function render({ sessionId, referents, bindings, byId, unbound, words, holdCoun
 
   // 4 — narration
   p("## What was said");
-  p("The full narration, verbatim:");
-  p(`> ${redact(utteranceText(words)).replace(/\n/g, "\n> ")}`);
+  if (narrationOverride) {
+    // The developer corrected the transcript in the review window before
+    // sending. Their text wins here — it is the first thing the agent reads and
+    // the one place a mis-heard identifier does real damage.
+    //
+    // But say so, because the quotes under each referent below are NOT
+    // corrected: those are sliced by word timing, and edited text has no
+    // timings. Two versions of the narration in one document is confusing only
+    // if nobody admits it.
+    p("The full narration, **as corrected by the developer after capture**:");
+    p(`> ${redact(narrationOverride).replace(/\n/g, "\n> ")}`);
+    p(
+      "*The per-referent quotes below are the raw speech-recognition output and",
+      "were not corrected — they are tied to word timings. Where they disagree",
+      "with the narration above, the narration above is what the developer meant.*",
+    );
+  } else {
+    p("The full narration, verbatim:");
+    p(`> ${redact(utteranceText(words)).replace(/\n/g, "\n> ")}`);
+  }
 
   // 5 — referents
   p("## What was pointed at");
@@ -417,6 +435,14 @@ const holdCount =
   events.find((e) => e.type === "sessionEnd" && e.holdCount != null)?.holdCount ??
   new Set(referents.map((r) => r.hold)).size;
 
+// The developer's own correction of the narration, written by the review window
+// before they press Good to go. Absent for a brief rendered straight from the
+// command line, which is the same document it always was.
+const overridePath = join(dir, "narration.override.txt");
+const narrationOverride = existsSync(overridePath)
+  ? readFileSync(overridePath, "utf8").trim() || null
+  : null;
+
 const markdown = render({
   sessionId: basename(dir),
   referents,
@@ -425,6 +451,7 @@ const markdown = render({
   unbound,
   words,
   holdCount,
+  narrationOverride,
 });
 
 assertNoSecrets(markdown);
@@ -458,6 +485,30 @@ function cropRelease(r) {
 
 const manifest = {
   sessionId: basename(dir),
+  // The brief in short, for the review window to show before you send it.
+  //
+  // Computed HERE rather than parsed back out of the markdown, because the
+  // window and the brief must never disagree about what is in the session — a
+  // reader that scrapes prose starts lying the first time the prose is reworded.
+  //
+  // `narration` is the session's context in the developer's own words. Nothing
+  // summarises it and nothing should: they already said what the task is, out
+  // loud, at capture time.
+  summary: {
+    narration: narrationOverride ?? utteranceText(words),
+    narrationEdited: narrationOverride != null,
+    apps: [...new Set(referents.map((r) => r.app?.name).filter(Boolean))],
+    repoHints: repoHints(referents.map((r) => r.window).filter(Boolean)),
+    referentCount: referents.length,
+    wordCount: words.length,
+    boundCount: bindings.length,
+    unboundCount: unbound.length,
+    deicticCount: bindings.filter((b) => b.reason === "deictic").length,
+    overlapCount: bindings.filter((b) => b.reason === "overlap").length,
+    needsReviewCount: bindings.filter((b) => b.needsReview).length,
+    durationMs:
+      words.length ? Math.max(...words.map((w) => w.end)) - Math.min(...words.map((w) => w.start)) : 0,
+  },
   referents: referents.map((r) => {
     const { path, reason } = cropRelease(r);
     return {
