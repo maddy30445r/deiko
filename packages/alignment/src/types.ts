@@ -21,6 +21,19 @@ export interface Word {
    * matter how close their timestamps are.
    */
   hold?: number;
+  /**
+   * Whether `start` is a MEASUREMENT or a guess.
+   *
+   * Word times come from merging Sarvam's text with Apple's on-device timings:
+   * tokens both engines heard become anchors, and everything between them is
+   * spread evenly along a straight line. An anchored word sits where it was
+   * heard; an interpolated one sits where arithmetic put it, and on a session
+   * that anchored 37 of 223 words that is most of them.
+   *
+   * Optional because transcripts written before this existed do not carry it,
+   * and absent must not silently read as "interpolated".
+   */
+  anchored?: boolean;
 }
 
 /** A cursor settle the recorder logged. Not yet a referent. */
@@ -57,6 +70,27 @@ export interface Binding {
   confidence: number;
   /** Why this binding was made, for the review UI and for debugging the gate. */
   reason: "deictic" | "overlap" | "unbound";
+  /**
+   * Whether a human should look at this one — NOT the same as "low confidence".
+   *
+   * Every overlap binding scores below 0.5 by construction, so a raw threshold
+   * flagged 22 of 30 rows in a real session and meant nothing. Overlap being
+   * weaker than deictic is a fact about the class, worth saying once; what
+   * deserves a per-row mark is the aligner having been genuinely torn — a
+   * deictic word that could have named two different things.
+   */
+  needsReview: boolean;
+  /**
+   * Whether the deictic word that claimed this referent had a measured timing.
+   * Pass 1's entire score is `word.start - candidate.t`, so an interpolated
+   * word yields a guessed proximity.
+   *
+   * Reported, deliberately NOT scored: this signal is new and has never been
+   * measured against a session. It earns a place in `confidence` once the data
+   * shows it predicts something, not before. Undefined for overlap bindings,
+   * which have no claiming word.
+   */
+  anchoredTiming?: boolean;
 }
 
 export interface AlignmentResult {
@@ -65,6 +99,15 @@ export interface AlignmentResult {
    *  over-captures on purpose so the narration can be the filter. */
   unbound: string[];
 }
+
+/**
+ * Below this, a binding the STRONG path produced is worth a second look.
+ *
+ * Exported because it was three separate literals — two bare `0.5`s in the
+ * brief renderer and a `const` in the align harness — and a threshold that
+ * lives away from the confidence it judges drifts from it.
+ */
+export const LOW_CONFIDENCE = 0.5;
 
 export interface AlignmentOptions {
   /** How far BEFORE a deictic word a pointing act may sit — the user points

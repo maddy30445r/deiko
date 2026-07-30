@@ -50,9 +50,6 @@ if (!words?.length) {
 const candidates = toCandidates(loadSession(events).all());
 const { bindings, unbound } = align(candidates, words);
 
-/** Below this a binding is flagged for review rather than trusted. */
-const LOW_CONFIDENCE = 0.5;
-
 const byId = new Map(candidates.map((c) => [c.id, c]));
 
 console.log(`session: ${sessionDir}`);
@@ -60,7 +57,7 @@ console.log(`candidates: ${candidates.length}  words: ${words.length}\n`);
 
 for (const b of bindings) {
   const c = byId.get(b.candidateId);
-  const flag = b.confidence < LOW_CONFIDENCE ? "  ⚠ LOW" : "";
+  const flag = b.needsReview ? "  ⚠ REVIEW" : "";
   console.log(`[${b.confidence.toFixed(2)}] ${b.reason.padEnd(8)} ${c?.kind.padEnd(6)} ${c?.app?.name ?? "?"}${flag}`);
   console.log(`   said:      "${b.utterance}"`);
   if (b.deicticWord) console.log(`   pointed:   "${b.deicticWord}" at ${Math.round(b.deicticAt)}ms`);
@@ -71,8 +68,21 @@ for (const b of bindings) {
 console.log(`bound: ${bindings.length}/${candidates.length}`);
 console.log(`unbound (expected — the recorder over-captures on purpose): ${unbound.length}`);
 
-const low = bindings.filter((b) => b.confidence < LOW_CONFIDENCE).length;
-if (low) console.log(`low-confidence bindings needing review: ${low}`);
+// Split by reason, not by a threshold. Overlap bindings all sit below 0.5 by
+// construction, so counting "low confidence" just re-reported how many there
+// were; what is worth knowing is how many of the STRONG ones were shaky.
+const deictic = bindings.filter((b) => b.reason === "deictic");
+const overlap = bindings.filter((b) => b.reason === "overlap");
+const review = bindings.filter((b) => b.needsReview).length;
+console.log(`  ${deictic.length} named by a deictic word, ${overlap.length} from speech overlapping the dwell`);
+if (review) console.log(`  ${review} deictic binding(s) worth reviewing — the aligner was torn`);
+
+const anchored = deictic.filter((b) => b.anchoredTiming === true).length;
+const known = deictic.filter((b) => b.anchoredTiming !== undefined).length;
+if (known) {
+  // Reported, not scored. See `anchoredTiming` in types.ts.
+  console.log(`  ${anchored}/${known} deictic bindings rest on a MEASURED word time, not an interpolated one`);
+}
 
 console.log(`
 Next: hand-label which candidate each utterance SHOULD have bound to, then

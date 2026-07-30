@@ -126,8 +126,18 @@ function referentBlock(r, binding) {
   out.push("");
 
   if (binding) {
-    const flag = binding.confidence < 0.5 ? " ⚠ **low confidence — verify before relying on this**" : "";
-    out.push(`**Said while pointing here** (${binding.confidence.toFixed(2)}, ${binding.reason})${flag}:`);
+    // The mark follows `needsReview`, not a raw threshold. Every overlap
+    // binding scores under 0.5 by construction, so the old test flagged 22 of
+    // 30 rows — including twelve that displayed "0.50" beside a "below 0.50"
+    // warning. A caution on three quarters of the evidence is not a caution.
+    const flag = binding.needsReview
+      ? " ⚠ **the aligner was torn between candidates here — verify before relying on it**"
+      : "";
+    const how =
+      binding.reason === "deictic"
+        ? `named by "${binding.deicticWord}"`
+        : "said while dwelling here";
+    out.push(`**Said while pointing here** (${how})${flag}:`);
     out.push("");
     out.push(`> ${redact(binding.utterance)}`);
     out.push("");
@@ -162,7 +172,9 @@ function render({ sessionId, referents, bindings, byId, unbound, words, holdCoun
   const hints = repoHints(titles);
   const tickets = ticketIds(titles);
   const apps = [...new Set(referents.map((r) => r.app?.name).filter(Boolean))];
-  const lowConfidence = bindings.filter((b) => b.confidence < 0.5).length;
+  const deicticCount = bindings.filter((b) => b.reason === "deictic").length;
+  const overlapCount = bindings.filter((b) => b.reason === "overlap").length;
+  const reviewCount = bindings.filter((b) => b.needsReview).length;
 
   const md = [];
   const p = (...lines) => md.push(...lines, "");
@@ -253,10 +265,21 @@ function render({ sessionId, referents, bindings, byId, unbound, words, holdCoun
           " was being said while they were pointed at."
         : ""),
   );
-  if (lowConfidence) {
+  // The class distinction, stated once, instead of an identical alarm on every
+  // overlap row. Both kinds are real evidence; they differ in what they prove.
+  if (deicticCount || overlapCount) {
     p(
-      `${lowConfidence} binding${lowConfidence === 1 ? " is" : "s are"} low-confidence and marked ⚠ below.` +
-        " Verify those against the code before relying on them.",
+      `**${deicticCount} of these were named** — the developer said "this", "yeh", "isko" ` +
+        `while pointing, so the words identify the thing. **${overlapCount} merely overlapped**: ` +
+        "the cursor rested there while those words were spoken, which is weaker — " +
+        "it may be what they meant, or it may be where their hand happened to be.",
+    );
+  }
+  if (reviewCount) {
+    p(
+      `${reviewCount} of the named ones ${reviewCount === 1 ? "is" : "are"} marked ⚠: two or more ` +
+        "referents were about equally plausible for that word, and the aligner picked one. " +
+        "Those are the bindings worth checking against the code.",
     );
   }
   // Two sections, each CHRONOLOGICAL. Not one list sorted by strength: the

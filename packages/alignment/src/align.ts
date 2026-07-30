@@ -6,6 +6,7 @@ import {
   type Candidate,
   type Word,
   DEFAULT_OPTIONS,
+  LOW_CONFIDENCE,
 } from "./types.js";
 
 /**
@@ -68,6 +69,15 @@ export function align(
       utteranceStart: around.utteranceStart,
       confidence,
       reason: "deictic",
+      // The strong path was still unsure — two candidates nearly tied, or the
+      // one it picked sat far from the word. That is worth a human's attention
+      // in a way "this was an overlap binding" is not.
+      needsReview: confidence < LOW_CONFIDENCE,
+      // Spread rather than assigned: `exactOptionalPropertyTypes` forbids
+      // writing an explicit `undefined` into an optional field, and it is right
+      // to — a transcript predating `anchored` must leave this ABSENT rather
+      // than claim the timing was interpolated.
+      ...(word.anchored !== undefined && { anchoredTiming: word.anchored }),
     });
   }
 
@@ -94,6 +104,12 @@ export function align(
       // evidence but weaker than a word that explicitly points.
       confidence: clamp01(0.45 * noiseMultiplier(candidate)),
       reason: "overlap",
+      // Never flagged individually. 0.45 with at most a ×1.1 and a ×1.05 lift
+      // cannot reach 0.5, so a raw threshold marked EVERY overlap binding —
+      // seventeen of seventeen in one real session, alongside rows that
+      // displayed "0.50" beside a "below 0.50" warning. The class is weaker;
+      // the brief says so once, in a sentence.
+      needsReview: false,
     });
   }
 

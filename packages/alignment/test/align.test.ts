@@ -214,3 +214,61 @@ test("two deictic words claim two different candidates", () => {
   assert.equal(deictic.length, 2);
   assert.notEqual(deictic[0]!.candidateId, deictic[1]!.candidateId);
 });
+
+// ── What deserves a human's attention ───────────────────────────────────────
+//
+// `needsReview` exists because a raw confidence threshold flagged 22 of 30
+// bindings in a real session and therefore said nothing. These pin the
+// distinction so it cannot quietly revert to "confidence < 0.5".
+
+test("an overlap binding is never flagged for review", () => {
+  // 0.45 with at most a x1.1 and a x1.05 lift cannot reach 0.5, so a threshold
+  // test marks EVERY overlap binding. Overlap being weaker is a fact about the
+  // class, said once — not an alarm on each row.
+  const c = candidate(1000, { features: { dwellMs: 400, approachSpeed: 0 } });
+  const { bindings } = align([c], say("the padding looks wrong", 800));
+  const bound = bindings.find((b) => b.reason === "overlap")!;
+
+  assert.ok(bound.confidence < 0.5, "precondition: overlap scores below the threshold");
+  assert.equal(bound.needsReview, false);
+});
+
+test("a deictic binding the aligner was torn over IS flagged", () => {
+  // Two candidates almost equidistant from one deictic word: the margin over
+  // the runner-up collapses, which is exactly the ambiguity worth surfacing.
+  const a = candidate(1000);
+  const b = candidate(1100);
+  const { bindings } = align([a, b], say("expose this key", 1400));
+  const bound = bindings.find((x) => x.reason === "deictic")!;
+
+  assert.ok(bound.confidence < 0.5, `expected a weak binding, got ${bound.confidence}`);
+  assert.equal(bound.needsReview, true);
+});
+
+test("a confident deictic binding is not flagged", () => {
+  const only = candidate(1200);
+  const { bindings } = align([only], say("expose this key", 1400));
+  const bound = bindings.find((b) => b.reason === "deictic")!;
+
+  assert.ok(bound.confidence >= 0.5, `expected a strong binding, got ${bound.confidence}`);
+  assert.equal(bound.needsReview, false);
+});
+
+test("timing provenance is carried through, and absent when unknown", () => {
+  // Reported, never scored — see `anchoredTiming` in types.ts. A transcript
+  // written before `anchored` existed must leave the field ABSENT rather than
+  // claim the timing was interpolated.
+  const words = say("expose this key", 1400);
+  const withAnchor = words.map((w, i) => (i === 1 ? { ...w, anchored: true } : w));
+
+  const anchored = align([candidate(1200)], withAnchor).bindings
+    .find((b) => b.reason === "deictic")!;
+  assert.equal(anchored.anchoredTiming, true);
+
+  const unknown = align([candidate(1200)], words).bindings
+    .find((b) => b.reason === "deictic")!;
+  assert.ok(
+    !("anchoredTiming" in unknown),
+    "an unknown provenance must be absent, not false",
+  );
+});
