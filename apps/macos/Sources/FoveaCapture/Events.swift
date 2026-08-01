@@ -597,9 +597,35 @@ enum Emit {
         }
     }
 
-    /// Human-facing output. stderr only — stdout is reserved for the contract.
+    /// Human-facing output.
+    ///
+    /// Goes to the SAME sink as `event()` when one is set, and to stderr
+    /// otherwise. It used to write to stderr unconditionally, which is a file
+    /// descriptor a Finder-launched app does not have — so every `Emit.log` in
+    /// the menu-bar app went nowhere. That included the handoff trace added
+    /// specifically so a failure in the field would leave evidence: after 44
+    /// sessions, `~/Library/Logs/Fovea/launch.jsonl` was still zero bytes, and
+    /// two "nothing happened" investigations started from no data at all.
+    ///
+    /// Wrapped as JSON so a line of prose cannot break a reader parsing the
+    /// file as JSON Lines — the same file carries both.
     static func log(_ message: String) {
-        FileHandle.standardError.write(Data("\(message)\n".utf8))
+        sinkLock.lock()
+        defer { sinkLock.unlock() }
+        guard let sink else {
+            FileHandle.standardError.write(Data("\(message)\n".utf8))
+            return
+        }
+        let line = (try? encoder.encode(LogLine(message: message)))
+            .flatMap { String(data: $0, encoding: .utf8) }
+            ?? #"{"type":"log","message":"<unencodable>"}"#
+        sink.write(Data("\(line)\n".utf8))
+    }
+
+    private struct LogLine: Encodable {
+        let type = "log"
+        let t = Date().timeIntervalSince1970
+        let message: String
     }
 
     /// Send events to a file instead of stdout.

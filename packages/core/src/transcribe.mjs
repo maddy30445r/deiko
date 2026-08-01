@@ -347,9 +347,19 @@ function wavDurationMs(wavPath) {
  * request to an already-running process.
  */
 async function appleTimings(wavPath, { locale = "en-IN", timeoutMs } = {}) {
-  const app = resolve(REPO_ROOT, "build/Fovea.app");
+  // TOLD, not derived. A shipped app runs this script from
+  // `Fovea.app/Contents/Resources/scripts/`, where `REPO_ROOT` is `Resources`
+  // and `Resources/build/Fovea.app` does not exist — so the guess below threw
+  // on every session of every install that was not a developer's checkout, and
+  // the whole product came apart at the first stage. The app knows exactly
+  // where it is; it passes that in.
+  const app = process.env.FOVEA_APP_PATH || resolve(REPO_ROOT, "build/Fovea.app");
   if (!existsSync(app)) {
-    throw new Error("build/Fovea.app is missing — run `make bundle`");
+    throw new Error(
+      process.env.FOVEA_APP_PATH
+        ? `FOVEA_APP_PATH points at ${app}, which is not there`
+        : "build/Fovea.app is missing — run `make bundle`",
+    );
   }
 
   // Scaled by the recording, not fixed. A flat 90s worked for every session

@@ -92,6 +92,46 @@ enum Permission: String, CaseIterable {
             SFSpeechRecognizer.requestAuthorization { completion($0 == .authorized) }
         }
     }
+
+    /// Ask first, then send them to Settings if asking wasn't enough.
+    ///
+    /// Asking is what makes the app appear in the privacy pane at all, so this
+    /// must happen even when we expect the prompt to be suppressed — otherwise
+    /// the Settings link lands the user on a list Fovea isn't in, with nothing
+    /// to switch on. That was the reported bug: Fovea was absent from the
+    /// Microphone pane entirely because nothing had ever requested it.
+    ///
+    /// On `Permission` rather than on `MenuBar` because the welcome window asks
+    /// the same question, and two implementations of "how do we request this"
+    /// is two places for that hard-won detail to be forgotten.
+    @MainActor
+    func ask() async {
+        let granted = await withCheckedContinuation { continuation in
+            request { continuation.resume(returning: $0) }
+        }
+        guard !granted, let url = settingsURL else { return }
+        // Either already denied, or granting needs Settings anyway
+        // (Accessibility and Screen Recording always do).
+        NSWorkspace.shared.open(url)
+    }
+}
+
+/// Quit and come back.
+///
+/// Screen Recording is only re-read at process start, so "grant it then
+/// relaunch" is the actual flow — done for the user rather than left as an
+/// instruction they have to follow by hand. Shared because both the menu and
+/// the welcome window offer it.
+@MainActor
+enum Relauncher {
+    static func relaunch() {
+        let bundle = Bundle.main.bundleURL
+        let config = NSWorkspace.OpenConfiguration()
+        config.createsNewApplicationInstance = true
+        NSWorkspace.shared.openApplication(at: bundle, configuration: config) { _, _ in
+            Task { @MainActor in NSApplication.shared.terminate(nil) }
+        }
+    }
 }
 
 @MainActor
@@ -111,6 +151,7 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// while the orb is still up reuses it rather than stacking orbs.
     private let review = OrbController()
     private let settings = SettingsWindowController()
+    private let welcome = WelcomeWindowController()
 
     init(recorder: Recorder) {
         self.recorder = recorder
@@ -150,6 +191,12 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         startListeningIfPermitted()
         refresh()
+
+        // First run says something. Before this, a new install put an eye in
+        // the menu bar and waited — and the hotkey did nothing, because no tap
+        // is installed until every grant is in.
+        welcome.onOpenSettings = { [weak self] in self?.settings.present() }
+        welcome.presentIfNeeded()
     }
 
     private func refresh() {
@@ -159,16 +206,30 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func setIcon() {
         guard let button = statusItem.button else { return }
-        // SF Symbols: a filled eye while the key is down, an outline otherwise.
+        // SF Symbols: a filled eye while recording, an outline otherwise.
         // "Fovea" is the part of the retina that sees detail — the icon is the
         // product's whole thesis in one glyph.
+        //
+        // THE THIRD STATE EARNS ITS PLACE. Without a grant, the hotkey does
+        // nothing: `startListeningIfPermitted` returns early and no tap is
+        // installed. The icon used to look identical whether Fovea was armed or
+        // completely dead, so a new install presented as a working app that
+        // silently ignored every gesture — and the only explanation lived
+        // inside a menu nobody had a reason to open.
         let recording = recorder.isRecording
-        button.image = NSImage(
-            systemSymbolName: recording ? "eye.fill" : "eye",
-            accessibilityDescription: recording ? "Fovea — recording" : "Fovea — ready"
-        )
+        let blocked = !Permission.allCases.allSatisfy(\.isGranted)
+
+        let symbol = blocked ? "eye.trianglebadge.exclamationmark" : (recording ? "eye.fill" : "eye")
+        let description =
+            blocked
+            ? "Fovea — needs permission" : (recording ? "Fovea — recording" : "Fovea — ready")
+
+        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: description)
         button.image?.isTemplate = true
-        button.contentTintColor = recording ? .systemRed : nil
+        button.contentTintColor = recording ? .systemRed : (blocked ? .systemOrange : nil)
+        // Read aloud by VoiceOver, and shown on hover — the only place the
+        // reason is available without opening the menu.
+        button.toolTip = blocked ? "Fovea needs permission to work — click to grant" : nil
     }
 
     private func rebuildMenu() {
@@ -191,6 +252,25 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
             title: "Settings…",
             action: #selector(openSettings),
             keyEquivalent: ","
+        ))
+        menu.addItem(NSMenuItem(
+            title: "Getting started…",
+            action: #selector(openWelcome),
+            keyEquivalent: ""
+        ))
+        // ALWAYS present, not only while permissions are missing.
+        //
+        // Screen Recording takes effect only after a relaunch, and it used to
+        // live in the permissions branch — which `rebuildMenu` stops drawing the
+        // moment the last grant lands. So the button vanished at exactly the
+        // point it applied, and the failure it fixes is silent: ScreenCaptureKit
+        // keeps failing in the running process, crops come back with no path and
+        // no withheld reason, and the orb reports "0 screenshots going" with
+        // nothing anywhere saying why.
+        menu.addItem(NSMenuItem(
+            title: "Relaunch Fovea",
+            action: #selector(relaunch),
+            keyEquivalent: ""
         ))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Fovea", action: #selector(quit), keyEquivalent: "q"))
@@ -262,13 +342,6 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
             action: #selector(grantAll),
             keyEquivalent: ""
         ))
-        // Screen Recording in particular only takes effect after a relaunch,
-        // and there was previously no way to relaunch from inside the app.
-        menu.addItem(NSMenuItem(
-            title: "Relaunch Fovea",
-            action: #selector(relaunch),
-            keyEquivalent: ""
-        ))
     }
 
     private func disabled(_ title: String) -> NSMenuItem {
@@ -316,37 +389,21 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// Ask first, then send them to Settings if asking wasn't enough.
-    ///
-    /// Asking is what makes the app appear in the privacy pane at all, so this
-    /// must happen even when we expect the prompt to be suppressed — otherwise
-    /// the Settings link lands the user on a list Fovea isn't in, with nothing
-    /// to switch on. That was the reported bug: Fovea was absent from the
-    /// Microphone pane entirely because nothing had ever requested it.
     private func ask(_ permission: Permission) async {
-        let granted = await withCheckedContinuation { continuation in
-            permission.request { continuation.resume(returning: $0) }
-        }
-        guard !granted, let url = permission.settingsURL else { return }
-        // Either already denied, or granting needs Settings anyway
-        // (Accessibility and Screen Recording always do).
-        NSWorkspace.shared.open(url)
+        await permission.ask()
     }
 
     @objc private func relaunch() {
-        // Screen Recording is only re-read at process start, so "grant it then
-        // relaunch" is the actual flow — done here rather than left as an
-        // instruction the user has to follow by hand.
-        let bundle = Bundle.main.bundleURL
-        let config = NSWorkspace.OpenConfiguration()
-        config.createsNewApplicationInstance = true
-        NSWorkspace.shared.openApplication(at: bundle, configuration: config) { _, _ in
-            Task { @MainActor in NSApplication.shared.terminate(nil) }
-        }
+        Relauncher.relaunch()
     }
 
     @objc private func openSettings() {
         settings.present()
+    }
+
+    @objc private func openWelcome() {
+        welcome.onOpenSettings = { [weak self] in self?.settings.present() }
+        welcome.present()
     }
 
     @objc private func openSessionRoot() {

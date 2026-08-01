@@ -24,12 +24,21 @@ enum Credentials {
     /// The environment for a spawned pipeline script.
     ///
     /// Starts from this process's own environment so PATH, HOME and TMPDIR
-    /// survive — Node needs them — and layers the credentials on top.
+    /// survive — Node needs them — and layers on the credentials plus the one
+    /// thing the pipeline cannot work out for itself.
     static func childEnvironment() -> [String: String] {
         var env = ProcessInfo.processInfo.environment
         for name in names {
             if let value = value(for: name) { env[name] = value }
         }
+        // WHERE THE APP IS. `transcribe.mjs` relaunches Fovea through
+        // LaunchServices to get on-device word timings — TCC blames the
+        // responsible process, so the request has to come from the app itself
+        // rather than from node. It used to find the app by walking up from the
+        // script, which is right in a checkout and wrong in a bundle, where it
+        // resolves to `Contents/Resources/build/Fovea.app`. Telling it removes
+        // the guess.
+        env["FOVEA_APP_PATH"] = Bundle.main.bundleURL.path
         return env
     }
 

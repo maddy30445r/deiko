@@ -252,6 +252,11 @@ enum BriefPipeline {
             "cd \(quoted(repo.path)) && set -a && [ -f .env ] && . ./.env; set +a; \(command)",
         ]
         process.currentDirectoryURL = repo
+        // Same environment as the bundled path. The `.env` this login shell
+        // sources still wins for the API keys — but `FOVEA_APP_PATH` is not in
+        // any `.env`, so the checkout gets told where the app is too, rather
+        // than relying on it happening to sit at `<repo>/build/Fovea.app`.
+        process.environment = Credentials.childEnvironment()
         return try await capture(process, stage: stage)
     }
 
