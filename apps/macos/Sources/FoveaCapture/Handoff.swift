@@ -42,25 +42,30 @@ enum Handoff {
     /// Overridden wholesale by `handoff-test --command`; nil otherwise.
     static var commandOverride: String?
 
-    /// Terminals get the CLI form; everything else gets the extension form.
+    /// ASK a connected client; only guess when nobody has been connected.
     ///
-    /// The list runs this way round on purpose. Terminal emulators are a long
-    /// tail (this list will be incomplete) while the editors that host the
-    /// Claude Code extension are few and stable — so an app we fail to
-    /// recognise is far more likely to be an editor than a terminal. Guessing
-    /// wrong is visible and recoverable: the command sits typed and unsent,
-    /// which is exactly the state this bug produced.
+    /// The guess is the thing this replaces. It read the target window's bundle
+    /// id against a hand-kept list of terminal emulators — a list that is stale
+    /// the day a new terminal ships, and whose wrong answers are SILENT, because
+    /// Claude Code will not submit an unresolved slash command and the text just
+    /// sits in the input looking like a dropped keystroke. That cost an hour
+    /// once (`mddocs/spikes/T4.6-handoff-keystroke.md`).
+    ///
+    /// A client the user explicitly connected can simply be asked. The fallback
+    /// stays for an unconnected target, where guessing beats refusing.
     static func command(for target: HandoffTarget) -> String {
         if let commandOverride { return commandOverride }
+        let bundleID = NSRunningApplication(processIdentifier: target.pid)?.bundleIdentifier
+        if let connector = Connectors.matching(bundleID: bundleID) {
+            return connector.commandForm
+        }
+        // VERIFIED for the VS Code extension on 2026-07-31; the CLI form is
+        // what the repo has always documented but is unverified since.
         let terminals: Set<String> = [
             "com.apple.Terminal", "com.googlecode.iterm2", "com.mitchellh.ghostty",
             "dev.warp.Warp-Stable", "io.alacritty", "net.kovidgoyal.kitty",
             "com.github.wez.wezterm", "org.tabby", "co.zeit.hyper",
         ]
-        let bundleID = NSRunningApplication(processIdentifier: target.pid)?.bundleIdentifier
-        // VERIFIED for the VS Code extension on 2026-07-31; the CLI form is
-        // what the repo has always documented but is unverified since the
-        // rename. See `mddocs/spikes/T4.6-handoff-keystroke.md`.
         return terminals.contains(bundleID ?? "") ? "/mcp__fovea__brief" : "/fovea:brief"
     }
 

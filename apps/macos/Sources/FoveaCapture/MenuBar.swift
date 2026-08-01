@@ -110,6 +110,7 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Held for the app's lifetime, not created per session: a second session
     /// while the orb is still up reuses it rather than stacking orbs.
     private let review = OrbController()
+    private let settings = SettingsWindowController()
 
     init(recorder: Recorder) {
         self.recorder = recorder
@@ -139,6 +140,14 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         review.onExtend = { [weak self] dir in
             self?.recorder.resumeForExtraHold(dir: dir) ?? false
         }
+        // Put back a connection that has gone missing. Two ordinary things
+        // break it: Claude Code rewrites `~/.claude.json` wholesale and can drop
+        // our entry, and moving Fovea (to /Applications, say) invalidates the
+        // absolute paths the entry points at. Both look identical to the user —
+        // the brief stops arriving — and both are repaired by rewriting the
+        // entry. Only clients they actually connected are touched.
+        Connectors.selfHeal()
+
         startListeningIfPermitted()
         refresh()
     }
@@ -177,6 +186,11 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
             title: "Open sessions folder",
             action: #selector(openSessionRoot),
             keyEquivalent: ""
+        ))
+        menu.addItem(NSMenuItem(
+            title: "Settings…",
+            action: #selector(openSettings),
+            keyEquivalent: ","
         ))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Fovea", action: #selector(quit), keyEquivalent: "q"))
@@ -329,6 +343,10 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSWorkspace.shared.openApplication(at: bundle, configuration: config) { _, _ in
             Task { @MainActor in NSApplication.shared.terminate(nil) }
         }
+    }
+
+    @objc private func openSettings() {
+        settings.present()
     }
 
     @objc private func openSessionRoot() {

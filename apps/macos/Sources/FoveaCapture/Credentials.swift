@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE KEYS THE PIPELINE NEEDS
@@ -34,15 +35,75 @@ enum Credentials {
 
     /// Where a key comes from, in order.
     ///
-    /// The `.env` fallback is what keeps a developer's bundled-layout build
-    /// working before the Settings window exists, and it reads the file beside
-    /// the app rather than inside it — a credential must never be copied into
-    /// something that gets signed, notarised and handed to somebody else.
+    /// The `.env` fallback comes LAST and reads the file beside the app, never
+    /// inside it — a credential must never be copied into something that gets
+    /// signed, notarised and handed to somebody else. It exists so a developer's
+    /// checkout keeps working untouched; a shipped app has no such file and
+    /// falls through to the keychain.
     static func value(for name: String) -> String? {
         if let fromProcess = ProcessInfo.processInfo.environment[name], !fromProcess.isEmpty {
             return fromProcess
         }
+        if let fromKeychain = keychainRead(name), !fromKeychain.isEmpty {
+            return fromKeychain
+        }
         return dotEnv()[name]
+    }
+
+    /// Human-readable provenance, for the Settings window. A developer whose
+    /// `.env` already works should not be told to type a key they have.
+    static func sourceDescription() -> String {
+        if ProcessInfo.processInfo.environment["SARVAM_API_KEY"]?.isEmpty == false {
+            return "Using SARVAM_API_KEY from this process's environment."
+        }
+        if keychainRead("SARVAM_API_KEY")?.isEmpty == false {
+            return "Stored in your login keychain."
+        }
+        if dotEnv()["SARVAM_API_KEY"] != nil {
+            return "Using the .env beside the app. Saving here moves it to your keychain."
+        }
+        return "No Sarvam key yet — transcription will not run without one."
+    }
+
+    // ── Keychain ────────────────────────────────────────────────────────────
+
+    private static let service = "com.fovea.capture"
+
+    /// Store a key, or delete it when cleared.
+    ///
+    /// An empty box means "remove this", not "store an empty string": a stored
+    /// empty value would shadow the `.env` fallback and read as a key that is
+    /// present but wrong, which fails further downstream and less clearly.
+    static func store(_ value: String, for name: String) {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: name,
+        ]
+        SecItemDelete(query as CFDictionary)
+        guard !trimmed.isEmpty else { return }
+        query[kSecValueData as String] = Data(trimmed.utf8)
+        // The pipeline runs while the developer is at the machine, so
+        // `WhenUnlocked` is the tightest class that always works — no prompt,
+        // and the item never leaves this Mac.
+        query[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlocked
+        SecItemAdd(query as CFDictionary, nil)
+    }
+
+    private static func keychainRead(_ name: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: name,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data
+        else { return nil }
+        return String(decoding: data, as: UTF8.self)
     }
 
     /// Parsed once. A `.env` beside the bundle, if there is one.

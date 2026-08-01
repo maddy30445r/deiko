@@ -101,6 +101,9 @@ case "timing":
 case "handoff-test":
     await runHandoffTest(args)
 
+case "connect":
+    runConnect(args)
+
 case "help", "--help", "-h":
     Emit.log(Usage.text)
 
@@ -352,6 +355,43 @@ func runHandoffTest(_ args: Args) async {
 extension Array {
     /// This array, or `fallback` when empty — the exact-then-fuzzy match above.
     func ifEmpty(_ fallback: [Element]) -> [Element] { isEmpty ? fallback : self }
+}
+
+/// Show which coding clients Fovea can see, and optionally register with them.
+///
+/// The Settings window does the same thing with a button. This exists because
+/// the interesting question — "did writing to a config file that another program
+/// owns damage it?" — is answered by a diff, and a diff needs a scriptable way
+/// to trigger the write against a throwaway copy:
+///
+///   CLAUDE_CONFIG_DIR=/tmp/fakehome fovea-capture connect --write
+///
+/// `ClaudeCodeConnector` reads `CLAUDE_CONFIG_DIR` (as Claude Code itself does),
+/// so that runs the real code path against a config nobody depends on.
+@MainActor
+func runConnect(_ args: Args) {
+    Emit.log("node:   \(NodeRuntime.resolve()?.path ?? "NOT FOUND")")
+    Emit.log("layout: \(Layout.resolve().map(String.init(describing:)) ?? "NOT FOUND")")
+
+    for connector in Connectors.all {
+        Emit.log("")
+        Emit.log("\(connector.name)")
+        Emit.log("  installed: \(connector.isInstalled)")
+        Emit.log("  connected: \(connector.isConnected)")
+        Emit.log("  command:   \(connector.commandForm)")
+
+        guard args.has("write") else { continue }
+        do {
+            try Connectors.connect(connector)
+            Emit.log("  → connected: \(connector.isConnected)")
+        } catch {
+            Emit.log("  ✗ \(error.localizedDescription)")
+        }
+    }
+    if !args.has("write") {
+        Emit.log("")
+        Emit.log("nothing written — pass --write to register")
+    }
 }
 
 /// Word timings for a recorded WAV, on-device. Emits JSON on stdout so the
