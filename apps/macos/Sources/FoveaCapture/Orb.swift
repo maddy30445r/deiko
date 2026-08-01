@@ -6,13 +6,23 @@ import FoveaHandoff
 // ─────────────────────────────────────────────────────────────────────────────
 // THE ORB — the session's last step, on screen instead of in a terminal
 //
-// A session ends and the orb appears: a small always-on-top card, centred,
-// showing Fovea's three-line reading of what it heard. If the reading is right,
-// fling the orb onto the window running Claude Code and the brief lands in that
-// live session — the send, the app switch, and the typing of
-// the brief's slash command all inside one gesture. If the reading is wrong, expand
-// it: the full review panel (narration editor and all) is the orb's grown-up
-// form, not a separate window.
+// A session ends and the orb appears: a small always-on-top glass card, centred,
+// showing Fovea's three-line reading of what it heard. Its 56pt COIN — a disc
+// wearing the fovea mark — is the drag handle: fling it onto the window running
+// Claude Code and the brief lands in that live session, the send, the app
+// switch and the typing of the slash command all inside one gesture.
+//
+// While you aim, the coin DETACHES: it follows the cursor at full weight with
+// the aim label riding underneath, and the card stays behind at 35% opacity
+// with a dashed socket where the coin was. What you are throwing is the coin,
+// not the card — the design (mddocs/design-brief.md → Claude Design canvas)
+// made that literal.
+//
+// Clicking the coin opens the full review panel directly. The old unfold-on-
+// click options row is gone (canvas cut 1r): two hidden buttons behind a click,
+// on a non-activating panel where hover can't teach, was a dead end. "Add more"
+// lives on as the panel's "Point at more" button, and as double-tapping Right
+// Option while the orb is up — which resumes the SAME session.
 //
 // The summary sits at rest deliberately. A mis-heard identifier in the
 // narration does more damage than anywhere else in the brief, so "did it hear
@@ -25,10 +35,8 @@ import FoveaHandoff
 
 /// What the orb window is currently showing.
 enum OrbMode {
-    /// The card: summary and the fling handle.
+    /// The card: summary and the coin.
     case collapsed
-    /// The card with its actions unfolded (dismiss / add more / fix).
-    case options
     /// The full review panel.
     case expanded
 }
@@ -49,8 +57,11 @@ enum Aim {
 @MainActor
 final class OrbState: ObservableObject {
     @Published var mode: OrbMode = .collapsed
-    /// The app the fling is currently over, for the `→ iTerm2` label.
+    /// The app the fling is currently over, for the label under the coin.
     @Published var aim: Aim = .idle
+    /// What the session captured, for the working readout — known the moment
+    /// the recorder closes, long before the pipeline has anything to say.
+    @Published var captured: SessionStats?
     var isAiming: Bool { if case .idle = aim { return false }; return true }
 }
 
@@ -62,6 +73,7 @@ final class OrbController: NSObject {
     private let state = OrbState()
     private var fling = FlingGesture()
     private let highlight = TargetHighlight()
+    private lazy var coinCursor = CoinCursor(state: state)
     private var phaseWatcher: AnyCancellable?
     private var escapeMonitor: Any?
     private var fadeTask: Task<Void, Never>?
@@ -82,9 +94,6 @@ final class OrbController: NSObject {
     /// The session currently being extended, if any.
     private var extending: String?
 
-    /// Where the fling's mouse-down happened, in Cocoa screen coordinates.
-    private var pressLocation: NSPoint = .zero
-
     /// The point the last processed drag update resolved its target at, in CG
     /// global coordinates.
     ///
@@ -98,7 +107,7 @@ final class OrbController: NSObject {
     // ── Presenting ──────────────────────────────────────────────────────────
 
     /// A session has just closed: show the orb and run the pipeline behind it.
-    func present(sessionDir: String) {
+    func present(sessionDir: String, stats: SessionStats? = nil) {
         // Narrate every handoff into the app's log. The first live fling
         // failed with nothing on screen and nothing on disk — the only trace
         // hook was in `handoff-test`, so the field run was undiagnosable and
@@ -108,6 +117,7 @@ final class OrbController: NSObject {
             Handoff.trace = { Emit.log("handoff: \($0)") }
         }
         fadeTask?.cancel()
+        state.captured = stats
         if let extending, extending == sessionDir {
             self.extending = nil
             show()
@@ -137,7 +147,12 @@ final class OrbController: NSObject {
             phaseWatcher = model.$phase.sink { [weak self] phase in
                 switch phase {
                 case .sent: self?.fadeSoon()
-                case .failed: self?.fadeTask?.cancel()
+                case .failed:
+                    self?.fadeTask?.cancel()
+                    // The failure block is taller than the readout — message,
+                    // a button, the folded details. Give it the room now; a
+                    // scrolling one-liner was the old design's mistake.
+                    self?.applyMode()
                 case .working, .ready: break
                 }
             }
@@ -194,8 +209,14 @@ final class OrbController: NSObject {
         guard let window, let screen = NSScreen.main ?? NSScreen.screens.first else { return }
         let size: NSSize
         switch state.mode {
-        case .collapsed: size = NSSize(width: 400, height: 190)
-        case .options: size = NSSize(width: 400, height: 236)
+        case .collapsed:
+            // The readout earns its height, no more. Failure needs room for
+            // the sentence, a button and the folded details.
+            if case .failed = model.phase {
+                size = NSSize(width: 400, height: 210)
+            } else {
+                size = NSSize(width: 400, height: 132)
+            }
         case .expanded: size = NSSize(width: 620, height: 640)
         }
         let origin = NSPoint(
@@ -228,7 +249,7 @@ final class OrbController: NSObject {
         }
     }
 
-    // ── "Add more" ──────────────────────────────────────────────────────────
+    // ── "Point at more" ─────────────────────────────────────────────────────
 
     /// Identical contract to the review window's extend: hand control back to
     /// the recorder for another hold, and get the orb out of the way — the
@@ -250,6 +271,22 @@ final class OrbController: NSObject {
         window?.orderOut(nil)
     }
 
+    /// The start gesture arrived while the orb is up: add to the session it is
+    /// showing instead of opening a second one the agent would have to
+    /// reconcile. Returns false when there is nothing extendable — no window,
+    /// no digest yet, or a brief already handed over — and the recorder then
+    /// starts a fresh session exactly as before.
+    func extendPresentedSession() -> Bool {
+        guard window?.isVisible == true, model.digest != nil else { return false }
+        switch model.phase {
+        case .ready, .failed:
+            extendSession()
+            return extending != nil
+        case .working, .sent:
+            return false
+        }
+    }
+
     // ── The fling ───────────────────────────────────────────────────────────
 
     private func flingPressed() {
@@ -262,7 +299,6 @@ final class OrbController: NSObject {
             case .working, .sent: return false
             }
         }()
-        pressLocation = NSEvent.mouseLocation
         _ = fling.press()
     }
 
@@ -282,6 +318,9 @@ final class OrbController: NSObject {
             // Only remembered when it actually resolved to the target we are
             // naming — an aim point over nothing must not become a click point.
             aimPoint = target == nil ? nil : cgPoint
+            // The detached coin rides the cursor with the aim label under it;
+            // the card behind keeps only its dashed socket.
+            coinCursor.move(to: mouse)
             if let resolved, target != nil {
                 highlight.show(cgRect: resolved.windowBounds)
             } else {
@@ -292,10 +331,15 @@ final class OrbController: NSObject {
 
     private func flingReleased() {
         highlight.hide()
+        coinCursor.hide()
         state.aim = .idle
         switch fling.release() {
         case .openOptions:
-            state.mode = state.mode == .options ? .collapsed : .options
+            // The gesture still calls a travel-free release `openOptions` —
+            // the name is the package's tested contract. What it OPENS changed
+            // with the redesign: the options row is cut, so a click goes
+            // straight to the review panel.
+            state.mode = .expanded
             applyMode()
         case .commit(let target):
             // Pin the aim point onto the target. The paste can only land where
@@ -315,6 +359,7 @@ final class OrbController: NSObject {
     private func cancelFling() {
         _ = fling.cancel()
         highlight.hide()
+        coinCursor.hide()
         state.aim = .idle
     }
 
@@ -391,6 +436,163 @@ private final class OrbPanel: NSPanel {
     override var canBecomeKey: Bool { true }
 }
 
+// ── The detached coin ───────────────────────────────────────────────────────
+
+/// The coin while it is being thrown: a click-through panel that follows the
+/// cursor, drawing the coin at full weight with the aim label riding under it.
+/// The card it left behind keeps a dashed socket — what travels is the coin.
+@MainActor
+final class CoinCursor {
+    private var window: NSPanel?
+    private let state: OrbState
+
+    /// Panel geometry: the coin's centre sits `coinCenterFromTop` below the
+    /// panel's top edge, and the label hangs beneath it.
+    private static let panelSize = NSSize(width: 340, height: 110)
+    private static let coinCenterFromTop: CGFloat = 28
+
+    init(state: OrbState) {
+        self.state = state
+    }
+
+    /// Put the coin's centre at the cursor, in Cocoa screen coordinates.
+    func move(to cocoaPoint: NSPoint) {
+        if window == nil { window = make() }
+        guard let window else { return }
+        window.setFrameOrigin(NSPoint(
+            x: cocoaPoint.x - Self.panelSize.width / 2,
+            y: cocoaPoint.y - (Self.panelSize.height - Self.coinCenterFromTop)
+        ))
+        // Ordered after the card's panel at the same level, so the coin rides
+        // above the card when the fling passes over it.
+        window.orderFrontRegardless()
+    }
+
+    func hide() {
+        window?.orderOut(nil)
+    }
+
+    private func make() -> NSPanel {
+        let panel = NSPanel(
+            contentRect: NSRect(origin: .zero, size: Self.panelSize),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        // The coin draws its own shadow; a window shadow under a mostly-empty
+        // panel paints a visible rectangle.
+        panel.hasShadow = false
+        // Click-through: the panel chases the cursor, and a panel that could
+        // swallow the mouse-up would end the fling into itself.
+        panel.ignoresMouseEvents = true
+        panel.level = .floating
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        panel.contentViewController = NSHostingController(rootView: CoinCursorView(state: state))
+        return panel
+    }
+}
+
+private struct CoinCursorView: View {
+    @ObservedObject var state: OrbState
+
+    var body: some View {
+        VStack(spacing: 8) {
+            CoinView(kind: .ready, held: true)
+            switch state.aim {
+            case .over(let target):
+                aimLabel("→ \(target.appName) · let go to send", prominent: true)
+            case .overNothing:
+                aimLabel("not over a window · let go to cancel", prominent: false)
+            case .idle:
+                EmptyView()
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(width: 340, height: 110, alignment: .top)
+    }
+
+    private func aimLabel(_ text: String, prominent: Bool) -> some View {
+        Text(text)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(prominent ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(.regularMaterial, in: Capsule())
+            .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
+    }
+}
+
+// ── The coin ────────────────────────────────────────────────────────────────
+
+/// The orb's handle: a 56pt disc with rim light, an inset ring, and a real
+/// shadow — the one element in the product with depth, because it is the one
+/// you can pick up. Wears the fovea mark; the failed state swaps it for `!`.
+struct CoinView: View {
+    enum Kind {
+        /// Grey, pulsing — no accent until there is something to throw.
+        case working
+        case ready
+        case failed
+    }
+
+    let kind: Kind
+    /// Held coins float: the shadow grows from 2pt to 8pt of throw the moment
+    /// the coin is picked up. The card's shadow never changes.
+    var held: Bool = false
+
+    var body: some View {
+        ZStack {
+            Circle().fill(fill)
+            // Rim light: bright at the top, gone by the middle.
+            Circle().fill(
+                LinearGradient(
+                    colors: [FoveaStyle.coinShine, .clear],
+                    startPoint: .top, endPoint: .center
+                )
+            )
+            Circle().strokeBorder(ring, lineWidth: 1.5)
+            glyph
+        }
+        .frame(width: 56, height: 56)
+        .shadow(
+            color: .black.opacity(held ? 0.45 : 0.3),
+            radius: held ? 14 : 3,
+            y: held ? 8 : 2
+        )
+    }
+
+    private var fill: Color {
+        switch kind {
+        case .working: return Color.primary.opacity(0.06)
+        case .ready: return FoveaStyle.coinFill
+        case .failed: return FoveaStyle.needsYou.opacity(0.12)
+        }
+    }
+
+    private var ring: Color {
+        switch kind {
+        case .working: return Color.secondary.opacity(0.5)
+        case .ready: return FoveaStyle.accent
+        case .failed: return FoveaStyle.needsYou
+        }
+    }
+
+    @ViewBuilder private var glyph: some View {
+        switch kind {
+        case .working:
+            FoveaMark(diameter: 20, color: Color.secondary)
+        case .ready:
+            FoveaMark(diameter: 20, color: FoveaStyle.mark)
+        case .failed:
+            Text("!")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(FoveaStyle.needsYou)
+        }
+    }
+}
+
 // ── The aiming outline ──────────────────────────────────────────────────────
 
 /// A stroked rectangle over the window the fling would land on. Purely visual,
@@ -431,7 +633,7 @@ final class TargetHighlight {
             let inset = bounds.insetBy(dx: 2, dy: 2)
             let path = NSBezierPath(roundedRect: inset, xRadius: 8, yRadius: 8)
             path.lineWidth = 3
-            NSColor.controlAccentColor.setStroke()
+            FoveaStyle.accentNS.setStroke()
             path.stroke()
         }
     }
@@ -462,6 +664,8 @@ struct OrbRootView: View {
         Group {
             if state.mode == .expanded {
                 expandedPanel
+            } else if case .sent = model.phase {
+                sentPill
             } else {
                 card
             }
@@ -471,94 +675,102 @@ struct OrbRootView: View {
     // ── The card ────────────────────────────────────────────────────────────
 
     private var card: some View {
-        VStack(spacing: 10) {
-            HStack(alignment: .top, spacing: 14) {
-                orbBody
-                readout
-                // ALWAYS present, in every phase — not inside `optionsRow`.
-                // That row only appears after a click that only registers once
-                // a digest exists, so a pipeline that failed before producing
-                // one left a borderless, always-on-top, all-Spaces panel with
-                // no close box and no way out but quitting Fovea. The title-bar
-                // close box this orb replaced worked in every phase; this is
-                // that guarantee, restored.
-                //
-                // Hidden only while aiming, where it would sit under the
-                // cursor mid-fling.
-                if !state.isAiming {
-                    Button {
-                        actions.onDismiss()
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 11, weight: .bold))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.tertiary)
-                    .help("Put the orb away. The session stays on disk.")
+        HStack(alignment: .top, spacing: 14) {
+            coinSlot
+            readout
+            // ALWAYS present, in every phase. A pipeline that failed before
+            // producing a digest once left a borderless, always-on-top,
+            // all-Spaces panel with no close box and no way out but quitting
+            // Fovea. Hidden only while aiming, where it would sit under the
+            // cursor mid-fling.
+            if !state.isAiming {
+                Button {
+                    actions.onDismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .bold))
                 }
-            }
-            if state.mode == .options {
-                optionsRow
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                .buttonStyle(.plain)
+                .foregroundStyle(.tertiary)
+                .help("Put the orb away. The session stays on disk.")
             }
         }
-        .padding(18)
+        .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
+        .background(
+            RoundedRectangle(cornerRadius: FoveaStyle.panelRadius)
+                .fill(.regularMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: FoveaStyle.panelRadius)
+                        .strokeBorder(Color.primary.opacity(0.09), lineWidth: 1)
+                )
+        )
         .opacity(state.isAiming ? 0.35 : 1)
         .animation(.spring(duration: 0.25), value: state.mode)
         .animation(.easeOut(duration: 0.15), value: state.isAiming)
     }
 
-    /// The fling handle. A plain circle that pulses while the pipeline works
-    /// and settles when the brief is ready to go.
-    private var orbBody: some View {
+    /// The coin at rest, or the socket it left behind while being thrown.
+    ///
+    /// The socket is drawn OVER an invisible coin, not INSTEAD of it: the
+    /// coin's view owns the drag gesture in flight, and SwiftUI cancels a
+    /// gesture whose view leaves the hierarchy — swap the views and the
+    /// release never arrives, stranding the fling mid-air with the cursor
+    /// coin stuck on screen.
+    private var coinSlot: some View {
         ZStack {
-            Circle()
-                .fill(orbColor.gradient)
-                .frame(width: 56, height: 56)
-            Image(systemName: orbSymbol)
-                .font(.system(size: 22, weight: .medium))
-                .foregroundStyle(.white)
+            CoinView(kind: coinKind)
+                .modifier(Breathing(active: isWorking))
+                .opacity(state.isAiming ? 0 : 1)
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            // The first update IS the press. Not
+                            // `translation == .zero` — a fast fling's first
+                            // event can arrive with the mouse already moved,
+                            // and the press would never register.
+                            if !pressed {
+                                pressed = true
+                                actions.onPress()
+                            }
+                            actions.onDrag(value.translation)
+                        }
+                        .onEnded { _ in
+                            pressed = false
+                            actions.onRelease()
+                        }
+                )
+                .accessibilityElement()
+                .accessibilityLabel(accessibilitySummary)
+                .accessibilityAddTraits(.isButton)
+                .help("Drag the coin onto the window running Claude Code to hand the brief over. Click to review.")
+            if state.isAiming {
+                Circle()
+                    .strokeBorder(
+                        Color.secondary.opacity(0.6),
+                        style: StrokeStyle(lineWidth: 1.5, dash: [4, 3])
+                    )
+                    .frame(width: 56, height: 56)
+                    .allowsHitTesting(false)
+            }
         }
-        .modifier(Breathing(active: isWorking))
-        .gesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { value in
-                    // The first update IS the press. Not `translation == .zero` —
-                    // a fast fling's first event can arrive with the mouse
-                    // already moved, and the press would never register.
-                    if !pressed {
-                        pressed = true
-                        actions.onPress()
-                    }
-                    actions.onDrag(value.translation)
-                }
-                .onEnded { _ in
-                    pressed = false
-                    actions.onRelease()
-                }
-        )
-        .help("Drag onto the window running Claude Code to hand the brief over. Click for options.")
     }
 
     @ViewBuilder private var readout: some View {
         VStack(alignment: .leading, spacing: 6) {
-            // AIMING OUTRANKS THE PHASE. This used to live inside `case .ready`,
-            // but a fling also arms on `.failed` — so retrying after a failed
-            // handoff showed the error text for the whole drag and never named
-            // the target. That is the gesture most likely to be thrown in a
-            // hurry, and it was the one without the safety label.
-            switch state.aim {
-            case .over(let target):
-                Label("→ \(target.appName)", systemImage: "arrow.up.forward.app")
-                    .font(.title3.weight(.semibold))
-                Text("Let go to send the brief there")
-                    .font(.caption).foregroundStyle(.secondary)
-            case .overNothing:
-                Text("Not over a window — let go to cancel")
-                    .font(.callout).foregroundStyle(.secondary)
-            case .idle:
+            if state.isAiming {
+                // The aim label rides under the coin now; the dimmed card only
+                // reassures that nothing has been decided yet.
+                if let summary = model.summary ?? digestLine {
+                    Text(summary)
+                        .font(.system(size: 13))
+                        .lineLimit(1)
+                        .opacity(0.8)
+                }
+                Text("the card stays behind while you aim — nothing sent yet")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            } else {
                 phaseReadout
             }
         }
@@ -568,32 +780,50 @@ struct OrbRootView: View {
     @ViewBuilder private var phaseReadout: some View {
         switch model.phase {
         case .working(let what):
-            Text(what).font(.callout).foregroundStyle(.secondary)
-        case .sent:
-            Label("Handed over", systemImage: "checkmark.circle.fill")
-                .font(.callout)
-                .foregroundStyle(.green)
-        case .failed(let problem):
-            VStack(alignment: .leading, spacing: 6) {
-                ScrollView {
-                    Text(problem.message)
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                // One click to the fix, when the fix is a key. The alternative
-                // is a sentence telling somebody to go and find Settings.
-                if problem.opensSettings {
-                    Button("Open Settings") { actions.onOpenSettings() }
-                        .font(.caption)
-                }
+            Text(what).font(.system(size: 13))
+            if let captured = state.captured {
+                Text(capturedLine(captured))
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
             }
+        case .failed(let problem):
+            failureReadout(problem)
         case .ready:
             summaryLines
-            Text("Drag the orb onto your Claude Code window · click for more")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+        case .sent:
+            // Unreachable — the sent phase swaps the whole card for the pill —
+            // but the switch must be total.
+            EmptyView()
+        }
+    }
+
+    private func failureReadout(_ problem: PipelineFailure) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(problem.message)
+                .font(.system(size: 13))
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            HStack(spacing: 10) {
+                if problem.opensSettings {
+                    Button("Open Settings") { actions.onOpenSettings() }
+                        .font(.system(size: 12, weight: .semibold))
+                }
+            }
+            // Kept, folded — the raw output is the only thing worth having in
+            // a bug report, and not what the person in front of it needs.
+            if !problem.raw.isEmpty {
+                DisclosureGroup("Details") {
+                    ScrollView {
+                        Text(problem.raw)
+                            .font(.system(size: 11, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 90)
+                }
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -602,39 +832,67 @@ struct OrbRootView: View {
     @ViewBuilder private var summaryLines: some View {
         if let summary = model.summary {
             Text(summary)
-                .font(.callout)
+                .font(.system(size: 13))
                 .fixedSize(horizontal: false, vertical: true)
-        } else if let d = model.digest {
-            let seconds = Int((d.summary.durationMs / 1000).rounded())
-            let apps = d.summary.apps.isEmpty ? "no app" : d.summary.apps.joined(separator: ", ")
-            Text("\(seconds)s · \(d.summary.referentCount) things pointed at · \(apps)")
-                .font(.callout)
+        } else if let line = digestLine {
+            Text(line)
+                .font(.system(size: 13))
             if model.summaryPending {
                 ProgressView().controlSize(.small)
             }
         }
         if let repo = model.digest?.summary.repoHints.first {
-            Label(repo, systemImage: "shippingbox")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                Text(repo)
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(FoveaStyle.mark)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(FoveaStyle.accent.opacity(0.16), in: Capsule())
+                Text("drag the coin onto Claude Code · click it for more")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.top, 3)
         } else if model.digest != nil {
             Label("No repo named — confirm where this belongs", systemImage: "questionmark.circle")
-                .font(.caption)
-                .foregroundStyle(.orange)
+                .font(.system(size: 11))
+                .foregroundStyle(FoveaStyle.needsYou)
+            Text("drag the coin onto Claude Code · click it for more")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
         }
     }
 
-    private var optionsRow: some View {
-        HStack(spacing: 8) {
-            Button("Add more") { actions.onExtend() }
-                .help("Reopen this session and record more — talk and point again, then tap Right Option to stop.")
+    // ── The sent pill ───────────────────────────────────────────────────────
 
-            Button("Wanna fix something?") { actions.onSetMode(.expanded) }
-                .help("Open the full review — the narration is editable there.")
-
-            Spacer()
+    /// The card collapses to a capsule on the way out the door — less to read
+    /// once there is nothing left to decide. Fades 2.5s later.
+    private var sentPill: some View {
+        HStack(spacing: 10) {
+            ZStack {
+                Circle()
+                    .fill(FoveaStyle.sentGreen.opacity(0.18))
+                Circle()
+                    .strokeBorder(FoveaStyle.sentGreen, lineWidth: 1.5)
+                Image(systemName: "checkmark")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(FoveaStyle.sentGreen)
+            }
+            .frame(width: 36, height: 36)
+            Text(sentLine)
+                .font(.system(size: 13))
         }
-        .disabled(isWorking)
+        .padding(.leading, 8)
+        .padding(.trailing, 20)
+        .padding(.vertical, 8)
+        .background(
+            Capsule()
+                .fill(.regularMaterial)
+                .overlay(Capsule().strokeBorder(Color.primary.opacity(0.09), lineWidth: 1))
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityLabel(sentLine)
     }
 
     // ── The expanded panel ──────────────────────────────────────────────────
@@ -658,7 +916,14 @@ struct OrbRootView: View {
             .padding(.top, 14)
             ReviewView(model: model, onExtend: actions.onExtend)
         }
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
+        .background(
+            RoundedRectangle(cornerRadius: FoveaStyle.panelRadius)
+                .fill(.regularMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: FoveaStyle.panelRadius)
+                        .strokeBorder(Color.primary.opacity(0.09), lineWidth: 1)
+                )
+        )
     }
 
     // ── Wording ─────────────────────────────────────────────────────────────
@@ -668,37 +933,62 @@ struct OrbRootView: View {
         return false
     }
 
-    private var orbColor: Color {
+    private var coinKind: CoinView.Kind {
         switch model.phase {
-        case .working: return .gray
-        case .ready: return .indigo
-        case .sent: return .green
-        case .failed: return .orange
+        case .working: return .working
+        case .failed: return .failed
+        case .ready, .sent: return .ready
         }
     }
 
-    private var orbSymbol: String {
+    /// `0:43 captured · 6 things pointed at` — mono, because it is data.
+    private func capturedLine(_ stats: SessionStats) -> String {
+        var parts: [String] = []
+        if let ms = stats.durationMs {
+            let total = Int((ms / 1000).rounded())
+            parts.append(String(format: "%d:%02d captured", total / 60, total % 60))
+        }
+        parts.append("\(stats.referentCount) thing\(stats.referentCount == 1 ? "" : "s") pointed at")
+        return parts.joined(separator: " · ")
+    }
+
+    private var digestLine: String? {
+        guard let d = model.digest else { return nil }
+        let seconds = Int((d.summary.durationMs / 1000).rounded())
+        let apps = d.summary.apps.isEmpty ? "no app" : d.summary.apps.joined(separator: ", ")
+        return "\(seconds)s · \(d.summary.referentCount) things pointed at · \(apps)"
+    }
+
+    private var sentLine: String {
+        model.handedTo.map { "Handed to \($0)" } ?? "Handed over"
+    }
+
+    private var accessibilitySummary: String {
         switch model.phase {
-        case .working: return "eye"
-        case .ready: return "eye.fill"
-        case .sent: return "checkmark"
-        case .failed: return "exclamationmark"
+        case .working: return "Fovea brief, preparing"
+        case .ready: return "Fovea brief, ready. Drag onto your coding agent's window to send, click to review."
+        case .failed: return "Fovea brief, needs attention"
+        case .sent: return "Fovea brief, handed over"
         }
     }
 }
 
 /// A soft breathing pulse for the working state — motion says "busy" without a
-/// spinner fighting the summary for attention. (Not Overlay's `Pulse`, which is
-/// a captured-referent ring; the name is taken.)
+/// spinner fighting the summary for attention. Under Reduce Motion the scale
+/// becomes an opacity breath: still visibly alive, nothing moves.
+/// (Not Overlay's `Pulse`, which is a captured-referent ring; the name is
+/// taken.)
 private struct Breathing: ViewModifier {
     let active: Bool
     @State private var up = false
 
     func body(content: Content) -> some View {
+        let reduce = FoveaStyle.reduceMotion
         content
-            .scaleEffect(active && up ? 1.08 : 1.0)
+            .scaleEffect(active && up && !reduce ? 1.06 : 1.0)
+            .opacity(active && up && reduce ? 0.7 : 1.0)
             .animation(
-                active ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true) : .default,
+                active ? .easeInOut(duration: 1.0).repeatForever(autoreverses: true) : .default,
                 value: up
             )
             .onAppear { up = true }

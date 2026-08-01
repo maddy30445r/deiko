@@ -171,15 +171,21 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Stop talking and the brief comes to you. Hung off the recorder rather
         // than the Stop menu item so it fires however the session ended — hotkey
         // tap, menu, or the silence watchdog.
-        recorder.onSessionClosed = { [weak self] dir in
-            self?.review.present(sessionDir: dir)
+        recorder.onSessionClosed = { [weak self] dir, stats in
+            self?.review.present(sessionDir: dir, stats: stats)
         }
-        // "Forgot something?" reopens the session the window is showing and
-        // starts another hold. Routed through the recorder rather than done in
-        // the window, because reopening has to restore the session's counters
-        // and tell the hotkey a session is live again.
+        // "Point at more" reopens the session the orb is showing and starts
+        // another hold. Routed through the recorder rather than done in the
+        // window, because reopening has to restore the session's counters and
+        // tell the hotkey a session is live again.
         review.onExtend = { [weak self] dir in
             self?.recorder.resumeForExtraHold(dir: dir) ?? false
+        }
+        // The start gesture, thrown while the orb is up, adds to the session
+        // the orb is showing — the redesign's replacement for the orb's old
+        // "Add more" button.
+        recorder.onStartGestureWhileIdle = { [weak self] in
+            self?.review.extendPresentedSession() ?? false
         }
         review.onOpenSettings = { [weak self] in self?.settings.present() }
         // Put back a connection that has gone missing. Two ordinary things

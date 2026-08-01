@@ -33,6 +33,17 @@ import Foundation
 // voice rather than by a heuristic about cursor movement.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// What a closed session captured, as the recorder knew it at the moment of
+/// close. The orb's working readout shows this while the pipeline is still
+/// transcribing — "0:43 captured · 6 things pointed at" is answerable
+/// immediately; everything else has to wait.
+struct SessionStats {
+    /// Wall time from session start to close. Nil for a reopened session,
+    /// whose original start this launch may never have seen.
+    let durationMs: Double?
+    let referentCount: Int
+}
+
 @MainActor
 final class Recorder {
 
@@ -124,6 +135,10 @@ final class Recorder {
     /// forever, and the session running with it).
     private var recordingStartedAt: Double?
 
+    /// When the OPEN session was minted, for the stats handed to the orb at
+    /// close. Nil for reopened sessions — see `reopenSession`.
+    private var sessionStartedMs: Double?
+
     // Settle state
     private var lastPosition = Point(x: 0, y: 0)
     private var stationarySince = Clock.nowMs()
@@ -194,7 +209,19 @@ final class Recorder {
     /// Fired once with the session directory when a session has fully closed —
     /// crops written, WAV finalised, `sessionEnd` emitted. The review window
     /// hangs off this: everything it reads has to exist before it opens.
-    var onSessionClosed: ((String) -> Void)?
+    ///
+    /// The stats ride along because the orb's working readout wants them the
+    /// moment it appears — long before the pipeline has produced a digest —
+    /// and by then this class has already reset its counters for the next
+    /// session.
+    var onSessionClosed: ((String, SessionStats) -> Void)?
+
+    /// Consulted when the start gesture arrives with no session open. Return
+    /// true to claim the gesture — the orb does, while it is showing a
+    /// finished brief, routing the recording into THAT session as another
+    /// hold (the redesign cut the orb's "Add more" button; the start gesture
+    /// is its replacement). Returning false starts a fresh session as always.
+    var onStartGestureWhileIdle: (() -> Bool)?
 
     /// Crop + AX resolution runs off the sampling path in detached tasks. Their
     /// handles are kept so `stopSession` can wait for them: the stop button
@@ -271,6 +298,10 @@ final class Recorder {
 
         sessionDir = dir
         sessionId = (dir as NSString).lastPathComponent
+        // The original start happened in some earlier close-out, possibly an
+        // earlier launch. A duration measured from HERE would claim the
+        // session is seconds old when its first hold is minutes of material.
+        sessionStartedMs = nil
         holdIndex = holds
         globalReferentIndex = referents
         sessionReferentCount = referents
@@ -326,6 +357,7 @@ final class Recorder {
 
         sessionDir = dir
         sessionId = stamp
+        sessionStartedMs = Clock.nowMs()
         holdIndex = 0
         globalReferentIndex = 0
         sessionReferentCount = 0
@@ -390,8 +422,16 @@ final class Recorder {
         // silently appended to a session the user considers finished.
         Emit.redirectToFile(Paths.launchLog)
 
+        // Read out BEFORE the reset below — after it, this session's numbers
+        // are gone.
+        let stats = SessionStats(
+            durationMs: sessionStartedMs.map { Clock.nowMs() - $0 },
+            referentCount: sessionReferentCount
+        )
+
         sessionDir = nil
         sessionId = nil
+        sessionStartedMs = nil
         // Tell the hotkey, whatever route brought us here. A watchdog stop or
         // a Quit never passed through the gesture, and leaving it believing a
         // session is live means Option-drags stay swallowed afterwards.
@@ -401,7 +441,7 @@ final class Recorder {
         // only one of four ways a session ends — the hotkey tap, the silence
         // watchdog and Quit all arrive through `stopSession` and would each have
         // needed their own call. One notification, every route.
-        onSessionClosed?(dir)
+        onSessionClosed?(dir, stats)
         return dir
     }
 
@@ -418,6 +458,11 @@ final class Recorder {
     private func handle(_ event: HotkeyEvent) {
         switch event {
         case .recordingStarted:
+            // No session open and the orb is showing a finished brief? Then
+            // this gesture ADDS to that session — the orb claims it via
+            // `resumeForExtraHold`, whose own `beginRecording` makes the one
+            // below a no-op behind the `isRecording` guard.
+            if sessionDir == nil, onStartGestureWhileIdle?() == true { break }
             beginRecording()
         case .recordingStopped:
             Task { _ = await self.stopSession() }

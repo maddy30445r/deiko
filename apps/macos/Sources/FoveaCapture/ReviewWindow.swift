@@ -52,6 +52,10 @@ final class ReviewModel: ObservableObject {
     @Published var digest: BriefDigest?
     @Published var narration: String = ""
 
+    /// Who the brief was handed to, once it was — the sent pill names the app
+    /// ("Handed to Claude Code") rather than claiming a vague success.
+    @Published var handedTo: String?
+
     /// Fovea's reading of the session, for this screen only — never sent.
     /// Nil while it is still arriving AND when it never arrives; `summaryPending`
     /// tells those apart, because a spinner that never resolves is worse than no
@@ -124,6 +128,7 @@ final class ReviewModel: ObservableObject {
     func load(sessionDir: String) {
         cancelPendingWork()
         self.sessionDir = sessionDir
+        handedTo = nil
         phase = .working("Transcribing…")
         task = Task {
             do {
@@ -174,6 +179,7 @@ final class ReviewModel: ObservableObject {
                     try await after()
                     guard stillCurrent(sessionDir) else { return }
                 }
+                handedTo = appName
                 phase = .sent
             } catch {
                 guard stillCurrent(sessionDir) else { return }
@@ -484,7 +490,7 @@ struct ReviewView: View {
             // Left of the primary action and unstyled, because it is the rarer
             // choice — but it must be reachable from the same place you decide
             // the brief is not complete.
-            Button("Forgot something?") { onExtend() }
+            Button("Point at more") { onExtend() }
                 .disabled(!isApprovable)
                 .help("Reopen this session and record more — talk and point again, then tap Right Option to stop.")
             Button("Good to go") { model.approve() }
