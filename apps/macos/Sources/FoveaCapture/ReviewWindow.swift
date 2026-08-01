@@ -370,11 +370,24 @@ struct ReviewView: View {
         .padding(20)
     }
 
+    /// Scrollable evidence, pinned decision.
+    ///
+    /// The footer sits OUTSIDE the scroll deliberately: this panel used to grow
+    /// with its content and push "Point at more" and "Good to go" off the
+    /// bottom of the display — two buttons that existed and could not be
+    /// clicked. Whatever the narration's length, the two things you can do
+    /// about it stay on screen.
     private var brief: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
-            summaryCard
-            narrationEditor
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    header
+                    summaryCard
+                    narrationEditor
+                }
+                .padding(.bottom, 16)
+            }
+            Divider()
             footer
         }
     }

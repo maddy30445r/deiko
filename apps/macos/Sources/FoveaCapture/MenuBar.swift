@@ -262,7 +262,11 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
             blocked
             ? "Fovea — needs permission" : (recording ? "Fovea — capturing" : "Fovea — ready")
         button.image = image
-        button.contentTintColor = nil
+        // The template above is black; the tint is applied here, where AppKit
+        // resolves it against the menu bar's own appearance. Nil = follow the
+        // bar, which is what "ready" should do.
+        button.contentTintColor =
+            recording ? FoveaStyle.recordRedNS : (blocked ? FoveaStyle.needsYouNS : nil)
         // Read aloud by VoiceOver, and shown on hover — the only place the
         // reason is available without opening the menu.
         button.toolTip = blocked ? "Fovea needs permission to work — click to grant" : nil

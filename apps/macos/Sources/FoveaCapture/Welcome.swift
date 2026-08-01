@@ -58,7 +58,11 @@ final class WelcomeWindowController: NSObject, NSWindowDelegate {
             self?.window?.close()
         }
 
-        let window = NSWindow(contentViewController: NSHostingController(rootView: WelcomeView(model: model)))
+        let hosting = NSHostingController(rootView: WelcomeView(model: model))
+        // 540×720 is the design's size and the window keeps it; the content
+        // scrolls. See `Orb.swift`'s `makeWindow`.
+        hosting.sizingOptions = []
+        let window = NSWindow(contentViewController: hosting)
         window.title = "Welcome to Fovea"
         window.styleMask = [.titled, .closable]
         // Tall enough that nothing scrolls. At 560 the content overflowed and
@@ -95,7 +99,7 @@ final class WelcomeModel: ObservableObject {
 
     @Published var rows: [Row] = []
     @Published var needsRelaunch = false
-    @Published var keyPresent = (Credentials.value(for: "SARVAM_API_KEY") ?? "").isEmpty == false
+    @Published var keyPresent = Credentials.exists("SARVAM_API_KEY")
     @Published var agentConnected = false
     @Published var connectProblem: String?
 
@@ -120,7 +124,9 @@ final class WelcomeModel: ObservableObject {
         rows = Permission.allCases.map {
             Row(id: $0.rawValue, symbol: $0.symbol, purpose: $0.purpose, granted: $0.isGranted)
         }
-        keyPresent = (Credentials.value(for: "SARVAM_API_KEY") ?? "").isEmpty == false
+        // `exists`, not `value` — first run must not demand the login password
+        // just to draw a checkmark.
+        keyPresent = Credentials.exists("SARVAM_API_KEY")
         agentConnected = claude?.isConnected ?? false
     }
 

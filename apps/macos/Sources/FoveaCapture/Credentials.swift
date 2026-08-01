@@ -49,24 +49,91 @@ enum Credentials {
     /// signed, notarised and handed to somebody else. It exists so a developer's
     /// checkout keeps working untouched; a shipped app has no such file and
     /// falls through to the keychain.
+    ///
+    /// **This one decrypts, so it can prompt.** Call it only when the value is
+    /// actually needed — spawning the pipeline. Anything that merely wants to
+    /// know whether a key is set should call `exists(_:)`, which does not.
     static func value(for name: String) -> String? {
         if let fromProcess = ProcessInfo.processInfo.environment[name], !fromProcess.isEmpty {
             return fromProcess
         }
+        if let cached = cache.read(name) { return cached }
         if let fromKeychain = keychainRead(name), !fromKeychain.isEmpty {
+            cache.write(name, fromKeychain)
             return fromKeychain
         }
         return dotEnv()[name]
     }
 
+    /// Is a key set — without decrypting it, and therefore without a prompt.
+    ///
+    /// THIS DISTINCTION IS THE WHOLE POINT. A keychain item's ciphertext is
+    /// guarded by an ACL whose partition list pins one exact cdhash, so every
+    /// rebuild (and, shipped, every update) invalidates it and macOS demands
+    /// the login password. But an ATTRIBUTES-only query decrypts nothing and
+    /// is never challenged — verified against a binary deliberately signed out
+    /// of the ACL. So Settings and first-run, which only ever needed to say
+    /// "a key is stored", now ask a question that has no password attached.
+    static func exists(_ name: String) -> Bool {
+        if ProcessInfo.processInfo.environment[name]?.isEmpty == false { return true }
+        if cache.read(name) != nil { return true }
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: name,
+            // Attributes, NOT data. Adding kSecReturnData here would put the
+            // password prompt back.
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        if SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess { return true }
+        return dotEnv()[name]?.isEmpty == false
+    }
+
+    /// Decrypted values already paid for this launch, so the pipeline prompts
+    /// at most once per key per launch rather than once per session.
+    private final class Cache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var values: [String: String] = [:]
+
+        func read(_ name: String) -> String? {
+            lock.lock()
+            defer { lock.unlock() }
+            return values[name]
+        }
+
+        func write(_ name: String, _ value: String) {
+            lock.lock()
+            defer { lock.unlock() }
+            values[name] = value
+        }
+
+        func forget(_ name: String) {
+            lock.lock()
+            defer { lock.unlock() }
+            values[name] = nil
+        }
+    }
+
+    private static let cache = Cache()
+
     /// Where ONE key comes from, for the Settings window's per-key line —
     /// "Sarvam: from your login keychain · Groq: not set". A developer whose
     /// `.env` already works should not be told to type a key they have.
+    /// Asks `exists`-style questions only — opening Settings must never
+    /// trigger a keychain password prompt.
     static func source(of name: String) -> String {
         if ProcessInfo.processInfo.environment[name]?.isEmpty == false {
             return "from this process's environment"
         }
-        if keychainRead(name)?.isEmpty == false {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: name,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        if SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess {
             return "from your login keychain"
         }
         if dotEnv()[name]?.isEmpty == false {
@@ -92,7 +159,9 @@ enum Credentials {
             kSecAttrAccount as String: name,
         ]
         SecItemDelete(query as CFDictionary)
+        cache.forget(name)
         guard !trimmed.isEmpty else { return }
+        cache.write(name, trimmed)
         query[kSecValueData as String] = Data(trimmed.utf8)
         // The pipeline runs while the developer is at the machine, so
         // `WhenUnlocked` is the tightest class that always works — no prompt,

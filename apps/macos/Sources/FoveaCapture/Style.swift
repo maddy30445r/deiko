@@ -128,51 +128,48 @@ extension FoveaStyle {
     /// coin wears, so the menu bar and the orb are visibly the same object.
     ///
     /// Three states, each a SHAPE change so colour is never the only signal:
-    ///   ready     — ring with a small centred dot (template, follows the bar)
-    ///   capturing — the dot swells to fill the ring, in record red
-    ///   blocked   — ring-and-dot with an orange `!` at the corner
+    ///   ready     — ring with a small centred dot
+    ///   capturing — the dot swells to fill the ring
+    ///   blocked   — ring-and-dot with an `!` at the corner
+    ///
+    /// ALWAYS a template image, always drawn in black. Colour arrives from the
+    /// caller as `contentTintColor`, which AppKit resolves against the menu
+    /// bar's real appearance. Drawing colours in here instead meant guessing
+    /// that appearance from inside a drawing handler — and guessing wrong puts
+    /// a dark ring on a dark menu bar.
     static func menuBarIcon(recording: Bool, blocked: Bool) -> NSImage {
         let size = NSSize(width: 18, height: 16)
         let image = NSImage(size: size, flipped: false) { _ in
             let stroke: CGFloat = 1.5
             let ring = NSRect(x: 2.5, y: 1.5, width: 13, height: 13).insetBy(dx: stroke / 2, dy: stroke / 2)
 
+            NSColor.black.setStroke()
+            NSColor.black.setFill()
+
+            let path = NSBezierPath(ovalIn: ring)
+            path.lineWidth = stroke
+            path.stroke()
+
             if recording {
-                // The swollen dot. Red is drawn literally — a template image
-                // would flatten it to the bar colour, and this state must not
-                // be mistakable for ready.
-                recordRedNS.setStroke()
-                recordRedNS.setFill()
-                let path = NSBezierPath(ovalIn: ring)
-                path.lineWidth = stroke
-                path.stroke()
+                // The dot swells to fill the ring — legible at 16pt in a way a
+                // tint change alone is not.
                 NSBezierPath(ovalIn: ring.insetBy(dx: 3, dy: 3)).fill()
             } else {
-                // Ready ships as a template (black is the template convention);
-                // blocked cannot be one — the `!` must stay orange — so its
-                // ring uses labelColor, which the drawing handler re-resolves
-                // per appearance every time the image is drawn.
-                let ink: NSColor = blocked ? .labelColor : .black
-                ink.setStroke()
-                ink.setFill()
-                let path = NSBezierPath(ovalIn: ring)
-                path.lineWidth = stroke
-                path.stroke()
                 let dot = NSRect(x: ring.midX - 1.75, y: ring.midY - 1.75, width: 3.5, height: 3.5)
                 NSBezierPath(ovalIn: dot).fill()
                 if blocked {
-                    let attrs: [NSAttributedString.Key: Any] = [
-                        .font: NSFont.systemFont(ofSize: 9, weight: .bold),
-                        .foregroundColor: needsYouNS,
-                    ]
-                    ("!" as NSString).draw(at: NSPoint(x: size.width - 4, y: size.height - 10), withAttributes: attrs)
+                    ("!" as NSString).draw(
+                        at: NSPoint(x: size.width - 4.5, y: size.height - 10),
+                        withAttributes: [
+                            .font: NSFont.systemFont(ofSize: 9, weight: .bold),
+                            .foregroundColor: NSColor.black,
+                        ]
+                    )
                 }
             }
             return true
         }
-        // Template only while nothing is coloured: ready adapts to the bar,
-        // capturing keeps its red, blocked keeps its orange.
-        image.isTemplate = !recording && !blocked
+        image.isTemplate = true
         return image
     }
 }

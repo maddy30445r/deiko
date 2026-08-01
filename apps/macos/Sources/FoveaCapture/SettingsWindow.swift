@@ -31,6 +31,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             return
         }
         let hosting = NSHostingController(rootView: SettingsView())
+        // The window's size is the design's, not SwiftUI's — see `Orb.swift`'s
+        // `makeWindow` for what the default does to a fixed frame.
+        hosting.sizingOptions = []
         let window = NSWindow(contentViewController: hosting)
         window.title = "Fovea Settings"
         window.styleMask = [.titled, .closable, .miniaturizable]
@@ -63,8 +66,21 @@ final class SettingsModel: ObservableObject {
     @Published var rows: [Row] = []
     @Published var problem: String?
 
-    @Published var sarvamKey: String = Credentials.value(for: "SARVAM_API_KEY") ?? ""
-    @Published var groqKey: String = Credentials.value(for: "GROQ_API_KEY") ?? ""
+    /// The boxes start EMPTY even when a key is stored.
+    ///
+    /// Pre-filling them meant decrypting on every open, which is what made
+    /// macOS demand the login password every single time this window appeared.
+    /// It also pulled two live credentials into view state for no reason —
+    /// nothing here ever needed to read a key back, only to replace one.
+    @Published var sarvamKey: String = ""
+    @Published var groqKey: String = ""
+    /// Whether the developer has actually typed in each box. An untouched box
+    /// means "leave this alone"; a touched-and-emptied one means "remove it".
+    @Published var sarvamTouched = false
+    @Published var groqTouched = false
+
+    @Published private(set) var sarvamStored = Credentials.exists("SARVAM_API_KEY")
+    @Published private(set) var groqStored = Credentials.exists("GROQ_API_KEY")
 
     /// "Sarvam: from your login keychain · Groq: not set" — per key, because
     /// the two can genuinely come from different places.
@@ -75,8 +91,12 @@ final class SettingsModel: ObservableObject {
     /// The warning belongs HERE, where the fix is — the same failure the orb
     /// reports after the fact, stated before it happens.
     var sarvamMissing: Bool {
-        sarvamKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && (Credentials.value(for: "SARVAM_API_KEY") ?? "").isEmpty
+        if sarvamTouched { return sarvamKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        return !sarvamStored
+    }
+
+    func placeholder(stored: Bool) -> String {
+        stored ? "•••••••••• — type to replace" : "paste a key…"
     }
 
     func refresh() {
@@ -113,10 +133,24 @@ final class SettingsModel: ObservableObject {
         refresh()
     }
 
+    /// Only boxes the developer actually touched are written. An untouched
+    /// empty box must not delete a perfectly good stored key — which is
+    /// exactly what saving would have done once the boxes stopped pre-filling.
+    /// The text is deliberately NOT cleared afterwards: `onChange` cannot tell
+    /// a programmatic reset from typing, so clearing here would mark the box
+    /// touched-and-empty and the next Save would delete the key that was just
+    /// stored.
     func saveKeys() {
-        Credentials.store(sarvamKey, for: "SARVAM_API_KEY")
-        Credentials.store(groqKey, for: "GROQ_API_KEY")
-        objectWillChange.send()
+        if sarvamTouched {
+            Credentials.store(sarvamKey, for: "SARVAM_API_KEY")
+            sarvamTouched = false
+        }
+        if groqTouched {
+            Credentials.store(groqKey, for: "GROQ_API_KEY")
+            groqTouched = false
+        }
+        sarvamStored = Credentials.exists("SARVAM_API_KEY")
+        groqStored = Credentials.exists("GROQ_API_KEY")
     }
 }
 
@@ -217,9 +251,11 @@ private struct SettingsView: View {
         InsetCard {
             VStack(alignment: .leading, spacing: 10) {
                 keyRow(label: "Sarvam", tag: "required", text: $model.sarvamKey,
-                       prompt: "paste a key…")
+                       touched: $model.sarvamTouched,
+                       prompt: model.placeholder(stored: model.sarvamStored))
                 keyRow(label: "Groq", tag: "optional", text: $model.groqKey,
-                       prompt: "gsk_…")
+                       touched: $model.groqTouched,
+                       prompt: model.groqStored ? model.placeholder(stored: true) : "gsk_…")
                 HStack {
                     if model.sarvamMissing {
                         Text("No Sarvam key — briefs will stop at “Transcribing…”")
@@ -241,7 +277,10 @@ private struct SettingsView: View {
         }
     }
 
-    private func keyRow(label: String, tag: String, text: Binding<String>, prompt: String) -> some View {
+    private func keyRow(
+        label: String, tag: String, text: Binding<String>,
+        touched: Binding<Bool>, prompt: String
+    ) -> some View {
         HStack(spacing: 10) {
             (Text(label).font(.system(size: 13))
                 + Text("  \(tag)").font(.system(size: 11)).foregroundStyle(.secondary))
@@ -249,6 +288,7 @@ private struct SettingsView: View {
             SecureField(prompt, text: text)
                 .font(.system(size: 12, design: .monospaced))
                 .textFieldStyle(.roundedBorder)
+                .onChange(of: text.wrappedValue) { touched.wrappedValue = true }
         }
     }
 }

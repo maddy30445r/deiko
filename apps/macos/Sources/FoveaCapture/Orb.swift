@@ -63,6 +63,8 @@ final class OrbState: ObservableObject {
     /// the recorder closes, long before the pipeline has anything to say.
     @Published var captured: SessionStats?
     var isAiming: Bool { if case .idle = aim { return false }; return true }
+    /// Aiming AND over something a brief can actually go to.
+    var isOverTarget: Bool { if case .over = aim { return true }; return false }
 }
 
 @MainActor
@@ -181,7 +183,7 @@ final class OrbController: NSObject {
         // The panel still becomes key itself when the editor needs typing.
         panel.hidesOnDeactivate = false
 
-        panel.contentViewController = NSHostingController(
+        let hosting = NSHostingController(
             rootView: OrbRootView(
                 model: model,
                 state: state,
@@ -195,35 +197,68 @@ final class OrbController: NSObject {
                         self?.state.mode = mode
                         self?.applyMode()
                     },
-                    onOpenSettings: { [weak self] in self?.onOpenSettings?() }
+                    onOpenSettings: { [weak self] in self?.onOpenSettings?() },
+                    onHeightChange: { [weak self] height in self?.fit(cardHeight: height) }
                 )
             )
         )
+        // THE WINDOW OWNS ITS SIZE, NOT SWIFTUI.
+        //
+        // The default sizing options push the SwiftUI content's ideal size back
+        // onto the window, which silently beat every `setFrame` here: the
+        // expanded panel grew past the bottom of the display and took "Point at
+        // more" and "Good to go" off screen with it — two buttons that existed
+        // and could not be clicked. The collapsed card had the same disease,
+        // harmlessly. Now nothing resizes this window except `applyMode` and
+        // `fit(cardHeight:)`.
+        hosting.sizingOptions = []
+        panel.contentViewController = hosting
         return panel
     }
 
-    /// Size and recentre for the current mode. Centred and fixed, on purpose —
-    /// if that turns out to sit where you are looking, that is dogfooding
-    /// feedback worth having, not a setting worth pre-building.
+    /// The card's measured height, reported up from SwiftUI. Nil until the
+    /// first measurement lands.
+    private var measuredCardHeight: CGFloat?
+
+    /// Size and recentre for the current mode. Centred, on purpose — if that
+    /// turns out to sit where you are looking, that is dogfooding feedback
+    /// worth having, not a setting worth pre-building.
+    ///
+    /// The panel is the design's fixed 620×640 and scrolls internally. The card
+    /// is 400 wide and exactly as tall as its content — "the readout earns its
+    /// height, no more" — which is a measurement rather than the three guessed
+    /// constants this used to carry, one of which was always wrong for a
+    /// three-line summary.
     private func applyMode() {
-        guard let window, let screen = NSScreen.main ?? NSScreen.screens.first else { return }
         let size: NSSize
         switch state.mode {
-        case .collapsed:
-            // The readout earns its height, no more. Failure needs room for
-            // the sentence, a button and the folded details.
-            if case .failed = model.phase {
-                size = NSSize(width: 400, height: 210)
-            } else {
-                size = NSSize(width: 400, height: 132)
-            }
+        case .collapsed: size = NSSize(width: 400, height: measuredCardHeight ?? 132)
         case .expanded: size = NSSize(width: 620, height: 640)
         }
+        setFrame(to: size)
+    }
+
+    /// SwiftUI measured the card. Resize only when it actually changed, or the
+    /// preference round-trip becomes a layout loop.
+    private func fit(cardHeight: CGFloat) {
+        let rounded = cardHeight.rounded(.up)
+        guard rounded > 0, abs((measuredCardHeight ?? 0) - rounded) > 0.5 else { return }
+        measuredCardHeight = rounded
+        guard state.mode == .collapsed else { return }
+        setFrame(to: NSSize(width: 400, height: rounded))
+    }
+
+    private func setFrame(to size: NSSize) {
+        guard let window, let screen = NSScreen.main ?? NSScreen.screens.first else { return }
+        guard window.frame.size != size else { return }
         let origin = NSPoint(
             x: screen.frame.midX - size.width / 2,
             y: screen.frame.midY - size.height / 2
         )
-        window.setFrame(NSRect(origin: origin, size: size), display: true, animate: true)
+        window.setFrame(NSRect(origin: origin, size: size), display: true, animate: false)
+        // The shadow is cached against the old shape. Without this the sent
+        // pill wears the card's rectangle.
+        window.invalidateShadow()
     }
 
     /// The × — the session is already on disk; this only puts the orb away.
@@ -499,7 +534,7 @@ private struct CoinCursorView: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            CoinView(kind: .ready, held: true)
+            CoinView(kind: state.isOverTarget ? .ready : .overNothing, held: true)
             switch state.aim {
             case .over(let target):
                 aimLabel("→ \(target.appName) · let go to send", prominent: true)
@@ -534,6 +569,11 @@ struct CoinView: View {
         /// Grey, pulsing — no accent until there is something to throw.
         case working
         case ready
+        /// In flight, over nothing a brief can go to. The coin LOSES its
+        /// accent and its mark goes dashed — this is the one moment it most
+        /// needs to say "letting go here sends nothing", and a coin that looks
+        /// identical over a target and over the desktop says the opposite.
+        case overNothing
         case failed
     }
 
@@ -565,7 +605,7 @@ struct CoinView: View {
 
     private var fill: Color {
         switch kind {
-        case .working: return Color.primary.opacity(0.06)
+        case .working, .overNothing: return Color.primary.opacity(0.06)
         case .ready: return FoveaStyle.coinFill
         case .failed: return FoveaStyle.needsYou.opacity(0.12)
         }
@@ -573,7 +613,7 @@ struct CoinView: View {
 
     private var ring: Color {
         switch kind {
-        case .working: return Color.secondary.opacity(0.5)
+        case .working, .overNothing: return Color.secondary.opacity(0.5)
         case .ready: return FoveaStyle.accent
         case .failed: return FoveaStyle.needsYou
         }
@@ -585,6 +625,15 @@ struct CoinView: View {
             FoveaMark(diameter: 20, color: Color.secondary)
         case .ready:
             FoveaMark(diameter: 20, color: FoveaStyle.mark)
+        case .overNothing:
+            // Dashed and hollow — the mark's dot is what "this is aimed at
+            // something" looks like, so over nothing it is absent.
+            Circle()
+                .strokeBorder(
+                    Color.secondary,
+                    style: StrokeStyle(lineWidth: 2, dash: [3, 3])
+                )
+                .frame(width: 20, height: 20)
         case .failed:
             Text("!")
                 .font(.system(size: 22, weight: .semibold))
@@ -649,6 +698,17 @@ struct OrbActions {
     let onExtend: () -> Void
     let onSetMode: (OrbMode) -> Void
     let onOpenSettings: () -> Void
+    /// How tall the collapsed card wants to be, so the panel can be exactly
+    /// that and no more.
+    let onHeightChange: (CGFloat) -> Void
+}
+
+/// Carries the card's laid-out height from SwiftUI up to the window.
+private struct CardHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
 }
 
 struct OrbRootView: View {
@@ -665,11 +725,27 @@ struct OrbRootView: View {
             if state.mode == .expanded {
                 expandedPanel
             } else if case .sent = model.phase {
-                sentPill
+                measured { sentPill }
             } else {
-                card
+                measured { card }
             }
         }
+    }
+
+    /// Report how tall this is, so the window can be exactly that. Measured on
+    /// the way out rather than guessed on the way in.
+    private func measured<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        content()
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(width: 400, alignment: .top)
+            .background(
+                GeometryReader { proxy in
+                    Color.clear.preference(key: CardHeightKey.self, value: proxy.size.height)
+                }
+            )
+            .onPreferenceChange(CardHeightKey.self) { height in
+                actions.onHeightChange(height)
+            }
     }
 
     // ── The card ────────────────────────────────────────────────────────────
@@ -678,6 +754,22 @@ struct OrbRootView: View {
         HStack(alignment: .top, spacing: 14) {
             coinSlot
             readout
+                // The canvas gives the readout its own right margin and floats
+                // the ✕ above it. As an HStack member the ✕ stole width from
+                // the summary and shifted the text every time it appeared.
+                .padding(.trailing, 16)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(
+            RoundedRectangle(cornerRadius: FoveaStyle.panelRadius)
+                .fill(.regularMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: FoveaStyle.panelRadius)
+                        .strokeBorder(Color.primary.opacity(0.09), lineWidth: 1)
+                )
+        )
+        .overlay(alignment: .topTrailing) {
             // ALWAYS present, in every phase. A pipeline that failed before
             // producing a digest once left a borderless, always-on-top,
             // all-Spaces panel with no close box and no way out but quitting
@@ -689,22 +781,15 @@ struct OrbRootView: View {
                 } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 11, weight: .bold))
+                        .frame(width: 20, height: 20)
+                        .background(Color.primary.opacity(0.07), in: Circle())
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.secondary)
+                .padding(10)
                 .help("Put the orb away. The session stays on disk.")
             }
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(
-            RoundedRectangle(cornerRadius: FoveaStyle.panelRadius)
-                .fill(.regularMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: FoveaStyle.panelRadius)
-                        .strokeBorder(Color.primary.opacity(0.09), lineWidth: 1)
-                )
-        )
         .opacity(state.isAiming ? 0.35 : 1)
         .animation(.spring(duration: 0.25), value: state.mode)
         .animation(.easeOut(duration: 0.15), value: state.isAiming)
@@ -891,7 +976,10 @@ struct OrbRootView: View {
                 .fill(.regularMaterial)
                 .overlay(Capsule().strokeBorder(Color.primary.opacity(0.09), lineWidth: 1))
         )
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Centred in the 400pt width but NOT stretched to it — the canvas
+        // draws a pill on its own, and a pill inside an invisible card carries
+        // the card's shadow with it.
+        .frame(maxWidth: .infinity)
         .accessibilityLabel(sentLine)
     }
 
@@ -930,6 +1018,10 @@ struct OrbRootView: View {
                 onCollapse: { actions.onSetMode(.collapsed) }
             )
         }
+        // The design's panel, exactly. Nothing inside may grow it: the content
+        // scrolls and the footer is pinned, so "Good to go" is on screen for a
+        // one-line narration and a thirty-line one alike.
+        .frame(width: 620, height: 640)
         .background(
             RoundedRectangle(cornerRadius: FoveaStyle.panelRadius)
                 .fill(.regularMaterial)
