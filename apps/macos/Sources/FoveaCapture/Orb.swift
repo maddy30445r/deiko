@@ -119,6 +119,7 @@ final class OrbController: NSObject {
             Handoff.trace = { Emit.log("handoff: \($0)") }
         }
         fadeTask?.cancel()
+        resizeCount = 0
         state.captured = stats
         if let extending, extending == sessionDir {
             self.extending = nil
@@ -248,6 +249,11 @@ final class OrbController: NSObject {
         setFrame(to: NSSize(width: 400, height: rounded))
     }
 
+    /// How many times the panel has been resized since it appeared, and when
+    /// the first one was — see the warning in `setFrame`.
+    private var resizeCount = 0
+    private var firstResizeAt = Date()
+
     private func setFrame(to size: NSSize) {
         guard let window, let screen = NSScreen.main ?? NSScreen.screens.first else { return }
         guard window.frame.size != size else { return }
@@ -255,6 +261,25 @@ final class OrbController: NSObject {
             x: screen.frame.midX - size.width / 2,
             y: screen.frame.midY - size.height / 2
         )
+
+        // A settled orb resizes a handful of times: once when it appears, once
+        // when the summary lands, once per phase. A LOOP resizes forever, and
+        // the difference between "the layout is jittering" and "the layout is
+        // fine" is not something anybody can judge by watching it. So count.
+        //
+        // Instrumented because this was guessed at once already and the guess
+        // was wrong: the first fix assumed a spring on the mode change, and the
+        // orb kept moving during a phase that never changes mode.
+        resizeCount += 1
+        if resizeCount == 1 { firstResizeAt = Date() }
+        let elapsed = Date().timeIntervalSince(firstResizeAt)
+        if resizeCount % 20 == 0 {
+            Emit.log(
+                "orb: \(resizeCount) resizes in \(String(format: "%.1f", elapsed))s "
+                    + "— latest \(Int(size.width))×\(Int(size.height)). This is a layout loop."
+            )
+        }
+
         window.setFrame(NSRect(origin: origin, size: size), display: true, animate: false)
         // The shadow is cached against the old shape. Without this the sent
         // pill wears the card's rectangle.
@@ -1100,23 +1125,34 @@ struct OrbRootView: View {
 }
 
 /// A soft breathing pulse for the working state — motion says "busy" without a
-/// spinner fighting the summary for attention. Under Reduce Motion the scale
-/// becomes an opacity breath: still visibly alive, nothing moves.
+/// spinner fighting the summary for attention.
+///
+/// **Opacity, never scale.** This used to scale the coin 1.0↔1.06. A 6% swell
+/// on a 56pt disc moves each edge about 1.7pt outward and back, once a second,
+/// for the whole twenty seconds a transcription takes — and because `CoinView`
+/// carries a drop shadow, `scaleEffect` scaled the shadow's blur and its
+/// y-offset along with it. Watched rather than glanced at, that does not read
+/// as breathing. It reads as the coin twitching left and right, and it was
+/// reported as a bug twice.
+///
+/// The design canvas offers exactly this form as its Reduce Motion
+/// alternative. Making it the only form costs nothing — the coin still says
+/// "busy" — and it cannot move anything, because no geometry changes at all.
+///
 /// (Not Overlay's `Pulse`, which is a captured-referent ring; the name is
 /// taken.)
 private struct Breathing: ViewModifier {
     let active: Bool
-    @State private var up = false
+    @State private var dim = false
 
     func body(content: Content) -> some View {
-        let reduce = FoveaStyle.reduceMotion
+        let animate = active && !FoveaStyle.reduceMotion
         content
-            .scaleEffect(active && up && !reduce ? 1.06 : 1.0)
-            .opacity(active && up && reduce ? 0.7 : 1.0)
+            .opacity(animate && dim ? 0.55 : 1)
             .animation(
-                active ? .easeInOut(duration: 1.0).repeatForever(autoreverses: true) : .default,
-                value: up
+                animate ? .easeInOut(duration: 1.1).repeatForever(autoreverses: true) : .default,
+                value: dim
             )
-            .onAppear { up = true }
+            .onAppear { dim = true }
     }
 }
