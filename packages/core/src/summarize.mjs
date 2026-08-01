@@ -57,12 +57,26 @@ async function main() {
     process.exit(2);
   }
 
+  // Same order as `transcribe.mjs`: the developer's own key wins, Fovea's
+  // relay is the default, and neither is an error — a session without a
+  // summary is a session that works.
   const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) {
-    // Not an error. A session without a summary is a session that works.
-    console.error("· GROQ_API_KEY not set — skipping the summary");
+  const relay = process.env.FOVEA_RELAY_URL;
+  if (!apiKey && !relay) {
+    console.error("· no summary service configured — skipping the summary");
     return;
   }
+  const endpoint = apiKey
+    ? GROQ_URL
+    : `${relay.replace(/\/+$/, "")}/v1/summarize`;
+  const headers = apiKey
+    ? { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }
+    : {
+        ...(process.env.FOVEA_RELAY_TOKEN
+          ? { Authorization: `Bearer ${process.env.FOVEA_RELAY_TOKEN}` }
+          : {}),
+        "Content-Type": "application/json",
+      };
 
   const dir = resolve(sessionArg.replace(/^~/, homedir()));
   const manifestPath = join(dir, "brief.json");
@@ -108,17 +122,14 @@ async function main() {
   try {
     // A slow summary is worth less than a fast window. If Groq is having a bad
     // day the developer should get their brief and go, not watch a spinner.
-    const response = await fetch(GROQ_URL, {
+    const response = await fetch(endpoint, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
+      headers,
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(15_000),
     });
     if (!response.ok) {
-      console.error(`· groq ${response.status} — skipping the summary`);
+      console.error(`· ${apiKey ? "groq" : "fovea relay"} ${response.status} — skipping the summary`);
       return;
     }
     text = (await response.json())?.choices?.[0]?.message?.content?.trim();

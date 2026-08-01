@@ -39,8 +39,55 @@ enum Credentials {
         // resolves to `Contents/Resources/build/Fovea.app`. Telling it removes
         // the guess.
         env["FOVEA_APP_PATH"] = Bundle.main.bundleURL.path
+
+        // THE DEFAULT PATH FOR SOMEBODY WHO HAS NO KEYS.
+        //
+        // Passed unconditionally: the scripts prefer a real key when one is
+        // set, so a developer with their own Sarvam key never touches the
+        // relay, and everybody else transcribes without holding an account
+        // anywhere. Absent both, they still get a brief from on-device words.
+        if let relay = relayURL {
+            env["FOVEA_RELAY_URL"] = relay
+            env["FOVEA_RELAY_TOKEN"] = deviceToken()
+        }
         return env
     }
+
+    /// Where Fovea's transcription service lives, or nil when this build has
+    /// none — which is the state until it is actually deployed. `FOVEA_RELAY_URL`
+    /// in the environment overrides it, which is how the relay is tested against
+    /// a local server.
+    static var relayURL: String? {
+        if let override = ProcessInfo.processInfo.environment["FOVEA_RELAY_URL"],
+           !override.isEmpty {
+            return override
+        }
+        return defaultRelayURL
+    }
+
+    /// Nil until there is somewhere to point it. Set this to the deployed
+    /// service's origin (no trailing slash) and every install starts using it.
+    /// Left empty deliberately rather than pointing at a host that does not
+    /// answer: a relay that 404s on every session is worse than no relay,
+    /// because the on-device fallback is silent and the failure is not.
+    private static let defaultRelayURL: String? = nil
+
+    /// An opaque per-install identifier, so the service can rate-limit and
+    /// revoke without knowing anything about who is calling.
+    ///
+    /// Not authentication, and not described as such: a token that ships inside
+    /// a client can be read out of it by anyone who wants to. What it buys is
+    /// the ability to stop one abusive install without stopping everybody.
+    /// Real per-user identity means accounts, which is a product decision, not
+    /// a line of code.
+    static func deviceToken() -> String {
+        if let existing = value(for: tokenKey), !existing.isEmpty { return existing }
+        let minted = UUID().uuidString
+        store(minted, for: tokenKey)
+        return minted
+    }
+
+    private static let tokenKey = "FOVEA_DEVICE_TOKEN"
 
     /// Where a key comes from, in order.
     ///

@@ -83,17 +83,25 @@ const CHUNK_SECONDS = 25;
 const SAMPLE_RATE = 16000;
 const BYTES_PER_SAMPLE = 2;
 
-/** @returns {Transcriber} */
-function sarvamTranscriber(apiKey) {
+/**
+ * The chunking half, shared by every network transcriber.
+ *
+ * Splitting long audio at silence and uploading the pieces concurrently is the
+ * same problem whoever is on the other end, so `uploadOne` is the only thing
+ * that differs between talking to Sarvam directly and talking to Fovea's relay.
+ *
+ * @returns {Transcriber}
+ */
+function chunkedTranscriber(name, uploadOne) {
   return {
-    name: "sarvam",
+    name,
     async transcribe(wavPath, { language = "unknown" } = {}) {
       const file = readFileSync(wavPath);
       const pcm = file.subarray(44);
       const totalSeconds = pcm.length / (SAMPLE_RATE * BYTES_PER_SAMPLE);
 
       if (totalSeconds <= CHUNK_SECONDS) {
-        return timed("sarvam", () => this._one(pcm, language));
+        return timed(name, () => uploadOne(pcm, language));
       }
 
       const chunks = splitAtSilence(pcm, CHUNK_SECONDS);
@@ -104,49 +112,112 @@ function sarvamTranscriber(apiKey) {
       // starting the next spent four times one chunk's latency to no purpose.
       // `Promise.all` preserves order, which the join below depends on: these
       // are consecutive stretches of one sentence, not a set.
-      const parts = await timed("sarvam", () =>
-        Promise.all(chunks.map((data) => this._one(data, language))));
+      const parts = await timed(name, () =>
+        Promise.all(chunks.map((data) => uploadOne(data, language))));
       return { text: parts.map((p) => p.text).filter(Boolean).join(" ") };
     },
-
-    async _one(pcm, language) {
-      const audio = wrapWav(pcm);
-      const form = new FormData();
-      form.append("file", new Blob([audio], { type: "audio/wav" }), "audio.wav");
-      form.append("model", "saaras:v3");
-      // `translit` returns Latin script — "Yeh jo data hai ismein taxonomy ke
-      // andar board ka naam" — matching the on-device timings and the Latin
-      // half of the deictic lexicon. `codemix` returns Devanagari for the same
-      // audio, which the lexicon also handles but which reads worse in a plan.
-      form.append("mode", "translit");
-      form.append("language_code", language);
-
-      const response = await fetch(SARVAM_STT_URL, {
-        method: "POST",
-        headers: { "api-subscription-key": apiKey },
-        body: form,
-      });
-
-      const bodyText = await response.text();
-      if (!response.ok) {
-        throw new Error(`Sarvam ${response.status}: ${bodyText.slice(0, 400)}`);
-      }
-
-      let raw;
-      try {
-        raw = JSON.parse(bodyText);
-      } catch {
-        throw new Error(`Sarvam returned non-JSON: ${bodyText.slice(0, 400)}`);
-      }
-
-      // TEXT only. Sarvam returns no word-level timings on any model or
-      // parameter combination we tried — one span for the whole clip — so the
-      // timeline comes from on-device Apple Speech and Sarvam supplies the
-      // words. There used to be a 60-line tolerant extractor here for timings
-      // that never arrived, feeding a field nothing read.
-      return { text: extractText(raw) };
-    },
   };
+}
+
+/** The multipart body both Sarvam and the relay accept. */
+function sttForm(pcm, language) {
+  const form = new FormData();
+  form.append("file", new Blob([wrapWav(pcm)], { type: "audio/wav" }), "audio.wav");
+  form.append("model", "saaras:v3");
+  // `translit` returns Latin script — "Yeh jo data hai ismein taxonomy ke
+  // andar board ka naam" — matching the on-device timings and the Latin
+  // half of the deictic lexicon. `codemix` returns Devanagari for the same
+  // audio, which the lexicon also handles but which reads worse in a plan.
+  form.append("mode", "translit");
+  form.append("language_code", language);
+  return form;
+}
+
+/** The developer's own Sarvam key: their key, their bill, nothing in between. */
+function sarvamTranscriber(apiKey) {
+  return chunkedTranscriber("sarvam", async (pcm, language) => {
+    const response = await fetch(SARVAM_STT_URL, {
+      method: "POST",
+      headers: { "api-subscription-key": apiKey },
+      body: sttForm(pcm, language),
+    });
+
+    const bodyText = await response.text();
+    if (!response.ok) {
+      throw new Error(`Sarvam ${response.status}: ${bodyText.slice(0, 400)}`);
+    }
+
+    let raw;
+    try {
+      raw = JSON.parse(bodyText);
+    } catch {
+      throw new Error(`Sarvam returned non-JSON: ${bodyText.slice(0, 400)}`);
+    }
+
+    // TEXT only. Sarvam returns no word-level timings on any model or
+    // parameter combination we tried — one span for the whole clip — so the
+    // timeline comes from on-device Apple Speech and Sarvam supplies the
+    // words. There used to be a 60-line tolerant extractor here for timings
+    // that never arrived, feeding a field nothing read.
+    return { text: extractText(raw) };
+  });
+}
+
+/**
+ * Fovea's relay: the default, so a new user transcribes without holding an
+ * account anywhere.
+ *
+ * The audio goes to Fovea's server, which forwards it and keeps nothing. That
+ * is a materially different promise from "only to Sarvam", and the app says so
+ * where people can read it before they start. Anyone who would rather not is
+ * one Settings field away from their own key, which skips this entirely.
+ */
+function relayTranscriber(endpoint, token) {
+  const url = `${endpoint.replace(/\/+$/, "")}/v1/transcribe`;
+  return chunkedTranscriber("fovea", async (pcm, language) => {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+      body: sttForm(pcm, language),
+    });
+
+    const bodyText = await response.text();
+    if (!response.ok) {
+      throw new Error(`Fovea relay ${response.status}: ${bodyText.slice(0, 400)}`);
+    }
+    try {
+      return { text: extractText(JSON.parse(bodyText)) };
+    } catch {
+      throw new Error(`Fovea relay returned non-JSON: ${bodyText.slice(0, 400)}`);
+    }
+  });
+}
+
+/**
+ * Nobody on the other end — and that is a supported way to run.
+ *
+ * Returning empty text rather than throwing is what makes this a configuration
+ * rather than a branch: the merge step below already handles "no cloud words,
+ * keep the on-device ones", because that is what it does when Sarvam fails.
+ * The words and their timings both come from Apple, and the session is intact.
+ */
+function onDeviceOnlyTranscriber() {
+  return { name: "on-device", async transcribe() { return { text: "" }; } };
+}
+
+/**
+ * Who transcribes, most specific first.
+ *
+ * 1. the developer's own Sarvam key — an explicit choice, so it wins;
+ * 2. Fovea's relay — the default, and the reason a new install needs no key;
+ * 3. on-device only — offline, or nothing configured. Degraded, not broken.
+ */
+function selectTranscriber() {
+  if (process.env.SARVAM_API_KEY) return sarvamTranscriber(process.env.SARVAM_API_KEY);
+  if (process.env.FOVEA_RELAY_URL) {
+    return relayTranscriber(process.env.FOVEA_RELAY_URL, process.env.FOVEA_RELAY_TOKEN);
+  }
+  return onDeviceOnlyTranscriber();
 }
 
 /**
@@ -494,12 +565,11 @@ async function main() {
     process.exit(2);
   }
 
-  const apiKey = process.env.SARVAM_API_KEY;
-  if (!apiKey) {
-    console.error("✗ SARVAM_API_KEY is not set. Copy .env.example to .env and fill it in,");
-    console.error("  then run:  export $(grep -v '^#' .env | xargs)");
-    process.exit(1);
-  }
+  // NO KEY IS NOT AN ERROR. It used to exit(1) here, which meant a new install
+  // produced nothing at all — while the machinery for a keyless session was
+  // already present and working three hundred lines below, in the path that
+  // keeps Apple's words when Sarvam fails. `selectTranscriber` decides who
+  // transcribes; every outcome, including nobody, renders a brief.
 
   // Accepts both `--language hi-IN` and `--language=hi-IN`. The indexOf form
   // alone silently ignored the `=` spelling — Sarvam then got
@@ -515,7 +585,13 @@ async function main() {
 
   const dir = resolve(sessionDir);
   const events = loadEvents(dir);
-  const transcriber = sarvamTranscriber(apiKey);
+  const transcriber = selectTranscriber();
+  if (transcriber.name === "on-device") {
+    console.error(
+      "  no transcription service — using on-device words only. "
+        + "Accuracy is lower, especially for mixed-language speech."
+    );
+  }
 
   // Pair each hold's start (which carries the audio path) with its end (which
   // carries audioT0, only known once the first buffer landed).
@@ -683,10 +759,19 @@ async function main() {
     if (widestGap) stages.set("apple:widest-gap", widestGap);
     console.error(`${timing.words.length} segments`);
 
-    // Sarvam for the words themselves. Best-effort: without it the hold falls
-    // back to Apple's words, which mishear Hindi function words but still bind
-    // English sessions fine.
-    let holdWords = timing.words;
+    // A cloud transcriber for the words themselves. Best-effort: without one
+    // the hold falls back to Apple's words, which mishear Hindi function words
+    // but still bind English sessions fine.
+    //
+    // Labelled anchored HERE rather than only inside `mergeWords`. These are
+    // the recogniser's own measured segments — the most anchored words that
+    // exist — and every path that keeps them unmerged (no cloud text at all,
+    // or a merge that found no anchors) used to hand them on with the field
+    // absent, which reads as `anchored: false`. A keyless session therefore
+    // reported "0 of 5 words carry a measured time" about five words whose
+    // times were all measured, and the brief tells the agent to trust referent
+    // binding less on exactly that signal.
+    let holdWords = timing.words.map((w) => ({ ...w, anchored: true }));
 
     // Nothing to merge against. These words ARE the transcriber's text already,
     // laid out on a line; running the merge would compare that text with itself
@@ -772,7 +857,16 @@ async function main() {
         // both need to be able to say that a session's word times are a
         // straight line rather than measurements, and stderr is not a channel
         // either of them can read.
-        { words: allWords, holdTexts, ...(degradedHolds.length ? { degradedHolds } : {}) },
+        {
+          words: allWords,
+          holdTexts,
+          // WHO PRODUCED THESE WORDS. On-device only is a real, supported way
+          // to run and a materially worse transcript, so the renderer can say
+          // which one the agent is reading — the same reason `degradedHolds`
+          // travels rather than staying in stderr nobody reads.
+          transcriber: transcriber.name,
+          ...(degradedHolds.length ? { degradedHolds } : {}),
+        },
         null,
         2,
       ),

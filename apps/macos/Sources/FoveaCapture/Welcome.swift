@@ -106,9 +106,12 @@ final class WelcomeModel: ObservableObject {
     var onOpenSettings: (() -> Void)?
     var onDone: (() -> Void)?
 
-    /// "Start pointing" enables when the app can actually deliver on it:
-    /// every grant in, and a key to transcribe with.
-    var readyToPoint: Bool { rows.allSatisfy(\.granted) && keyPresent }
+    /// "Start pointing" enables when the app can actually deliver on it —
+    /// which is the four grants, and nothing else. It used to require a Sarvam
+    /// key too, back when a session without one produced nothing at all. A
+    /// keyless install now transcribes; asking for a key before letting anyone
+    /// start would be demanding something the product no longer needs.
+    var readyToPoint: Bool { rows.allSatisfy(\.granted) }
 
     private var screenRecordingWasMissing = false
 
@@ -270,8 +273,10 @@ private struct WelcomeView: View {
                 HStack(spacing: 12) {
                     glyphTile("key")
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Sarvam API key").font(.system(size: 13, weight: .semibold))
-                        Text(model.keyPresent ? "in your login keychain" : "transcribes your narration — required")
+                        Text("Your own Sarvam key").font(.system(size: 13, weight: .semibold))
+                        Text(model.keyPresent
+                            ? "in your login keychain — Fovea's servers never see your narration"
+                            : "optional — transcription works without one")
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                     }

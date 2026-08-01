@@ -88,11 +88,24 @@ final class SettingsModel: ObservableObject {
         "Sarvam: \(Credentials.source(of: "SARVAM_API_KEY")) · Groq: \(Credentials.source(of: "GROQ_API_KEY"))"
     }
 
-    /// The warning belongs HERE, where the fix is — the same failure the orb
-    /// reports after the fact, stated before it happens.
-    var sarvamMissing: Bool {
-        if sarvamTouched { return sarvamKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        return !sarvamStored
+    /// Whether a key is set at all — no longer a warning, because a session
+    /// without one now works. What it changes is WHO transcribes, and that is
+    /// worth saying plainly rather than as an alarm.
+    var usingOwnKey: Bool {
+        if sarvamTouched { return !sarvamKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        return sarvamStored
+    }
+
+    /// Where narration audio goes, in one sentence, stated before anything is
+    /// recorded rather than after.
+    var whereAudioGoes: String {
+        if usingOwnKey {
+            return "Your narration goes straight to Sarvam with your key. Fovea's servers never see it."
+        }
+        if Credentials.relayURL != nil {
+            return "Your narration goes to Fovea, which passes it to a transcription service and keeps nothing. Add your own key below to skip Fovea entirely."
+        }
+        return "Transcription runs on this Mac. Nothing is uploaded — accuracy is lower, especially for mixed-language speech."
     }
 
     func placeholder(stored: Bool) -> String {
@@ -251,22 +264,25 @@ private struct SettingsView: View {
     private var keys: some View {
         InsetCard {
             VStack(alignment: .leading, spacing: 10) {
-                keyRow(label: "Sarvam", tag: "required", text: $model.sarvamKey,
+                Text(model.whereAudioGoes)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, 2)
+
+                keyRow(label: "Sarvam", tag: "optional", text: $model.sarvamKey,
                        touched: $model.sarvamTouched,
                        prompt: model.placeholder(stored: model.sarvamStored))
                 keyRow(label: "Groq", tag: "optional", text: $model.groqKey,
                        touched: $model.groqTouched,
                        prompt: model.groqStored ? model.placeholder(stored: true) : "gsk_…")
                 HStack {
-                    if model.sarvamMissing {
-                        Text("No Sarvam key — briefs will stop at “Transcribing…”")
-                            .font(.system(size: 11))
-                            .foregroundStyle(FoveaStyle.needsYou)
-                    } else {
-                        Text(model.keySources)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                    }
+                    // No longer a warning. A missing key used to mean briefs
+                    // stopped at "Transcribing…"; now it means somebody else
+                    // transcribes, which the sentence above already explains.
+                    Text(model.keySources)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
                     Spacer()
                     Button("Save") { model.saveKeys() }
                         .keyboardShortcut(.defaultAction)
