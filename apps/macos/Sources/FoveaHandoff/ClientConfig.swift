@@ -60,6 +60,31 @@ public enum ClientConfig {
         return document
     }
 
+    /// Remove one server entry, leaving everything else exactly as it was.
+    ///
+    /// The mirror of `merge`, and it has the same job: touch one key. A client
+    /// the user disconnects must be left as though Fovea had never written —
+    /// including the `mcpServers` object itself, which stays (possibly empty)
+    /// rather than being deleted, because its absence and its emptiness are not
+    /// the same thing to whoever wrote it.
+    ///
+    /// Returns nil when there was nothing to remove, so the caller can skip the
+    /// write entirely rather than rewriting a file it did not change.
+    public static func remove(
+        from existing: [String: Any]?,
+        serverKey: String,
+        containerKey: String = "mcpServers"
+    ) -> [String: Any]? {
+        guard var document = existing,
+              var servers = document[containerKey] as? [String: Any],
+              servers[serverKey] != nil
+        else { return nil }
+
+        servers.removeValue(forKey: serverKey)
+        document[containerKey] = servers
+        return document
+    }
+
     /// Whether a config already registers this server with exactly this entry.
     ///
     /// Drives both "is it connected?" in the UI and the self-heal at launch.

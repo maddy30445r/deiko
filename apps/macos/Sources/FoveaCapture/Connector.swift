@@ -39,6 +39,10 @@ protocol Connector: Sendable {
     /// no-op, which is what makes the launch-time self-heal safe to run always.
     func connect() throws
 
+    /// Unregister Fovea, leaving the client's config as if we had never
+    /// written. Also idempotent.
+    func disconnect() throws
+
     /// How this client spells a slash command for an MCP prompt.
     ///
     /// Owning this here is the point of the whole abstraction. `Handoff` used to
@@ -159,6 +163,13 @@ struct ClaudeCodeConnector: Connector {
         }
     }
 
+    func disconnect() throws {
+        guard let stripped = ClientConfig.remove(from: read(), serverKey: serverKey) else {
+            return  // nothing registered; nothing to write
+        }
+        try writeAtomically(stripped)
+    }
+
     // ── The entry ───────────────────────────────────────────────────────────
 
     /// Absolute paths to THIS app's runtime and bridge.
@@ -266,9 +277,15 @@ enum Connectors {
         optedIn.insert(connector.name)
     }
 
-    /// Forget a client — the user disconnected it, so stop putting it back.
-    static func forget(_ connector: Connector) {
+    /// Unregister, and stop putting it back.
+    ///
+    /// Forgetting FIRST, so a disconnect that throws halfway still leaves
+    /// self-heal disarmed. The other order would let the next launch quietly
+    /// reconnect a client the user had just asked to be rid of — the one
+    /// outcome a disconnect button must never produce.
+    static func disconnect(_ connector: Connector) throws {
         optedIn.remove(connector.name)
+        try connector.disconnect()
     }
 
     /// Re-register anything the user connected that is no longer registered.

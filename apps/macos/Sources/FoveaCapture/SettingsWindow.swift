@@ -88,6 +88,17 @@ final class SettingsModel: ObservableObject {
         refresh()
     }
 
+    func disconnect(_ id: String) {
+        guard let connector = Connectors.all.first(where: { $0.name == id }) else { return }
+        problem = nil
+        do {
+            try Connectors.disconnect(connector)
+        } catch {
+            problem = error.localizedDescription
+        }
+        refresh()
+    }
+
     func saveKeys() {
         Credentials.store(sarvamKey, for: "SARVAM_API_KEY")
         Credentials.store(groqKey, for: "GROQ_API_KEY")
@@ -133,7 +144,12 @@ private struct SettingsView: View {
                         .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    if !row.isConnected {
+                    if row.isConnected {
+                        // Every state this window can reach has to be one you
+                        // can leave. Connect without Disconnect is a one-way
+                        // door into a file the user cannot see.
+                        Button("Disconnect") { model.disconnect(row.id) }
+                    } else {
                         // Never disabled on detection. "Not found" is a guess
                         // from three filesystem signals, all of which have false
                         // negatives — and a wrong guess must not stand between

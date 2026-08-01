@@ -380,17 +380,21 @@ func runConnect(_ args: Args) {
         Emit.log("  connected: \(connector.isConnected)")
         Emit.log("  command:   \(connector.commandForm)")
 
-        guard args.has("write") else { continue }
         do {
-            try Connectors.connect(connector)
-            Emit.log("  → connected: \(connector.isConnected)")
+            if args.has("disconnect") {
+                try Connectors.disconnect(connector)
+                Emit.log("  → connected: \(connector.isConnected)")
+            } else if args.has("write") {
+                try Connectors.connect(connector)
+                Emit.log("  → connected: \(connector.isConnected)")
+            }
         } catch {
             Emit.log("  ✗ \(error.localizedDescription)")
         }
     }
-    if !args.has("write") {
+    if !args.has("write"), !args.has("disconnect") {
         Emit.log("")
-        Emit.log("nothing written — pass --write to register")
+        Emit.log("nothing written — pass --write to register, --disconnect to remove")
     }
 }
 

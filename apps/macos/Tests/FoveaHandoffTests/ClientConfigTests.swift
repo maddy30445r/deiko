@@ -127,6 +127,49 @@ func absentReadsAsDisconnected() {
     #expect(!ClientConfig.isRegistered(in: ["mcpServers": [:]], serverKey: "fovea", matching: foveaEntry()))
 }
 
+// ── Disconnecting ───────────────────────────────────────────────────────────
+
+@Test("removing Fovea leaves the rest of the config exactly as it was")
+func removeTouchesOnlyOurKey() throws {
+    let before = claudeConfig()
+    let connected = try ClientConfig.merge(into: before, serverKey: "fovea", entry: foveaEntry())
+    let after = try #require(ClientConfig.remove(from: connected, serverKey: "fovea"))
+
+    // Back to the original, key for key — disconnecting must be as if we had
+    // never written.
+    #expect(NSDictionary(dictionary: after).isEqual(to: before))
+}
+
+@Test("another client's server survives the removal")
+func removeLeavesOtherServers() throws {
+    let connected = try ClientConfig.merge(into: claudeConfig(), serverKey: "fovea", entry: foveaEntry())
+    let after = try #require(ClientConfig.remove(from: connected, serverKey: "fovea"))
+    let servers = try #require(after["mcpServers"] as? [String: Any])
+
+    #expect(servers["playwright"] != nil)
+    #expect(servers["fovea"] == nil)
+}
+
+@Test("removing what is not there reports nothing to do")
+func removeWhenAbsentIsNil() {
+    // nil, not an unchanged copy: the caller skips the write entirely rather
+    // than rewriting a file it did not change.
+    #expect(ClientConfig.remove(from: claudeConfig(), serverKey: "fovea") == nil)
+    #expect(ClientConfig.remove(from: nil, serverKey: "fovea") == nil)
+    #expect(ClientConfig.remove(from: [:], serverKey: "fovea") == nil)
+}
+
+@Test("an emptied mcpServers stays present rather than being deleted")
+func removeKeepsTheContainer() throws {
+    let only = try ClientConfig.merge(into: [:], serverKey: "fovea", entry: foveaEntry())
+    let after = try #require(ClientConfig.remove(from: only, serverKey: "fovea"))
+
+    // Present and empty, not absent. Those mean different things to whoever
+    // wrote the file, and we do not get to decide which they meant.
+    let servers = try #require(after["mcpServers"] as? [String: Any])
+    #expect(servers.isEmpty)
+}
+
 // ── The container key is a parameter, not a constant ────────────────────────
 
 @Test("VS Code's own MCP config uses `servers`, not `mcpServers`")
