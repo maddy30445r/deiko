@@ -737,7 +737,14 @@ struct OrbRootView: View {
     private func measured<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         content()
             .fixedSize(horizontal: false, vertical: true)
-            .frame(width: 400, alignment: .top)
+            // `.topLeading`, NOT `.top`. `.top` means
+            // `Alignment(horizontal: .center, vertical: .top)`, so anything
+            // that made the card momentarily narrower or wider than 400 —
+            // an animating width, a re-layout after a window resize — moved
+            // its contents sideways to keep them centred. Pinned to the
+            // leading edge, a width that wobbles cannot translate into the
+            // coin sliding across the card.
+            .frame(width: 400, alignment: .topLeading)
             .background(
                 GeometryReader { proxy in
                     Color.clear.preference(key: CardHeightKey.self, value: proxy.size.height)
@@ -791,7 +798,20 @@ struct OrbRootView: View {
             }
         }
         .opacity(state.isAiming ? 0.35 : 1)
-        .animation(.spring(duration: 0.25), value: state.mode)
+        // NO SPRING ON THE MODE CHANGE.
+        //
+        // A spring overshoots — that is what makes it feel like a spring — and
+        // this one was applied to a view whose WIDTH changes when the mode
+        // does: coming back from the 620pt panel, `maxWidth: .infinity`
+        // re-resolves to 400 and the spring carried it past 400 and back.
+        // With the frame above centring its contents, that read as the coin
+        // bouncing left and right until it settled.
+        //
+        // It bought nothing even when it worked: `body` swaps the whole card
+        // for `expandedPanel` on a mode change, so this was animating a layout
+        // on its way out of the hierarchy. The aiming fade below stays — it is
+        // an opacity change on a view that remains, and easeOut cannot
+        // overshoot.
         .animation(.easeOut(duration: 0.15), value: state.isAiming)
     }
 
