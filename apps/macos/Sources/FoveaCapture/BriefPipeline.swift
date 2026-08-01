@@ -116,7 +116,9 @@ enum BriefPipeline {
 
     /// Run one stage, whichever layout this app is running in.
     @discardableResult
-    private static func run(_ stage: Stage, sessionDir: String) async throws -> String {
+    private static func run(
+        _ stage: Stage, sessionDir: String, extraEnvironment: [String: String] = [:]
+    ) async throws -> String {
         guard let layout = Layout.resolve() else {
             throw BriefPipelineError.pipelineNotFound(Bundle.main.bundleURL.path)
         }
@@ -125,7 +127,8 @@ enum BriefPipeline {
             return try await shell(
                 "make \(stage.makeTarget) SESSION=\(quoted(sessionDir))",
                 in: repo,
-                stage: stage.label
+                stage: stage.label,
+                extraEnvironment: extraEnvironment
             )
         case .bundled(let resources):
             guard let node = NodeRuntime.resolve() else { throw BriefPipelineError.nodeNotFound }
@@ -138,16 +141,113 @@ enum BriefPipeline {
                     resources.appendingPathComponent("scripts/\(stage.script)").path,
                     sessionDir,
                 ],
-                stage: stage.label
+                stage: stage.label,
+                extraEnvironment: extraEnvironment
             )
         }
     }
 
     /// Transcribe, then render. Returns the brief in short.
     static func run(sessionDir: String) async throws -> BriefDigest {
-        try await run(.transcribe, sessionDir: sessionDir)
+        let precomputed = await precomputeTimings(sessionDir: sessionDir)
+        // EVERY timing file is transient, and one that outlives the run is a
+        // verbatim transcript of the developer's narration sitting in a
+        // directory they may hand to somebody. `transcribe.mjs` deletes each
+        // one as it consumes it — but it only consumes holds it actually
+        // transcribes, and a hold served from the transcript cache is never
+        // read at all. So sweep unconditionally, including on the failure path.
+        defer { removeTimingSidecars(sessionDir: sessionDir) }
+        try await run(
+            .transcribe,
+            sessionDir: sessionDir,
+            // Only claimed when a file was actually written. Asserting it
+            // unconditionally would make the script trust a file that is not
+            // there for holds we failed to recognise, and the launch fallback
+            // is exactly what should happen then.
+            extraEnvironment: precomputed ? ["FOVEA_TIMINGS_READY": "1"] : [:]
+        )
         try await run(.brief, sessionDir: sessionDir)
         return try digest(sessionDir: sessionDir)
+    }
+
+    /// Recognise every hold's audio HERE, in the app that is already running.
+    ///
+    /// `transcribe.mjs` gets on-device word timings by launching a second copy
+    /// of Fovea through LaunchServices — because TCC blames the *responsible*
+    /// process, and a binary exec'd from node inherits node's identity, which
+    /// has no speech usage description. That reasoning is sound for the command
+    /// line and irrelevant here: this code is already inside the app that holds
+    /// the grant.
+    ///
+    /// What the launch was costing, measured on a 16-second two-hold session:
+    /// a whole second app instance per hold, in series — process spawn, AppKit,
+    /// the speech model loading — against roughly one second of actual
+    /// recognition per hold at 7–12× realtime. The work was never the slow part.
+    ///
+    /// Holds run concurrently: the WAVs are independent and neither recogniser
+    /// reads the other's output.
+    ///
+    /// Best-effort throughout. Every failure here simply leaves no file, and
+    /// `appleTimings` falls back to launching the app exactly as before — this
+    /// is a shortcut, not a new dependency.
+    /// Delete every `<wav>.timing.json` in a session. See `run`'s `defer`.
+    private static func removeTimingSidecars(sessionDir: String) {
+        let audio = URL(fileURLWithPath: sessionDir).appendingPathComponent("audio")
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: audio, includingPropertiesForKeys: nil
+        ) else { return }
+        for file in files where file.lastPathComponent.hasSuffix(".timing.json") {
+            try? FileManager.default.removeItem(at: file)
+        }
+    }
+
+    /// Returns whether at least one timing file is now on disk, so the caller
+    /// only tells the script to expect them when they exist.
+    private static func precomputeTimings(sessionDir: String) async -> Bool {
+        let audio = URL(fileURLWithPath: sessionDir).appendingPathComponent("audio")
+        guard let wavs = try? FileManager.default.contentsOfDirectory(
+            at: audio, includingPropertiesForKeys: nil
+        ).filter({ $0.pathExtension == "wav" }), !wavs.isEmpty else { return false }
+
+        return await withTaskGroup(of: Bool.self) { group in
+            for wav in wavs {
+                let out = URL(fileURLWithPath: wav.path + ".timing.json")
+                // A hold already recognised in an earlier run of this session
+                // (the extend flow re-runs the whole pipeline) keeps its file.
+                if FileManager.default.fileExists(atPath: out.path) { continue }
+                group.addTask {
+                    // `en-IN` because that is `transcribe.mjs`'s own default
+                    // for `--locale`. Recognising here under a different locale
+                    // would quietly change the words compared with the CLI.
+                    let result = await SpeechTiming.transcribe(
+                        url: wav, localeIdentifier: "en-IN"
+                    )
+                    // WRITTEN EVEN WHEN RECOGNITION FAILED. A result carrying
+                    // `error` is a real answer — the script reads it, throws,
+                    // and takes the degraded path that keeps the transcript
+                    // with estimated word times. Withholding it instead would
+                    // send the script off to launch the app and wait out the
+                    // same silence a second time, which is the single most
+                    // expensive thing in this pipeline.
+                    guard let data = try? JSONEncoder().encode(result) else {
+                        Emit.log("timings: could not encode \(wav.lastPathComponent) — the script will launch the app")
+                        return false
+                    }
+                    // Atomic for the same reason the subcommand is: the reader
+                    // polls for existence and parses immediately, so a
+                    // half-written file is a discarded hold.
+                    do {
+                        try data.write(to: out, options: .atomic)
+                        return true
+                    } catch {
+                        return false
+                    }
+                }
+            }
+            var any = false
+            for await wrote in group where wrote { any = true }
+            return any
+        }
     }
 
     /// Which holds a session has already transcribed, and what each one said.
@@ -239,7 +339,9 @@ enum BriefPipeline {
 
     /// A checkout: through `make`, in a login shell, with `.env` sourced.
     @discardableResult
-    private static func shell(_ command: String, in repo: URL, stage: String) async throws -> String {
+    private static func shell(
+        _ command: String, in repo: URL, stage: String, extraEnvironment: [String: String] = [:]
+    ) async throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         // `-l` for the login profile (nvm), `-c` for the command. The `set -a`
@@ -256,7 +358,7 @@ enum BriefPipeline {
         // sources still wins for the API keys — but `FOVEA_APP_PATH` is not in
         // any `.env`, so the checkout gets told where the app is too, rather
         // than relying on it happening to sit at `<repo>/build/Fovea.app`.
-        process.environment = Credentials.childEnvironment()
+        process.environment = Credentials.childEnvironment().merging(extraEnvironment) { _, new in new }
         return try await capture(process, stage: stage)
     }
 
@@ -267,11 +369,14 @@ enum BriefPipeline {
     /// path above cannot offer that, which is one more reason it stays confined
     /// to the developer's own checkout.
     @discardableResult
-    private static func exec(_ executable: URL, arguments: [String], stage: String) async throws -> String {
+    private static func exec(
+        _ executable: URL, arguments: [String], stage: String,
+        extraEnvironment: [String: String] = [:]
+    ) async throws -> String {
         let process = Process()
         process.executableURL = executable
         process.arguments = arguments
-        process.environment = Credentials.childEnvironment()
+        process.environment = Credentials.childEnvironment().merging(extraEnvironment) { _, new in new }
         return try await capture(process, stage: stage)
     }
 

@@ -143,12 +143,36 @@ enum SpeechTiming {
                 }
             }
 
+            // SILENCE GETS ITS OWN, MUCH SHORTER DEADLINE.
+            //
+            // The backstop below waits duration + 20s, which is right for a
+            // recognition in progress — cutting one of those off would truncate
+            // a transcript. But a recogniser that has produced NOTHING is not
+            // in progress, and it was being given the same generous wait.
+            // Measured on session 20260801-215445: 16s of audio took 38.4s
+            // through the pipeline, and 27 of those seconds were one 7.1s hold
+            // sitting at its full deadline having recognised nothing. The app
+            // launch this was blamed on costs 0.1s.
+            //
+            // Recognition streams at 7–12× realtime, so a first segment arrives
+            // early or never. Allow generously for a cold model load, then stop.
+            // Being wrong here is cheap: no timings means the transcript is kept
+            // with estimated word times, not that the hold is lost.
+            let silenceDeadline = max(8.0, (durationMs.map { $0 / 1000 } ?? 60) * 1.5)
+            Task {
+                try? await Task.sleep(for: .seconds(silenceDeadline))
+                // Anything at all arrived → this is a real recognition, and the
+                // backstop below owns it.
+                guard collector.isEmpty(), collector.markResumed() else { return }
+                continuation.resume(returning: failure(
+                    "nothing recognised in \(Int(silenceDeadline))s — no speech the on-device model could hear",
+                    locale: localeIdentifier
+                ))
+            }
+
             // Hard deadline, now a backstop rather than the common path. The
             // recogniser signals completion inconsistently — sometimes an error
-            // at end-of-audio, sometimes a final result, sometimes neither — and
-            // without this a file that yields NO segments at all would hang
-            // forever, since the idle watch above waits for a first segment
-            // that never comes.
+            // at end-of-audio, sometimes a final result, sometimes neither.
             let deadline = (durationMs.map { $0 / 1000 } ?? 60) + 20
             Task {
                 try? await Task.sleep(for: .seconds(deadline))
@@ -357,6 +381,14 @@ private final class SegmentCollector: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return resumed
+    }
+
+    /// Nothing recognised at all — as opposed to "recognised something and
+    /// gone quiet", which is what `decideCompletion` is for.
+    func isEmpty() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return segments.isEmpty
     }
 
     func markResumed() -> Bool {

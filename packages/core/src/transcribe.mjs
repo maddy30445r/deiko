@@ -395,6 +395,24 @@ async function appleTimings(wavPath, { locale = "en-IN", timeoutMs } = {}) {
   timeoutMs ??= Math.max(90_000, audioMs * 4 + 30_000);
 
   const out = `${wavPath}.timing.json`;
+
+  // ALREADY DONE. When the app itself drives this pipeline it recognises the
+  // holds in-process first — it is the process that holds the Speech grant, so
+  // the LaunchServices dance below buys nothing there and costs a whole app
+  // launch per hold. Read the result and skip straight past it.
+  //
+  // Note the ORDER: this has to come before the `rmSync` that follows, which
+  // exists to clear a stale file from a previous run and would cheerfully
+  // delete a freshly precomputed one.
+  if (process.env.FOVEA_TIMINGS_READY === "1" && existsSync(out)) {
+    return await timed("apple:precomputed", async () => {
+      const result = JSON.parse(readFileSync(out, "utf8"));
+      rmSync(out);
+      if (result.error) throw new Error(`speech timing: ${result.error}`);
+      return result;
+    });
+  }
+
   if (existsSync(out)) rmSync(out);
 
   // Timed apart from the recognition itself: launching a second copy of the app
@@ -419,6 +437,7 @@ async function appleTimings(wavPath, { locale = "en-IN", timeoutMs } = {}) {
  */
 async function awaitTimingFile(out, { timeoutMs, audioMs }) {
   const deadline = Date.now() + timeoutMs;
+  const startedAt = Date.now();
   while (Date.now() < deadline) {
     if (existsSync(out)) {
       let result;
@@ -435,7 +454,11 @@ async function awaitTimingFile(out, { timeoutMs, audioMs }) {
       if (result.error) throw new Error(`speech timing: ${result.error}`);
       return result;
     }
-    await sleep(500);
+    // A short hold finishes in about a second, so a flat 500ms tick spent up
+    // to half of the total wait doing nothing. Check often while the answer is
+    // plausibly imminent, then back off so a long recording is not polled
+    // thousands of times.
+    await sleep(Date.now() - startedAt < 5_000 ? 100 : 500);
   }
   // The app may still write the file AFTER we stop waiting, so a single check
   // here cannot do the job — and it didn't: a timed-out run left a verbatim
