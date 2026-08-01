@@ -29,16 +29,28 @@ enum Permission: String, CaseIterable {
     case microphone = "Microphone"
     case speech = "Speech Recognition"
 
+    /// The canvas's rule: each reason is the DATA the permission takes,
+    /// stated plainly — that is what earns trust, not reassurance copy.
     var purpose: String {
         switch self {
         case .accessibility:
-            "read what you point at, and watch for the hotkey"
+            "reads the label under your cursor, and watches for the hotkey"
         case .screenRecording:
-            "capture the crop around what you point at"
+            "crops a screenshot of what you point at"
         case .microphone:
-            "record your narration while a session is capturing"
+            "records your narration while you point"
         case .speech:
-            "work out when each word was said, on-device"
+            "turns your words into text, on this Mac"
+        }
+    }
+
+    /// SF Symbol for the first-run row's glyph tile.
+    var symbol: String {
+        switch self {
+        case .accessibility: "accessibility"
+        case .screenRecording: "rectangle.dashed.badge.record"
+        case .microphone: "mic"
+        case .speech: "waveform"
         }
     }
 
@@ -153,6 +165,19 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let settings = SettingsWindowController()
     private let welcome = WelcomeWindowController()
 
+    /// Whether Screen Recording was still ungranted when this process came up.
+    /// Granted-now + missing-then = a relaunch is pending, and that is the ONE
+    /// moment the menu offers Relaunch Fovea.
+    private var screenRecordingMissingAtLaunch = false
+    private var relaunchPending: Bool {
+        screenRecordingMissingAtLaunch && Permission.screenRecording.isGranted
+    }
+
+    /// The `● Capturing · 0:43` header of the OPEN menu, so a timer can keep
+    /// its clock honest while the user is looking at it.
+    private weak var capturingItem: NSMenuItem?
+    private var menuClock: Timer?
+
     init(recorder: Recorder) {
         self.recorder = recorder
         super.init()
@@ -160,6 +185,7 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func install() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        screenRecordingMissingAtLaunch = !Permission.screenRecording.isGranted
 
         // Any change in the recorder — hold started, hold ended, session
         // opened — redraws both the icon and the menu from `recorder` itself.
@@ -213,9 +239,10 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func setIcon() {
         guard let button = statusItem.button else { return }
-        // SF Symbols: a filled eye while recording, an outline otherwise.
-        // "Fovea" is the part of the retina that sees detail — the icon is the
-        // product's whole thesis in one glyph.
+        // The fovea mark — the same ring-and-dot the orb's coin wears, so the
+        // status item and the orb are visibly the same object. "Fovea" is the
+        // part of the retina that sees detail; the mark is the product's whole
+        // thesis in one glyph: "I'm pointing at this."
         //
         // THE THIRD STATE EARNS ITS PLACE. Without a grant, the hotkey does
         // nothing: `startListeningIfPermitted` returns early and no tap is
@@ -223,17 +250,19 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // completely dead, so a new install presented as a working app that
         // silently ignored every gesture — and the only explanation lived
         // inside a menu nobody had a reason to open.
+        //
+        // Each state is a SHAPE change, not a tint: capturing swells the dot
+        // to fill the ring (and goes record-red), blocked hangs an `!` off the
+        // ring. Colour is never the only signal.
         let recording = recorder.isRecording
         let blocked = !Permission.allCases.allSatisfy(\.isGranted)
 
-        let symbol = blocked ? "eye.trianglebadge.exclamationmark" : (recording ? "eye.fill" : "eye")
-        let description =
+        let image = FoveaStyle.menuBarIcon(recording: recording, blocked: blocked)
+        image.accessibilityDescription =
             blocked
-            ? "Fovea — needs permission" : (recording ? "Fovea — recording" : "Fovea — ready")
-
-        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: description)
-        button.image?.isTemplate = true
-        button.contentTintColor = recording ? .systemRed : (blocked ? .systemOrange : nil)
+            ? "Fovea — needs permission" : (recording ? "Fovea — capturing" : "Fovea — ready")
+        button.image = image
+        button.contentTintColor = nil
         // Read aloud by VoiceOver, and shown on hover — the only place the
         // reason is available without opening the menu.
         button.toolTip = blocked ? "Fovea needs permission to work — click to grant" : nil
@@ -243,10 +272,27 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let menu = NSMenu()
         let missing = Permission.allCases.filter { !$0.isGranted }
 
-        if missing.isEmpty {
-            addCaptureItems(to: menu)
-        } else {
+        if !missing.isEmpty {
             addPermissionItems(missing, to: menu)
+        } else if relaunchPending, recorder.sessionDir == nil {
+            // Never while a session is open — a live session needs its Stop
+            // item more than it needs relaunch advice, and relaunching would
+            // kill the recording anyway.
+            // Screen Recording was granted this launch. The system reports it
+            // granted immediately, but ScreenCaptureKit in THIS process keeps
+            // failing until a restart — and that failure is silent: crops come
+            // back with no path and no withheld reason. So the relaunch leads
+            // the menu at exactly the moment it applies, and ONLY then — an
+            // always-there Relaunch item quietly says "this app breaks".
+            menu.addItem(disabled("Relaunch to finish"))
+            menu.addItem(disabled("Screen Recording takes effect after a relaunch"))
+            menu.addItem(NSMenuItem(
+                title: "Relaunch Fovea",
+                action: #selector(relaunch),
+                keyEquivalent: ""
+            ))
+        } else {
+            addCaptureItems(to: menu)
         }
 
         menu.addItem(.separator())
@@ -265,20 +311,6 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
             action: #selector(openWelcome),
             keyEquivalent: ""
         ))
-        // ALWAYS present, not only while permissions are missing.
-        //
-        // Screen Recording takes effect only after a relaunch, and it used to
-        // live in the permissions branch — which `rebuildMenu` stops drawing the
-        // moment the last grant lands. So the button vanished at exactly the
-        // point it applied, and the failure it fixes is silent: ScreenCaptureKit
-        // keeps failing in the running process, crops come back with no path and
-        // no withheld reason, and the orb reports "0 screenshots going" with
-        // nothing anywhere saying why.
-        menu.addItem(NSMenuItem(
-            title: "Relaunch Fovea",
-            action: #selector(relaunch),
-            keyEquivalent: ""
-        ))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Fovea", action: #selector(quit), keyEquivalent: "q"))
 
@@ -291,48 +323,87 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.menu = menu
     }
 
-    /// The normal menu. Exactly one button ever appears here — Stop session —
-    /// and only when there is a session to stop.
+    /// The normal menu: a state block first, then the utility tail. Idle names
+    /// the gesture, so the menu doubles as the cheat-sheet. Capturing leads
+    /// with the red dot and a LIVE mono timer, and Stop is the emphasised item.
+    ///
+    /// Cut, per the redesign: the session id line (nobody types it anywhere —
+    /// it lives in the sessions folder) and "Reveal this session" (the orb
+    /// arrives the moment a session closes; "Open sessions folder" covers the
+    /// archaeology case).
     private func addCaptureItems(to menu: NSMenu) {
-        if let id = recorder.sessionId {
-            menu.addItem(disabled("Session \(id)"))
+        if recorder.sessionDir != nil {
+            let header = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+            header.isEnabled = false
+            header.attributedTitle = capturingHeader()
+            menu.addItem(header)
+            capturingItem = header
 
             let referents = recorder.referentCount
             menu.addItem(disabled(
-                (recorder.isRecording ? "  ● Recording · " : "  ")
-                    + "\(referents) referent\(referents == 1 ? "" : "s")"
+                "\(referents) thing\(referents == 1 ? "" : "s") pointed at so far"
             ))
 
-            menu.addItem(NSMenuItem(
-                title: "Stop session",
+            let stop = NSMenuItem(
+                title: "Stop capturing — tap right ⌥",
                 action: #selector(stopSession),
                 keyEquivalent: ""
-            ))
-            menu.addItem(.separator())
-            menu.addItem(NSMenuItem(
-                title: "Reveal this session",
-                action: #selector(revealSession),
-                keyEquivalent: ""
-            ))
+            )
+            // The one action that matters mid-session, bold so it reads as the
+            // default even though NSMenu has no real notion of one.
+            stop.attributedTitle = NSAttributedString(
+                string: "Stop capturing — tap right ⌥",
+                attributes: [.font: NSFont.menuFont(ofSize: 0).withWeight(.semibold)]
+            )
+            menu.addItem(stop)
         } else {
+            capturingItem = nil
             menu.addItem(disabled(
                 isListening
-                    ? "Double-tap Right Option to start capturing"
+                    ? "Ready — ⌥⌥ to start"
                     : "Not listening — could not create the event tap"
             ))
+            if isListening {
+                menu.addItem(disabled("double-tap right Option, then talk and point"))
+            }
         }
     }
 
+    /// `● Capturing · 0:43` — the dot in record red, the timer in mono.
+    private func capturingHeader() -> NSAttributedString {
+        let line = NSMutableAttributedString(
+            string: "● ",
+            attributes: [.foregroundColor: FoveaStyle.recordRedNS]
+        )
+        line.append(NSAttributedString(
+            string: "Capturing",
+            attributes: [.font: NSFont.menuFont(ofSize: 0).withWeight(.semibold)]
+        ))
+        if let ms = recorder.sessionElapsedMs {
+            let total = Int(ms / 1000)
+            line.append(NSAttributedString(
+                string: String(format: " · %d:%02d", total / 60, total % 60),
+                attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize(for: .regular), weight: .regular)]
+            ))
+        }
+        return line
+    }
+
     /// Missing permissions are the whole menu when present — there is nothing
-    /// else worth showing until they are resolved, and each one states what it
-    /// is FOR rather than just naming itself (PRD §10: every permission
-    /// explained with its exact use).
+    /// else worth showing until they are resolved. The header says what the
+    /// user actually experiences ("the hotkey is doing nothing"), in words,
+    /// not an icon tint.
     private func addPermissionItems(_ missing: [Permission], to menu: NSMenu) {
-        menu.addItem(disabled("Fovea needs permission to:"))
+        menu.addItem(disabled("The hotkey is doing nothing"))
+        menu.addItem(disabled(
+            missing.count == 1
+                ? "one permission is missing"
+                : "\(missing.count) permissions are missing"
+        ))
 
         for permission in missing {
             let item = NSMenuItem(
-                title: "  \(permission.rawValue) — \(permission.purpose)",
+                title: "Grant \(permission.rawValue) — \(permission.purpose)",
                 action: #selector(requestPermission(_:)),
                 keyEquivalent: ""
             )
@@ -368,11 +439,6 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Task { @MainActor in
             _ = await recorder.stopSession()
         }
-    }
-
-    @objc private func revealSession() {
-        guard let dir = recorder.sessionDir else { return }
-        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: dir)])
     }
 
     /// Ask for every missing permission in turn.
@@ -441,6 +507,26 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // twice per menu open.
         startListeningIfPermitted()
         rebuildMenu()
+
+        // The capturing header carries a clock; a menu held open for a minute
+        // must not claim 0:43 the whole time. `.common` because menu tracking
+        // runs the loop in a mode plain timers never fire in.
+        menuClock?.invalidate()
+        if capturingItem != nil {
+            let clock = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, let item = self.capturingItem else { return }
+                    item.attributedTitle = self.capturingHeader()
+                }
+            }
+            RunLoop.main.add(clock, forMode: .common)
+            menuClock = clock
+        }
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        menuClock?.invalidate()
+        menuClock = nil
     }
 
     /// Bring the event tap up once everything is granted. Idempotent. The
@@ -454,5 +540,13 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 hint: "Accessibility is granted but the tap was refused. Quit and relaunch Fovea; if it persists, remove Fovea from Accessibility and add it again."
             ))
         }
+    }
+}
+
+private extension NSFont {
+    /// The menu font at a different weight — NSFont has no variant API, and
+    /// the system font at menu size is the menu font.
+    func withWeight(_ weight: NSFont.Weight) -> NSFont {
+        NSFont.systemFont(ofSize: pointSize, weight: weight)
     }
 }

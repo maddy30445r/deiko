@@ -202,6 +202,12 @@ final class Recorder {
     /// Referents captured so far this session — shown in the menu.
     var referentCount: Int { sessionReferentCount }
 
+    /// How long the open session has been running, for the menu's live clock.
+    /// Nil with no session, and for reopened ones (original start unknown).
+    var sessionElapsedMs: Double? {
+        sessionStartedMs.map { Clock.nowMs() - $0 }
+    }
+
     /// Fired whenever any of the above changes, so the menu-bar icon and items
     /// reflect what is genuinely happening rather than what was last clicked.
     var onStateChange: (() -> Void)?
@@ -554,6 +560,11 @@ final class Recorder {
         // than making that referent wait ~300ms for it.
         lastFrontPid = AXProbe.prePokeFrontmost()
 
+        // The pill's promise is "click me and this stops" — same close-out as
+        // every other route, so a click can never truncate crops in flight.
+        overlay.onStopRequested = { [weak self] in
+            Task { @MainActor in _ = await self?.stopSession() }
+        }
         overlay.show()
         sampler = Timer.scheduledTimer(withTimeInterval: sampleInterval, repeats: true) { _ in
             MainActor.assumeIsolated { self.sample() }

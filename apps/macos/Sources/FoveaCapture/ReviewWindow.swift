@@ -146,19 +146,24 @@ final class ReviewModel: ObservableObject {
         }
     }
 
-    /// Save the edit, re-render, then send. In that order, and only that order:
-    /// sending a brief whose narration section predates the correction would
-    /// hand over the text the developer just rejected.
+    /// Save the edit, re-render, then — only on the fling path — send.
     ///
-    /// `then` runs after the brief is in the outbox, and **the phase does not
-    /// read `.sent` until it returns.** The orb hangs the handoff keystroke
-    /// there, and the first version of this set `.sent` before running it — so
-    /// the orb said "Handed over" while nothing had reached the editor, and the
-    /// checkmark was evidence only of a file copy. A success state must not
-    /// outrun the work it claims.
+    /// ONE SEND GESTURE IN THE WHOLE PRODUCT. Called with no handoff closure
+    /// (the panel's "Good to go"), this applies the correction and returns to
+    /// `.ready`: nothing leaves the machine until the coin is thrown. The
+    /// panel never sends, so there is exactly one gesture that does, and the
+    /// developer can always answer "has anything been sent?" by whether they
+    /// have thrown.
     ///
-    /// The copy still happens first, deliberately: if the handoff half fails,
-    /// the brief is already pending and typing the command by hand still works.
+    /// On the fling path the order is edit → send → keystroke, and **the phase
+    /// does not read `.sent` until the keystroke returns.** The first version
+    /// set `.sent` before running it — so the orb said "Handed over" while
+    /// nothing had reached the editor, and the checkmark was evidence only of
+    /// a file copy. A success state must not outrun the work it claims.
+    ///
+    /// The copy still happens before the keystroke, deliberately: if the
+    /// handoff half fails, the brief is already pending and typing the command
+    /// by hand still works.
     func approve(handingTo appName: String? = nil, then after: (@MainActor () async throws -> Void)? = nil) {
         guard let sessionDir else { return }
         task?.cancel()
@@ -171,14 +176,18 @@ final class ReviewModel: ObservableObject {
                     guard stillCurrent(sessionDir) else { return }
                     self.digest = rerendered
                 }
+                guard let after else {
+                    // The panel's path ends here: corrected, re-rendered,
+                    // nothing sent.
+                    phase = .ready
+                    return
+                }
                 phase = .working("Sending…")
                 try await BriefPipeline.send(sessionDir: sessionDir)
                 guard stillCurrent(sessionDir) else { return }
-                if let after {
-                    phase = .working("Handing to \(appName ?? "your editor")…")
-                    try await after()
-                    guard stillCurrent(sessionDir) else { return }
-                }
+                phase = .working("Handing to \(appName ?? "your editor")…")
+                try await after()
+                guard stillCurrent(sessionDir) else { return }
                 handedTo = appName
                 phase = .sent
             } catch {
@@ -292,6 +301,9 @@ struct ReviewView: View {
     /// Reopening the session is the orb controller's job — it owns the window
     /// that has to get out of the way, and the recorder handoff.
     let onExtend: () -> Void
+    /// "Good to go" returns to the collapsed orb — the panel corrects, the
+    /// coin sends. Owned by the orb, which owns the window's shape.
+    let onCollapse: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -362,9 +374,7 @@ struct ReviewView: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             summaryCard
-            Divider()
             narrationEditor
-            Divider()
             footer
         }
     }
@@ -374,98 +384,191 @@ struct ReviewView: View {
     ///
     /// Read-only on purpose: it is never sent, so an editable box would invite
     /// corrections that go nowhere. The narration below is the field that
-    /// travels, and the one worth correcting.
+    /// travels, and the one worth correcting. The "for you, not sent" pill is
+    /// outlined at full label contrast — a privacy claim must not read like a
+    /// watermark.
     ///
     /// Absent entirely when there is no summary. A card reading "no summary
     /// available" would take up the same room as the summary while telling the
     /// developer less than silence does.
     @ViewBuilder private var summaryCard: some View {
         if model.summaryPending || model.summary != nil {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 6) {
-                    Image(systemName: "eye")
-                    Text("Fovea's reading — for you, not sent")
-                    if model.summaryPending {
-                        ProgressView().controlSize(.small)
+            VStack(alignment: .leading, spacing: 7) {
+                HStack {
+                    HStack(spacing: 6) {
+                        SectionLabel("FOVEA'S READING")
+                            .foregroundStyle(FoveaStyle.mark)
+                        if model.summaryPending {
+                            ProgressView().controlSize(.small)
+                        }
                     }
+                    Spacer()
+                    Text("for you, not sent")
+                        .font(.system(size: 11, weight: .semibold))
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 2)
+                        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.35), lineWidth: 1))
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
 
                 if let summary = model.summary {
                     Text(summary)
-                        .font(.body)
+                        .font(.system(size: 13))
+                        .lineSpacing(3)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .padding(16)
+            .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.secondary.opacity(0.08))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .background(
+                RoundedRectangle(cornerRadius: FoveaStyle.insetRadius)
+                    .fill(FoveaStyle.accent.opacity(0.1))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: FoveaStyle.insetRadius)
+                            .strokeBorder(FoveaStyle.accent.opacity(0.22), lineWidth: 1)
+                    )
+            )
             .padding(.horizontal, 20)
-            .padding(.bottom, 16)
+            .padding(.top, 16)
         }
     }
 
     // ── Pieces ──────────────────────────────────────────────────────────────
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 5) {
             if let d = model.digest {
-                Text(headline(d)).font(.headline)
-                Text(bindingLine(d)).font(.subheadline).foregroundStyle(.secondary)
-                HStack(spacing: 6) {
-                    Image(systemName: "photo.on.rectangle")
-                    Text(cropLine(d))
-                }
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                if let repo = d.summary.repoHints.first {
-                    HStack(spacing: 6) {
-                        Image(systemName: "shippingbox")
-                        Text("Targets \(repo)")
-                    }
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                } else {
-                    // Worth its own line and its own colour: a brief with no repo
-                    // signal is the one most likely to land in the wrong project.
-                    HStack(spacing: 6) {
-                        Image(systemName: "questionmark.circle")
-                        Text("No repo named — confirm where this belongs")
-                    }
-                    .font(.subheadline)
-                    .foregroundStyle(.orange)
-                }
+                headline(d)
+                bindingLine(d)
+                cropRow(d)
+                repoRow(d)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
+        .padding(.horizontal, 20)
+        .padding(.top, 16)
+    }
+
+    /// `43s · 6 things pointed at · Code` — the app name in mono, because it
+    /// is data.
+    private func headline(_ d: BriefDigest) -> some View {
+        let seconds = Int((d.summary.durationMs / 1000).rounded())
+        let apps = d.summary.apps.isEmpty ? "no app" : d.summary.apps.joined(separator: ", ")
+        return (
+            Text("\(seconds)s · \(d.summary.referentCount) things pointed at · ")
+                .font(.system(size: 15, weight: .semibold))
+            + Text(apps)
+                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+        )
+    }
+
+    private func bindingLine(_ d: BriefDigest) -> some View {
+        var line = Text("\(d.summary.boundCount) of \(d.summary.referentCount) bound to what you said")
+            .foregroundStyle(.secondary)
+        // Surfaced because it is the one number that says "check this" — the
+        // aligner had two equally plausible referents and picked one.
+        if d.summary.needsReviewCount > 0 {
+            line = line
+                + Text(" · ").foregroundStyle(.secondary)
+                + Text("\(d.summary.needsReviewCount) worth checking")
+                .foregroundStyle(FoveaStyle.needsYou)
+        }
+        return line.font(.system(size: 13))
+    }
+
+    /// The withheld line NEVER collapses into the stats — its own orange row,
+    /// even mid-flow. Watching Fovea refuse to share a credential is the
+    /// privacy model, visible.
+    @ViewBuilder private func cropRow(_ d: BriefDigest) -> some View {
+        if d.cropsWithheld > 0 {
+            HStack(spacing: 8) {
+                Text("!")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(FoveaStyle.needsYou)
+                    .frame(width: 16, height: 16)
+                    .overlay(Circle().strokeBorder(FoveaStyle.needsYou, lineWidth: 1.5))
+                (
+                    Text("\(d.cropsWithheld) screenshot\(d.cropsWithheld == 1 ? "" : "s") withheld — a credential was visible. ")
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(FoveaStyle.needsYou)
+                    + Text("\(d.cropsReleased) \(d.cropsReleased == 1 ? "is" : "are") going.")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(.secondary)
+                )
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(FoveaStyle.needsYou.opacity(0.09), in: RoundedRectangle(cornerRadius: 8))
+            .padding(.top, 3)
+        } else {
+            Label("\(d.cropsReleased) screenshots going", systemImage: "photo.on.rectangle")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder private func repoRow(_ d: BriefDigest) -> some View {
+        if let repo = d.summary.repoHints.first {
+            HStack(spacing: 8) {
+                Text("Targets \(repo)")
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(FoveaStyle.mark)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 3)
+                    .background(FoveaStyle.accent.opacity(0.12), in: Capsule())
+                Text("from the windows you pointed at")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.top, 3)
+        } else {
+            // Worth its own colour and outline: a brief with no repo signal is
+            // the one most likely to land in the wrong project.
+            Text("No repo named — confirm where this belongs")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(FoveaStyle.needsYou)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 3)
+                .overlay(Capsule().strokeBorder(FoveaStyle.needsYou.opacity(0.6), lineWidth: 1.5))
+                .padding(.top, 3)
+        }
     }
 
     private var narrationEditor: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("What you said").font(.headline)
+                SectionLabel("WHAT YOU SAID")
                 Spacer()
                 if model.narrationEdited {
-                    Text("edited").font(.caption).foregroundStyle(.orange)
+                    Text("edited")
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(Color.primary.opacity(0.08), in: Capsule())
                 }
             }
-            Text("This is the task, in your words. Fix anything it misheard.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
             TextEditor(text: $model.narration)
-                .font(.system(.body, design: .default))
-                .frame(minHeight: 200)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color.secondary.opacity(0.3))
+                .font(.system(size: 13))
+                .scrollContentBackground(.hidden)
+                .padding(8)
+                .frame(minHeight: 120)
+                .background(
+                    RoundedRectangle(cornerRadius: FoveaStyle.insetRadius)
+                        .fill(Color(nsColor: .textBackgroundColor).opacity(0.6))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: FoveaStyle.insetRadius)
+                                .strokeBorder(Color.primary.opacity(0.1), lineWidth: 1)
+                        )
                 )
+            Text("This is the task, in your words — the one thing here you can edit. Fix anything it misheard.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
         }
-        .padding(20)
+        .padding(.horizontal, 20)
+        .padding(.top, 16)
     }
 
     private var footer: some View {
@@ -473,18 +576,24 @@ struct ReviewView: View {
             switch model.phase {
             case .working(let what):
                 ProgressView().controlSize(.small)
-                Text(what).font(.caption).foregroundStyle(.secondary)
+                Text(what).font(.system(size: 12)).foregroundStyle(.secondary)
             case .sent:
-                Label("Sent — run /fovea:brief in your repo", systemImage: "checkmark.circle")
-                    .font(.caption)
-                    .foregroundStyle(.green)
+                Label(model.handedTo.map { "Handed to \($0)" } ?? "Handed over", systemImage: "checkmark.circle")
+                    .font(.system(size: 12))
+                    .foregroundStyle(FoveaStyle.sentGreen)
             case .failed(let problem):
                 Label(problem.message, systemImage: "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
+                    .font(.system(size: 12))
+                    .foregroundStyle(FoveaStyle.needsYou)
                     .lineLimit(2)
             case .ready:
-                Text("Nothing has been sent yet.").font(.caption).foregroundStyle(.secondary)
+                // The trust line, and now also the model: the panel corrects,
+                // the coin sends. There is no send button on this screen.
+                Text(model.narrationEdited
+                    ? "Everything else goes as captured."
+                    : "Nothing is sent until you throw the coin.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
             }
             Spacer()
             // Left of the primary action and unstyled, because it is the rarer
@@ -493,9 +602,14 @@ struct ReviewView: View {
             Button("Point at more") { onExtend() }
                 .disabled(!isApprovable)
                 .help("Reopen this session and record more — talk and point again, then tap Right Option to stop.")
-            Button("Good to go") { model.approve() }
-                .keyboardShortcut(.defaultAction)
-                .disabled(!isApprovable)
+            Button("Good to go") {
+                model.approve()
+                onCollapse()
+            }
+            .keyboardShortcut(.defaultAction)
+            .tint(FoveaStyle.accent)
+            .disabled(!isApprovable)
+            .help("Apply your correction and return to the coin. Nothing is sent until you throw it.")
         }
         .padding(20)
     }
@@ -505,29 +619,5 @@ struct ReviewView: View {
         case .ready, .failed: return model.digest != nil
         case .working, .sent: return false
         }
-    }
-
-    // ── Wording ─────────────────────────────────────────────────────────────
-
-    private func headline(_ d: BriefDigest) -> String {
-        let seconds = Int((d.summary.durationMs / 1000).rounded())
-        let apps = d.summary.apps.isEmpty ? "no app" : d.summary.apps.joined(separator: ", ")
-        return "\(seconds)s · \(d.summary.referentCount) things pointed at · \(apps)"
-    }
-
-    private func bindingLine(_ d: BriefDigest) -> String {
-        var line = "\(d.summary.boundCount) of \(d.summary.referentCount) bound to what you said"
-        // Surfaced because it is the one number that says "check this" — the
-        // aligner had two equally plausible referents and picked one.
-        if d.summary.needsReviewCount > 0 {
-            line += " · \(d.summary.needsReviewCount) worth checking"
-        }
-        return line
-    }
-
-    private func cropLine(_ d: BriefDigest) -> String {
-        d.cropsWithheld > 0
-            ? "\(d.cropsReleased) screenshots going, \(d.cropsWithheld) withheld (a credential was visible)"
-            : "\(d.cropsReleased) screenshots going"
     }
 }

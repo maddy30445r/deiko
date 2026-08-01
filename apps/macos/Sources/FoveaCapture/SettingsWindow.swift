@@ -12,6 +12,11 @@ import SwiftUI
 // exactly this — one row per coding client, with a button that writes that
 // client's config. There is no documented third-party API for registering an
 // MCP server, so this is the shape the ecosystem has converged on.
+//
+// The three agent states keep their exact distinctions — "Connected ·
+// /fovea:brief" (mono, because it is a command), "Installed, not connected",
+// "Not found on this Mac" — because collapsing them is how a user ends up
+// connecting a client they don't have, or hunting for one they do.
 // ─────────────────────────────────────────────────────────────────────────────
 
 @MainActor
@@ -27,7 +32,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         }
         let hosting = NSHostingController(rootView: SettingsView())
         let window = NSWindow(contentViewController: hosting)
-        window.title = "Fovea — Settings"
+        window.title = "Fovea Settings"
         window.styleMask = [.titled, .closable, .miniaturizable]
         window.setContentSize(NSSize(width: 520, height: 460))
         window.center()
@@ -61,9 +66,18 @@ final class SettingsModel: ObservableObject {
     @Published var sarvamKey: String = Credentials.value(for: "SARVAM_API_KEY") ?? ""
     @Published var groqKey: String = Credentials.value(for: "GROQ_API_KEY") ?? ""
 
-    /// Where the keys currently come from, so a developer with a `.env` is not
-    /// told to type a key they already have.
-    var keySource: String { Credentials.sourceDescription() }
+    /// "Sarvam: from your login keychain · Groq: not set" — per key, because
+    /// the two can genuinely come from different places.
+    var keySources: String {
+        "Sarvam: \(Credentials.source(of: "SARVAM_API_KEY")) · Groq: \(Credentials.source(of: "GROQ_API_KEY"))"
+    }
+
+    /// The warning belongs HERE, where the fix is — the same failure the orb
+    /// reports after the fact, stated before it happens.
+    var sarvamMissing: Bool {
+        sarvamKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (Credentials.value(for: "SARVAM_API_KEY") ?? "").isEmpty
+    }
 
     func refresh() {
         rows = Connectors.all.map {
@@ -102,6 +116,7 @@ final class SettingsModel: ObservableObject {
     func saveKeys() {
         Credentials.store(sarvamKey, for: "SARVAM_API_KEY")
         Credentials.store(groqKey, for: "GROQ_API_KEY")
+        objectWillChange.send()
     }
 }
 
@@ -112,86 +127,159 @@ private struct SettingsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: 20) {
+                SectionLabel("CODING AGENTS — WHERE BRIEFS LAND")
                 clients
-                Divider()
+                SectionLabel("TRANSCRIPTION")
+                    .padding(.top, 2)
                 keys
+                Text("Keys never leave the login keychain. Nothing else is stored off this Mac.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
             }
-            .padding(22)
+            .padding(24)
         }
         .onAppear { model.refresh() }
     }
 
     private var clients: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Coding agents").font(.headline)
-            Text("Connecting registers Fovea's bridge so the agent can fetch a brief you hand it.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            ForEach(model.rows) { row in
-                HStack(spacing: 10) {
-                    Image(systemName: row.isConnected ? "checkmark.circle.fill" : "circle.dashed")
-                        .foregroundStyle(row.isConnected ? .green : .secondary)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(row.name)
-                        Text(
-                            row.isConnected
-                                ? "Connected · \(row.commandForm)"
-                                : row.isInstalled ? "Installed, not connected" : "Not found on this Mac"
-                        )
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 8) {
+            InsetCard {
+                ForEach(Array(model.rows.enumerated()), id: \.element.id) { index, row in
+                    if index > 0 { Divider().padding(.horizontal, 14) }
+                    HStack(spacing: 12) {
+                        roundel(for: row)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(row.name)
+                                .font(.system(size: 13, weight: .semibold))
+                            if row.isConnected {
+                                Text("Connected · \(row.commandForm)")
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text(row.isInstalled ? "Installed, not connected" : "Not found on this Mac")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        Spacer()
+                        if row.isConnected {
+                            // Every state this window can reach has to be one
+                            // you can leave. Connect without Disconnect is a
+                            // one-way door into a file the user cannot see.
+                            Button("Disconnect") { model.disconnect(row.id) }
+                        } else {
+                            // The canvas drops this button on not-found rows.
+                            // Kept, deliberately: "Not found" is a guess from
+                            // three filesystem signals, all of which have false
+                            // negatives — a wrong guess must not stand between
+                            // someone and the button they came here to press.
+                            Button("Connect") { model.connect(row.id) }
+                        }
                     }
-                    Spacer()
-                    if row.isConnected {
-                        // Every state this window can reach has to be one you
-                        // can leave. Connect without Disconnect is a one-way
-                        // door into a file the user cannot see.
-                        Button("Disconnect") { model.disconnect(row.id) }
-                    } else {
-                        // Never disabled on detection. "Not found" is a guess
-                        // from three filesystem signals, all of which have false
-                        // negatives — and a wrong guess must not stand between
-                        // someone and the button they came here to press.
-                        Button("Connect") { model.connect(row.id) }
-                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 11)
+                    .opacity(row.isConnected || row.isInstalled ? 1 : 0.55)
                 }
-                .padding(12)
-                .background(Color.secondary.opacity(0.08))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
             }
 
             if let problem = model.problem {
                 // The whole message, selectable. A connector failure is about a
                 // file path, and a truncated path is not actionable.
                 Text(problem)
-                    .font(.caption)
-                    .foregroundStyle(.orange)
+                    .font(.system(size: 11))
+                    .foregroundStyle(FoveaStyle.needsYou)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
 
-    private var keys: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Transcription").font(.headline)
-            Text(model.keySource).font(.caption).foregroundStyle(.secondary)
-
-            LabeledContent("Sarvam") {
-                SecureField("required — transcribes your narration", text: $model.sarvamKey)
+    @ViewBuilder private func roundel(for row: SettingsModel.Row) -> some View {
+        ZStack {
+            if row.isConnected {
+                Circle().fill(FoveaStyle.sentGreen.opacity(0.14))
+                Circle().strokeBorder(FoveaStyle.sentGreen, lineWidth: 1.5)
+                Image(systemName: "checkmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(FoveaStyle.sentGreen)
+            } else {
+                Circle().strokeBorder(Color.secondary.opacity(row.isInstalled ? 0.5 : 0.35), lineWidth: 1.5)
+                if !row.isInstalled {
+                    Text("–").font(.system(size: 11, weight: .semibold)).foregroundStyle(.tertiary)
+                }
             }
-            LabeledContent("Groq") {
-                SecureField("optional — the orb's three-line reading", text: $model.groqKey)
-            }
-            HStack {
-                Spacer()
-                Button("Save") { model.saveKeys() }.keyboardShortcut(.defaultAction)
-            }
-            Text("Keys are stored in your login keychain, never in the app bundle.")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
         }
+        .frame(width: 22, height: 22)
+    }
+
+    private var keys: some View {
+        InsetCard {
+            VStack(alignment: .leading, spacing: 10) {
+                keyRow(label: "Sarvam", tag: "required", text: $model.sarvamKey,
+                       prompt: "paste a key…")
+                keyRow(label: "Groq", tag: "optional", text: $model.groqKey,
+                       prompt: "gsk_…")
+                HStack {
+                    if model.sarvamMissing {
+                        Text("No Sarvam key — briefs will stop at “Transcribing…”")
+                            .font(.system(size: 11))
+                            .foregroundStyle(FoveaStyle.needsYou)
+                    } else {
+                        Text(model.keySources)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Save") { model.saveKeys() }
+                        .keyboardShortcut(.defaultAction)
+                        .tint(FoveaStyle.accent)
+                }
+                .padding(.top, 2)
+            }
+            .padding(14)
+        }
+    }
+
+    private func keyRow(label: String, tag: String, text: Binding<String>, prompt: String) -> some View {
+        HStack(spacing: 10) {
+            (Text(label).font(.system(size: 13))
+                + Text("  \(tag)").font(.system(size: 11)).foregroundStyle(.secondary))
+                .frame(width: 96, alignment: .leading)
+            SecureField(prompt, text: text)
+                .font(.system(size: 12, design: .monospaced))
+                .textFieldStyle(.roundedBorder)
+        }
+    }
+}
+
+// ── Shared pieces (Settings + first run share this vocabulary) ──────────────
+
+/// The uppercase 11pt section label the canvas uses everywhere.
+struct SectionLabel: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+    var body: some View {
+        Text(text)
+            .font(.system(size: 11, weight: .semibold))
+            .kerning(0.66)
+            .foregroundStyle(.secondary)
+    }
+}
+
+/// A white/inset rounded card holding rows — the canvas's grouping surface.
+struct InsetCard<Content: View>: View {
+    @ViewBuilder let content: Content
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) { content }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: FoveaStyle.insetRadius)
+                    .fill(Color(nsColor: .textBackgroundColor).opacity(0.5))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: FoveaStyle.insetRadius)
+                            .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                    )
+            )
     }
 }

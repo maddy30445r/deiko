@@ -62,10 +62,17 @@ public struct PipelineFailure: Equatable, Sendable {
             PipelineFailure(kind: kind, message: message, opensSettings: settings, raw: output)
         }
 
+        // Every sentence says what happened to the WORK — "saved", "will
+        // finish on its own", "nothing was sent". A failed session must never
+        // leave the developer wondering whether 43 seconds of narration
+        // evaporated. It never does: the session is on disk before any of
+        // these stages run.
+
         if text.contains("sarvam_api_key is not set") || text.contains("sarvam_api_key is missing") {
             return make(
                 .noAPIKey,
-                "Fovea needs a Sarvam API key to turn your narration into text. Add one in Settings.",
+                "No Sarvam key yet — Fovea needs one to turn your narration into text. "
+                    + "Add one in Settings and this brief finishes on its own.",
                 settings: true
             )
         }
@@ -74,14 +81,15 @@ public struct PipelineFailure: Equatable, Sendable {
         if text.contains("sarvam 401") || text.contains("sarvam 403") {
             return make(
                 .authRejected,
-                "Sarvam rejected the API key. Check it in Settings — it may have been revoked or copied incompletely.",
+                "Sarvam rejected the key — it may have expired or been copied incompletely. "
+                    + "Paste a fresh one in Settings; the session is saved.",
                 settings: true
             )
         }
         if text.contains("sarvam 429") || text.contains("quota") || text.contains("rate limit") {
             return make(
                 .quotaExhausted,
-                "Sarvam is rate-limiting or out of quota. Wait a moment and send again, or check your plan."
+                "Sarvam is rate-limiting. Nothing is lost — wait a moment and try again."
             )
         }
 
@@ -92,7 +100,8 @@ public struct PipelineFailure: Equatable, Sendable {
             || text.contains("network is unreachable") || text.contains("etimedout") {
             return make(
                 .offline,
-                "Could not reach Sarvam. Check your internet connection and send again."
+                "You're offline — check your internet connection. "
+                    + "The session is saved and will finish when you're back."
             )
         }
 
@@ -100,7 +109,8 @@ public struct PipelineFailure: Equatable, Sendable {
             || text.contains("mic never delivered") {
             return make(
                 .noSpeech,
-                "Fovea did not hear any speech in this session. Check that the right microphone is selected in System Settings → Sound."
+                "No speech heard — there's nothing to brief. If you were talking, "
+                    + "check the right microphone is selected in System Settings → Sound."
             )
         }
 
@@ -114,10 +124,13 @@ public struct PipelineFailure: Equatable, Sendable {
         if text.contains("could not find node") || text.contains("node: command not found") {
             return make(
                 .noRuntime,
-                "Fovea could not find the Node runtime it needs to process this session."
+                "Fovea could not find the Node runtime it needs to process this session. The session is saved."
             )
         }
 
-        return make(.unknown, "\(stage) failed. The details below are worth sending in a bug report.")
+        return make(
+            .unknown,
+            "\(stage) failed. The session is saved — the details below are worth sending in a bug report."
+        )
     }
 }

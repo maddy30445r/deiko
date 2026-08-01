@@ -906,15 +906,29 @@ struct OrbRootView: View {
                 Button {
                     actions.onSetMode(.collapsed)
                 } label: {
-                    Label("Back to the orb", systemImage: "chevron.down.circle")
+                    Text("‹ Back to the orb")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(FoveaStyle.mark)
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
                 Spacer()
+                Button {
+                    actions.onDismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .bold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.tertiary)
+                .help("Put the orb away. The session stays on disk.")
             }
             .padding(.horizontal, 20)
             .padding(.top, 14)
-            ReviewView(model: model, onExtend: actions.onExtend)
+            ReviewView(
+                model: model,
+                onExtend: actions.onExtend,
+                onCollapse: { actions.onSetMode(.collapsed) }
+            )
         }
         .background(
             RoundedRectangle(cornerRadius: FoveaStyle.panelRadius)

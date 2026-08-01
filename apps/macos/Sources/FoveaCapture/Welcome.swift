@@ -2,20 +2,22 @@ import AppKit
 import SwiftUI
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FIRST RUN
+// FIRST RUN — the one screen where reading is the point
 //
-// What a new install used to do: put an eye in the menu bar and wait. The
+// What a new install used to do: put a mark in the menu bar and wait. The
 // hotkey did nothing, because `startListeningIfPermitted` installs no event tap
 // until all four grants are in — and the list of what was missing lived inside
 // a menu the user had no reason to open. The app presented as working and
 // silently ignored every gesture.
 //
-// So this appears once, unprompted, and states the three things nothing else
-// says: what Fovea does, which permissions it needs and exactly why, and where
-// the key goes. It is not a tour — one screen, four rows, a button.
+// So this appears once, unprompted. One column, one read: what Fovea does,
+// each permission with the DATA it takes (that is what earns trust, not
+// reassurance copy), the key and the agent — each row granting or connecting
+// itself directly — and the gesture. The primary button is "Start pointing",
+// not "Done": the moment everything is in, the next action is the product.
 //
-// Shown again from Settings, because "I clicked past it" is not a reason to
-// have to reinstall.
+// Shown again from the menu's "Getting started…", because "I clicked past it"
+// is not a reason to have to reinstall.
 // ─────────────────────────────────────────────────────────────────────────────
 
 @MainActor
@@ -30,7 +32,8 @@ final class WelcomeWindowController: NSObject, NSWindowDelegate {
         set { UserDefaults.standard.set(newValue, forKey: seenKey) }
     }
 
-    /// Open Settings — set by `MenuBar`, which owns that window.
+    /// Open Settings — set by `MenuBar`, which owns that window. The key row
+    /// deep-links there for typing the key itself.
     var onOpenSettings: (() -> Void)?
 
     /// Show on first launch, or whenever a permission is missing and the user
@@ -85,27 +88,40 @@ final class WelcomeModel: ObservableObject {
 
     struct Row: Identifiable {
         let id: String
+        let symbol: String
         let purpose: String
         let granted: Bool
     }
 
     @Published var rows: [Row] = []
     @Published var needsRelaunch = false
+    @Published var keyPresent = (Credentials.value(for: "SARVAM_API_KEY") ?? "").isEmpty == false
+    @Published var agentConnected = false
+    @Published var connectProblem: String?
 
     var onOpenSettings: (() -> Void)?
     var onDone: (() -> Void)?
 
-    /// True once every permission is in.
-    var allGranted: Bool { rows.allSatisfy(\.granted) }
+    /// "Start pointing" enables when the app can actually deliver on it:
+    /// every grant in, and a key to transcribe with.
+    var readyToPoint: Bool { rows.allSatisfy(\.granted) && keyPresent }
 
     private var screenRecordingWasMissing = false
+
+    /// The one connector first-run offers. More clients live in Settings;
+    /// this screen is a path, not a catalogue.
+    private var claude: Connector? {
+        Connectors.all.first { $0.name == "Claude Code" }
+    }
 
     init() { refresh() }
 
     func refresh() {
         rows = Permission.allCases.map {
-            Row(id: $0.rawValue, purpose: $0.purpose, granted: $0.isGranted)
+            Row(id: $0.rawValue, symbol: $0.symbol, purpose: $0.purpose, granted: $0.isGranted)
         }
+        keyPresent = (Credentials.value(for: "SARVAM_API_KEY") ?? "").isEmpty == false
+        agentConnected = claude?.isConnected ?? false
     }
 
     /// Ask for one permission, then re-read the whole set.
@@ -140,6 +156,18 @@ final class WelcomeModel: ObservableObject {
         }
     }
 
+    /// The agent row connects itself — the row IS the deep link.
+    func connectAgent() {
+        guard let claude else { return }
+        connectProblem = nil
+        do {
+            try Connectors.connect(claude)
+        } catch {
+            connectProblem = error.localizedDescription
+        }
+        refresh()
+    }
+
     func relaunch() { Relauncher.relaunch() }
 }
 
@@ -150,103 +178,201 @@ private struct WelcomeView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 18) {
                 header
+                SectionLabel("FOVEA NEEDS TO SEE AND HEAR WHAT YOU POINT AT")
                 permissions
-                Divider()
-                nextSteps
+                SectionLabel("TWO MORE THINGS")
+                setupRows
+                gestureStrip
+                footer
             }
-            .padding(24)
+            .padding(.horizontal, 32)
+            .padding(.vertical, 20)
         }
         .onAppear { model.refresh() }
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
-                Image(systemName: "eye")
-                    .font(.system(size: 26))
-                Text("Fovea").font(.largeTitle.weight(.semibold))
+        HStack(spacing: 14) {
+            ZStack {
+                Circle().fill(FoveaStyle.coinFill)
+                Circle().fill(
+                    LinearGradient(colors: [FoveaStyle.coinShine, .clear], startPoint: .top, endPoint: .center)
+                )
+                Circle().strokeBorder(FoveaStyle.accent, lineWidth: 1.5)
+                FoveaMark(diameter: 16, color: FoveaStyle.mark)
             }
-            Text("Point at things across your apps while talking. Fovea turns that into a brief your coding agent can act on — with the screenshots and the exact text you pointed at.")
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            .frame(width: 44, height: 44)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Fovea").font(.system(size: 22, weight: .semibold))
+                Text("Point at your screen and talk. What you said — and what you pointed at — becomes a brief for your coding agent.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
     private var permissions: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Fovea needs four permissions").font(.headline)
-            Text("Each one is used for exactly one thing. Nothing is captured unless you start a session.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            ForEach(model.rows) { row in
-                HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: row.granted ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(row.granted ? .green : .secondary)
-                        .padding(.top, 2)
+        InsetCard {
+            ForEach(Array(model.rows.enumerated()), id: \.element.id) { index, row in
+                if index > 0 { Divider().padding(.horizontal, 14) }
+                HStack(spacing: 12) {
+                    glyphTile(row.symbol)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(row.id)
-                        Text("to \(row.purpose)")
-                            .font(.caption)
+                        Text(row.id).font(.system(size: 13, weight: .semibold))
+                        Text(row.purpose)
+                            .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer()
-                    if !row.granted {
+                    if row.granted {
+                        grantedTag("Granted")
+                    } else {
                         Button("Grant") { model.request(row.id) }
                     }
                 }
-                .padding(12)
-                .background(Color.secondary.opacity(0.08))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-            }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
 
-            if model.needsRelaunch {
-                // Stated here rather than discovered later as crops that never
-                // arrive with no reason given.
-                HStack(spacing: 8) {
-                    Image(systemName: "arrow.clockwise.circle.fill").foregroundStyle(.orange)
-                    Text("Screen Recording needs a relaunch before Fovea can capture.")
-                        .font(.caption)
-                    Spacer()
-                    Button("Relaunch") { model.relaunch() }
+                // The relaunch strip renders INLINE under Screen Recording,
+                // with the fix on the same line — not discovered later as
+                // crops that never arrive with no reason given.
+                if row.id == Permission.screenRecording.rawValue, model.needsRelaunch {
+                    HStack(spacing: 8) {
+                        Text("Takes effect after a relaunch.")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(FoveaStyle.needsYou)
+                        Spacer()
+                        Button("Relaunch now") { model.relaunch() }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(FoveaStyle.needsYou.opacity(0.1), in: RoundedRectangle(cornerRadius: 7))
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 10)
                 }
-                .padding(12)
-                .background(Color.orange.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
             }
         }
     }
 
-    private var nextSteps: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Two more things").font(.headline)
-            Label(
-                "Add a Sarvam API key in Settings — Fovea needs it to transcribe.",
-                systemImage: "key"
-            )
-            .font(.callout)
-            Label(
-                "Connect your coding agent in Settings, so it can fetch what you capture.",
-                systemImage: "app.connected.to.app.below.fill"
-            )
-            .font(.callout)
+    private var setupRows: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            InsetCard {
+                HStack(spacing: 12) {
+                    glyphTile("key")
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Sarvam API key").font(.system(size: 13, weight: .semibold))
+                        Text(model.keyPresent ? "in your login keychain" : "transcribes your narration — required")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if model.keyPresent {
+                        grantedTag("Added")
+                    } else {
+                        Button("Add key…") { model.onOpenSettings?() }
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
 
-            Text("Then: double-tap Right Option to start, talk while pointing, tap it again to stop.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+                Divider().padding(.horizontal, 14)
 
-            HStack {
-                Button("Open Settings") { model.onOpenSettings?() }
-                Spacer()
-                Button(model.allGranted ? "Done" : "Later") { model.onDone?() }
-                    .keyboardShortcut(.defaultAction)
+                HStack(spacing: 12) {
+                    glyphTile("terminal")
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Claude Code").font(.system(size: 13, weight: .semibold))
+                        Text(model.agentConnected ? "Connected · /fovea:brief" : "where briefs land — installs /fovea:brief")
+                            .font(.system(size: 11, design: model.agentConnected ? .monospaced : .default))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if model.agentConnected {
+                        grantedTag("Connected")
+                    } else {
+                        Button("Connect") { model.connectAgent() }
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
             }
-            .padding(.top, 4)
+            if let problem = model.connectProblem {
+                Text(problem)
+                    .font(.system(size: 11))
+                    .foregroundStyle(FoveaStyle.needsYou)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// The gesture, as three keycaps — the menu repeats this later, but the
+    /// first run is where the muscle memory starts.
+    private var gestureStrip: some View {
+        HStack(spacing: 16) {
+            keycap("⌥ ⌥", "double-tap right Option — start")
+            keycap("⌥ + drag", "left Option — lasso a region")
+            keycap("⌥", "tap — stop")
+        }
+        .frame(maxWidth: .infinity)
+        .padding(12)
+        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: FoveaStyle.insetRadius))
+    }
+
+    private var footer: some View {
+        HStack {
+            Spacer()
+            Button("Finish later") { model.onDone?() }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+            // "Start pointing", not "Done" — the moment it enables, the next
+            // action is the product itself. Half-lit until the app can
+            // actually deliver on the promise.
+            Button("Start pointing") { model.onDone?() }
+                .keyboardShortcut(.defaultAction)
+                .tint(FoveaStyle.accent)
+                .disabled(!model.readyToPoint)
+        }
+        .padding(.top, 2)
+    }
+
+    // ── Pieces ──────────────────────────────────────────────────────────────
+
+    private func glyphTile(_ symbol: String) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: 13))
+            .foregroundStyle(.primary)
+            .frame(width: 26, height: 26)
+            .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func grantedTag(_ word: String) -> some View {
+        Label(word, systemImage: "checkmark")
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(FoveaStyle.sentGreen)
+            .labelStyle(.titleAndIcon)
+    }
+
+    private func keycap(_ keys: String, _ meaning: String) -> some View {
+        HStack(spacing: 7) {
+            Text(keys)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(Color(nsColor: .textBackgroundColor).opacity(0.8))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 5)
+                                .strokeBorder(Color.primary.opacity(0.18), lineWidth: 1)
+                        )
+                )
+            Text(meaning)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
         }
     }
 }

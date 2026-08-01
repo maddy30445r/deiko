@@ -59,19 +59,20 @@ enum Credentials {
         return dotEnv()[name]
     }
 
-    /// Human-readable provenance, for the Settings window. A developer whose
+    /// Where ONE key comes from, for the Settings window's per-key line —
+    /// "Sarvam: from your login keychain · Groq: not set". A developer whose
     /// `.env` already works should not be told to type a key they have.
-    static func sourceDescription() -> String {
-        if ProcessInfo.processInfo.environment["SARVAM_API_KEY"]?.isEmpty == false {
-            return "Using SARVAM_API_KEY from this process's environment."
+    static func source(of name: String) -> String {
+        if ProcessInfo.processInfo.environment[name]?.isEmpty == false {
+            return "from this process's environment"
         }
-        if keychainRead("SARVAM_API_KEY")?.isEmpty == false {
-            return "Stored in your login keychain."
+        if keychainRead(name)?.isEmpty == false {
+            return "from your login keychain"
         }
-        if dotEnv()["SARVAM_API_KEY"] != nil {
-            return "Using the .env beside the app. Saving here moves it to your keychain."
+        if dotEnv()[name]?.isEmpty == false {
+            return "from the .env beside the app"
         }
-        return "No Sarvam key yet — transcription will not run without one."
+        return "not set"
     }
 
     // ── Keychain ────────────────────────────────────────────────────────────

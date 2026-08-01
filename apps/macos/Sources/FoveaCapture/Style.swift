@@ -77,6 +77,19 @@ enum FoveaStyle {
         dark: NSColor(srgbRed: 255 / 255, green: 69 / 255, blue: 58 / 255, alpha: 1)
     )
 
+    /// The capturing pill's body — deliberately NOT dynamic and NOT
+    /// translucent: the one opaque surface Fovea draws, identical over any
+    /// wallpaper, unchanged by Reduce Transparency because it was never
+    /// transparent.
+    static let pillRedNS = NSColor(srgbRed: 229 / 255, green: 56 / 255, blue: 46 / 255, alpha: 1)
+
+    /// Region-capture pulses only — the lasso's "got it" ring. A point's ring
+    /// is the accent; the two are distinguishable at a glance mid-session.
+    static let regionTealNS = dynamic(
+        light: NSColor(srgbRed: 0, green: 144 / 255, blue: 168 / 255, alpha: 1),
+        dark: NSColor(srgbRed: 64 / 255, green: 203 / 255, blue: 224 / 255, alpha: 1)
+    )
+
     /// The rim light across the coin's top half — what makes it read as a
     /// physical object that can be picked up rather than a filled circle.
     static let coinShineNS = dynamic(
@@ -104,6 +117,63 @@ enum FoveaStyle {
     /// screen, and the next pulse should already obey it.
     static var reduceMotion: Bool {
         NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+}
+
+// ── The menu-bar mark ───────────────────────────────────────────────────────
+
+extension FoveaStyle {
+
+    /// The fovea mark for the status item — the same ring-and-dot the orb's
+    /// coin wears, so the menu bar and the orb are visibly the same object.
+    ///
+    /// Three states, each a SHAPE change so colour is never the only signal:
+    ///   ready     — ring with a small centred dot (template, follows the bar)
+    ///   capturing — the dot swells to fill the ring, in record red
+    ///   blocked   — ring-and-dot with an orange `!` at the corner
+    static func menuBarIcon(recording: Bool, blocked: Bool) -> NSImage {
+        let size = NSSize(width: 18, height: 16)
+        let image = NSImage(size: size, flipped: false) { _ in
+            let stroke: CGFloat = 1.5
+            let ring = NSRect(x: 2.5, y: 1.5, width: 13, height: 13).insetBy(dx: stroke / 2, dy: stroke / 2)
+
+            if recording {
+                // The swollen dot. Red is drawn literally — a template image
+                // would flatten it to the bar colour, and this state must not
+                // be mistakable for ready.
+                recordRedNS.setStroke()
+                recordRedNS.setFill()
+                let path = NSBezierPath(ovalIn: ring)
+                path.lineWidth = stroke
+                path.stroke()
+                NSBezierPath(ovalIn: ring.insetBy(dx: 3, dy: 3)).fill()
+            } else {
+                // Ready ships as a template (black is the template convention);
+                // blocked cannot be one — the `!` must stay orange — so its
+                // ring uses labelColor, which the drawing handler re-resolves
+                // per appearance every time the image is drawn.
+                let ink: NSColor = blocked ? .labelColor : .black
+                ink.setStroke()
+                ink.setFill()
+                let path = NSBezierPath(ovalIn: ring)
+                path.lineWidth = stroke
+                path.stroke()
+                let dot = NSRect(x: ring.midX - 1.75, y: ring.midY - 1.75, width: 3.5, height: 3.5)
+                NSBezierPath(ovalIn: dot).fill()
+                if blocked {
+                    let attrs: [NSAttributedString.Key: Any] = [
+                        .font: NSFont.systemFont(ofSize: 9, weight: .bold),
+                        .foregroundColor: needsYouNS,
+                    ]
+                    ("!" as NSString).draw(at: NSPoint(x: size.width - 4, y: size.height - 10), withAttributes: attrs)
+                }
+            }
+            return true
+        }
+        // Template only while nothing is coloured: ready adapts to the bar,
+        // capturing keeps its red, blocked keeps its orange.
+        image.isTemplate = !recording && !blocked
+        return image
     }
 }
 
