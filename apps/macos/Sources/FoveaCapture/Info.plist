@@ -23,6 +23,6 @@
 	<string>Fovea transcribes your narration on-device to work out which moment you were pointing at. Audio never leaves your Mac for this step.</string>
 
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Fovea records your narration only while you hold the push-to-talk key.</string>
+	<string>Fovea records your narration from when you start a session until you stop it. A red bar stays on screen the whole time. The recording is deleted as soon as your brief is made.</string>
 </dict>
 </plist>

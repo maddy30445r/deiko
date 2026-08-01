@@ -167,9 +167,10 @@ private struct SettingsView: View {
                 SectionLabel("TRANSCRIPTION")
                     .padding(.top, 2)
                 keys
-                Text("Keys never leave the login keychain. Nothing else is stored off this Mac.")
+                Text("Keys never leave the login keychain. Your recording is deleted as soon as the brief is made — what stays on this Mac is the brief and its screenshots.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .padding(24)
         }

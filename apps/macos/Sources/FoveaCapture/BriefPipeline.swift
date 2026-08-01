@@ -167,7 +167,43 @@ enum BriefPipeline {
             extraEnvironment: precomputed ? ["FOVEA_TIMINGS_READY": "1"] : [:]
         )
         try await run(.brief, sessionDir: sessionDir)
-        return try digest(sessionDir: sessionDir)
+        let brief = try digest(sessionDir: sessionDir)
+        // The brief exists, so the recording has done its one job.
+        discardAudio(sessionDir: sessionDir)
+        return brief
+    }
+
+    /// Delete the session's recordings once the brief is made.
+    ///
+    /// Nothing downstream reads them again: the transcript cache holds each
+    /// hold's words, a re-render works from that, and `transcribe.mjs` treats a
+    /// missing WAV with cached words as a hit. What is left behind is a
+    /// screenshot-and-text record of a task — not a recording of somebody's
+    /// voice sitting in a folder indefinitely.
+    ///
+    /// `FOVEA_KEEP_AUDIO=1` keeps them, and it earns its place: the WAV has
+    /// twice been the only evidence that explained a failure in this project.
+    /// The "Apple heard nothing" diagnosis was made by feeding the file to
+    /// Sarvam by hand and finding the speech perfectly audible — the real cause
+    /// was a 27% input volume, and nothing else on disk could have shown that.
+    /// Shipped users get deletion; whoever is debugging keeps the choice.
+    ///
+    /// Only the app deletes. `make transcribe` is the diagnostic path and
+    /// leaves the evidence alone.
+    private static func discardAudio(sessionDir: String) {
+        guard ProcessInfo.processInfo.environment["FOVEA_KEEP_AUDIO"] != "1" else {
+            Emit.log("audio: kept (FOVEA_KEEP_AUDIO=1)")
+            return
+        }
+        let audio = URL(fileURLWithPath: sessionDir).appendingPathComponent("audio")
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: audio, includingPropertiesForKeys: nil
+        ) else { return }
+        var removed = 0
+        for file in files where file.pathExtension == "wav" {
+            if (try? FileManager.default.removeItem(at: file)) != nil { removed += 1 }
+        }
+        if removed > 0 { Emit.log("audio: deleted \(removed) recording(s) — the brief is made") }
     }
 
     /// Recognise every hold's audio HERE, in the app that is already running.

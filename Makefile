@@ -168,7 +168,7 @@ reset-permissions:
 clean:
 	@rm -rf $(CAPTURE_DIR)/.build node_modules packages/*/dist build
 
-## record — push-to-talk session recorder (hold Right Option, Ctrl-C to stop)
+## record — session recorder (double-tap Right Option to start, tap to stop)
 ##
 ## The binary mints and names the session directory itself now (sessions/<stamp>),
 ## on the FIRST hold — so a run where you never record leaves nothing behind.

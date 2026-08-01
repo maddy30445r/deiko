@@ -581,9 +581,22 @@ async function main() {
       if (existsSync(inSession)) wav = inSession;
     }
 
-    const bytes = existsSync(wav) ? statSync(wav).size : 0;
+    // A DELETED RECORDING IS A CACHE HIT, NOT A MISS.
+    //
+    // The app removes each session's WAVs the moment the brief exists — the
+    // recording of somebody's voice should not outlive its one use. But the
+    // cache is keyed on the file's byte size, so a deleted WAV reads as 0,
+    // misses, and sends this loop off to transcribe a file that is not there.
+    // That would break "Point at more", which re-runs the whole pipeline over
+    // every hold including the ones already done.
+    //
+    // The size check is there to notice a CHANGED recording. A deleted one can
+    // never be re-transcribed, so the cached words are the only record there
+    // will ever be, and they are exactly right.
+    const present = existsSync(wav);
+    const bytes = present ? statSync(wav).size : 0;
     const cached = cache[hold];
-    if (cached?.bytes === bytes && cached.words?.length) {
+    if (cached?.words?.length && (!present || cached.bytes === bytes)) {
       // Cached words are stored on the AUDIO clock, before the shift, so the
       // shift below applies identically whether they were just recognised or
       // read back. Storing them shifted would bake in an `audioT0` that a
@@ -597,6 +610,16 @@ async function main() {
         hold,
         anchored: w.anchored === true,
       })));
+      continue;
+    }
+
+    // Gone, and nothing cached to stand in for it. Say what happened rather
+    // than failing later with a file-not-found from inside a recogniser.
+    if (!present) {
+      console.error(
+        `  hold ${hold}: the recording was deleted after the brief was made, `
+          + `and there is no cached transcript for it — skipping`
+      );
       continue;
     }
 

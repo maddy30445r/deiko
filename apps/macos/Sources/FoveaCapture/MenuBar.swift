@@ -38,7 +38,7 @@ enum Permission: String, CaseIterable {
         case .screenRecording:
             "crops a screenshot of what you point at"
         case .microphone:
-            "records your narration while you point"
+            "records your narration while you point — deleted once your brief is made"
         case .speech:
             "turns your words into text, on this Mac"
         }
