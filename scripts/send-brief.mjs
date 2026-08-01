@@ -75,4 +75,9 @@ copyFileSync(md, join(OUTBOX, `${id}.md`));
 copyFileSync(manifest, join(OUTBOX, `${id}.json`));
 
 console.error(`✓ ${id} → ${OUTBOX}`);
-console.error(`  in Claude Code:  /mcp__fovea__brief`);
+// The command name DIFFERS BY HOST and getting it wrong is silent: Claude Code
+// will not submit an unresolved slash command, so the wrong form sits typed in
+// the input looking like a broken keystroke. Both are printed rather than
+// guessing which one the reader is in front of.
+console.error(`  in Claude Code:  /fovea:brief        (VS Code extension)`);
+console.error(`                   /mcp__fovea__brief  (CLI)`);

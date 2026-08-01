@@ -107,10 +107,9 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Quit is how you stop it.
     private var isListening = false
 
-    /// Held for the app's lifetime, not created per session: the window keeps its
-    /// size and position where the developer put it, and a second session while
-    /// the first is still open reuses it rather than stacking windows.
-    private let review = ReviewWindowController()
+    /// Held for the app's lifetime, not created per session: a second session
+    /// while the orb is still up reuses it rather than stacking orbs.
+    private let review = OrbController()
 
     init(recorder: Recorder) {
         self.recorder = recorder

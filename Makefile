@@ -154,7 +154,7 @@ send:
 ## bridge-install — register the MCP server with Claude Code, once
 bridge-install:
 	@claude mcp add fovea --scope user -- node "$(CURDIR)/apps/bridge/src/server.mjs"
-	@echo "  then, in any repo:  /mcp__fovea__brief"
+	@echo "  then, in any repo:  /fovea:brief  (VS Code)  ·  /mcp__fovea__brief  (CLI)"
 
 ## bridge-test — drive the bridge over raw JSON-RPC, no Claude Code needed
 bridge-test:

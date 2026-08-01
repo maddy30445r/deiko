@@ -1,5 +1,7 @@
 import AppKit
+import Carbon.HIToolbox
 import Foundation
+import FoveaHandoff
 
 // ─────────────────────────────────────────────────────────────────────────────
 // fovea-capture — the capture binary
@@ -95,6 +97,9 @@ case "app":
 
 case "timing":
     await runTiming(args)
+
+case "handoff-test":
+    await runHandoffTest(args)
 
 case "help", "--help", "-h":
     Emit.log(Usage.text)
@@ -257,6 +262,96 @@ func runApp(_ args: Args) {
 
     Emit.log("Fovea running in the menu bar — sessions → \(root)")
     app.run()
+}
+
+/// Run the fling's keystroke half against a named running app, narrating every
+/// boundary. This exists because the shipped path failed SILENTLY in the field:
+/// the orb said "handed over" and nothing arrived. `CGEvent.post` reports
+/// nothing when TCC drops it, so the only way to locate the break is to log the
+/// grants and run the identical `Handoff.deliver` code with a trace attached.
+///
+///   fovea-capture handoff-test --app TextEdit   ← control: no webview, no doubt
+///   fovea-capture handoff-test --app "Code"     ← the app that ate the paste
+@MainActor
+func runHandoffTest(_ args: Args) async {
+    guard let name = args.string("app") else {
+        Emit.event(ErrorEvent("handoff-test needs --app <name>", hint: "e.g. --app TextEdit"))
+        exit(2)
+    }
+
+    // The grants, before anything moves. Posting is a SEPARATE question from
+    // the Accessibility trust the event tap runs on — `CGEvent.post` from a
+    // process without post-event access is silently discarded, which is
+    // exactly the observed failure shape.
+    Emit.log("AXIsProcessTrusted:          \(AXProbe.isTrusted())")
+    Emit.log("CGPreflightPostEventAccess:  \(CGPreflightPostEventAccess())")
+    Emit.log("IsSecureEventInputEnabled:   \(IsSecureEventInputEnabled())")
+
+    if !CGPreflightPostEventAccess() {
+        Emit.log("→ posting is NOT granted; requesting now (watch for a System Settings prompt)…")
+        Emit.log("CGRequestPostEventAccess:    \(CGRequestPostEventAccess())")
+    }
+
+    let running = NSWorkspace.shared.runningApplications
+    // An exact name wins outright — "TextEdit" must not be ambiguous with the
+    // helper processes that carry it in parentheses.
+    let apps = running.filter { $0.localizedName?.caseInsensitiveCompare(name) == .orderedSame }
+        .ifEmpty(running.filter { $0.localizedName?.localizedCaseInsensitiveContains(name) == true })
+    guard let app = apps.first, apps.count == 1 else {
+        let names = apps.compactMap(\.localizedName).joined(separator: ", ")
+        Emit.event(ErrorEvent(
+            apps.isEmpty ? "no running app matches '\(name)'" : "ambiguous: \(names)",
+            hint: "use the exact app name from the Dock"
+        ))
+        exit(1)
+    }
+
+    Emit.log("frontmost before: \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "none")")
+    Emit.log("3 seconds to put focus where the paste should land…")
+    try? await Task.sleep(for: .seconds(3))
+
+    if let command = args.string("command") { Handoff.commandOverride = command }
+    if let seq = args.string("seq") {
+        guard let strategy = Handoff.Submit(rawValue: seq) else {
+            Emit.event(ErrorEvent(
+                "unknown --seq '\(seq)'",
+                hint: "return | return-twice | escape-return | pasted-newline | none"
+            ))
+            exit(2)
+        }
+        Handoff.submit = strategy
+    }
+
+    Handoff.trace = { Emit.log("  [deliver] \($0)") }
+    let target = HandoffTarget(pid: app.processIdentifier, appName: app.localizedName ?? name)
+    do {
+        // `--key return` posts a single Return and nothing else — for probing
+        // what a submit needs when the text is already sitting in the input.
+        if args.string("key") == "return" {
+            NSRunningApplication(processIdentifier: target.pid)?.activate()
+            try await Task.sleep(for: .milliseconds(300))
+            Handoff.pressReturnForTesting()
+            Emit.log("posted a single Return")
+        } else {
+            try await Handoff.deliver(to: target)
+            Emit.log("deliver returned cleanly")
+        }
+    } catch {
+        Emit.log("deliver FAILED: \(error.localizedDescription)")
+    }
+    Emit.log("frontmost after:  \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "none")")
+
+    // The clipboard restore fires at +3s on a `DispatchQueue.main` work item.
+    // This harness must OUTLIVE it: exiting first kills the work item and the
+    // clipboard reads as destroyed when the app would have put it back — a
+    // harness that reports a bug the product does not have.
+    try? await Task.sleep(for: .milliseconds(3500))
+    Emit.log("pasteboard now:   \(NSPasteboard.general.string(forType: .string) ?? "<empty>")")
+}
+
+extension Array {
+    /// This array, or `fallback` when empty — the exact-then-fuzzy match above.
+    func ifEmpty(_ fallback: [Element]) -> [Element] { isEmpty ? fallback : self }
 }
 
 /// Word timings for a recorded WAV, on-device. Emits JSON on stdout so the

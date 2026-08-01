@@ -38,11 +38,21 @@ let package = Package(
             path: "Tests/FoveaGroundingTests"
         ),
 
+        // The fling — press the orb, drag onto a window, release — split out
+        // because resolving what is under the cursor needs a window server.
+        // Distance and target arrive as parameters; only decisions live here.
+        .target(name: "FoveaHandoff", path: "Sources/FoveaHandoff"),
+        .testTarget(
+            name: "FoveaHandoffTests",
+            dependencies: ["FoveaHandoff"],
+            path: "Tests/FoveaHandoffTests"
+        ),
+
         // No external dependencies on purpose: subcommand parsing is ~30 lines,
         // and a dependency-free build keeps `make dev` offline and fast.
         .executableTarget(
             name: "FoveaCapture",
-            dependencies: ["FoveaGesture", "FoveaVoice", "FoveaGrounding"],
+            dependencies: ["FoveaGesture", "FoveaVoice", "FoveaGrounding", "FoveaHandoff"],
             path: "Sources/FoveaCapture",
             exclude: ["Info.plist"],
             linkerSettings: [

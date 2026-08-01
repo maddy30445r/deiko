@@ -2,12 +2,16 @@ import AppKit
 import SwiftUI
 
 // ─────────────────────────────────────────────────────────────────────────────
-// THE REVIEW WINDOW — the brief in short, before it goes anywhere
+// THE REVIEW — the brief in short, before it goes anywhere
 //
 // What is on screen is deliberately small: the counts, the repo it targets, how
 // many screenshots are going and how many were withheld, and the narration.
 // The brief itself runs to a thousand lines of evidence; none of that is here,
 // because none of it is a decision.
+//
+// Presented by the orb (`Orb.swift`): `ReviewView` is the orb's expanded form,
+// and `ReviewModel` is the one model both forms share — which is why collapsing
+// the panel loses nothing.
 //
 // THE NARRATION IS THE SUMMARY. Nothing writes a description of the session,
 // and nothing should — the developer already said what the task was, out loud,
@@ -21,88 +25,11 @@ import SwiftUI
 // reads, and a mis-heard identifier there does more damage than anywhere else in
 // the document. Correcting it by hand is `T2.4` done properly.
 //
-// Nothing leaves the machine until Good to go is pressed. That property is the
-// reason the tool is trustworthy and it is not negotiable — a brief that
-// injected itself into your editor the moment you stopped talking is a brief you
-// would stop trusting.
+// Nothing leaves the machine until the developer flings the orb or presses
+// Good to go. That property is the reason the tool is trustworthy and it is not
+// negotiable — a brief that injected itself into your editor the moment you
+// stopped talking is a brief you would stop trusting.
 // ─────────────────────────────────────────────────────────────────────────────
-
-@MainActor
-final class ReviewWindowController: NSObject, NSWindowDelegate {
-
-    private var window: NSWindow?
-    private let model = ReviewModel()
-
-    /// Reopen a finished session and start recording again. Set by `MenuBar`,
-    /// which owns the recorder. Returns false if the session could not be
-    /// reopened, and the window stays where it is.
-    var onExtend: ((String) -> Bool)?
-
-    /// The session currently being extended, if any. What tells the difference
-    /// between "a session ended" and "the session I just added to ended".
-    private var extending: String?
-
-    /// Open for a session that has just closed, and run the pipeline behind it.
-    func present(sessionDir: String) {
-        // The second stop of an extended session arrives here exactly like the
-        // first. Route it to the extend path so the developer's correction is
-        // kept rather than replaced by a fresh transcript.
-        if let extending, extending == sessionDir {
-            self.extending = nil
-            show()
-            model.reload(afterExtending: sessionDir)
-            return
-        }
-        show()
-        model.load(sessionDir: sessionDir)
-    }
-
-    /// "Forgot something?" — hand control back to the recorder for another hold.
-    func extendSession() {
-        guard let dir = model.currentSessionDir, let onExtend else { return }
-        model.prepareToExtend()
-        guard onExtend(dir) else {
-            model.noteExtendFailed()
-            return
-        }
-        extending = dir
-        // Out of the way, not closed: you are about to point at another app, and
-        // the window would be sitting on top of the thing you want to show.
-        // `windowWillClose` would also cancel the model's work, which is exactly
-        // wrong here — the recording it is waiting for has just begun.
-        window?.orderOut(nil)
-    }
-
-    private func show() {
-        if let window {
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-            return
-        }
-
-        let hosting = NSHostingController(
-            rootView: ReviewView(model: model) { [weak self] in self?.extendSession() }
-        )
-        let window = NSWindow(contentViewController: hosting)
-        window.title = "Fovea — review"
-        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        window.setContentSize(NSSize(width: 620, height: 640))
-        window.center()
-        window.delegate = self
-        window.isReleasedWhenClosed = false
-        self.window = window
-
-        window.makeKeyAndOrderFront(nil)
-        // A menu-bar app is an accessory: without this the window opens behind
-        // whatever the developer was looking at, which for a window that appears
-        // by itself is indistinguishable from not opening at all.
-        NSApp.activate(ignoringOtherApps: true)
-    }
-
-    func windowWillClose(_ notification: Notification) {
-        model.cancelPendingWork()
-    }
-}
 
 // ── State ───────────────────────────────────────────────────────────────────
 
@@ -148,20 +75,36 @@ final class ReviewModel: ObservableObject {
             != originalNarration.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Whether a result that has just come back still belongs on screen.
+    ///
+    /// `Task.isCancelled` alone is not enough. It reports only the task's OWN
+    /// cancellation, and every entry point here used to overwrite `task` without
+    /// cancelling what was there — so a session that finished transcribing after
+    /// a NEWER one had already loaded would happily publish its digest,
+    /// narration and summary into a model now pointing somewhere else. The orb
+    /// would show one session while the fling sent another, and `narrationEdited`
+    /// would compare the new text against the old original, writing an edit
+    /// nobody made. Cancelling on entry fixes the common case; this check is what
+    /// makes it true even for a task already past its last suspension point.
+    private func stillCurrent(_ dir: String) -> Bool {
+        !Task.isCancelled && sessionDir == dir
+    }
+
     func load(sessionDir: String) {
+        cancelPendingWork()
         self.sessionDir = sessionDir
         phase = .working("Transcribing…")
         task = Task {
             do {
                 let digest = try await BriefPipeline.run(sessionDir: sessionDir)
-                guard !Task.isCancelled else { return }
+                guard stillCurrent(sessionDir) else { return }
                 self.digest = digest
                 self.narration = digest.summary.narration
                 self.originalNarration = digest.summary.narration
                 self.phase = .ready
                 self.fetchSummary(sessionDir: sessionDir)
             } catch {
-                guard !Task.isCancelled else { return }
+                guard stillCurrent(sessionDir) else { return }
                 self.phase = .failed(error.localizedDescription)
             }
         }
@@ -170,21 +113,39 @@ final class ReviewModel: ObservableObject {
     /// Save the edit, re-render, then send. In that order, and only that order:
     /// sending a brief whose narration section predates the correction would
     /// hand over the text the developer just rejected.
-    func approve() {
+    ///
+    /// `then` runs after the brief is in the outbox, and **the phase does not
+    /// read `.sent` until it returns.** The orb hangs the handoff keystroke
+    /// there, and the first version of this set `.sent` before running it — so
+    /// the orb said "Handed over" while nothing had reached the editor, and the
+    /// checkmark was evidence only of a file copy. A success state must not
+    /// outrun the work it claims.
+    ///
+    /// The copy still happens first, deliberately: if the handoff half fails,
+    /// the brief is already pending and typing the command by hand still works.
+    func approve(handingTo appName: String? = nil, then after: (@MainActor () async throws -> Void)? = nil) {
         guard let sessionDir else { return }
+        task?.cancel()
         task = Task {
             do {
                 if narrationEdited {
                     phase = .working("Applying your correction…")
                     try BriefPipeline.writeNarrationOverride(narration, sessionDir: sessionDir)
-                    self.digest = try await BriefPipeline.rerender(sessionDir: sessionDir)
+                    let rerendered = try await BriefPipeline.rerender(sessionDir: sessionDir)
+                    guard stillCurrent(sessionDir) else { return }
+                    self.digest = rerendered
                 }
                 phase = .working("Sending…")
                 try await BriefPipeline.send(sessionDir: sessionDir)
-                guard !Task.isCancelled else { return }
+                guard stillCurrent(sessionDir) else { return }
+                if let after {
+                    phase = .working("Handing to \(appName ?? "your editor")…")
+                    try await after()
+                    guard stillCurrent(sessionDir) else { return }
+                }
                 phase = .sent
             } catch {
-                guard !Task.isCancelled else { return }
+                guard stillCurrent(sessionDir) else { return }
                 phase = .failed(error.localizedDescription)
             }
         }
@@ -194,10 +155,11 @@ final class ReviewModel: ObservableObject {
     /// cancelling the window does not have to wait on a network call, and so a
     /// slow round trip cannot delay Good to go.
     private func fetchSummary(sessionDir: String) {
+        summaryTask?.cancel()
         summaryPending = true
         summaryTask = Task {
             let text = await BriefPipeline.summary(sessionDir: sessionDir)
-            guard !Task.isCancelled else { return }
+            guard stillCurrent(sessionDir) else { return }
             self.summary = text
             self.summaryPending = false
         }
@@ -234,13 +196,14 @@ final class ReviewModel: ObservableObject {
         carriedNarration = nil
         holdsBeforeExtending = []
 
+        cancelPendingWork()
         self.sessionDir = sessionDir
         summary = nil
         phase = .working("Transcribing what you added…")
         task = Task {
             do {
                 var digest = try await BriefPipeline.run(sessionDir: sessionDir)
-                guard !Task.isCancelled else { return }
+                guard stillCurrent(sessionDir) else { return }
 
                 // Everything said in a hold that did not exist before the button
                 // was pressed, in hold order.
@@ -256,6 +219,7 @@ final class ReviewModel: ObservableObject {
                     let merged = "\(kept) \(added)"
                     try BriefPipeline.writeNarrationOverride(merged, sessionDir: sessionDir)
                     digest = try await BriefPipeline.rerender(sessionDir: sessionDir)
+                    guard stillCurrent(sessionDir) else { return }
                 }
 
                 self.digest = digest
@@ -264,7 +228,7 @@ final class ReviewModel: ObservableObject {
                 self.phase = .ready
                 self.fetchSummary(sessionDir: sessionDir)
             } catch {
-                guard !Task.isCancelled else { return }
+                guard stillCurrent(sessionDir) else { return }
                 self.phase = .failed(error.localizedDescription)
             }
         }
@@ -286,10 +250,10 @@ final class ReviewModel: ObservableObject {
 
 // ── View ────────────────────────────────────────────────────────────────────
 
-private struct ReviewView: View {
+struct ReviewView: View {
     @ObservedObject var model: ReviewModel
-    /// Reopening the session is the controller's job — it owns the window that
-    /// has to get out of the way, and the recorder handoff.
+    /// Reopening the session is the orb controller's job — it owns the window
+    /// that has to get out of the way, and the recorder handoff.
     let onExtend: () -> Void
 
     var body: some View {
@@ -450,7 +414,7 @@ private struct ReviewView: View {
                 ProgressView().controlSize(.small)
                 Text(what).font(.caption).foregroundStyle(.secondary)
             case .sent:
-                Label("Sent — run /mcp__fovea__brief in your repo", systemImage: "checkmark.circle")
+                Label("Sent — run /fovea:brief in your repo", systemImage: "checkmark.circle")
                     .font(.caption)
                     .foregroundStyle(.green)
             case .failed(let message):
