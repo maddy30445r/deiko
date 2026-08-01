@@ -6,8 +6,23 @@
 	<string>com.fovea.capture</string>
 	<key>CFBundleName</key>
 	<string>Fovea Capture</string>
+	<!--
+	  Version and build are STAMPED BY `make bundle` from the `VERSION` file at
+	  the repo root. The placeholders below are what a raw SwiftPM build sees;
+	  anything shipped carries the real thing, and `FoveaVersion` reads it back
+	  out of the bundle so there is exactly one version in the product.
+	-->
 	<key>CFBundleShortVersionString</key>
-	<string>0.0.1</string>
+	<string>0.0.0-dev</string>
+	<key>CFBundleVersion</key>
+	<string>0</string>
+
+	<key>CFBundleIconFile</key>
+	<string>Fovea</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>© 2026 Fovea</string>
 
 	<!--
 	  TCC usage descriptions. A SwiftPM executable has no bundle, so this plist

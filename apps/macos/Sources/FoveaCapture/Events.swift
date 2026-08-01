@@ -558,7 +558,23 @@ struct ErrorEvent: Codable {
 }
 
 enum FoveaVersion {
-    static let current = "0.0.1"
+    /// Read from the bundle rather than hardcoded, so there is ONE version in
+    /// the product and it is the one macOS shows.
+    ///
+    /// `VERSION` at the repo root is the source; `make bundle` stamps it into
+    /// `CFBundleShortVersionString`, and this reads it back. The two used to be
+    /// separate literals with nothing keeping them in sync — the kind of drift
+    /// nobody notices until a bug report cites a version that never shipped.
+    ///
+    /// The fallback covers the SwiftPM binary run straight out of `.build`,
+    /// which has no bundle to read.
+    static let current: String =
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        ?? "0.0.0-dev"
+
+    /// The build, for telling two shipped copies of the same version apart.
+    static let build: String =
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

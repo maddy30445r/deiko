@@ -28,7 +28,24 @@ on-device words.
 ## Deploying
 
 Any host that runs Node and terminates TLS. It is one file, has no
-dependencies, and holds no state worth persisting.
+dependencies, and holds no state worth persisting. A `Dockerfile` and a
+`fly.toml` are here because those are the two shortest routes.
+
+**Fly.io**, from this directory:
+
+```sh
+fly launch --no-deploy --name fovea-relay
+fly secrets set SARVAM_API_KEY=… GROQ_API_KEY=…
+fly deploy
+curl https://fovea-relay.fly.dev/health
+```
+
+It scales to zero, so an idle day costs nothing; the first session after a
+quiet spell pays a second or two of cold start, which is well inside the
+client's timeout.
+
+**Anything else** — Render, Railway, a VPS behind Caddy — is
+`docker build . && docker run -e SARVAM_API_KEY=… -p 8787:8787`.
 
 | Variable | |
 |---|---|

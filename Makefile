@@ -1,4 +1,4 @@
-.PHONY: dev build test probe watch region clean setup bundle resources dist record transcribe align ground brief summarize send bridge-install bridge-test show-brief signing-setup reset-permissions
+.PHONY: dev build test probe watch region clean setup bundle icon dmg resources dist record transcribe align ground brief summarize send bridge-install bridge-test show-brief signing-setup reset-permissions
 
 # Code-signing identity for the bundle.
 #
@@ -71,9 +71,21 @@ region: $(DEBUG_BIN)
 APP := build/Fovea.app
 RES := $(APP)/Contents/Resources
 
+# ONE version in the product. `VERSION` is the source; it is stamped into the
+# bundle below, and `FoveaVersion` reads it back out at runtime. There used to
+# be two hardcoded literals with nothing keeping them in sync.
+VERSION := $(shell cat VERSION 2>/dev/null || echo 0.0.0)
+# The build number distinguishes two shipped copies of one version. A commit
+# count is monotonic, requires nothing to be maintained by hand, and is 1 in a
+# tarball with no git — which is honest rather than wrong.
+BUILD := $(shell git rev-list --count HEAD 2>/dev/null || echo 1)
+
 bundle: $(DEBUG_BIN) resources
 	@cp $(CAPTURE_DIR)/Sources/FoveaCapture/Info.plist $(APP)/Contents/Info.plist
 	@cp $(DEBUG_BIN) $(APP)/Contents/MacOS/fovea-capture
+	@cp $(CAPTURE_DIR)/Sources/FoveaCapture/Fovea.icns $(RES)/Fovea.icns
+	@/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $(VERSION)" $(APP)/Contents/Info.plist
+	@/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(BUILD)" $(APP)/Contents/Info.plist
 	@/usr/libexec/PlistBuddy -c "Add :CFBundleExecutable string fovea-capture" $(APP)/Contents/Info.plist >/dev/null 2>&1 || true
 	@/usr/libexec/PlistBuddy -c "Add :CFBundlePackageType string APPL" $(APP)/Contents/Info.plist >/dev/null 2>&1 || true
 	@/usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" $(APP)/Contents/Info.plist >/dev/null 2>&1 || true
@@ -88,6 +100,62 @@ else
 endif
 	@echo "launch it:  open $(APP)      (menu-bar app; permissions attach to Fovea)"
 	@echo "subcommand: $(APP)/Contents/MacOS/fovea-capture <cmd>"
+
+## dmg — the thing you actually hand to somebody
+##
+## `hdiutil` rather than `create-dmg`, because it ships with macOS: a release
+## step that first needs a Homebrew install is a release step that fails on the
+## one machine you did not set up.
+##
+## Built from `dist`, not `bundle` — the Node runtime is what makes this work on
+## a Mac that has never had Node, which is most Macs.
+##
+## THE README IN THE WINDOW IS NOT DECORATION. The app is signed with a
+## self-signed certificate, so the first thing that happens after the drag is
+## macOS refusing to open it. Somebody who does not find the bypass concludes
+## the app is broken, and they are not wrong to.
+DMG := build/Fovea-$(VERSION).dmg
+
+dmg: dist
+	@rm -rf build/dmg $(DMG)
+	@mkdir -p build/dmg
+	@cp -R $(APP) build/dmg/
+	@ln -s /Applications build/dmg/Applications
+	@cp README.md build/dmg/
+	@printf '%s\n' \
+		'Fovea $(VERSION)' \
+		'' \
+		'1. Drag Fovea onto the Applications folder.' \
+		'2. Launch it. macOS will refuse, saying the developer cannot be' \
+		'   verified — this is expected. Fovea is signed with a self-signed' \
+		'   certificate rather than an Apple Developer ID.' \
+		'3. Open System Settings -> Privacy & Security, scroll to the message' \
+		'   about Fovea, and click "Open Anyway".' \
+		'' \
+		'   Or run this once in Terminal:' \
+		'     xattr -dr com.apple.quarantine /Applications/Fovea.app' \
+		'' \
+		'   Right-click -> Open is usually NOT enough on current macOS.' \
+		'' \
+		'4. Fovea lives in the menu bar. A first-run window explains the four' \
+		'   permissions it needs and why.' \
+		'' \
+		'Full documentation: README.md, beside this file.' \
+		> 'build/dmg/Read me first.txt'
+	@hdiutil create -volname "Fovea $(VERSION)" -srcfolder build/dmg \
+		-ov -format UDZO -quiet $(DMG)
+	@echo "built $(DMG)  ($$(du -h $(DMG) | cut -f1))"
+	@echo "  the app inside is SELF-SIGNED — the receiver must bypass Gatekeeper."
+	@echo "  'Read me first.txt' in the window tells them how."
+
+## icon — regenerate Fovea.icns from the fovea mark
+##
+## The .icns is COMMITTED, so `make bundle` needs nothing but a copy. Run this
+## only after changing the geometry in scripts/make-icon.mjs.
+icon:
+	@node scripts/make-icon.mjs build/Fovea.iconset
+	@iconutil -c icns build/Fovea.iconset -o $(CAPTURE_DIR)/Sources/FoveaCapture/Fovea.icns
+	@echo "✓ $(CAPTURE_DIR)/Sources/FoveaCapture/Fovea.icns"
 
 ## resources — the pipeline, inside the bundle
 ##

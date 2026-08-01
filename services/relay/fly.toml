@@ -1,0 +1,39 @@
+# Fly.io, because it terminates TLS, gives you a hostname, and scales to zero —
+# which matters when the service is idle most of the day and every request costs
+# you money at Sarvam either way.
+#
+# Deploy:
+#   fly launch --no-deploy --name fovea-relay      (once, from services/relay)
+#   fly secrets set SARVAM_API_KEY=… GROQ_API_KEY=…
+#   fly deploy
+#
+# Then set `defaultRelayURL` in Credentials.swift to https://<app>.fly.dev and
+# rebuild. Nothing else in the app changes.
+
+app = "fovea-relay"
+primary_region = "bom"   # closest to Sarvam; move it to your users
+
+[build]
+
+[http_service]
+  internal_port = 8787
+  force_https = true
+  # Scale to zero. A cold start costs a second or two on the first session of
+  # the day, and the client's own timeout is far longer than that.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    grace_period = "5s"
+    interval = "30s"
+    method = "GET"
+    path = "/health"
+    timeout = "3s"
+
+[[vm]]
+  # The service holds one request body in memory at a time and does nothing
+  # else. 256MB is generous; the audio chunks are capped at 12MB.
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus = 1
