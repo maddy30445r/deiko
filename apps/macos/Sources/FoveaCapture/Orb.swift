@@ -70,6 +70,15 @@ final class OrbController: NSObject {
     /// which owns the recorder — the same contract the review window had.
     var onExtend: ((String) -> Bool)?
 
+    /// Open Settings — set by `MenuBar`, which owns that window. A failure whose
+    /// fix is "add your key" should be one click from the key.
+    ///
+    /// Forwarded to the model too, so the expanded panel's failure view offers
+    /// the same button as the collapsed orb.
+    var onOpenSettings: (() -> Void)? {
+        didSet { model.onOpenSettings = onOpenSettings }
+    }
+
     /// The session currently being extended, if any.
     private var extending: String?
 
@@ -170,7 +179,8 @@ final class OrbController: NSObject {
                     onSetMode: { [weak self] mode in
                         self?.state.mode = mode
                         self?.applyMode()
-                    }
+                    },
+                    onOpenSettings: { [weak self] in self?.onOpenSettings?() }
                 )
             )
         )
@@ -436,6 +446,7 @@ struct OrbActions {
     let onDismiss: () -> Void
     let onExtend: () -> Void
     let onSetMode: (OrbMode) -> Void
+    let onOpenSettings: () -> Void
 }
 
 struct OrbRootView: View {
@@ -562,13 +573,21 @@ struct OrbRootView: View {
             Label("Handed over", systemImage: "checkmark.circle.fill")
                 .font(.callout)
                 .foregroundStyle(.green)
-        case .failed(let message):
-            ScrollView {
-                Text(message)
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+        case .failed(let problem):
+            VStack(alignment: .leading, spacing: 6) {
+                ScrollView {
+                    Text(problem.message)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                // One click to the fix, when the fix is a key. The alternative
+                // is a sentence telling somebody to go and find Settings.
+                if problem.opensSettings {
+                    Button("Open Settings") { actions.onOpenSettings() }
+                        .font(.caption)
+                }
             }
         case .ready:
             summaryLines

@@ -1,4 +1,5 @@
 import AppKit
+import FoveaHandoff
 import SwiftUI
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -40,7 +41,11 @@ final class ReviewModel: ObservableObject {
         case working(String)
         case ready
         case sent
-        case failed(String)
+        /// A sentence naming the fix, plus the raw output behind it. The raw
+        /// text used to BE the message — four hundred characters of provider
+        /// JSON, or a stack trace telling the user to edit a file inside the
+        /// app bundle.
+        case failed(PipelineFailure)
     }
 
     @Published var phase: Phase = .working("Starting…")
@@ -61,10 +66,19 @@ final class ReviewModel: ObservableObject {
     /// The session on screen, for the controller to hand back to the recorder.
     var currentSessionDir: String? { sessionDir }
 
+    /// Open Settings — set by whoever owns that window. A failure whose fix is
+    /// "add your key" should be one click from the key, not an instruction.
+    var onOpenSettings: (() -> Void)?
+
     /// The recorder refused to reopen the session — the events file is gone, or
     /// another session is already live. Say so and leave the brief usable.
     func noteExtendFailed() {
-        phase = .failed("Could not reopen this session to add to it. The brief above is still fine to send.")
+        phase = .failed(PipelineFailure(
+            kind: .unknown,
+            message: "Could not reopen this session to add to it. The brief above is still fine to send.",
+            opensSettings: false,
+            raw: ""
+        ))
     }
     /// The narration as recognised, so "did the developer change it" is a
     /// comparison rather than a flag that has to be maintained.
@@ -90,6 +104,23 @@ final class ReviewModel: ObservableObject {
         !Task.isCancelled && sessionDir == dir
     }
 
+    /// Turn a thrown error into something worth reading.
+    ///
+    /// `commandFailed` carries the stage and the script's raw output, which is
+    /// what the taxonomy classifies. Everything else already has a written
+    /// message — `HandoffError`, `ConnectorError` — and passes through.
+    private func describe(_ error: Error) -> PipelineFailure {
+        if case BriefPipelineError.commandFailed(let stage, let output) = error {
+            return PipelineFailure.classify(stage: stage, output: output)
+        }
+        return PipelineFailure(
+            kind: .unknown,
+            message: error.localizedDescription,
+            opensSettings: false,
+            raw: ""
+        )
+    }
+
     func load(sessionDir: String) {
         cancelPendingWork()
         self.sessionDir = sessionDir
@@ -105,7 +136,7 @@ final class ReviewModel: ObservableObject {
                 self.fetchSummary(sessionDir: sessionDir)
             } catch {
                 guard stillCurrent(sessionDir) else { return }
-                self.phase = .failed(error.localizedDescription)
+                self.phase = .failed(describe(error))
             }
         }
     }
@@ -146,7 +177,7 @@ final class ReviewModel: ObservableObject {
                 phase = .sent
             } catch {
                 guard stillCurrent(sessionDir) else { return }
-                phase = .failed(error.localizedDescription)
+                phase = .failed(describe(error))
             }
         }
     }
@@ -229,7 +260,7 @@ final class ReviewModel: ObservableObject {
                 self.fetchSummary(sessionDir: sessionDir)
             } catch {
                 guard stillCurrent(sessionDir) else { return }
-                self.phase = .failed(error.localizedDescription)
+                self.phase = .failed(describe(error))
             }
         }
     }
@@ -261,8 +292,8 @@ struct ReviewView: View {
             switch model.phase {
             case .working(let what) where model.digest == nil:
                 progress(what)
-            case .failed(let message) where model.digest == nil:
-                failure(message)
+            case .failed(let problem) where model.digest == nil:
+                failure(problem)
             default:
                 brief
             }
@@ -280,19 +311,43 @@ struct ReviewView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func failure(_ message: String) -> some View {
+    private func failure(_ failure: PipelineFailure) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             Label("Could not prepare the brief", systemImage: "exclamationmark.triangle")
                 .font(.headline)
-            // The whole output, scrollable and selectable. A truncated shell
-            // error is a bug report nobody can act on.
-            ScrollView {
-                Text(message)
-                    .font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+
+            // The sentence first, in prose, at readable size. This used to be
+            // the raw shell output in monospace — which for the commonest
+            // failure told the user to edit a `.env` they do not have, from a
+            // shell they are not in.
+            Text(failure.message)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            HStack {
+                if failure.opensSettings {
+                    Button("Open Settings") { model.onOpenSettings?() }
+                        .keyboardShortcut(.defaultAction)
+                }
+                Button("Try again") { model.retry() }
+                Spacer()
             }
-            Button("Try again") { model.retry() }
+
+            // Kept, not discarded — it is the only thing worth having in a bug
+            // report — but folded away, because it is not what the person in
+            // front of it needs to read.
+            if !failure.raw.isEmpty {
+                DisclosureGroup("Details") {
+                    ScrollView {
+                        Text(failure.raw)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 220)
+                }
+                .font(.caption)
+            }
         }
         .padding(20)
     }
@@ -417,8 +472,8 @@ struct ReviewView: View {
                 Label("Sent — run /fovea:brief in your repo", systemImage: "checkmark.circle")
                     .font(.caption)
                     .foregroundStyle(.green)
-            case .failed(let message):
-                Label(message, systemImage: "exclamationmark.triangle")
+            case .failed(let problem):
+                Label(problem.message, systemImage: "exclamationmark.triangle")
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .lineLimit(2)

@@ -181,6 +181,7 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         review.onExtend = { [weak self] dir in
             self?.recorder.resumeForExtraHold(dir: dir) ?? false
         }
+        review.onOpenSettings = { [weak self] in self?.settings.present() }
         // Put back a connection that has gone missing. Two ordinary things
         // break it: Claude Code rewrites `~/.claude.json` wholesale and can drop
         // our entry, and moving Fovea (to /Applications, say) invalidates the

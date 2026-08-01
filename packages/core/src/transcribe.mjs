@@ -328,6 +328,28 @@ function wavDurationMs(wavPath) {
   return ((statSync(wavPath).size - 44) / (SAMPLE_RATE * BYTES_PER_SAMPLE)) * 1000;
 }
 
+/**
+ * Words spread evenly across a duration, none of them anchored.
+ *
+ * The fallback when on-device recognition produced nothing to anchor against.
+ * Every word is explicitly `anchored: false`, which is the honest claim: these
+ * positions are a straight line through the hold, not measurements. The aligner
+ * already treats anchored and interpolated words differently, so saying so is
+ * enough — a binding built on these is weak and is scored as such.
+ */
+function spreadEvenly(text, audioDurationMs) {
+  const tokens = text.split(/\s+/).filter(Boolean);
+  if (!tokens.length) return [];
+  const per = audioDurationMs / tokens.length;
+  return tokens.map((word, i) => ({
+    text: word,
+    start: i * per,
+    end: Math.min((i + 1) * per, audioDurationMs),
+    source: "text-only",
+    anchored: false,
+  }));
+}
+
 // ── On-device word timings ──────────────────────────────────────────────────
 
 /**
@@ -505,6 +527,9 @@ async function main() {
 
   const allWords = [];
   const holdTexts = [];
+  /// Holds that lost their on-device timings and are running on text alone.
+  /// Reported at the end so a degraded session cannot pass for a normal one.
+  const degradedHolds = [];
 
   // Per-hold cache, so extending a session costs only the new audio.
   //
@@ -567,11 +592,43 @@ async function main() {
       transcriber.transcribe(wav, { language }),
     ]);
 
+    // ON-DEVICE TIMINGS FAILING IS NOT THE END OF THE HOLD.
+    //
+    // It used to be: this `continue`d, and the hold was discarded whole —
+    // including a Sarvam transcript that had arrived perfectly. Measured on
+    // session 20260801-183429: 9.8s of quiet speech (RMS -39 dBFS, recorded
+    // with the system input at 27%). Apple's en-IN recogniser returned "No
+    // speech detected"; Sarvam returned the full Hinglish sentence. Fovea threw
+    // it away and reported "no words transcribed".
+    //
+    // That made a recogniser STATE.md already documents as hearing ~25% of
+    // Hinglish into a hard gate on the entire session. The narration is the
+    // most valuable thing a session produces — the brief says so — and losing
+    // it because a SECONDARY signal failed is the wrong trade. So: keep the
+    // words, spread them evenly across the hold, and mark every one unanchored.
+    // Referent binding degrades (it has nothing measured to bind against) and
+    // is honest about it, rather than the session evaporating.
+    let timing;
+    let degraded = false;
     if (timingOutcome.status === "rejected") {
-      console.error(`FAILED\n    ${timingOutcome.reason.message}`);
-      continue;
+      const text = textOutcome.status === "fulfilled" ? textOutcome.value?.text : null;
+      if (!text) {
+        console.error(`FAILED\n    ${timingOutcome.reason.message}`);
+        continue;
+      }
+      console.error(
+        `on-device FAILED (${timingOutcome.reason.message}) — keeping ${transcriber.name} text, unanchored`,
+      );
+      degradedHolds.push(hold);
+      degraded = true;
+      timing = {
+        words: spreadEvenly(text, wavDurationMs(wav)),
+        transcript: text,
+        deliveryGapsMs: [],
+      };
+    } else {
+      timing = timingOutcome.value;
     }
-    const timing = timingOutcome.value;
     // The widest pause between the recogniser's deliveries. It matters because
     // the app finishes a recognition that stops short by waiting out an idle
     // threshold; if this ever approaches that threshold, recognition starts
@@ -584,6 +641,27 @@ async function main() {
     // back to Apple's words, which mishear Hindi function words but still bind
     // English sessions fine.
     let holdWords = timing.words;
+
+    // Nothing to merge against. These words ARE the transcriber's text already,
+    // laid out on a line; running the merge would compare that text with itself
+    // and — worse — `mergeWords` labels its input anchored BY DEFINITION,
+    // because its input is normally a measurement. That would restore the exact
+    // lie this path exists to avoid: a session reporting "32/32 words carry a
+    // measured time" when not one of them does.
+    if (degraded) {
+      holdTexts.push({ hold, text: timing.transcript });
+      console.error(`  hold ${hold} → ${holdWords.length} words, times estimated across the hold`);
+      cache[hold] = { bytes, words: holdWords };
+      allWords.push(...holdWords.map((w) => ({
+        text: w.text,
+        start: w.start + audioT0,
+        end: w.end + audioT0,
+        hold,
+        anchored: false,
+      })));
+      continue;
+    }
+
     process.stderr.write(`  hold ${hold} → merging … `);
     try {
       if (textOutcome.status === "rejected") throw textOutcome.reason;
@@ -641,7 +719,18 @@ async function main() {
 
   const out = join(dir, "transcript.json");
   await timed("write", async () =>
-    writeFileSync(out, JSON.stringify({ words: allWords, holdTexts }, null, 2)));
+    writeFileSync(
+      out,
+      JSON.stringify(
+        // Carried into the file, not just printed: the renderer and the orb
+        // both need to be able to say that a session's word times are a
+        // straight line rather than measurements, and stderr is not a channel
+        // either of them can read.
+        { words: allWords, holdTexts, ...(degradedHolds.length ? { degradedHolds } : {}) },
+        null,
+        2,
+      ),
+    ));
   // Best effort. A cache that cannot be written costs time on the next run and
   // nothing else — never fail a good transcript over it.
   try {
@@ -654,6 +743,12 @@ async function main() {
   // discoverable by reading the JSON, which is why a session sat at 37/223 for
   // a day without anyone noticing.
   console.error(`  anchored: ${anchored}/${allWords.length} words carry a measured time`);
+  if (degradedHolds.length) {
+    console.error(
+      `  ⚠ hold${degradedHolds.length > 1 ? "s" : ""} ${degradedHolds.join(", ")}: on-device recognition ` +
+        `heard nothing, so word times are estimated. What you said is intact; what you pointed at may bind loosely.`,
+    );
+  }
   console.error(timingReport(performance.now() - startedAt));
 }
 
