@@ -851,6 +851,25 @@ struct OrbRootView: View {
         ZStack {
             CoinView(kind: coinKind)
                 .modifier(Breathing(active: isWorking))
+                // THE COIN MUST NOT ANIMATE ITS OWN POSITION.
+                //
+                // `Breathing` runs a `repeatForever` animation, and a
+                // repeating animation is PERSISTENT — it stays the active
+                // animation for this subtree. When the panel resizes (it does,
+                // once, the moment the first height measurement corrects the
+                // default the window opened at), the coin's resolved position
+                // moves, SwiftUI animates that move with whatever animation is
+                // active, and "forever" turns a one-off 40pt correction into a
+                // permanent oscillation. The coin swung left and right until
+                // the view was rebuilt — which is exactly why opening the
+                // review panel and coming back appeared to fix it: that path
+                // resizes to an already-measured height, so `setFrame`
+                // early-returns and there is no geometry change to capture.
+                //
+                // `geometryGroup()` resolves this subtree's geometry as a unit
+                // with its parent instead of letting it animate independently.
+                // It is the API Apple added for precisely this.
+                .geometryGroup()
                 .opacity(state.isAiming ? 0 : 1)
                 .gesture(
                     DragGesture(minimumDistance: 0)
