@@ -1,4 +1,4 @@
-.PHONY: dev build test probe watch region clean setup bundle record transcribe align ground brief summarize send bridge-install bridge-test show-brief signing-setup reset-permissions
+.PHONY: dev build test probe watch region clean setup bundle resources dist record transcribe align ground brief summarize send bridge-install bridge-test show-brief signing-setup reset-permissions
 
 # Code-signing identity for the bundle.
 #
@@ -69,10 +69,9 @@ region: $(DEBUG_BIN)
 ## and it fixes the permission model: permissions attach to Fovea.app instead of
 ## to whichever terminal happened to launch the binary.
 APP := build/Fovea.app
+RES := $(APP)/Contents/Resources
 
-bundle: $(DEBUG_BIN)
-	@rm -rf $(APP)
-	@mkdir -p $(APP)/Contents/MacOS
+bundle: $(DEBUG_BIN) resources
 	@cp $(CAPTURE_DIR)/Sources/FoveaCapture/Info.plist $(APP)/Contents/Info.plist
 	@cp $(DEBUG_BIN) $(APP)/Contents/MacOS/fovea-capture
 	@/usr/libexec/PlistBuddy -c "Add :CFBundleExecutable string fovea-capture" $(APP)/Contents/Info.plist >/dev/null 2>&1 || true
@@ -89,6 +88,62 @@ else
 endif
 	@echo "launch it:  open $(APP)      (menu-bar app; permissions attach to Fovea)"
 	@echo "subcommand: $(APP)/Contents/MacOS/fovea-capture <cmd>"
+
+## resources — the pipeline, inside the bundle
+##
+## MIRRORS THE REPO LAYOUT, and that is the whole trick. The scripts import
+## their packages by relative path (`../packages/alignment/dist/src/align.js`)
+## and the bridge reaches back for `../../../scripts/lib/redact.mjs`; Node also
+## finds `node_modules` by walking up from the script it is running. Reproduce
+## the shape and every one of those resolves unchanged — no rewriting imports,
+## no bundler, nothing to keep in sync.
+##
+## The dependency closure is COPIED rather than tree-shaken with esbuild. It is
+## 24MB against the 106MB Node runtime that ships beside it, so bundling would
+## optimise the small half — and esbuild on an SDK with dynamic requires is a
+## real chance of a break that only shows up in the shipped app.
+##
+## `make bundle` runs this every time: it is a few hundred KB of scripts and
+## built packages, and a bundle whose Resources lag its binary is a bug you find
+## in the DMG. `node_modules` is rebuilt only when the bridge's manifest changes.
+resources: build/bridge-deps/node_modules
+	@rm -rf $(RES)
+	@mkdir -p $(RES)/apps $(APP)/Contents/MacOS
+	@npm run build --workspaces --if-present --silent >/dev/null
+	@rsync -a --delete scripts $(RES)/
+	@rsync -a --delete --prune-empty-dirs \
+		--include='*/' --include='dist/***' --include='package.json' --exclude='*' \
+		packages $(RES)/
+	@rsync -a --delete apps/bridge $(RES)/apps/
+	@rsync -a --delete build/bridge-deps/node_modules $(RES)/
+	@echo "  resources: scripts + packages/dist + bridge + node_modules"
+
+## The bridge's PRODUCTION dependency closure, staged once.
+##
+## A separate tree from the repo's own `node_modules` (49MB, dev deps and all)
+## because a shipped app should carry what the bridge needs and nothing else.
+## Make rebuilds it only when `apps/bridge/package.json` is newer.
+build/bridge-deps/node_modules: apps/bridge/package.json
+	@mkdir -p build/bridge-deps
+	@cp apps/bridge/package.json build/bridge-deps/
+	@cd build/bridge-deps && npm install --omit=dev --silent --no-audit --no-fund
+	@touch $@
+
+## dist — the shippable bundle: everything in `bundle`, plus the Node runtime
+##
+## Node is NOT in `make bundle` on purpose. It is 106MB, and a developer's app
+## resolves the pipeline from the checkout beside it anyway (see `Layout`), so
+## copying it on every rebuild would cost the fast local loop and buy nothing.
+## Here it is the point: `NodeRuntime` prefers a bundled runtime over anything
+## on PATH, so this is what makes the app work on a Mac with no Node at all.
+NODE_BIN := $(shell zsh -lc 'command -v node' 2>/dev/null)
+
+dist: bundle
+	@test -n "$(NODE_BIN)" || (echo "✗ no node found to bundle"; exit 1)
+	@cp "$(NODE_BIN)" $(RES)/node
+	@echo "  node: $(NODE_BIN) → $(RES)/node  ($$(du -h "$(NODE_BIN)" | cut -f1))"
+	@echo "⚠ signing is still the LOCAL cert — see Phase 5 for Developer ID + notarisation"
+	@echo "built $(APP) with a bundled runtime  ($$(du -sh $(APP) | cut -f1))"
 
 ## signing-setup — create the local signing certificate (idempotent)
 ##

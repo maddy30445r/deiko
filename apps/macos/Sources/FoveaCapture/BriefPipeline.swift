@@ -52,15 +52,17 @@ struct BriefDigest {
 }
 
 enum BriefPipelineError: LocalizedError {
-    case repoNotFound(String)
+    case pipelineNotFound(String)
+    case nodeNotFound
     case commandFailed(stage: String, output: String)
     case noManifest(String)
 
     var errorDescription: String? {
         switch self {
-        case .repoNotFound(let path):
-            return "Could not find the Fovea repo from the app bundle (looked at \(path)). "
-                + "The app has to sit in the repo's build/ folder to run the pipeline."
+        case .pipelineNotFound(let path):
+            return "Could not find Fovea's pipeline, in the app bundle or beside it (looked at \(path))."
+        case .nodeNotFound:
+            return "Could not find Node on this Mac. Fovea needs it to transcribe and render a brief."
         case .commandFailed(let stage, let output):
             return "\(stage) failed.\n\n\(output)"
         case .noManifest(let path):
@@ -71,28 +73,80 @@ enum BriefPipelineError: LocalizedError {
 
 enum BriefPipeline {
 
-    /// The repo this app was built into: `<repo>/build/Fovea.app`.
+    /// One stage of the pipeline: a Node script, and the `make` target that
+    /// wraps it in a checkout.
     ///
-    /// Derived from the bundle rather than configured, so a fresh clone works
-    /// with no setup — and so moving the app somewhere else fails loudly here
-    /// instead of silently running against the wrong checkout.
-    static func repoRoot() -> URL? {
-        let root = Bundle.main.bundleURL          // <repo>/build/Fovea.app
-            .deletingLastPathComponent()          // <repo>/build
-            .deletingLastPathComponent()          // <repo>
-        return FileManager.default.fileExists(atPath: root.appendingPathComponent("Makefile").path)
-            ? root
-            : nil
+    /// The two spellings exist because the development path must keep going
+    /// through `make`: those targets build the TypeScript packages first
+    /// (`npm run build -w @fovea/alignment`), and a script run directly against
+    /// a stale or absent `dist/` fails in a way that looks like a bug in the
+    /// script. A bundle ships `dist/` already built, so there is nothing to
+    /// build and nothing to wrap.
+    private enum Stage {
+        case transcribe, brief, summarize, send
+
+        var script: String {
+            switch self {
+            case .transcribe: return "transcribe.mjs"
+            case .brief: return "render-brief.mjs"
+            case .summarize: return "summarize.mjs"
+            case .send: return "send-brief.mjs"
+            }
+        }
+
+        var makeTarget: String {
+            switch self {
+            case .transcribe: return "transcribe"
+            case .brief: return "brief"
+            case .summarize: return "summarize"
+            case .send: return "send"
+            }
+        }
+
+        /// What the orb says while this is running.
+        var label: String {
+            switch self {
+            case .transcribe: return "Transcribing"
+            case .brief: return "Rendering the brief"
+            case .summarize: return "Summarising"
+            case .send: return "Sending"
+            }
+        }
+    }
+
+    /// Run one stage, whichever layout this app is running in.
+    @discardableResult
+    private static func run(_ stage: Stage, sessionDir: String) async throws -> String {
+        guard let layout = Layout.resolve() else {
+            throw BriefPipelineError.pipelineNotFound(Bundle.main.bundleURL.path)
+        }
+        switch layout {
+        case .development(let repo):
+            return try await shell(
+                "make \(stage.makeTarget) SESSION=\(quoted(sessionDir))",
+                in: repo,
+                stage: stage.label
+            )
+        case .bundled(let resources):
+            guard let node = NodeRuntime.resolve() else { throw BriefPipelineError.nodeNotFound }
+            // No shell at all here: the executable and its one argument are
+            // passed directly, so nothing has to be quoted and a session path
+            // with a space or a quote in it cannot be misread.
+            return try await exec(
+                node,
+                arguments: [
+                    resources.appendingPathComponent("scripts/\(stage.script)").path,
+                    sessionDir,
+                ],
+                stage: stage.label
+            )
+        }
     }
 
     /// Transcribe, then render. Returns the brief in short.
     static func run(sessionDir: String) async throws -> BriefDigest {
-        guard let repo = repoRoot() else {
-            throw BriefPipelineError.repoNotFound(Bundle.main.bundleURL.path)
-        }
-
-        try await shell("make transcribe SESSION=\(quoted(sessionDir))", in: repo, stage: "Transcribing")
-        try await shell("make brief SESSION=\(quoted(sessionDir))", in: repo, stage: "Rendering the brief")
+        try await run(.transcribe, sessionDir: sessionDir)
+        try await run(.brief, sessionDir: sessionDir)
         return try digest(sessionDir: sessionDir)
     }
 
@@ -117,10 +171,7 @@ enum BriefPipeline {
     /// Re-render only. Used after the narration is edited: the transcript has not
     /// changed, so there is nothing to recognise again.
     static func rerender(sessionDir: String) async throws -> BriefDigest {
-        guard let repo = repoRoot() else {
-            throw BriefPipelineError.repoNotFound(Bundle.main.bundleURL.path)
-        }
-        try await shell("make brief SESSION=\(quoted(sessionDir))", in: repo, stage: "Rendering the brief")
+        try await run(.brief, sessionDir: sessionDir)
         return try digest(sessionDir: sessionDir)
     }
 
@@ -135,8 +186,7 @@ enum BriefPipeline {
     /// Never throws. A missing summary is a smaller thing than an error dialog
     /// about a missing summary.
     static func summary(sessionDir: String) async -> String? {
-        guard let repo = repoRoot() else { return nil }
-        try? await shell("make summarize SESSION=\(quoted(sessionDir))", in: repo, stage: "Summarising")
+        _ = try? await run(.summarize, sessionDir: sessionDir)
 
         // Read the file rather than the command's stdout: the script prints
         // progress and skip reasons there, and a skip must read as "no summary",
@@ -151,10 +201,7 @@ enum BriefPipeline {
     /// the outbox rules (one pending brief at a time, and why), and is spawned
     /// rather than reimplemented so those rules have exactly one home.
     static func send(sessionDir: String) async throws {
-        guard let repo = repoRoot() else {
-            throw BriefPipelineError.repoNotFound(Bundle.main.bundleURL.path)
-        }
-        try await shell("make send SESSION=\(quoted(sessionDir))", in: repo, stage: "Sending")
+        try await run(.send, sessionDir: sessionDir)
     }
 
     /// Save the developer's corrected narration next to the session. The renderer
@@ -190,22 +237,42 @@ enum BriefPipeline {
         "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
+    /// A checkout: through `make`, in a login shell, with `.env` sourced.
     @discardableResult
     private static func shell(_ command: String, in repo: URL, stage: String) async throws -> String {
-        try await withCheckedThrowingContinuation { continuation in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            // `-l` for the login profile (nvm), `-c` for the command. The `set -a`
-            // pair exports everything in .env for the child, which is where
-            // SARVAM_API_KEY lives; `[ -f .env ]` so a checkout without one fails
-            // in the transcriber with its own clear message rather than here with
-            // a shell error about a missing file.
-            process.arguments = [
-                "-lc",
-                "cd \(quoted(repo.path)) && set -a && [ -f .env ] && . ./.env; set +a; \(command)",
-            ]
-            process.currentDirectoryURL = repo
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        // `-l` for the login profile (nvm), `-c` for the command. The `set -a`
+        // pair exports everything in .env for the child, which is where
+        // SARVAM_API_KEY lives; `[ -f .env ]` so a checkout without one fails
+        // in the transcriber with its own clear message rather than here with
+        // a shell error about a missing file.
+        process.arguments = [
+            "-lc",
+            "cd \(quoted(repo.path)) && set -a && [ -f .env ] && . ./.env; set +a; \(command)",
+        ]
+        process.currentDirectoryURL = repo
+        return try await capture(process, stage: stage)
+    }
 
+    /// A bundle: the executable and its arguments, with no shell in between.
+    ///
+    /// Nothing is quoted because nothing is parsed — a session path containing a
+    /// space, a quote or a `$` reaches the script exactly as written. The shell
+    /// path above cannot offer that, which is one more reason it stays confined
+    /// to the developer's own checkout.
+    @discardableResult
+    private static func exec(_ executable: URL, arguments: [String], stage: String) async throws -> String {
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = arguments
+        process.environment = Credentials.childEnvironment()
+        return try await capture(process, stage: stage)
+    }
+
+    /// Run a prepared process and collect everything it says.
+    private static func capture(_ process: Process, stage: String) async throws -> String {
+        try await withCheckedThrowingContinuation { continuation in
             let pipe = Pipe()
             process.standardOutput = pipe
             process.standardError = pipe
