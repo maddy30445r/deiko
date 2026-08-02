@@ -22,27 +22,28 @@ Claude Code window               command is typed and submitted for you
 ## Install
 
 1. Open the DMG and drag **Fovea** to Applications.
-2. **Gatekeeper will refuse to open it.** See below — this is expected and it is
-   not a mistake you made.
+2. **Before launching**, clear the quarantine:
+   ```sh
+   xattr -dr com.apple.quarantine /Applications/Fovea.app
+   ```
 3. Launch it. A first-run window walks you through four permissions.
 4. Connect your coding agent in Settings, and you're done.
 
-### Getting past Gatekeeper
+### Why step 2, and why that way round
 
 Fovea is signed with a **self-signed certificate**, not an Apple Developer ID.
-Anything downloaded from the internet without one is quarantined, and macOS
-says *"Fovea can't be opened because the developer cannot be verified."*
+Anything downloaded without one is quarantined, and macOS says *"Fovea can't be
+opened because the developer cannot be verified."*
 
-Either:
+The GUI route — **System Settings → Privacy & Security → Open Anyway** — does
+let the app start, and it is fine if you prefer clicking. But quarantine is set
+on **every file** in the download, and Fovea ships its own Node runtime inside
+the bundle to transcribe your sessions. Clearing the app you launched does not
+obviously clear a nested binary the app later spawns, and the failure shows up
+much later as a session stuck at *"Transcribing…"*. `xattr -dr` clears the whole
+tree in one go, which is why it leads.
 
-- **System Settings → Privacy & Security**, scroll to the message about Fovea,
-  and click **Open Anyway**; or
-- run this once:
-  ```sh
-  xattr -dr com.apple.quarantine /Applications/Fovea.app
-  ```
-
-Right-click → Open often is **not** enough on current macOS.
+Right-click → Open is **not** enough on current macOS.
 
 Being straight about what this means: you are choosing to run an app Apple has
 not vetted, on the basis that you trust whoever handed you the DMG. That is a

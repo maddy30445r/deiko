@@ -1,4 +1,4 @@
-.PHONY: dev build test probe watch region clean setup bundle icon dmg resources dist record transcribe align ground brief summarize send bridge-install bridge-test show-brief signing-setup reset-permissions
+.PHONY: dev build test probe watch region clean setup bundle icon dmg release guard-clean resources dist record transcribe align ground brief summarize send bridge-install bridge-test show-brief signing-setup reset-permissions
 
 # Code-signing identity for the bundle.
 #
@@ -86,6 +86,12 @@ bundle: $(DEBUG_BIN) resources
 	@cp $(CAPTURE_DIR)/Sources/FoveaCapture/Fovea.icns $(RES)/Fovea.icns
 	@/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $(VERSION)" $(APP)/Contents/Info.plist
 	@/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(BUILD)" $(APP)/Contents/Info.plist
+	@/usr/libexec/PlistBuddy -c "Set :FoveaRelayURL $(RELAY_URL)" $(APP)/Contents/Info.plist
+ifneq ($(RELAY_URL),)
+	@echo "  relay: $(RELAY_URL)"
+else
+	@echo "  relay: none — sessions fall back to on-device words"
+endif
 	@/usr/libexec/PlistBuddy -c "Add :CFBundleExecutable string fovea-capture" $(APP)/Contents/Info.plist >/dev/null 2>&1 || true
 	@/usr/libexec/PlistBuddy -c "Add :CFBundlePackageType string APPL" $(APP)/Contents/Info.plist >/dev/null 2>&1 || true
 	@/usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" $(APP)/Contents/Info.plist >/dev/null 2>&1 || true
@@ -126,19 +132,27 @@ dmg: dist
 		'Fovea $(VERSION)' \
 		'' \
 		'1. Drag Fovea onto the Applications folder.' \
-		'2. Launch it. macOS will refuse, saying the developer cannot be' \
-		'   verified — this is expected. Fovea is signed with a self-signed' \
-		'   certificate rather than an Apple Developer ID.' \
-		'3. Open System Settings -> Privacy & Security, scroll to the message' \
-		'   about Fovea, and click "Open Anyway".' \
 		'' \
-		'   Or run this once in Terminal:' \
+		'2. BEFORE LAUNCHING, run this once in Terminal:' \
+		'' \
 		'     xattr -dr com.apple.quarantine /Applications/Fovea.app' \
 		'' \
-		'   Right-click -> Open is usually NOT enough on current macOS.' \
+		'   Fovea is signed with a self-signed certificate rather than an' \
+		'   Apple Developer ID, so macOS quarantines everything you just' \
+		'   downloaded. This clears the whole bundle -- including the Node' \
+		'   runtime inside it that Fovea spawns to transcribe your sessions.' \
 		'' \
-		'4. Fovea lives in the menu bar. A first-run window explains the four' \
-		'   permissions it needs and why.' \
+		'   The GUI route (System Settings -> Privacy & Security -> "Open' \
+		'   Anyway") lets the app start, but may leave that nested runtime' \
+		'   quarantined -- which turns up later as a session stuck at' \
+		'   "Transcribing...". The command above avoids that.' \
+		'' \
+		'   Right-click -> Open is NOT enough on current macOS.' \
+		'' \
+		'3. Launch it. Fovea lives in the menu bar, and a first-run window' \
+		'   explains the four permissions it needs and why.' \
+		'' \
+		'4. Settings -> connect your coding agent.' \
 		'' \
 		'Full documentation: README.md, beside this file.' \
 		> 'build/dmg/Read me first.txt'
@@ -147,6 +161,56 @@ dmg: dist
 	@echo "built $(DMG)  ($$(du -h $(DMG) | cut -f1))"
 	@echo "  the app inside is SELF-SIGNED — the receiver must bypass Gatekeeper."
 	@echo "  'Read me first.txt' in the window tells them how."
+
+## release — cut a GitHub Release with the DMG attached
+##
+##   make release RELAY_URL=https://fovea-relay.fly.dev
+##
+## A PRIVATE repo is the access list. Whoever can see `maddy30445r/Fovea` can
+## download the build and nobody else can — no bucket to secure, no link to
+## leak, and the same permission the code already lives behind.
+##
+## Refuses on a dirty tree or an existing tag. A release whose contents do not
+## correspond to a commit is worse than no release: the first bug report cites
+## a version that cannot be checked out.
+release: guard-clean
+	@test -z "$$(git tag -l v$(VERSION))" \
+		|| (echo "✗ tag v$(VERSION) already exists — bump VERSION first"; exit 1)
+	@$(MAKE) --no-print-directory dmg RELAY_URL=$(RELAY_URL)
+	@printf '%s\n' \
+		'## Install' \
+		'' \
+		'1. Open the DMG and drag **Fovea** to Applications.' \
+		'2. Clear the download quarantine — **do this before launching**:' \
+		'   ```' \
+		'   xattr -dr com.apple.quarantine /Applications/Fovea.app' \
+		'   ```' \
+		'   Fovea is signed with a self-signed certificate rather than an Apple' \
+		'   Developer ID, so macOS quarantines it. This one command clears the' \
+		'   whole bundle, including the Node runtime inside it that the app' \
+		'   spawns to transcribe.' \
+		'' \
+		'   The GUI route (System Settings → Privacy & Security → Open Anyway)' \
+		'   lets the app launch, but may leave that nested runtime quarantined —' \
+		'   which shows up later as a session stuck at "Transcribing…".' \
+		'' \
+		'3. Launch it. A first-run window covers the four permissions.' \
+		'4. Settings → connect your coding agent.' \
+		'' \
+		'Full documentation is in README.md in the repo.' \
+		'' \
+		'Built from $(shell git rev-parse --short HEAD).' \
+		> build/release-notes.md
+	@gh release create v$(VERSION) $(DMG) \
+		--title "Fovea $(VERSION)" \
+		--notes-file build/release-notes.md
+	@echo "✓ https://github.com/$$(gh repo view --json nameWithOwner -q .nameWithOwner)/releases/tag/v$(VERSION)"
+
+## Refuse to build a release out of uncommitted work.
+guard-clean:
+	@test -z "$$(git status --porcelain)" \
+		|| (echo "✗ working tree is dirty — commit before releasing"; \
+		    git status --short; exit 1)
 
 ## icon — regenerate Fovea.icns from the fovea mark
 ##

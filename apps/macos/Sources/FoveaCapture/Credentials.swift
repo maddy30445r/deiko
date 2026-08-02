@@ -65,12 +65,20 @@ enum Credentials {
         return defaultRelayURL
     }
 
-    /// Nil until there is somewhere to point it. Set this to the deployed
-    /// service's origin (no trailing slash) and every install starts using it.
-    /// Left empty deliberately rather than pointing at a host that does not
-    /// answer: a relay that 404s on every session is worse than no relay,
-    /// because the on-device fallback is silent and the failure is not.
-    private static let defaultRelayURL: String? = nil
+    /// Read from the bundle, stamped there by `make bundle RELAY_URL=…`.
+    ///
+    /// Deployment configuration rather than a source literal, for the same
+    /// reason the version is: a constant that has to be edited before every
+    /// release is a constant that is wrong in somebody's local build. Empty
+    /// means there is no relay, and sessions fall back to on-device words —
+    /// which is correct for a local build and for any release cut before the
+    /// service exists. Better than pointing at a host that does not answer:
+    /// the fallback is silent, and a relay that 404s on every session is not.
+    private static var defaultRelayURL: String? {
+        let configured = Bundle.main.object(forInfoDictionaryKey: "FoveaRelayURL") as? String
+        guard let configured, !configured.isEmpty else { return nil }
+        return configured
+    }
 
     /// An opaque per-install identifier, so the service can rate-limit and
     /// revoke without knowing anything about who is calling.

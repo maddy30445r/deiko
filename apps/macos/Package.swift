@@ -54,7 +54,11 @@ let package = Package(
             name: "FoveaCapture",
             dependencies: ["FoveaGesture", "FoveaVoice", "FoveaGrounding", "FoveaHandoff"],
             path: "Sources/FoveaCapture",
-            exclude: ["Info.plist"],
+            // Neither is a source file, and both live here because they are
+            // inputs to `make bundle` rather than to SwiftPM. Listed so a
+            // clean build does not warn about "unhandled files" at everybody
+            // who builds from source.
+            exclude: ["Info.plist", "Fovea.icns"],
             linkerSettings: [
                 // A SwiftPM executable has no bundle, so TCC has nowhere to read
                 // usage descriptions from — and requesting Speech Recognition

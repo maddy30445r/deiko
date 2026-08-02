@@ -104,6 +104,12 @@ case "handoff-test":
 case "connect":
     runConnect(args)
 
+// Also a subcommand, not only a Settings button. The moment diagnostics are
+// worth having is the moment the app is not working — and if it will not
+// launch, a button inside it is not reachable.
+case "diagnostics":
+    print(Diagnostics.report())
+
 case "help", "--help", "-h":
     Emit.log(Usage.text)
 
@@ -728,6 +734,14 @@ fovea-capture \(FoveaVersion.current)
                               the AX element rectangle over a fixed box.
     --crop-dir <path>         Where crops are written (sessions/crops).
     --verbose                 Human summary on stderr alongside the JSON.
+
+  diagnostics                 Version, permissions, connectors and where the
+                              log is — the block the Settings button copies.
+                              Contains nothing from inside a session, so it is
+                              safe to paste into a bug report.
+
+  connect [--write]           Show every coding client's state; --write
+                              registers Fovea, --disconnect removes it.
 
 Events go to stdout as JSON Lines. Logs go to stderr.
 """

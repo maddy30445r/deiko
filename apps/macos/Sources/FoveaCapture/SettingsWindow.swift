@@ -171,6 +171,8 @@ final class SettingsModel: ObservableObject {
 
 private struct SettingsView: View {
     @StateObject private var model = SettingsModel()
+    /// Momentary, so the button can say it worked.
+    @State private var copied = false
 
     var body: some View {
         ScrollView {
@@ -184,6 +186,8 @@ private struct SettingsView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                Divider()
+                about
             }
             .padding(24)
         }
@@ -292,6 +296,27 @@ private struct SettingsView: View {
             }
             .padding(14)
         }
+    }
+
+    /// The version, and one button that makes a bug report answerable.
+    private var about: some View {
+        HStack(spacing: 10) {
+            Text("Fovea \(FoveaVersion.current) (\(FoveaVersion.build))")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+            Spacer()
+            Button(copied ? "Copied" : "Copy diagnostics") {
+                Diagnostics.copyToPasteboard()
+                copied = true
+                // Long enough to notice, short enough that the button is not
+                // stuck reading "Copied" the next time somebody needs it.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
+            }
+            .help("Version, permissions, connectors and where the log is — no session content.")
+            Button("Reveal log") { Diagnostics.revealLog() }
+        }
+        .font(.system(size: 12))
     }
 
     private func keyRow(
