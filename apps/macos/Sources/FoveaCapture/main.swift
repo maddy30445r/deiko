@@ -1,3 +1,4 @@
+import AVFoundation
 import AppKit
 import Carbon.HIToolbox
 import Foundation
@@ -332,10 +333,24 @@ func runTiming(_ args: Args) async {
     // No network fallback and no flag for one. The only thing such a flag
     // could do is ship narration to Apple's servers — the exact thing
     // SpeechTiming's guard exists to refuse (PRD §10).
-    let result = await SpeechTiming.transcribe(
-        url: URL(fileURLWithPath: path),
-        localeIdentifier: args.string("locale") ?? "hi-IN"
-    )
+    //
+    // `--live` runs the WAV through the LIVE recogniser instead, by handing it
+    // the file's samples the way the microphone tap hands it buffers. That is
+    // the one thing about the live path a unit test cannot answer: whether the
+    // recogniser accepts the 16kHz mono int16 buffers we feed it. Since
+    // recording now depends on that being true, it needs a way to be checked
+    // that does not involve speaking into a microphone and hoping.
+    let result: TimingResult
+    if args.has("live") {
+        result = await liveTimingFromFile(
+            path: path, locale: args.string("locale") ?? "hi-IN"
+        )
+    } else {
+        result = await SpeechTiming.transcribe(
+            url: URL(fileURLWithPath: path),
+            localeIdentifier: args.string("locale") ?? "hi-IN"
+        )
+    }
 
     // Writing to a file rather than only stdout, because this has to be
     // launchable via `open -a`: TCC blames the RESPONSIBLE process, and a
@@ -368,6 +383,51 @@ func runTiming(_ args: Args) async {
     if !result.transcript.isEmpty {
         Emit.log("  \"\(result.transcript.prefix(120))\"")
     }
+}
+
+/// Replay a WAV through the live recogniser, in the buffer shape AND at the pace
+/// the mic tap produces: 16kHz mono int16, 4096 frames at a time, one buffer per
+/// 256ms of audio.
+///
+/// Read AS int16 rather than through the default float processing format, so
+/// what reaches `append` is the same thing `Audio`'s converter emits. Reading it
+/// as float would test a format the app never sends and pass while the real path
+/// failed.
+///
+/// THE PACING IS NOT POLITENESS, it is the difference between a valid test and a
+/// misleading one. Fed a whole file as fast as the disk allows, the recogniser
+/// drops most of it: this replay returned three garbled segments where the
+/// file-based path on the same WAV returned twenty-one correct words. A
+/// microphone cannot deliver faster than realtime, so an unpaced replay tests a
+/// condition the app can never be in — and fails it, which would have looked
+/// exactly like a broken live path.
+func liveTimingFromFile(path: String, locale: String) async -> TimingResult {
+    guard let live = LiveSpeechTiming(localeIdentifier: locale) else {
+        return TimingResult(
+            words: [], transcript: "", locale: locale, onDevice: false,
+            error: "no on-device live recogniser for \(locale)"
+        )
+    }
+    guard let file = try? AVAudioFile(
+        forReading: URL(fileURLWithPath: path),
+        commonFormat: .pcmFormatInt16,
+        interleaved: true
+    ), let buffer = AVAudioPCMBuffer(
+        pcmFormat: file.processingFormat, frameCapacity: 4096
+    ) else {
+        live.cancel()
+        return TimingResult(
+            words: [], transcript: "", locale: locale, onDevice: false,
+            error: "could not read \(path) as 16-bit PCM"
+        )
+    }
+
+    let bufferMs = 4096.0 / file.processingFormat.sampleRate * 1000
+    while (try? file.read(into: buffer, frameCount: 4096)) != nil, buffer.frameLength > 0 {
+        live.append(buffer)
+        try? await Task.sleep(for: .milliseconds(Int(bufferMs)))
+    }
+    return await live.finish()
 }
 
 /// Push-to-talk session recorder. Unlike the other subcommands this needs a
@@ -551,6 +611,23 @@ fovea-capture \(FoveaVersion.current)
                               the AX element rectangle over a fixed box.
     --crop-dir <path>         Where crops are written (sessions/crops).
     --verbose                 Human summary on stderr alongside the JSON.
+
+  timing --wav <path>         On-device word timings for a recorded WAV.
+    --locale <id>             Recogniser locale (hi-IN; the app uses en-IN).
+    --out <path>              Write the JSON here as well as to stdout.
+    --live                    Replay the file through the LIVE recogniser —
+                              the path a real session uses — instead of the
+                              file-based one, buffer by buffer and at realtime
+                              pace. Whether the recogniser accepts the buffers
+                              the microphone produces is the one thing no unit
+                              test can answer, and recording depends on it.
+
+                              Run this from Fovea.app, not from a terminal:
+                              speech is attributed to the RESPONSIBLE process,
+                              and a terminal has no speech usage description,
+                              so the request aborts the binary outright.
+                                open -n -a build/Fovea.app --args timing \\
+                                  --wav f.wav --live --out /tmp/t.json
 
   diagnostics                 Version, permissions, connectors and where the
                               log is — the block the Settings button copies.

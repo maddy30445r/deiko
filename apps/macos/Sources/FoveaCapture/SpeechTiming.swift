@@ -229,7 +229,7 @@ enum SpeechTiming {
         }
     }
 
-    private static func failure(_ message: String, locale: String) -> TimingResult {
+    fileprivate static func failure(_ message: String, locale: String) -> TimingResult {
         TimingResult(words: [], transcript: "", locale: locale, onDevice: false, error: message)
     }
 
@@ -294,6 +294,159 @@ enum SpeechTiming {
         }
 
         return lastSpeechMs
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LIVE TIMING — the same recogniser, fed while the session is still running
+//
+// The file-based path above is correct and slow, and the slowness is structural:
+// handed a finished WAV, the recogniser has no way to say "that was the end", so
+// completion has to be INFERRED — an 8s idle threshold, a silence deadline, a
+// duration+20s backstop. Measured on real sessions, that inference was 92-99% of
+// the wait between letting go of the hotkey and reading a brief, against roughly
+// 1.5s of actual recognition for 13s of audio.
+//
+// Fed live, end-of-audio stops being a guess: `endAudio()` states it, and the
+// recogniser delivers its final result in well under a second. The heuristics
+// are not tuned — they are not needed.
+//
+// This does NOT replace the file path. It is best-effort in exactly the way the
+// crops are: if the recogniser is unavailable, errors, or returns nothing, no
+// file is written and `BriefPipeline.precomputeTimings` recognises the WAV
+// afterwards exactly as it does today. Same output format, same consumer, so
+// nothing downstream can tell which path produced a timing file.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Recognises one hold as it is spoken. One instance per hold.
+final class LiveSpeechTiming: @unchecked Sendable {
+    private let locale: String
+    private let request: SFSpeechAudioBufferRecognitionRequest
+    private let collector: SegmentCollector
+    private var task: SFSpeechRecognitionTask?
+    private let lock = NSLock()
+    /// Set by whichever of `endAudio` and the result handler gets there first.
+    private var continuation: CheckedContinuation<TimingResult, Never>?
+    private var finished = false
+
+    /// Nil when live recognition cannot run at all — no recogniser for the
+    /// locale, unavailable, or no on-device model. Every one of those is a
+    /// reason to leave the work to the file path rather than to report an error:
+    /// the session is recording either way and the user must not be told about a
+    /// shortcut that did not happen.
+    init?(localeIdentifier: String = "en-IN") {
+        guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: localeIdentifier)),
+              recognizer.isAvailable,
+              // Same refusal as the file path: narration does not go to Apple's
+              // servers because a local model was missing.
+              recognizer.supportsOnDeviceRecognition
+        else { return nil }
+
+        self.locale = localeIdentifier
+        self.request = SFSpeechAudioBufferRecognitionRequest()
+        // Live has no `speechEndMs` to measure — the audio does not exist yet.
+        // Nil means the collector's coverage test never fires, which is right:
+        // `endAudio()` is the completion signal here, not a coverage guess.
+        self.collector = SegmentCollector(speechEndMs: nil)
+
+        request.shouldReportPartialResults = true
+        request.requiresOnDeviceRecognition = true
+        request.taskHint = .dictation
+
+        task = recognizer.recognitionTask(with: request) { [weak self] result, error in
+            guard let self else { return }
+            if let result { self.collector.absorb(result.bestTranscription) }
+            // An error at end-of-stream is the recogniser's normal way of
+            // saying it is done, and it usually arrives having already
+            // delivered everything. Partial results in hand beat nothing.
+            if error != nil || (result?.isFinal ?? false) { self.deliver() }
+        }
+    }
+
+    /// Called on the audio thread for every converted buffer.
+    func append(_ buffer: AVAudioPCMBuffer) {
+        lock.lock()
+        let done = finished
+        lock.unlock()
+        guard !done else { return }
+        request.append(buffer)
+    }
+
+    /// Say the audio has ended and wait for the last result.
+    ///
+    /// The deadline is a backstop, not the expected path — the final result
+    /// lands in well under a second once the stream is closed. Whatever has been
+    /// collected by then is returned rather than discarded, because a partial
+    /// timeline still binds most of the words and the alternative is recognising
+    /// the whole file again.
+    func finish(timeout: Duration = .seconds(3)) async -> TimingResult {
+        request.endAudio()
+        let waiter = Task { [weak self] in
+            try? await Task.sleep(for: timeout)
+            self?.deliver()
+        }
+        defer { waiter.cancel(); clearTask() }
+
+        return await withCheckedContinuation { cont in
+            lock.lock()
+            // The result handler may already have fired — `deliver` sets
+            // `finished` before it can resume anything, so check it under the
+            // same lock rather than parking a continuation nobody will resume.
+            if finished {
+                lock.unlock()
+                cont.resume(returning: result())
+                return
+            }
+            continuation = cont
+            lock.unlock()
+        }
+    }
+
+    /// Abandon the recognition without waiting — the hold produced no audio, or
+    /// the session is being torn down.
+    func cancel() {
+        lock.lock()
+        finished = true
+        let pending = continuation
+        continuation = nil
+        let running = task
+        task = nil
+        lock.unlock()
+        running?.cancel()
+        pending?.resume(returning: SpeechTiming.failure("cancelled", locale: locale))
+    }
+
+    /// The recognition task is written in `init` and cleared from whichever
+    /// thread finishes first, so it is held under the same lock as everything
+    /// else here rather than being the one field left to chance.
+    private func clearTask() {
+        lock.lock()
+        task = nil
+        lock.unlock()
+    }
+
+    private func deliver() {
+        lock.lock()
+        if finished { lock.unlock(); return }
+        finished = true
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        // Nil when `finish()` has not been called yet: the recogniser finished
+        // before we asked it to, which is fine — `finish()` reads the collected
+        // result directly in that case.
+        pending?.resume(returning: result())
+    }
+
+    private func result() -> TimingResult {
+        guard let final = collector.finish() else {
+            return SpeechTiming.failure("nothing recognised live", locale: locale)
+        }
+        return TimingResult(
+            words: final.words, transcript: final.transcript,
+            locale: locale, onDevice: true, error: nil,
+            deliveryGapsMs: collector.gaps().map { $0 * 1000 }
+        )
     }
 }
 

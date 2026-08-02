@@ -235,6 +235,14 @@ final class Recorder {
     /// still being written is a folder the user sees as incomplete.
     private var pendingResolves: [Int: Task<Void, Never>] = [:]
 
+    /// Recognition running against the hold currently being spoken, and where to
+    /// write its result. Awaited at close alongside the crops, for the same
+    /// reason: the pipeline starts the moment the session closes, and a timing
+    /// file that lands afterwards would be read by nobody.
+    private var liveTiming: LiveSpeechTiming?
+    private var liveTimingAudioPath: String?
+    private var timingWrites: [Task<Void, Never>] = []
+
     /// The close-out in progress, if any. One task, shared: `stopSession` from
     /// the menu, Quit, and a second Ctrl-C all await the SAME close rather than
     /// racing it — a second caller used to pass the `sessionDir` guard, see an
@@ -410,6 +418,14 @@ final class Recorder {
         }
         for task in outstanding.values { await task.value }
 
+        // The last hold's recognition, which `endRecording` closed a moment ago.
+        // It resolves in well under a second — the audio is already in the
+        // recogniser — and it must land before `onSessionClosed` starts the
+        // pipeline, or the pipeline would recognise the file all over again.
+        let timings = timingWrites
+        timingWrites = []
+        for task in timings { await task.value }
+
         Emit.event(SessionEvent.end(
             id: id, holdCount: holdIndex, referentCount: sessionReferentCount
         ))
@@ -529,10 +545,17 @@ final class Recorder {
         let path = holdIndex == 1
             ? "\(sessionDir)/audio/session.wav"
             : "\(sessionDir)/audio/hold-\(holdIndex).wav"
+        // The recogniser is attached BEFORE the tap can fire. `onBuffer` is read
+        // on the audio thread, so assigning it after `start()` would both lose
+        // the opening buffers and race a reader against a half-written closure —
+        // and the opening buffers are the first words of the sentence.
+        prepareLiveTiming()
         do {
             try audio.start(path: path)
             audioPath = path
+            liveTimingAudioPath = path
         } catch {
+            abandonLiveTiming()
             Emit.event(ErrorEvent(
                 "audio capture failed: \(error.localizedDescription)",
                 hint: "System Settings → Privacy & Security → Microphone, and make sure Fovea is switched on. Capture continues without narration, but the session cannot be aligned."
@@ -582,6 +605,7 @@ final class Recorder {
         overlay.hide()
         lassoPath = nil
         let audioT0 = audio.stop()
+        endLiveTiming()
 
         guard let sessionId else { return }
         Emit.event(HoldEvent.end(
@@ -591,6 +615,58 @@ final class Recorder {
         Emit.log("○ stopped — \(holdReferentCount) referent(s)"
             + (audioT0 == nil ? " (no audio)" : ""))
         onStateChange?()
+    }
+
+    // ── Live word timings ───────────────────────────────────────────────────
+    //
+    // Recognition used to start when the session ended, which put the whole of
+    // it — including the several seconds a file-based recogniser spends working
+    // out that it has reached the end — between letting go and reading a brief.
+    // Here it runs while the words are being said, so by the time the hotkey is
+    // tapped the answer is a `endAudio()` away.
+    //
+    // BEST-EFFORT, deliberately, and shaped exactly like the crops: on any
+    // failure no file is written, and `BriefPipeline.precomputeTimings` does the
+    // work afterwards precisely as it does today. Nothing downstream knows or
+    // cares which path produced the file.
+
+    private func prepareLiveTiming() {
+        // `en-IN` because that is what the file path uses. Recognising live
+        // under a different locale would change the words depending on which
+        // path happened to run — the worst kind of difference to debug.
+        guard let live = LiveSpeechTiming(localeIdentifier: "en-IN") else { return }
+        liveTiming = live
+        audio.onBuffer = { [weak live] buffer in live?.append(buffer) }
+    }
+
+    /// The microphone never opened, so there is nothing to recognise.
+    private func abandonLiveTiming() {
+        audio.onBuffer = nil
+        liveTiming?.cancel()
+        liveTiming = nil
+        liveTimingAudioPath = nil
+    }
+
+    private func endLiveTiming() {
+        audio.onBuffer = nil
+        guard let live = liveTiming, let path = liveTimingAudioPath else { return }
+        liveTiming = nil
+        liveTimingAudioPath = nil
+
+        let out = URL(fileURLWithPath: path + ".timing.json")
+        timingWrites.append(Task.detached {
+            let result = await live.finish()
+            // A result carrying an error is not written: an empty timing file
+            // would tell `precomputeTimings` this hold is done and stop the file
+            // path from ever running, turning a recoverable miss into a hold
+            // with no timings at all. Silence here means "fall back", which is
+            // the whole contract of this shortcut.
+            guard result.error == nil, !result.words.isEmpty,
+                  let data = try? JSONEncoder().encode(result) else { return }
+            // Atomic because the reader polls for existence and parses
+            // immediately — a half-written file is a discarded hold.
+            try? data.write(to: out, options: .atomic)
+        })
     }
 
     // ── Sampling ────────────────────────────────────────────────────────────

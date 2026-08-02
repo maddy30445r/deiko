@@ -57,6 +57,25 @@ final class Audio {
     /// multi-second gate absorbs.
     nonisolated(unsafe) private(set) var lastVoiceMs: Double?
 
+    /// Handed every converted buffer, on the audio thread, immediately before it
+    /// is written to the WAV.
+    ///
+    /// This exists so recognition can run DURING the session instead of on the
+    /// finished file afterwards, which is where the wait used to be: the work is
+    /// ~1.5s for 13s of audio, and the rest was a file-based recogniser having to
+    /// *infer* that it had reached the end. Live, end-of-audio is a fact we state.
+    ///
+    /// It gets the CONVERTED buffer rather than the mic's native one for two
+    /// reasons: the recognition stream then contains exactly the samples the WAV
+    /// contains, so a hold that falls back to the file path keeps the same
+    /// timeline; and 16kHz mono int16 is already proven to work with this
+    /// recogniser, because it is what it reads out of our WAVs today.
+    ///
+    /// Called on the real-time thread, so whatever is on the other end must be
+    /// cheap. `SFSpeechAudioBufferRecognitionRequest.append` is — it hands the
+    /// buffer off and returns.
+    nonisolated(unsafe) var onBuffer: ((AVAudioPCMBuffer) -> Void)?
+
     /// Decides whether a buffer is speech, relative to the room rather than
     /// against a fixed number. See `VoiceGate` for why — a fixed threshold was
     /// measurably losing referents at the volume this app is actually spoken
@@ -205,6 +224,9 @@ final class Audio {
 
         guard error == nil, output.frameLength > 0 else { return }
         noteVoiceActivity(in: output)
+        // Before the write, so a disk error cannot cost the recogniser a buffer
+        // it has no way to ask for again.
+        onBuffer?(output)
         try? file.write(from: output)
     }
 

@@ -148,8 +148,33 @@ enum BriefPipeline {
     }
 
     /// Transcribe, then render. Returns the brief in short.
+    ///
+    /// TIMED, and the timing is logged. `transcribe.mjs` has printed its own
+    /// stage breakdown to stderr since the last latency pass — and this app
+    /// captured that output and threw it away, so the only number anybody could
+    /// see from a real session was the total. Both halves are now in
+    /// `launch.jsonl`: the app's stages, and the script's own line. Any change
+    /// claiming to make this faster has to move these.
     static func run(sessionDir: String) async throws -> BriefDigest {
+        let clock = ContinuousClock()
+        let started = clock.now
+        var marks: [String] = []
+        var last = started
+        func mark(_ name: String) {
+            let now = clock.now
+            marks.append("\(name) \(seconds(last.duration(to: now)))")
+            last = now
+        }
+        // Emitted on the failure path too, via defer: a run that died after
+        // eleven seconds of recognition is exactly the one whose timing matters,
+        // and it is the one that would never have reached a trailing log call.
+        defer {
+            Emit.log("pipeline: " + marks.joined(separator: " · ")
+                + " · total \(seconds(started.duration(to: clock.now)))")
+        }
+
         let precomputed = await precomputeTimings(sessionDir: sessionDir)
+        mark("precompute")
         // EVERY timing file is transient, and one that outlives the run is a
         // verbatim transcript of the developer's narration sitting in a
         // directory they may hand to somebody. `transcribe.mjs` deletes each
@@ -157,7 +182,7 @@ enum BriefPipeline {
         // transcribes, and a hold served from the transcript cache is never
         // read at all. So sweep unconditionally, including on the failure path.
         defer { removeTimingSidecars(sessionDir: sessionDir) }
-        try await run(
+        let transcribeOutput = try await run(
             .transcribe,
             sessionDir: sessionDir,
             // Only claimed when a file was actually written. Asserting it
@@ -166,7 +191,17 @@ enum BriefPipeline {
             // is exactly what should happen then.
             extraEnvironment: precomputed ? ["FOVEA_TIMINGS_READY": "1"] : [:]
         )
+        mark("transcribe")
+        // The script's own per-stage breakdown, which says which half of the
+        // transcribe leg was slow — the app's single number cannot.
+        if let line = transcribeOutput
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .last(where: { $0.contains("timing:") })?
+            .trimmingCharacters(in: .whitespaces) {
+            Emit.log("transcribe: \(line)")
+        }
         try await run(.brief, sessionDir: sessionDir)
+        mark("render")
         let brief = try digest(sessionDir: sessionDir)
         // The brief exists, so the recording has done its one job.
         discardAudio(sessionDir: sessionDir)
@@ -237,8 +272,19 @@ enum BriefPipeline {
         }
     }
 
-    /// Returns whether at least one timing file is now on disk, so the caller
-    /// only tells the script to expect them when they exist.
+    /// Returns whether at least one timing file is NOW ON DISK — not whether
+    /// this function put it there.
+    ///
+    /// That distinction is the whole contract. The caller uses the answer to set
+    /// `FOVEA_TIMINGS_READY`, and the script reads a precomputed file only when
+    /// that is set; without it, it *deletes* any file it finds and launches a
+    /// second copy of the app to redo the work. So reporting "I wrote nothing"
+    /// for a session whose holds were all recognised live would throw away every
+    /// one of those results and take the slowest path available — the exact
+    /// opposite of what recognising during capture is for.
+    ///
+    /// Safe when only some holds have files: the script checks per hold and
+    /// falls back to launching for the ones that do not.
     private static func precomputeTimings(sessionDir: String) async -> Bool {
         let audio = URL(fileURLWithPath: sessionDir).appendingPathComponent("audio")
         guard let wavs = try? FileManager.default.contentsOfDirectory(
@@ -246,11 +292,15 @@ enum BriefPipeline {
         ).filter({ $0.pathExtension == "wav" }), !wavs.isEmpty else { return false }
 
         return await withTaskGroup(of: Bool.self) { group in
+            var alreadyPresent = false
             for wav in wavs {
                 let out = URL(fileURLWithPath: wav.path + ".timing.json")
-                // A hold already recognised in an earlier run of this session
-                // (the extend flow re-runs the whole pipeline) keeps its file.
-                if FileManager.default.fileExists(atPath: out.path) { continue }
+                // Recognised already: live, during the session, or by an earlier
+                // run of this pipeline (the extend flow re-runs the whole thing).
+                if FileManager.default.fileExists(atPath: out.path) {
+                    alreadyPresent = true
+                    continue
+                }
                 group.addTask {
                     // `en-IN` because that is `transcribe.mjs`'s own default
                     // for `--locale`. Recognising here under a different locale
@@ -280,7 +330,7 @@ enum BriefPipeline {
                     }
                 }
             }
-            var any = false
+            var any = alreadyPresent
             for await wrote in group where wrote { any = true }
             return any
         }
@@ -367,6 +417,14 @@ enum BriefPipeline {
             cropsReleased: manifest.referents.filter { $0.cropPath != nil }.count,
             cropsWithheld: manifest.referents.filter { $0.cropWithheld != nil }.count
         )
+    }
+
+    /// One decimal, the same shape `transcribe.mjs` prints, so the app's line
+    /// and the script's line read as one measurement rather than two formats.
+    private static func seconds(_ duration: Duration) -> String {
+        let s = Double(duration.components.seconds)
+            + Double(duration.components.attoseconds) * 1e-18
+        return String(format: "%.1fs", s)
     }
 
     private static func quoted(_ path: String) -> String {
