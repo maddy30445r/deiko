@@ -150,10 +150,30 @@ if ! URL=$(aws lambda get-function-url-config --function-name "$FUNCTION" --regi
   say "creating function URL"
   URL=$(aws lambda create-function-url-config --function-name "$FUNCTION" --region "$REGION" \
     --auth-type NONE --query FunctionUrl --output text)
-  aws lambda add-permission --function-name "$FUNCTION" --region "$REGION" \
-    --statement-id FunctionURLAllowPublicAccess --action lambda:InvokeFunctionUrl \
-    --principal '*' --function-url-auth-type NONE >/dev/null
 fi
+
+# BOTH permission statements, ensured on every run rather than only when the
+# URL is first created — and the second one is the hard-won part.
+#
+# The textbook policy (`lambda:InvokeFunctionUrl`, principal *, AuthType NONE)
+# is NOT sufficient on recent AWS accounts: they ship with Lambda's public
+# access block enabled, which rejects URL-based public grants and returns
+# Forbidden with a perfectly correct-looking policy in place. A plain
+# `lambda:InvokeFunction` for * is what actually opens the door. Diagnosed on
+# this very account: direct invoke 200, URL 403, until this statement landed.
+#
+# That grant also makes DIRECT invoke public, which sounds broader than the
+# URL — but is not, for this service: the only guard either way is the bearer
+# check inside the handler, so a caller crafting a direct-invoke event gets
+# exactly what a caller of the public URL gets. `|| true` because
+# add-permission errors when the statement already exists, which is the normal
+# case on a redeploy.
+aws lambda add-permission --function-name "$FUNCTION" --region "$REGION" \
+  --statement-id FunctionURLAllowPublicAccess --action lambda:InvokeFunctionUrl \
+  --principal '*' --function-url-auth-type NONE >/dev/null 2>&1 || true
+aws lambda add-permission --function-name "$FUNCTION" --region "$REGION" \
+  --statement-id AllowPublicInvoke --action lambda:InvokeFunction \
+  --principal '*' >/dev/null 2>&1 || true
 
 URL="${URL%/}"
 echo
