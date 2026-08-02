@@ -1,4 +1,4 @@
-.PHONY: dev build test probe watch region clean setup bundle icon dmg release guard-clean resources dist record transcribe align ground brief summarize send bridge-install bridge-test show-brief signing-setup reset-permissions
+.PHONY: dev build test probe watch region clean setup bundle icon dmg release guard-clean relay-deploy relay-dev site-deploy resources dist record transcribe align ground brief summarize send bridge-install bridge-test show-brief signing-setup reset-permissions
 
 # Code-signing identity for the bundle.
 #
@@ -79,6 +79,10 @@ VERSION := $(shell cat VERSION 2>/dev/null || echo 0.0.0)
 # count is monotonic, requires nothing to be maintained by hand, and is 1 in a
 # tarball with no git — which is honest rather than wrong.
 BUILD := $(shell git rev-list --count HEAD 2>/dev/null || echo 1)
+
+# Where the landing site's built static files are. Overridable because the
+# generator has not been chosen yet.
+SITE_DIR ?= site
 
 bundle: $(DEBUG_BIN) resources
 	@cp $(CAPTURE_DIR)/Sources/FoveaCapture/Info.plist $(APP)/Contents/Info.plist
@@ -211,6 +215,30 @@ guard-clean:
 	@test -z "$$(git status --porcelain)" \
 		|| (echo "✗ working tree is dirty — commit before releasing"; \
 		    git status --short; exit 1)
+
+## relay-deploy — the transcription relay onto AWS Lambda
+##
+##   SARVAM_API_KEY=… GROQ_API_KEY=… make relay-deploy
+##
+## Lambda because the service is idle most of the day by design — nobody is
+## recording — and it is the only option that costs nothing while idle. See
+## services/relay/deploy-aws.sh; it is idempotent, so this is also how you ship
+## a code change.
+relay-deploy:
+	@./services/relay/deploy-aws.sh
+
+## relay-dev — run the relay locally, for testing the app against it
+##
+##   make relay-dev
+##   FOVEA_RELAY_URL=http://localhost:8787 open build/Fovea.app
+relay-dev:
+	@node services/relay/server.mjs
+
+## site-deploy — the landing site onto S3 + CloudFront
+##
+##   make site-deploy SITE_DIR=site
+site-deploy:
+	@./scripts/deploy-site.sh $(SITE_DIR)
 
 ## icon — regenerate Fovea.icns from the fovea mark
 ##

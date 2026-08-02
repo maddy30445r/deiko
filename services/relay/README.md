@@ -25,27 +25,58 @@ Then record a session **with no Sarvam key in Settings** and confirm it
 transcribes. Kill the relay mid-session and confirm you still get a brief, from
 on-device words.
 
-## Deploying
+## Shape
 
-Any host that runs Node and terminates TLS. It is one file, has no
-dependencies, and holds no state worth persisting. A `Dockerfile` and a
-`fly.toml` are here because those are the two shortest routes.
+Three files, because the same logic has to run in two places:
 
-**Fly.io**, from this directory:
+| | |
+|---|---|
+| `relay.mjs` | every decision — routing, auth, rate limit, proxying. Knows nothing about a transport. |
+| `lambda.mjs` | the AWS entry point |
+| `server.mjs` | a `node:http` entry point, for local testing and containers |
+
+What you `curl` on localhost is therefore the same code that runs in
+production, which is the point: a bug found locally is a bug fixed everywhere.
+
+## Deploying — AWS Lambda
 
 ```sh
-fly launch --no-deploy --name fovea-relay
-fly secrets set SARVAM_API_KEY=… GROQ_API_KEY=…
-fly deploy
-curl https://fovea-relay.fly.dev/health
+SARVAM_API_KEY=… GROQ_API_KEY=… make relay-deploy
 ```
 
-It scales to zero, so an idle day costs nothing; the first session after a
-quiet spell pays a second or two of cold start, which is well inside the
-client's timeout.
+`deploy-aws.sh` creates or updates the function, its role, its URL and its
+concurrency cap using only the AWS CLI — no SAM, CDK or Terraform. It is
+idempotent, so the same command ships a code change.
 
-**Anything else** — Render, Railway, a VPS behind Caddy — is
-`docker build . && docker run -e SARVAM_API_KEY=… -p 8787:8787`.
+**Lambda specifically because this service is idle most of the day by design** —
+nobody is recording — and it is the only option that costs *nothing* while
+idle. A container platform bills for provisioned memory whether or not anyone
+is talking. The 6MB request cap is far above what a chunk actually weighs:
+`transcribe.mjs` splits audio at 25 seconds, which is 0.76MB of 16kHz mono.
+
+Knobs, all overridable in the environment:
+
+| | |
+|---|---|
+| `AWS_REGION` | `ap-south-1` — closest to Sarvam |
+| `FOVEA_LAMBDA_CONCURRENCY` | `5` reserved — a blast radius, not a quota |
+| `FOVEA_REVOKED_TOKENS` | comma-separated device tokens to refuse |
+
+Then verify — and check `transcription`, not just `ok`:
+
+```sh
+curl -s https://<id>.lambda-url.<region>.on.aws/health
+# {"ok":true,"transcription":true,"summary":true}
+```
+
+A relay with no key answers `ok` happily and then 503s every real request.
+
+## Deploying — anywhere else
+
+`Dockerfile` and `fly.toml` are still here and still work:
+`docker build . && docker run -e SARVAM_API_KEY=… -p 8787:8787`, or
+`fly launch --no-deploy && fly secrets set … && fly deploy`. Both run
+`server.mjs`, which is the same `relay.mjs` behind a port.
 
 | Variable | |
 |---|---|
@@ -83,8 +114,17 @@ out of it by anyone who wants to. Real per-user identity means accounts — a
 product decision, not a line of code. Until then the mitigations are the rate
 limit, the revocation list, and watching your provider bill.
 
-The rate limit is in memory and therefore per-instance: a speed bump, not a
-quota system. Running more than one instance needs a shared store.
+**The rate limit is weaker on Lambda than it looks**, and that is worth saying
+plainly rather than leaving you to assume you are covered. It counts in memory,
+so on Lambda it is per warm container: a determined caller gets a fresh
+container and a fresh counter. It catches a client stuck in a loop and nothing
+more.
+
+What actually bounds your spend is **reserved concurrency** (5 by default — at
+most five transcriptions in flight at once), the revocation list, and watching
+the Sarvam dashboard in the first week. A real quota means a shared store —
+DynamoDB with a TTL would do it for pennies — and is worth adding the moment
+this serves anybody outside the team.
 
 ## The privacy promise changes when you turn this on
 
