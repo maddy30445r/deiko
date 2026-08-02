@@ -1,4 +1,4 @@
-.PHONY: dev build test probe watch region clean setup bundle icon dmg release guard-clean relay-deploy relay-dev site-deploy resources dist record transcribe align ground brief summarize send bridge-install bridge-test show-brief signing-setup reset-permissions
+.PHONY: dev build test probe watch region clean setup bundle install icon dmg release guard-clean relay-deploy relay-dev site-deploy resources dist record transcribe align ground brief summarize send bridge-install bridge-test show-brief signing-setup reset-permissions
 
 # Code-signing identity for the bundle.
 #
@@ -110,6 +110,29 @@ else
 endif
 	@echo "launch it:  open $(APP)      (menu-bar app; permissions attach to Fovea)"
 	@echo "subcommand: $(APP)/Contents/MacOS/fovea-capture <cmd>"
+
+## install — put this build in /Applications and restart it
+##
+## `cp -R build/Fovea.app /Applications/` is the obvious command and it is
+## wrong twice over. It MERGES into the existing bundle rather than replacing
+## it, so files the old build had and the new one does not simply survive; and
+## it rewrites the app underneath Finder, which caches the icon it sees
+## mid-copy. That produced a prohibited-sign icon once and a blank placeholder
+## once, in the same evening, on an app that was working perfectly both times —
+## an hour lost to a cosmetic artifact with a valid signature behind it.
+##
+## So: quit first, replace wholesale, re-register, relaunch. The lsregister
+## call is the part that is easy to leave out and is the one that actually
+## clears the stale icon.
+install: bundle
+	@osascript -e 'quit app "Fovea"' 2>/dev/null || true
+	@sleep 1
+	@rm -rf /Applications/Fovea.app
+	@cp -R $(APP) /Applications/
+	@/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/Fovea.app
+	@open /Applications/Fovea.app
+	@echo "installed and running: /Applications/Fovea.app"
+	@echo "verify: /Applications/Fovea.app/Contents/MacOS/fovea-capture diagnostics | grep relay"
 
 ## dmg — the thing you actually hand to somebody
 ##

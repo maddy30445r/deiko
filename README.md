@@ -135,9 +135,17 @@ When you stop, the orb appears with Fovea's reading of what it heard. Then:
 ```sh
 make setup      # node deps
 make bundle     # build/Fovea.app
+make install    # …and put it in /Applications, restarted
 make dmg        # build/Fovea-<version>.dmg
 make test
 ```
+
+Use `make install` rather than copying by hand. `cp -R build/Fovea.app
+/Applications/` merges into the existing bundle instead of replacing it, and
+rewrites the app underneath Finder, which then caches whatever half-state it
+saw — a prohibited-sign or blank icon on an app that is running fine and
+correctly signed. `make install` quits, replaces wholesale, re-registers with
+LaunchServices and relaunches.
 
 `make signing-setup` creates the local certificate once. Without it the app is
 ad-hoc signed and **macOS drops all four permissions on every rebuild**.
