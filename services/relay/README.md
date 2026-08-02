@@ -105,9 +105,17 @@ than an oversight:
 
 ## What the token is, and is not
 
-An opaque per-install identifier, minted on first launch and kept in the
-login keychain. It lets you rate-limit and revoke one abusive install without
+An opaque per-install identifier, minted on first use and kept in the app's
+preferences. It lets you rate-limit and revoke one abusive install without
 stopping everybody.
+
+**Deliberately not in the keychain.** It used to be, and that cost every user a
+login-password prompt on their first session after every app update: a keychain
+read decrypts, decryption is checked against an ACL pinned to one exact binary,
+and an update always changes the binary. Since this is a random identifier
+rather than a secret — anyone holding the app can read it out either way —
+the keychain was buying nothing and charging a prompt. A user who updates now
+simply gets a new token, which is indistinguishable from a new install.
 
 **It is not authentication.** A token that ships inside a client can be read
 out of it by anyone who wants to. Real per-user identity means accounts — a

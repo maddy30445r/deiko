@@ -142,6 +142,64 @@ make test
 `make signing-setup` creates the local certificate once. Without it the app is
 ad-hoc signed and **macOS drops all four permissions on every rebuild**.
 
+## Shipping a new version to the team
+
+```sh
+# 1. bump the version — one file, everything else reads it
+echo 0.2.0 > VERSION
+
+# 2. commit; the release refuses to run on a dirty tree
+git commit -am "…"
+
+# 3. build, tag, and publish the DMG in one step
+make release RELAY_URL=https://<your-relay>.lambda-url.ap-south-1.on.aws
+```
+
+`make release` refuses a dirty tree or an existing tag, because a release whose
+contents do not match a commit is worse than no release. It stamps the version
+and the relay URL into the bundle, builds the DMG, and creates the GitHub
+Release with generated notes that lead with the quarantine step.
+
+**Always pass `RELAY_URL`.** It is not remembered between releases — a build
+made without it silently falls back to on-device words, which is a quieter
+failure than a relay that is down. Confirm it landed before sharing the link:
+
+```sh
+/Applications/Fovea.app/Contents/MacOS/fovea-capture diagnostics | grep -i transcri
+# must say: Fovea relay (https://…) — not "on-device only"
+```
+
+**Access is repo access.** The repository is private, so a release asset
+returns **404** to anyone who is not a collaborator — not a login page, a plain
+404, which reads like a broken link. Sharing the URL is therefore not enough:
+add each teammate under Settings → Collaborators first, or
+`gh api -X PUT repos/<owner>/Fovea/collaborators/<user> -f permission=pull`.
+Whoever can see the repo can fetch the build, and nobody else can — which is
+the access list you want while the app is unsigned anyway.
+
+**What a teammate does to update:** quit Fovea, drag the new build over the old
+one in Applications, and clear quarantine again
+(`xattr -dr com.apple.quarantine /Applications/Fovea.app`). The four
+permissions survive, because the app keeps the same signing identity. Anyone
+who pasted their own Sarvam key gets one login-password prompt on their first
+session after updating — see below.
+
+### The one rough edge in updates
+
+macOS guards a keychain item with an ACL pinned to one exact binary, and every
+update is a new binary, so the first read after an update asks for the login
+password. "Always Allow" quiets it until the next update.
+
+Fovea keeps this as small as it can: everything that only needs to know
+*whether* a key is set uses an attributes-only query that never prompts, and
+the relay device token was moved out of the keychain entirely because it is an
+identifier rather than a secret. What remains is the API keys themselves, so
+**only teammates using their own Sarvam or Groq key ever see the prompt.**
+Anyone on the default relay path never does.
+
+Removing it completely needs an Apple Developer ID ($99/yr), which changes the
+ACL from "this exact binary" to "this team" and therefore survives updates.
+
 ## Licence
 
 Not yet chosen. Every third-party dependency is permissively licensed (MIT,

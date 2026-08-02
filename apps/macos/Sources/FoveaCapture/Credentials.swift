@@ -88,10 +88,48 @@ enum Credentials {
     /// the ability to stop one abusive install without stopping everybody.
     /// Real per-user identity means accounts, which is a product decision, not
     /// a line of code.
+    ///
+    /// NOT IN THE KEYCHAIN, and that is the point. This used to be stored
+    /// beside the API keys, which meant every session read it back — and a
+    /// keychain read DECRYPTS, which is checked against an ACL that pins one
+    /// exact cdhash. Every app update mints a new cdhash, so every user got a
+    /// login-password prompt on their first session after every update, at the
+    /// worst possible moment: after they had finished talking, with the brief
+    /// waiting on it. Users with no API key at all were hit too, because the
+    /// relay path reads this token on every single session.
+    ///
+    /// The keychain was buying nothing for it. This is a random identifier, not
+    /// a secret — the doc comment above says so in as many words, and anyone
+    /// holding the app can read it out regardless. Protecting a non-secret with
+    /// something that costs a password prompt after every update is a bad
+    /// trade, so it lives in preferences and the prompt is gone.
     static func deviceToken() -> String {
-        if let existing = value(for: tokenKey), !existing.isEmpty { return existing }
+        // Environment first, as everywhere else here, so a test run can pin a
+        // token without touching the user's real one.
+        if let fromProcess = ProcessInfo.processInfo.environment[tokenKey],
+           !fromProcess.isEmpty {
+            return fromProcess
+        }
+        if let existing = UserDefaults.standard.string(forKey: tokenKey), !existing.isEmpty {
+            return existing
+        }
         let minted = UUID().uuidString
-        store(minted, for: tokenKey)
+        UserDefaults.standard.set(minted, forKey: tokenKey)
+        // Clear the old keychain item on the way past. `SecItemDelete` does not
+        // decrypt, so this cannot prompt — deleting is the one keychain
+        // operation that is free here, which is also why the token is minted
+        // afresh rather than migrated: reading the old one across would have
+        // charged the exact prompt this change exists to remove.
+        //
+        // Losing the old value costs nothing. The token identifies an install
+        // for rate-limiting, and a new install is what a re-minted token looks
+        // like — there is no server-side state keyed to it beyond a warm
+        // container's counter.
+        SecItemDelete([
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: tokenKey,
+        ] as CFDictionary)
         return minted
     }
 
