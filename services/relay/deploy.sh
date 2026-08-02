@@ -176,11 +176,34 @@ aws lambda add-permission --function-name "$FUNCTION" --region "$REGION" \
   --principal '*' >/dev/null 2>&1 || true
 
 URL="${URL%/}"
+
+# ── Verify the deploy, rather than asking the user to ──────────────────────
+#
+# A relay with no key answers ok:true happily and then 503s every real
+# request, so `transcription` is the field that matters. Cold start plus
+# permission propagation can take a few seconds on a fresh function; retry
+# briefly before declaring failure.
+say "verifying /health…"
+HEALTH=""
+for _ in 1 2 3 4 5 6; do
+  HEALTH=$(curl -s --max-time 10 "$URL/health" 2>/dev/null) || HEALTH=""
+  case "$HEALTH" in *'"transcription":true'*) break ;; esac
+  sleep 5
+done
+case "$HEALTH" in
+  *'"transcription":true'*) ;;
+  *)
+    echo
+    echo "✗ deploy finished but /health did not report transcription:true"
+    echo "  got: ${HEALTH:-no response}"
+    echo "  the function exists but every real request would fail — fix before releasing."
+    exit 1
+    ;;
+esac
+
 echo
 echo "✓ $URL"
+echo "  /health: $HEALTH"
 echo
-echo "  verify — 'transcription' MUST be true, not just 'ok':"
-echo "    curl -s $URL/health"
-echo
-echo "  then cut a release pointing at it:"
+echo "  cut a release pointing at it:"
 echo "    make release RELAY_URL=$URL"
