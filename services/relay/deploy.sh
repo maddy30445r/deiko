@@ -122,9 +122,22 @@ else
   aws lambda wait function-active --function-name "$FUNCTION" --region "$REGION"
 fi
 
-aws lambda put-function-concurrency --function-name "$FUNCTION" --region "$REGION" \
-  --reserved-concurrent-executions "$CONCURRENCY" --output text >/dev/null
-say "reserved concurrency $CONCURRENCY"
+# BEST-EFFORT, deliberately. Reserving concurrency requires the account to
+# keep 10 slots unreserved, and a fresh AWS account's TOTAL limit is often
+# exactly 10 — so any reservation at all is arithmetically impossible there.
+# On such an account the account-wide cap is already doing the blast-radius
+# job this reservation exists for, so failing the whole deploy over it would
+# refuse a protection the account cannot hold in exchange for one it already
+# has. On bigger accounts the reservation still lands.
+if aws lambda put-function-concurrency --function-name "$FUNCTION" --region "$REGION" \
+  --reserved-concurrent-executions "$CONCURRENCY" --output text >/dev/null 2>&1; then
+  say "reserved concurrency $CONCURRENCY"
+else
+  ACCOUNT_LIMIT=$(aws lambda get-account-settings --region "$REGION" \
+    --query AccountLimit.ConcurrentExecutions --output text 2>/dev/null || echo "?")
+  say "⚠ could not reserve concurrency (account limit: $ACCOUNT_LIMIT, and AWS keeps 10 unreserved)"
+  say "  the account-wide limit of $ACCOUNT_LIMIT is the effective cap instead"
+fi
 
 # ── The URL ─────────────────────────────────────────────────────────────────
 #
