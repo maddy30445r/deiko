@@ -20,9 +20,9 @@ import { connect } from "./lib/mcp-client.mjs";
 
 const out = process.argv[2];
 
-const { call, close } = await connect();
+const { client, close } = await connect();
 try {
-  const res = await call("tools/call", { name: "get_brief", arguments: {} });
+  const res = await client.callTool({ name: "get_brief", arguments: {} });
   const text = res.content?.[0]?.text ?? "";
 
   if (out) {
@@ -33,5 +33,5 @@ try {
     process.stdout.write(text.endsWith("\n") ? text : text + "\n");
   }
 } finally {
-  close();
+  await close();
 }

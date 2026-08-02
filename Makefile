@@ -215,9 +215,13 @@ guard-clean:
 ## icon — regenerate Fovea.icns from the fovea mark
 ##
 ## The .icns is COMMITTED, so `make bundle` needs nothing but a copy. Run this
-## only after changing the geometry in scripts/make-icon.mjs.
-icon:
-	@node scripts/make-icon.mjs build/Fovea.iconset
+## only after changing the geometry in Sources/FoveaCapture/Iconset.swift.
+##
+## Drawn by the binary rather than by a script: the coin, the menu bar and the
+## icon are one shape, and keeping the third renderer in the same target as the
+## other two is what stops it drifting.
+icon: $(DEBUG_BIN)
+	@$(DEBUG_BIN) icon --out build/Fovea.iconset
 	@iconutil -c icns build/Fovea.iconset -o $(CAPTURE_DIR)/Sources/FoveaCapture/Fovea.icns
 	@echo "✓ $(CAPTURE_DIR)/Sources/FoveaCapture/Fovea.icns"
 
@@ -320,7 +324,7 @@ transcribe:
 ## Credentials are stripped and the renderer refuses to write if any survive —
 ## Fovea reads the screen, and screens have secrets on them.
 brief:
-	@npm run build -w @fovea/alignment -w @fovea/referents --silent
+	@npm run build -w @fovea/alignment --silent
 	@node scripts/render-brief.mjs $(SESSION)
 
 ## summarize — three lines about the session, FOR YOUR SCREEN ONLY
@@ -343,7 +347,7 @@ bridge-install:
 	@claude mcp add fovea --scope user -- node "$(CURDIR)/apps/bridge/src/server.mjs"
 	@echo "  then, in any repo:  /fovea:brief  (VS Code)  ·  /mcp__fovea__brief  (CLI)"
 
-## bridge-test — drive the bridge over raw JSON-RPC, no Claude Code needed
+## bridge-test — drive the bridge over MCP, no Claude Code needed
 bridge-test:
 	@node scripts/bridge-smoke.mjs
 
@@ -367,8 +371,8 @@ ground:
 	@node scripts/ground-report.mjs $(SESSION)
 
 ## align — run the T0.2 gate harness over a transcribed session
-## Needs BOTH packages built: the script imports alignment's aligner and
-## referents' session loader from their dist/ directories.
+## Needs @fovea/alignment built: the script imports both the aligner and the
+## session loader from its dist/.
 align:
-	@npm run build -w @fovea/alignment -w @fovea/referents --silent
+	@npm run build -w @fovea/alignment --silent
 	@node scripts/align-session.mjs $(SESSION)

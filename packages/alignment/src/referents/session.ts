@@ -38,15 +38,13 @@ export function loadSession(events: RawEvent[]): ReferentStack {
   const cursors = events.filter((e) => e.type === "cursor") as any[];
 
   // Holds, from the wire. `holdStart`/`holdEnd` carry the hold number and its
-  // time range; a referent's hold is the range its `t` falls in. (Sessions
-  // recorded before the rename spelled these `sessionStart`/`sessionEnd` —
-  // same fields, so accept both; a session-level event has no `hold` and is
-  // skipped.) Candidates and probes deliberately do NOT carry a hold field
-  // themselves — the events that define the boundary are already in the file.
+  // time range; a referent's hold is the range its `t` falls in. Candidates and
+  // probes deliberately do NOT carry a hold field themselves — the events that
+  // define the boundary are already in the file.
   const holdStarts = new Map<number, number>();
   for (const e of events as any[]) {
     if (e.hold == null) continue;
-    if (e.type === "holdStart" || e.type === "sessionStart") holdStarts.set(e.hold, e.t);
+    if (e.type === "holdStart") holdStarts.set(e.hold, e.t);
   }
   const holdAt = (t: number): number => {
     for (const [hold, start] of holdStarts) {
@@ -59,7 +57,7 @@ export function loadSession(events: RawEvent[]): ReferentStack {
   };
 
   const usedProbes = new Set<number>();
-  const drafts: Array<Omit<Referent, "index" | "visit" | "id">> = [];
+  const drafts: Array<Omit<Referent, "id">> = [];
 
   // ── points: candidate + its probe ────────────────────────────────────────
   for (const candidate of candidates) {

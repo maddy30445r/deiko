@@ -12,14 +12,14 @@
 import { resolve } from "node:path";
 
 import { align } from "../packages/alignment/dist/src/align.js";
-import { loadSession } from "../packages/referents/dist/src/session.js";
-import { toCandidates } from "../packages/referents/dist/src/candidates.js";
+import { loadSession } from "../packages/alignment/dist/src/referents/session.js";
+import { toCandidates } from "../packages/alignment/dist/src/referents/candidates.js";
 import { loadEvents, loadFile as load } from "./lib/session-io.mjs";
 
-// Pairing candidate+probe events, recovering a lasso's drag span, ordering
-// across app visits, and adapting the result for the aligner all live in
-// `@fovea/referents` — the adaptation used to be a second copy here, and the
-// brief renderer would have made it a third.
+// Pairing candidate+probe events, recovering a lasso's drag span, ordering them
+// chronologically, and adapting the result for the aligner all live in
+// `@fovea/alignment`'s `referents/` — the adaptation used to be a second copy
+// here, and the brief renderer would have made it a third.
 
 // ── Main ────────────────────────────────────────────────────────────────────
 

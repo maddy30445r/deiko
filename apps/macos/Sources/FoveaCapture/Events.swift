@@ -4,9 +4,10 @@ import Foundation
 // THE WIRE CONTRACT
 //
 // Everything the Swift capture binary emits crosses into TypeScript as one JSON
-// object per line (JSON Lines) on stdout. `packages/protocol` mirrors these
-// types. Change a field here and you change it there — that is the whole reason
-// they live in one small file.
+// object per line (JSON Lines) on stdout. THIS FILE IS THE CONTRACT — there is
+// no mirrored copy on the other side. A TypeScript one existed and was deleted:
+// nothing ever imported it, so it drifted silently and its only real effect was
+// to make two files look authoritative when one was.
 //
 // Three rules the rest of the system depends on:
 //

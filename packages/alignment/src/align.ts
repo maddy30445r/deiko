@@ -123,8 +123,12 @@ export function align(
  * How well one candidate explains one deictic word. Zero means "outside the
  * window, not a possibility at all".
  */
-/** The hold rule, shared by both passes: unknown holds bind freely (legacy
- *  data), known-and-different never do. */
+/** The hold rule, shared by both passes: known-and-different never bind, and an
+ *  unknown hold binds freely. `hold` is optional on both sides because this
+ *  package is scored in isolation — its tests build candidates with no hold at
+ *  all — while the recorder always writes one. Tightening this to strict
+ *  equality would therefore change nothing in the product and break the suite
+ *  that proves the boundary rule. */
 function sameHold(word: Word, candidate: Candidate): boolean {
   return (
     word.hold === undefined ||

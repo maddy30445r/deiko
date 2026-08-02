@@ -34,34 +34,15 @@ export interface ReferentText {
 }
 
 export interface Referent {
-  /** Stable within a session: "r1", "r2", … Cited by plan steps. */
-  id: string;
   /**
-   * Insertion order. This is what makes it a STACK rather than a bag — "the
-   * one before that", "earlier", and cross-app sequencing all read from here.
+   * Stable within a session: "r1", "r2", … Cited by the brief, and assigned in
+   * insertion order — which, since the loader sorts chronologically before
+   * adding, is what makes this a STACK rather than a bag. "The one before
+   * that" and "earlier" read off the order of `all()`.
    */
-  index: number;
+  id: string;
   /** Which hotkey hold. Releasing the key is a hard boundary for utterances. */
   hold: number;
-  /**
-   * Which VISIT to an app this referent belongs to — a counter that increments
-   * every time the frontmost app changes. Compass → VS Code → back to Compass
-   * produces visits 1, 2, 3, so the two Compass excursions are distinguishable
-   * even though `app` is identical.
-   *
-   * `index` alone already handles returning to an app: it is global and
-   * chronological, so a later referent is simply later. Visits add the *shape*
-   * of the session — "you were in Compass, then the editor, then Compass
-   * again" — which is what `byVisit()` renders into the plan prompt so the
-   * model can see the excursions rather than a flat list.
-   *
-   * They are descriptive only. An earlier version scored back-references by
-   * penalising the current visit; it was cut because the model resolves such
-   * references from the referent text perfectly well, and the heuristic broke
-   * on long visits (point at a field early in a two-minute Compass session,
-   * refer back to it later, and it is still the same visit).
-   */
-  visit: number;
   /** Session-clock milliseconds — the same monotonic clock as audio and cursor. */
   t: number;
   /**

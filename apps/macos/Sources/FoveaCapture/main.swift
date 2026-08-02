@@ -86,9 +86,6 @@ case "hello":
 case "ax-probe":
     await runAXProbe(args)
 
-case "capture":
-    await runCapture(args)
-
 case "record":
     runRecord(args)
 
@@ -98,8 +95,8 @@ case "app":
 case "timing":
     await runTiming(args)
 
-case "handoff-test":
-    await runHandoffTest(args)
+case "icon":
+    renderIconset(args)
 
 case "connect":
     runConnect(args)
@@ -273,95 +270,6 @@ func runApp(_ args: Args) {
     app.run()
 }
 
-/// Run the fling's keystroke half against a named running app, narrating every
-/// boundary. This exists because the shipped path failed SILENTLY in the field:
-/// the orb said "handed over" and nothing arrived. `CGEvent.post` reports
-/// nothing when TCC drops it, so the only way to locate the break is to log the
-/// grants and run the identical `Handoff.deliver` code with a trace attached.
-///
-///   fovea-capture handoff-test --app TextEdit   ← control: no webview, no doubt
-///   fovea-capture handoff-test --app "Code"     ← the app that ate the paste
-@MainActor
-func runHandoffTest(_ args: Args) async {
-    guard let name = args.string("app") else {
-        Emit.event(ErrorEvent("handoff-test needs --app <name>", hint: "e.g. --app TextEdit"))
-        exit(2)
-    }
-
-    // The grants, before anything moves. Posting is a SEPARATE question from
-    // the Accessibility trust the event tap runs on — `CGEvent.post` from a
-    // process without post-event access is silently discarded, which is
-    // exactly the observed failure shape.
-    Emit.log("AXIsProcessTrusted:          \(AXProbe.isTrusted())")
-    Emit.log("CGPreflightPostEventAccess:  \(CGPreflightPostEventAccess())")
-    Emit.log("IsSecureEventInputEnabled:   \(IsSecureEventInputEnabled())")
-
-    if !CGPreflightPostEventAccess() {
-        Emit.log("→ posting is NOT granted; requesting now (watch for a System Settings prompt)…")
-        Emit.log("CGRequestPostEventAccess:    \(CGRequestPostEventAccess())")
-    }
-
-    let running = NSWorkspace.shared.runningApplications
-    // An exact name wins outright — "TextEdit" must not be ambiguous with the
-    // helper processes that carry it in parentheses.
-    let apps = running.filter { $0.localizedName?.caseInsensitiveCompare(name) == .orderedSame }
-        .ifEmpty(running.filter { $0.localizedName?.localizedCaseInsensitiveContains(name) == true })
-    guard let app = apps.first, apps.count == 1 else {
-        let names = apps.compactMap(\.localizedName).joined(separator: ", ")
-        Emit.event(ErrorEvent(
-            apps.isEmpty ? "no running app matches '\(name)'" : "ambiguous: \(names)",
-            hint: "use the exact app name from the Dock"
-        ))
-        exit(1)
-    }
-
-    Emit.log("frontmost before: \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "none")")
-    Emit.log("3 seconds to put focus where the paste should land…")
-    try? await Task.sleep(for: .seconds(3))
-
-    if let command = args.string("command") { Handoff.commandOverride = command }
-    if let seq = args.string("seq") {
-        guard let strategy = Handoff.Submit(rawValue: seq) else {
-            Emit.event(ErrorEvent(
-                "unknown --seq '\(seq)'",
-                hint: "return | return-twice | escape-return | pasted-newline | none"
-            ))
-            exit(2)
-        }
-        Handoff.submit = strategy
-    }
-
-    Handoff.trace = { Emit.log("  [deliver] \($0)") }
-    let target = HandoffTarget(pid: app.processIdentifier, appName: app.localizedName ?? name)
-    do {
-        // `--key return` posts a single Return and nothing else — for probing
-        // what a submit needs when the text is already sitting in the input.
-        if args.string("key") == "return" {
-            NSRunningApplication(processIdentifier: target.pid)?.activate()
-            try await Task.sleep(for: .milliseconds(300))
-            Handoff.pressReturnForTesting()
-            Emit.log("posted a single Return")
-        } else {
-            try await Handoff.deliver(to: target)
-            Emit.log("deliver returned cleanly")
-        }
-    } catch {
-        Emit.log("deliver FAILED: \(error.localizedDescription)")
-    }
-    Emit.log("frontmost after:  \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "none")")
-
-    // The clipboard restore fires at +3s on a `DispatchQueue.main` work item.
-    // This harness must OUTLIVE it: exiting first kills the work item and the
-    // clipboard reads as destroyed when the app would have put it back — a
-    // harness that reports a bug the product does not have.
-    try? await Task.sleep(for: .milliseconds(3500))
-    Emit.log("pasteboard now:   \(NSPasteboard.general.string(forType: .string) ?? "<empty>")")
-}
-
-extension Array {
-    /// This array, or `fallback` when empty — the exact-then-fuzzy match above.
-    func ifEmpty(_ fallback: [Element]) -> [Element] { isEmpty ? fallback : self }
-}
 
 /// Show which coding clients Fovea can see, and optionally register with them.
 ///
@@ -530,87 +438,6 @@ func runRecord(_ args: Args) {
     app.run()
 }
 
-/// Tier 1 in isolation: crop + OCR with no Accessibility involvement at all.
-/// Exists so the base path can be verified independently of AX — if this works
-/// and ax-probe doesn't, the problem is a permission, not the capture code.
-func runCapture(_ args: Args) async {
-    if let delay = args.double("delay") {
-        Emit.log("waiting \(delay)s…")
-        try? await Task.sleep(for: .seconds(delay))
-    }
-
-    let cursor = AXProbe.cursorLocation()
-    let shape: Shape
-    // An explicit --rect must be captured verbatim, not run through the
-    // point-referent heuristics that would replace it with a default box.
-    var explicitRect: Frame?
-
-    if let radius = args.double("region") {
-        shape = Shape.region(path: circlePath(around: cursor, radius: radius))
-    } else if let spec = args.string("rect") {
-        let parts = spec.split(separator: ",").compactMap { Double($0) }
-        guard parts.count == 4 else {
-            Emit.event(ErrorEvent("--rect needs x,y,w,h"))
-            exit(2)
-        }
-        let f = Frame(x: parts[0], y: parts[1], width: parts[2], height: parts[3])
-        explicitRect = f
-        shape = Shape(kind: .point, origin: f.center, bounds: f, path: nil)
-    } else {
-        shape = Shape.point(cursor)
-    }
-
-    // An empty snapshot: no AX consulted, so `rect(for:)` falls back to the
-    // default box and OCR always runs. That is exactly the Tier 1 path an app
-    // with no accessibility tree would take.
-    let empty = AXSnapshot(
-        resolved: false, elements: [], samplesTested: nil, uniqueElements: nil,
-        manualAccessibilityApplied: false, elapsedMs: 0, error: nil
-    )
-    let (rect, fromAX) = explicitRect.map { ($0, false) }
-        ?? Capture.rect(for: shape, snapshot: empty, screenArea: AXProbe.screenArea())
-
-    let out = args.string("out") ?? "sessions/crops/capture.png"
-
-    // Repeat in-process. The display cache and ScreenCaptureKit's own warm-up
-    // only pay off after the first call, so measuring cost by running the
-    // binary N times measures N cold starts. The <4s release-to-plan budget is
-    // a stated gate, so this needs to be measurable.
-    let repeats = max(1, Int(args.string("repeat") ?? "1") ?? 1)
-    var crop: CropResult!
-    var timings: [Double] = []
-    for _ in 0..<repeats {
-        crop = await Capture.crop(
-            shape: shape, snapshot: empty, outputPath: out,
-            runOCR: !args.has("no-ocr"), rectFromAX: fromAX, rect: rect
-        )
-        timings.append(crop.captureElapsedMs)
-    }
-    if repeats > 1 {
-        Emit.log("  capture ms: " + timings.map { String(Int($0)) }.joined(separator: " → "))
-    }
-
-    Emit.event(ProbeEvent(
-        shape: shape, app: nil, windowTitle: nil, snapshot: empty, crop: crop
-    ))
-
-    if let err = crop.error {
-        Emit.log("✗ \(err)")
-        Emit.log("  Screen Recording is a SEPARATE permission from Accessibility.")
-        Emit.log("  System Settings → Privacy & Security → Screen & System Audio Recording")
-        Emit.log("  Grant the terminal you launched from, then relaunch that terminal.")
-        exit(1)
-    }
-
-    Emit.log("✓ \(Int(crop.rect.width))×\(Int(crop.rect.height)) → \(crop.path ?? "(not written)") in \(Int(crop.captureElapsedMs))ms")
-    if let ms = crop.ocrElapsedMs {
-        Emit.log("  ocr: \(crop.ocr.count) lines in \(Int(ms))ms")
-        for line in crop.ocr.prefix(12) {
-            Emit.log(String(format: "    %.2f  %@", line.confidence, line.text))
-        }
-    }
-}
-
 /// Polygon approximating a circle — a stand-in freehand lasso.
 func circlePath(around center: Point, radius: Double, segments: Int = 24) -> [Point] {
     (0..<segments).map { i in
@@ -707,16 +534,6 @@ fovea-capture \(FoveaVersion.current)
     --dwell <ms>              Rest time before a settle fires (300).
     --no-crop                 Skip the Tier 1 crop + OCR per referent.
 
-  capture [options]           Tier 1 only: crop + OCR, no Accessibility.
-    --delay <sec>             Wait before capturing.
-    --region <radius>         Capture a circular lasso, masked to the path.
-    --rect <x,y,w,h>          Capture an explicit rectangle.
-    --out <path>              PNG destination (sessions/crops/capture.png).
-    --no-ocr                  Skip Vision text recognition.
-    --repeat <n>              Capture n times in-process and print each timing.
-                              First call is cold (~200ms); steady state is what
-                              the <4s release-to-plan budget actually pays.
-
   ax-probe [options]          Resolve what the cursor is pointing at.
     --watch                   Probe continuously, on each cursor settle.
     --delay <sec>             Wait before probing (time to switch apps).
@@ -742,6 +559,10 @@ fovea-capture \(FoveaVersion.current)
 
   connect [--write]           Show every coding client's state; --write
                               registers Fovea, --disconnect removes it.
+
+  icon --out <dir>            Render the fovea mark into an .iconset. Build
+                              step, not a runtime one — `make icon` runs this
+                              and hands the result to iconutil.
 
 Events go to stdout as JSON Lines. Logs go to stderr.
 """

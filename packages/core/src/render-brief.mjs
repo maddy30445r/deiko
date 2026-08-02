@@ -23,8 +23,8 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { resolve, join, basename } from "node:path";
 
 import { align } from "../packages/alignment/dist/src/align.js";
-import { loadSession } from "../packages/referents/dist/src/session.js";
-import { toCandidates } from "../packages/referents/dist/src/candidates.js";
+import { loadSession } from "../packages/alignment/dist/src/referents/session.js";
+import { toCandidates } from "../packages/alignment/dist/src/referents/candidates.js";
 import { loadEvents } from "./lib/session-io.mjs";
 import { redact, redactBlock, carriesSecret, assertNoSecrets } from "./lib/redact.mjs";
 
@@ -441,7 +441,7 @@ const bindingById = new Map(bindings.map((b) => [b.candidateId, b]));
 const holdCount =
   new Set(
     events
-      .filter((e) => (e.type === "holdStart" || e.type === "sessionStart") && e.hold != null)
+      .filter((e) => e.type === "holdStart" && e.hold != null)
       .map((e) => e.hold),
   ).size || new Set(referents.map((r) => r.hold)).size;
 

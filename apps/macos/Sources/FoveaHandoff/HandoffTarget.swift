@@ -12,8 +12,8 @@ public struct HandoffTarget: Equatable, Sendable {
     public let appName: String
 
     /// Where the fling was RELEASED, in CG global coordinates (top-left
-    /// origin). Nil when the target was not chosen by pointing — `handoff-test`
-    /// names an app, it does not aim at a pixel.
+    /// origin). Nil when the target was not chosen by pointing — a caller that
+    /// names an app rather than aiming at a pixel has no drop point to give.
     ///
     /// This exists because activating an app restores focus to whatever widget
     /// had it last, which is not necessarily anywhere near where the user

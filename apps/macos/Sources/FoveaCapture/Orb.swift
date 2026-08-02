@@ -112,9 +112,10 @@ final class OrbController: NSObject {
     func present(sessionDir: String, stats: SessionStats? = nil) {
         // Narrate every handoff into the app's log. The first live fling
         // failed with nothing on screen and nothing on disk — the only trace
-        // hook was in `handoff-test`, so the field run was undiagnosable and
-        // the whole investigation started from "nothing happened". Field runs
-        // must never be quieter than the test harness.
+        // hook lived in a test subcommand, so the field run was undiagnosable
+        // and the whole investigation started from "nothing happened". A field
+        // run must never be quieter than a harness; this is now the only hook,
+        // and `make show-brief` plus Diagnostics are what read it back.
         if Handoff.trace == nil {
             Handoff.trace = { Emit.log("handoff: \($0)") }
         }

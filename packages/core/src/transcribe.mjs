@@ -594,16 +594,10 @@ async function main() {
   }
 
   // Pair each hold's start (which carries the audio path) with its end (which
-  // carries audioT0, only known once the first buffer landed).
-  //
-  // `sessionStart`/`sessionEnd` are accepted as well as `holdStart`/`holdEnd`:
-  // holds used to be called sessions, and every session recorded before the
-  // rename is still perfectly good data we do not want to strand. The `hold`
-  // field is what tells them apart — a real session event has none.
-  const isHold = (e, phase) =>
-    (e.type === `hold${phase}` || e.type === `session${phase}`) && e.hold != null;
-  const starts = events.filter((e) => isHold(e, "Start"));
-  const ends = events.filter((e) => isHold(e, "End"));
+  // carries audioT0, only known once the first buffer landed). The session-level
+  // `sessionStart`/`sessionEnd` pair carries no `hold` and is skipped.
+  const starts = events.filter((e) => e.type === "holdStart" && e.hold != null);
+  const ends = events.filter((e) => e.type === "holdEnd" && e.hold != null);
 
   const holds = [];
   for (const start of starts) {

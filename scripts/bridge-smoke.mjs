@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Drive the bridge over raw JSON-RPC, with no Claude Code involved.
+ * Drive the bridge over MCP, with no Claude Code involved.
  *
  *   node scripts/bridge-smoke.mjs
  *
@@ -23,7 +23,7 @@ import { connect } from "./lib/mcp-client.mjs";
 
 const OUTBOX = join(homedir(), ".fovea", "outbox");
 
-const { init, call, close } = await connect();
+const { client, close } = await connect();
 
 let failures = 0;
 function check(label, ok, detail = "") {
@@ -31,19 +31,20 @@ function check(label, ok, detail = "") {
   if (!ok) failures += 1;
 }
 
-check("initialize", init?.serverInfo?.name === "fovea", init?.serverInfo?.name);
+const serverInfo = client.getServerVersion();
+check("initialize", serverInfo?.name === "fovea", serverInfo?.name);
 
-const tools = (await call("tools/list")).tools.map((t) => t.name).sort();
+const tools = (await client.listTools()).tools.map((t) => t.name).sort();
 check("tools", tools.join(",") === "get_brief,get_crop,mark_brief_done", tools.join(", "));
 
-const prompts = (await call("prompts/list")).prompts.map((p) => p.name);
+const prompts = (await client.listPrompts()).prompts.map((p) => p.name);
 check("prompt", prompts.includes("brief"), prompts.join(", "));
 
 const pendingIds = existsSync(OUTBOX)
   ? readdirSync(OUTBOX).filter((f) => f.endsWith(".md"))
   : [];
 
-const got = await call("tools/call", { name: "get_brief", arguments: {} });
+const got = await client.callTool({ name: "get_brief", arguments: {} });
 const text = got.content[0].text;
 
 if (pendingIds.length) {
@@ -66,7 +67,7 @@ if (pendingIds.length) {
   );
 
   if (released.length) {
-    const img = await call("tools/call", { name: "get_crop", arguments: { id: released[0].id } });
+    const img = await client.callTool({ name: "get_crop", arguments: { id: released[0].id } });
     check(
       `get_crop(${released[0].id}) returns an image`,
       img.content?.[0]?.type === "image" && img.content[0].data?.length > 1000,
@@ -74,7 +75,7 @@ if (pendingIds.length) {
     );
   }
   if (withheld.length) {
-    const no = await call("tools/call", { name: "get_crop", arguments: { id: withheld[0].id } });
+    const no = await client.callTool({ name: "get_crop", arguments: { id: withheld[0].id } });
     const body = no.content?.[0]?.text ?? "";
     check(
       `get_crop(${withheld[0].id}) refuses a withheld crop`,
@@ -83,7 +84,7 @@ if (pendingIds.length) {
     );
   }
 
-  const unknown = await call("tools/call", { name: "get_crop", arguments: { id: "r99999" } });
+  const unknown = await client.callTool({ name: "get_crop", arguments: { id: "r99999" } });
   check("get_crop on an unknown id is an error, not a crash", unknown.isError === true);
 
   if (released.length) {
@@ -92,21 +93,21 @@ if (pendingIds.length) {
     let refused = null;
     for (let i = 0; i < 12 && refused === null; i++) {
       const r = released[i % released.length];
-      const res = await call("tools/call", { name: "get_crop", arguments: { id: r.id } });
+      const res = await client.callTool({ name: "get_crop", arguments: { id: r.id } });
       if (res.isError && (res.content?.[0]?.text ?? "").includes("more than a task")) refused = i;
     }
     check("the crop budget is enforced", refused !== null, refused === null ? "never refused" : `refused after ${refused + 1} more`);
   }
 } else {
   check("empty outbox explains itself", text.includes("No Fovea brief is pending"));
-  const done = await call("tools/call", {
+  const done = await client.callTool({
     name: "mark_brief_done",
     arguments: { id: "does-not-exist", outcome: "abandoned" },
   });
   check("mark_brief_done on a missing id is an error, not a crash", done.isError === true);
 }
 
-const prompt = await call("prompts/get", { name: "brief", arguments: {} });
+const prompt = await client.getPrompt({ name: "brief", arguments: {} });
 check("prompt returns one user message", prompt.messages?.[0]?.role === "user");
 
 // The guard, proved rather than asserted. A brief that somehow arrives in the
@@ -120,7 +121,7 @@ check("prompt returns one user message", prompt.messages?.[0]?.role === "user");
     "# Task brief — guard check\n\n```\naccount key: " + "A".repeat(44) + "==\n```\n",
   );
   try {
-    const res = await call("tools/call", { name: "get_brief", arguments: {} });
+    const res = await client.callTool({ name: "get_brief", arguments: {} });
     const out = res.content?.[0]?.text ?? "";
     check(
       "a credential-bearing brief is refused, not delivered",
@@ -173,6 +174,6 @@ check("prompt returns one user message", prompt.messages?.[0]?.role === "user");
   }
 }
 
-close();
+await close();
 console.log(failures ? `\n${failures} check(s) failed` : "\nall checks passed");
 process.exit(failures ? 1 : 0);

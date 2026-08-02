@@ -289,10 +289,8 @@ final class Recorder {
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let type = obj["type"] as? String
             else { continue }
-            // `sessionStart` is the pre-rename spelling of `holdStart`; a
-            // session-level event carries no `hold`, which is what tells the two
-            // apart. Same rule the TypeScript loader uses.
-            if (type == "holdStart" || type == "sessionStart"), obj["hold"] != nil { holds += 1 }
+            // A session-level `sessionStart` carries no `hold`; only a hold does.
+            if type == "holdStart", obj["hold"] != nil { holds += 1 }
             // `probe`, not `candidate`. One probe is emitted per `resolve` —
             // which is exactly what increments `globalReferentIndex` — and it
             // covers lassos as well as settles. Verified against two recorded

@@ -132,17 +132,24 @@ enum Credentials {
     static func exists(_ name: String) -> Bool {
         if ProcessInfo.processInfo.environment[name]?.isEmpty == false { return true }
         if cache.read(name) != nil { return true }
+        if inKeychain(name) { return true }
+        return dotEnv()[name]?.isEmpty == false
+    }
+
+    /// Is there a keychain item for this key — WITHOUT decrypting it?
+    ///
+    /// Attributes, NOT data. Adding `kSecReturnData` here would put the password
+    /// prompt back for every caller, which is the whole thing `exists` and
+    /// `source` exist to avoid.
+    private static func inKeychain(_ name: String) -> Bool {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: name,
-            // Attributes, NOT data. Adding kSecReturnData here would put the
-            // password prompt back.
             kSecReturnAttributes as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
-        if SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess { return true }
-        return dotEnv()[name]?.isEmpty == false
+        return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
     }
 
     /// Decrypted values already paid for this launch, so the pipeline prompts
@@ -181,16 +188,7 @@ enum Credentials {
         if ProcessInfo.processInfo.environment[name]?.isEmpty == false {
             return "from this process's environment"
         }
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: name,
-            kSecReturnAttributes as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        if SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess {
-            return "from your login keychain"
-        }
+        if inKeychain(name) { return "from your login keychain" }
         if dotEnv()[name]?.isEmpty == false {
             return "from the .env beside the app"
         }

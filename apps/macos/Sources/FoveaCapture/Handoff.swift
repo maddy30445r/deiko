@@ -39,9 +39,6 @@ enum Handoff {
     /// sent this investigation chasing TCC grants, event sources and
     /// autocomplete popups before the developer recognised the name.
     ///
-    /// Overridden wholesale by `handoff-test --command`; nil otherwise.
-    static var commandOverride: String?
-
     /// ASK a connected client; only guess when nobody has been connected.
     ///
     /// The guess is the thing this replaces. It read the target window's bundle
@@ -54,7 +51,6 @@ enum Handoff {
     /// A client the user explicitly connected can simply be asked. The fallback
     /// stays for an unconnected target, where guessing beats refusing.
     static func command(for target: HandoffTarget) -> String {
-        if let commandOverride { return commandOverride }
         let bundleID = NSRunningApplication(processIdentifier: target.pid)?.bundleIdentifier
         if let connector = Connectors.matching(bundleID: bundleID) {
             return connector.commandForm
@@ -69,39 +65,16 @@ enum Handoff {
         return terminals.contains(bundleID ?? "") ? "/mcp__fovea__brief" : "/fovea:brief"
     }
 
-    /// Diagnostic tap for `handoff-test`. Nil in the app — the shipped path
-    /// stays silent — but the test subcommand hangs a logger here so the SAME
-    /// code that failed in the field can narrate itself. A separate
-    /// instrumented copy of `deliver` would be the copy that works.
+    /// Where a handoff narrates itself. `OrbController` points this at the
+    /// app's log on first use.
+    ///
+    /// Not optional decoration: the first live fling failed with nothing on
+    /// screen and nothing on disk, because the only trace hook lived in a test
+    /// subcommand and the field run was therefore undiagnosable. A field run
+    /// must never be quieter than a harness.
     static var trace: ((String) -> Void)?
 
     private static func note(_ message: String) { trace?(message) }
-
-    /// How to make the destination ACT on the command once it is in the input.
-    ///
-    /// This is a real variable, not a knob: measured behaviour differs by host.
-    /// A synthetic Return reaches VS Code (it inserts a newline in an editor
-    /// pane) but does not submit the Claude Code chat input after a paste —
-    /// the slash-command autocomplete is open and eats it. `handoff-test
-    /// --seq` exists to find which sequence wins where.
-    enum Submit: String {
-        /// Paste, then one Return. Works in TextEdit; does not submit VS Code.
-        case returnKey = "return"
-        /// Paste, then two Returns — the first dismisses/accepts the
-        /// autocomplete, the second submits.
-        case returnTwice = "return-twice"
-        /// Paste, Escape to dismiss the autocomplete, then Return.
-        case escapeReturn = "escape-return"
-        /// Paste text that already ends in a newline, and post nothing. Some
-        /// inputs treat a pasted newline as a submit.
-        case pastedNewline = "pasted-newline"
-        /// Paste only — leave the command typed for the developer to send.
-        /// The honest fallback if nothing else works.
-        case none = "none"
-    }
-
-    /// The default sequence. Set from the spike's findings.
-    static var submit: Submit = .returnKey
 
     /// The app owning the frontmost window under a point, for the orb to name
     /// while aiming.
@@ -211,10 +184,9 @@ enum Handoff {
             try await Task.sleep(for: .milliseconds(150))
         }
 
-        let strategy = Handoff.submit
         let command = Handoff.command(for: target)
         note("command for \(target.appName): \(command)")
-        try paste(strategy == .pastedNewline ? command + "\n" : command)
+        try paste(command)
 
         // Let the destination process the paste before anything else. Claude
         // Code's input needs a beat to take the text and settle its
@@ -222,26 +194,18 @@ enum Handoff {
         // wrong state.
         try await Task.sleep(for: .milliseconds(250))
 
-        note("submit strategy: \(strategy.rawValue)")
-        switch strategy {
-        case .none, .pastedNewline:
-            break
-        case .returnKey:
-            tap(keyCode: kReturn)
-        case .returnTwice:
-            tap(keyCode: kReturn)
-            try await Task.sleep(for: .milliseconds(200))
-            tap(keyCode: kReturn)
-        case .escapeReturn:
-            tap(keyCode: kEscape)
-            try await Task.sleep(for: .milliseconds(150))
-            tap(keyCode: kReturn)
-        }
+        // PASTE, WAIT, ONE RETURN — measured, not assumed
+        // (`mddocs/spikes/T4.6-handoff-keystroke.md`). Four other sequences were
+        // tried against real hosts: two Returns, Escape-then-Return, a pasted
+        // trailing newline, and paste-only. This is the one that submits, and
+        // the 250ms above is why — the autocomplete eats a Return that arrives
+        // before it has settled, which is what made the alternatives look
+        // necessary. Change the delay before you change the sequence.
+        tap(keyCode: kReturn)
         note("done")
     }
 
     private static let kReturn: CGKeyCode = 36
-    private static let kEscape: CGKeyCode = 53
 
     // ── Keystrokes ──────────────────────────────────────────────────────────
 
@@ -329,10 +293,6 @@ enum Handoff {
             return item
         })
     }
-
-    /// `handoff-test --key return` only — a bare Return for probing what a
-    /// submit takes when the command is already typed.
-    static func pressReturnForTesting() { tap(keyCode: kReturn) }
 
     /// One key press-and-release at the session event tap level — the same
     /// level Fovea's own hotkey tap listens at, so the destination receives it
