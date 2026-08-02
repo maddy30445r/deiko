@@ -72,7 +72,33 @@ fi
 
 # ── The function ────────────────────────────────────────────────────────────
 
-ENV_VARS="Variables={SARVAM_API_KEY=$SARVAM_API_KEY,GROQ_API_KEY=$GROQ_API_KEY,FOVEA_REVOKED_TOKENS=${FOVEA_REVOKED_TOKENS:-}}"
+# JSON IN A FILE, NOT SHORTHAND ON THE COMMAND LINE. Three reasons, and the
+# first one is a bug this script actually had:
+#
+#   • `Variables={A=1,B=}` — a trailing EMPTY value — fails the shorthand
+#     parser with "Expected: ',', received: 'EOF'". An unset revocation list is
+#     the normal case, so the script broke on its very first run.
+#   • an API key may contain a comma or an equals sign, either of which would
+#     silently split the shorthand into the wrong pairs.
+#   • a secret passed in argv is visible in `ps` to every process on the
+#     machine, and gets echoed back verbatim by the CLI's own error messages.
+#
+# The file is created with a private umask and removed on exit.
+ENV_FILE="$(mktemp)"
+trap 'rm -f "$ENV_FILE"' EXIT
+chmod 600 "$ENV_FILE"
+node -e '
+  const vars = {
+    SARVAM_API_KEY: process.env.SARVAM_API_KEY,
+    GROQ_API_KEY: process.env.GROQ_API_KEY,
+  };
+  // Omitted entirely when empty rather than sent as "" — Lambda would store a
+  // variable that exists and means nothing.
+  if (process.env.FOVEA_REVOKED_TOKENS) {
+    vars.FOVEA_REVOKED_TOKENS = process.env.FOVEA_REVOKED_TOKENS;
+  }
+  process.stdout.write(JSON.stringify({ Variables: vars }));
+' > "$ENV_FILE"
 
 if aws lambda get-function --function-name "$FUNCTION" --region "$REGION" >/dev/null 2>&1; then
   say "updating code"
@@ -80,7 +106,7 @@ if aws lambda get-function --function-name "$FUNCTION" --region "$REGION" >/dev/
     --zip-file "fileb://$ZIP" --query LastUpdateStatus --output text >/dev/null
   aws lambda wait function-updated --function-name "$FUNCTION" --region "$REGION"
   aws lambda update-function-configuration --function-name "$FUNCTION" --region "$REGION" \
-    --environment "$ENV_VARS" --timeout 60 --memory-size 512 \
+    --environment "file://$ENV_FILE" --timeout 60 --memory-size 512 \
     --query LastUpdateStatus --output text >/dev/null
   aws lambda wait function-updated --function-name "$FUNCTION" --region "$REGION"
 else
@@ -92,7 +118,7 @@ else
   aws lambda create-function --function-name "$FUNCTION" --region "$REGION" \
     --runtime nodejs22.x --role "$ROLE_ARN" --handler lambda.handler \
     --zip-file "fileb://$ZIP" --timeout 60 --memory-size 512 \
-    --environment "$ENV_VARS" --query FunctionArn --output text >/dev/null
+    --environment "file://$ENV_FILE" --query FunctionArn --output text >/dev/null
   aws lambda wait function-active --function-name "$FUNCTION" --region "$REGION"
 fi
 
