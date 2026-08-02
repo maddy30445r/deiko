@@ -165,9 +165,15 @@ made without it silently falls back to on-device words, which is a quieter
 failure than a relay that is down. Confirm it landed before sharing the link:
 
 ```sh
-/Applications/Fovea.app/Contents/MacOS/fovea-capture diagnostics | grep -i transcri
-# must say: Fovea relay (https://…) — not "on-device only"
+/Applications/Fovea.app/Contents/MacOS/fovea-capture diagnostics | grep relay
 ```
+
+That must print the URL, not `none — this build has no relay`.
+
+Check `relay configured:`, **not** `transcription:`. The second line says which
+transcriber would run, and your own Sarvam key outranks the relay — so on your
+machine it reads "your own Sarvam key" whether the URL was stamped or not. It
+cannot fail, which makes it the worse kind of check: the trusted kind.
 
 **Access is repo access.** The repository is private, so a release asset
 returns **404** to anyone who is not a collaborator — not a login page, a plain

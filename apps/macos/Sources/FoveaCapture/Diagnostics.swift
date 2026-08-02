@@ -57,6 +57,7 @@ enum Diagnostics {
         lines.append("")
 
         lines.append("transcription: \(transcriberDescription())")
+        lines.append("relay configured: \(Credentials.relayURL ?? "none — this build has no relay")")
         lines.append("runtime: \(NodeRuntime.resolve()?.path ?? "NOT FOUND")")
         lines.append("layout: \(Layout.resolve().map(String.init(describing:)) ?? "NOT FOUND")")
         lines.append("sessions recorded: \(sessionCount())")
@@ -74,6 +75,13 @@ enum Diagnostics {
 
     /// Which transcriber a session would use right now — the single most
     /// useful line when somebody says the words came out wrong.
+    ///
+    /// Reported ALONGSIDE the configured relay, never instead of it. This line
+    /// answers "what will happen", and a personal Sarvam key outranks the relay,
+    /// so on a machine that has one it says the same thing whether the build was
+    /// given a relay or not. That made it useless for the question it kept being
+    /// used for — did `make release RELAY_URL=…` actually stamp the URL — and a
+    /// check that cannot fail is worse than no check, because it is trusted.
     private static func transcriberDescription() -> String {
         if Credentials.exists("SARVAM_API_KEY") { return "your own Sarvam key" }
         if let relay = Credentials.relayURL { return "Fovea relay (\(relay))" }
