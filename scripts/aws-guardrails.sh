@@ -21,7 +21,12 @@ set -euo pipefail
 EMAIL="${1:?usage: aws-guardrails.sh <alert-email>}"
 REGION="${AWS_REGION:-ap-south-1}"           # where fovea-relay lives
 FUNCTION="${FOVEA_LAMBDA_NAME:-fovea-relay}"
-BUDGET_USD="${FOVEA_BUDGET_USD:-10}"
+# ₹500/month is the cap the owner chose. The budget is denominated in USD
+# anyway because THIS ACCOUNT BILLS IN USD (checked via Cost Explorer) — an
+# INR budget on a USD-billed account would compare rupees against dollars
+# and alert at 88× the intended spend. $6 ≈ ₹500; adjust here if the rate
+# drifts far enough to matter.
+BUDGET_USD="${FOVEA_BUDGET_USD:-6}"
 say() { printf '  %s\n' "$*"; }
 
 command -v aws >/dev/null || { echo "✗ aws CLI not found"; exit 1; }
