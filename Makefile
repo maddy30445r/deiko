@@ -121,17 +121,28 @@ endif
 ## once, in the same evening, on an app that was working perfectly both times —
 ## an hour lost to a cosmetic artifact with a valid signature behind it.
 ##
-## So: quit first, replace wholesale, re-register, relaunch. The lsregister
-## call is the part that is easy to leave out and is the one that actually
-## clears the stale icon.
+## So: quit first, replace wholesale, then make the icon caches let go.
+##
+## THE CACHE PURGE AND THE RESTARTS ARE THE LOAD-BEARING PART, and `lsregister`
+## alone is NOT enough — this target shipped without them and reproduced the
+## blank icon on its very first run. Finder and Dock each hold their own
+## rendered copy, keyed by path, and neither re-reads the bundle just because
+## LaunchServices was told to. Restarting them is what actually clears it.
+## They both relaunch immediately; the cost is a Finder window blinking.
 install: bundle
 	@osascript -e 'quit app "Fovea"' 2>/dev/null || true
 	@sleep 1
 	@rm -rf /Applications/Fovea.app
 	@cp -R $(APP) /Applications/
-	@/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/Fovea.app
+	@/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f -R /Applications/Fovea.app
+	@touch /Applications/Fovea.app /Applications/Fovea.app/Contents/Info.plist
+	@find "$$(getconf DARWIN_USER_CACHE_DIR)" -name com.apple.dock.iconcache -delete 2>/dev/null || true
+	@find "$$(getconf DARWIN_USER_CACHE_DIR)" -maxdepth 2 -name com.apple.iconservices -type d -exec rm -rf {} + 2>/dev/null || true
+	@killall Dock 2>/dev/null || true
+	@killall Finder 2>/dev/null || true
+	@sleep 2
 	@open /Applications/Fovea.app
-	@echo "installed and running: /Applications/Fovea.app"
+	@echo "installed and running: /Applications/Fovea.app  (Dock + Finder restarted)"
 	@echo "verify: /Applications/Fovea.app/Contents/MacOS/fovea-capture diagnostics | grep relay"
 
 ## dmg — the thing you actually hand to somebody
