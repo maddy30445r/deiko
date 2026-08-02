@@ -39,9 +39,17 @@ enum Diagnostics {
         // from a shell that is the terminal — which has never asked for Speech
         // Recognition, so it reads as denied however thoroughly Fovea.app was
         // granted it. Saying so beats sending somebody to hunt a permission
-        // they already have. A TTY on stdout is the tell; the app launched
-        // from Finder has none.
-        if isatty(STDOUT_FILENO) == 1 {
+        // they already have.
+        //
+        // ANY of the three streams, not stdout alone. Gating on stdout meant
+        // the caveat vanished the moment the report was piped — and piping is
+        // how it is actually used: `| grep`, `| pbcopy` to paste into a chat.
+        // So the warning disappeared in precisely the case that produces a bug
+        // report, and what got pasted was a bare "✗ Speech Recognition" for a
+        // permission the app holds. stderr survives a pipe on stdout; the app
+        // launched from Finder, and the Settings button that calls this
+        // in-process, have a TTY on none of them.
+        if isatty(STDOUT_FILENO) == 1 || isatty(STDERR_FILENO) == 1 || isatty(STDIN_FILENO) == 1 {
             lines.append("  (run from a terminal — these are attributed to your")
             lines.append("   terminal, not to Fovea.app. Settings reports them correctly.)")
         }
