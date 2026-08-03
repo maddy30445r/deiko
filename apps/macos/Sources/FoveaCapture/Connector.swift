@@ -1,5 +1,60 @@
+import AppKit
 import Foundation
 import FoveaHandoff
+
+/// Is a client actually ON this Mac — asked of the program, never of its
+/// config directory.
+///
+/// THE CONFIG DIRECTORY CANNOT ANSWER THIS, because `connect()` creates it.
+/// Every connector used to detect itself by looking for `~/.gemini`,
+/// `~/.cursor`, `~/.codex` or `~/.claude.json`, and every one of those is a
+/// path Fovea itself writes — so pressing Connect on a client that was never
+/// installed made it report itself installed a moment later. The check was
+/// measuring our own footprint.
+enum Installed {
+    /// A GUI app, wherever it lives. `urlForApplication` asks LaunchServices,
+    /// which knows about `~/Applications` and every other location a hardcoded
+    /// `/Applications/Foo.app` would miss.
+    static func app(_ bundleID: String) -> Bool {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) != nil
+    }
+
+    /// A CLI, resolved through the LOGIN shell.
+    ///
+    /// A GUI app inherits a bare `/usr/bin:/bin:/usr/sbin:/sbin`, so anything
+    /// from Homebrew, npm or nvm is invisible to a plain PATH walk — the same
+    /// problem `NodeRuntime` solves, solved the same way. Cached per name for
+    /// the process lifetime: this spawns a shell, and Settings re-reads every
+    /// row on every refresh.
+    static func command(_ name: String) -> Bool {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        if let known = cache[name] { return known }
+        let found = resolve(name)
+        cache[name] = found
+        return found
+    }
+
+    private static let cacheLock = NSLock()
+    nonisolated(unsafe) private static var cache: [String: Bool] = [:]
+
+    private static func resolve(_ name: String) -> Bool {
+        if let path = ProcessInfo.processInfo.environment["PATH"] {
+            for dir in path.split(separator: ":") {
+                let candidate = URL(fileURLWithPath: String(dir)).appendingPathComponent(name)
+                if FileManager.default.isExecutableFile(atPath: candidate.path) { return true }
+            }
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-lc", "command -v \(name)"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch { return false }
+        process.waitUntilExit()
+        return process.terminationStatus == 0
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONNECTING FOVEA TO A CODING CLIENT
@@ -289,11 +344,14 @@ extension JSONMCPConnector {
         // negative: the config file does not exist until Claude Code first
         // writes it, `~/.claude` belongs to the CLI, and someone may only ever
         // have used the VS Code extension.
+        // `~/.claude.json` is gone from this list: that is the file Fovea
+        // writes, so it proved only that Connect had been pressed. The three
+        // that remain are all made by Claude Code itself.
         let installed =
-            fm.fileExists(atPath: configPathForClaude().path)
-            || fm.fileExists(atPath: home.appendingPathComponent(".claude").path)
+            fm.fileExists(atPath: home.appendingPathComponent(".claude").path)
             || ((try? fm.contentsOfDirectory(atPath: home.appendingPathComponent(".vscode/extensions").path)) ?? [])
                 .contains { $0.hasPrefix("anthropic.claude-code") }
+            || Installed.command("claude")
 
         return JSONMCPConnector(
             name: "Claude Code",
@@ -328,8 +386,9 @@ extension JSONMCPConnector {
             hostBundleIDs: ["com.todesktop.230313mzl4w4u92"],
             containerKey: "mcpServers",
             configURL: { home.appendingPathComponent(".cursor/mcp.json") },
-            isInstalled: fm.fileExists(atPath: home.appendingPathComponent(".cursor").path)
-                || fm.fileExists(atPath: "/Applications/Cursor.app")
+            // NOT `~/.cursor` — Fovea writes `~/.cursor/mcp.json`.
+            isInstalled: Installed.app("com.todesktop.230313mzl4w4u92")
+                || Installed.command("cursor")
         )
     }
 
@@ -347,8 +406,11 @@ extension JSONMCPConnector {
             hostBundleIDs: ["com.google.antigravity"],
             containerKey: "mcpServers",
             configURL: { home.appendingPathComponent(".gemini/config/mcp_config.json") },
-            isInstalled: fm.fileExists(atPath: home.appendingPathComponent(".gemini").path)
-                || fm.fileExists(atPath: "/Applications/Antigravity.app")
+            // NOT `~/.gemini` — Fovea writes `~/.gemini/config/mcp_config.json`,
+            // which is what made Antigravity report itself installed on a Mac
+            // that has never had it.
+            isInstalled: Installed.app("com.google.antigravity")
+                || Installed.command("antigravity")
         )
     }
 }
@@ -383,9 +445,8 @@ struct CodexConnector: Connector {
         return dir.appendingPathComponent("config.toml")
     }
 
-    var isInstalled: Bool {
-        FileManager.default.fileExists(atPath: configURL.deletingLastPathComponent().path)
-    }
+    /// The binary, not `~/.codex` — Fovea writes `~/.codex/config.toml`.
+    var isInstalled: Bool { Installed.command("codex") }
 
     var isConnected: Bool {
         guard let node = try? MCPEntry.node(), let bridge = try? MCPEntry.bridge() else {

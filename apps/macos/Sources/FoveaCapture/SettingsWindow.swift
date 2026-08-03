@@ -212,7 +212,14 @@ private struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(row.name)
                                 .font(.system(size: 13, weight: .semibold))
-                            if row.isConnected {
+                            if row.isConnected, !row.isInstalled {
+                                // Registered in a config file for a client that
+                                // is not here. Saying "Connected" alone would
+                                // promise a handoff that cannot land.
+                                Text("Set up · install \(row.name) to use it")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(FoveaStyle.needsYou)
+                            } else if row.isConnected {
                                 Text("Connected · \(row.commandForm)")
                                     .font(.system(size: 11, design: .monospaced))
                                     .foregroundStyle(.secondary)
@@ -257,12 +264,22 @@ private struct SettingsView: View {
 
     @ViewBuilder private func roundel(for row: SettingsModel.Row) -> some View {
         ZStack {
-            if row.isConnected {
+            // GREEN MEANS USABLE, which takes both halves: registered with the
+            // client AND the client actually on this Mac. Registered-but-absent
+            // gets the needs-you colour, because a green tick on a client that
+            // cannot run is the window telling a comfortable lie.
+            if row.isConnected, row.isInstalled {
                 Circle().fill(FoveaStyle.sentGreen.opacity(0.14))
                 Circle().strokeBorder(FoveaStyle.sentGreen, lineWidth: 1.5)
                 Image(systemName: "checkmark")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(FoveaStyle.sentGreen)
+            } else if row.isConnected {
+                Circle().fill(FoveaStyle.needsYou.opacity(0.14))
+                Circle().strokeBorder(FoveaStyle.needsYou, lineWidth: 1.5)
+                Image(systemName: "exclamationmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(FoveaStyle.needsYou)
             } else {
                 Circle().strokeBorder(Color.secondary.opacity(row.isInstalled ? 0.5 : 0.35), lineWidth: 1.5)
                 if !row.isInstalled {
