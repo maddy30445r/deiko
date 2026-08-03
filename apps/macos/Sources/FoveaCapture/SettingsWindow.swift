@@ -199,8 +199,16 @@ private struct SettingsView: View {
             InsetCard {
                 ForEach(Array(model.rows.enumerated()), id: \.element.id) { index, row in
                     if index > 0 { Divider().padding(.horizontal, 14) }
+                    // Dims the DESCRIPTION of a not-found client, never its
+                    // button. Dimming the whole row made the button read as
+                    // disabled while it stayed fully clickable — so it looked
+                    // broken when pressed and worked anyway. The button is
+                    // deliberately always live (see below); it must therefore
+                    // always look live.
+                    let dim = row.isConnected || row.isInstalled ? 1.0 : 0.55
                     HStack(spacing: 12) {
                         roundel(for: row)
+                            .opacity(dim)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(row.name)
                                 .font(.system(size: 13, weight: .semibold))
@@ -214,6 +222,7 @@ private struct SettingsView: View {
                                     .foregroundStyle(.secondary)
                             }
                         }
+                        .opacity(dim)
                         Spacer()
                         if row.isConnected {
                             // Every state this window can reach has to be one
@@ -231,7 +240,6 @@ private struct SettingsView: View {
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 11)
-                    .opacity(row.isConnected || row.isInstalled ? 1 : 0.55)
                 }
             }
 
