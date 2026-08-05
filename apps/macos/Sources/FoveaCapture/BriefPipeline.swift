@@ -87,14 +87,13 @@ enum BriefPipeline {
     /// script. A bundle ships `dist/` already built, so there is nothing to
     /// build and nothing to wrap.
     private enum Stage {
-        case transcribe, brief, summarize, send
+        case transcribe, brief, summarize
 
         var script: String {
             switch self {
             case .transcribe: return "transcribe.mjs"
             case .brief: return "render-brief.mjs"
             case .summarize: return "summarize.mjs"
-            case .send: return "send-brief.mjs"
             }
         }
 
@@ -103,7 +102,6 @@ enum BriefPipeline {
             case .transcribe: return "transcribe"
             case .brief: return "brief"
             case .summarize: return "summarize"
-            case .send: return "send"
             }
         }
 
@@ -113,7 +111,6 @@ enum BriefPipeline {
             case .transcribe: return "Transcribing"
             case .brief: return "Rendering the brief"
             case .summarize: return "Summarising"
-            case .send: return "Sending"
             }
         }
     }
@@ -387,11 +384,12 @@ enum BriefPipeline {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    /// Hand the brief to Claude Code. THE approval step — `send-brief.mjs` owns
-    /// the outbox rules (one pending brief at a time, and why), and is spawned
-    /// rather than reimplemented so those rules have exactly one home.
-    static func send(sessionDir: String) async throws {
-        try await run(.send, sessionDir: sessionDir)
+    /// The message the drop pastes. Read from disk rather than held in memory:
+    /// the review window may have re-rendered it after a narration correction,
+    /// and the file is the only thing that saw that.
+    static func promptText(sessionDir: String) throws -> String {
+        let path = URL(fileURLWithPath: sessionDir).appendingPathComponent("prompt.txt")
+        return try String(contentsOf: path, encoding: .utf8)
     }
 
     /// Save the developer's corrected narration next to the session. The renderer

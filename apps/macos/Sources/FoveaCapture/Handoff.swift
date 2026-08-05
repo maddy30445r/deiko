@@ -2,17 +2,15 @@ import AppKit
 import FoveaHandoff
 
 // ─────────────────────────────────────────────────────────────────────────────
-// THE HANDOFF — put the brief's slash command into the window the orb landed on
+// THE HANDOFF — paste the developer's prompt into the window the orb landed on
 //
 // Everything decided lives in `FoveaHandoff`; this file is the plumbing that
 // cannot be tested: reading the window list, activating an app, synthesizing a
 // paste. It should hold no judgement calls beyond the ones documented inline.
 //
-// The order is send FIRST, keystroke SECOND, always. If the keystroke misses —
-// wrong window focused, an editor that swallowed the paste — the brief is
-// already pending in the outbox, so the fallback is exactly the old flow: type
-// the command yourself. The reverse order could have an agent fetch a brief
-// that is not there yet.
+// If the paste or the Return misses, `prompt.txt` is still on disk beside the
+// session and the orb says where. That is the fallback, and it is the reason
+// nothing here reports partial success.
 //
 // This does not violate "nothing leaves until Good to go" — the fling IS the
 // approval, a deliberate gesture at a named target. What it must never become
@@ -28,42 +26,6 @@ struct ResolvedTarget {
 
 @MainActor
 enum Handoff {
-
-    /// The slash command that pulls the pending brief — **host-dependent, and
-    /// that is the whole story of why the first live handoff did nothing.**
-    ///
-    /// The CLI/TUI names MCP prompts `/mcp__<server>__<prompt>`; the VS Code
-    /// extension names the same prompt `/<server>:<prompt>`. Pasting the wrong
-    /// form leaves an *unresolved* command in the input, and Claude Code will
-    /// not submit one — which looks exactly like a failed Return keystroke, and
-    /// sent this investigation chasing TCC grants, event sources and
-    /// autocomplete popups before the developer recognised the name.
-    ///
-    /// ASK a connected client; only guess when nobody has been connected.
-    ///
-    /// The guess is the thing this replaces. It read the target window's bundle
-    /// id against a hand-kept list of terminal emulators — a list that is stale
-    /// the day a new terminal ships, and whose wrong answers are SILENT, because
-    /// Claude Code will not submit an unresolved slash command and the text just
-    /// sits in the input looking like a dropped keystroke. That cost an hour
-    /// once (`mddocs/spikes/T4.6-handoff-keystroke.md`).
-    ///
-    /// A client the user explicitly connected can simply be asked. The fallback
-    /// stays for an unconnected target, where guessing beats refusing.
-    static func command(for target: HandoffTarget) -> String {
-        let bundleID = NSRunningApplication(processIdentifier: target.pid)?.bundleIdentifier
-        if let connector = Connectors.matching(bundleID: bundleID) {
-            return connector.commandForm
-        }
-        // VERIFIED for the VS Code extension on 2026-07-31; the CLI form is
-        // what the repo has always documented but is unverified since.
-        let terminals: Set<String> = [
-            "com.apple.Terminal", "com.googlecode.iterm2", "com.mitchellh.ghostty",
-            "dev.warp.Warp-Stable", "io.alacritty", "net.kovidgoyal.kitty",
-            "com.github.wez.wezterm", "org.tabby", "co.zeit.hyper",
-        ]
-        return terminals.contains(bundleID ?? "") ? "/mcp__fovea__brief" : "/fovea:brief"
-    }
 
     /// Where a handoff narrates itself. `OrbController` points this at the
     /// app's log on first use.
@@ -120,12 +82,11 @@ enum Handoff {
         return nil
     }
 
-    /// Activate the target and type the slash command into it.
+    /// Activate the target and paste the developer's prompt into it.
     ///
-    /// Throws rather than reporting partial success: the caller has already
-    /// sent the brief, so every failure here has the same remedy — the orb says
-    /// "type the command yourself" — and the same severity.
-    static func deliver(to target: HandoffTarget) async throws {
+    /// Throws rather than reporting partial success: every failure here has the
+    /// same remedy — the orb points at `prompt.txt` — and the same severity.
+    static func deliver(to target: HandoffTarget, text: String) async throws {
         guard let app = NSRunningApplication(processIdentifier: target.pid) else {
             throw HandoffError("\(target.appName) is no longer running.")
         }
@@ -184,23 +145,24 @@ enum Handoff {
             try await Task.sleep(for: .milliseconds(150))
         }
 
-        let command = Handoff.command(for: target)
-        note("command for \(target.appName): \(command)")
-        try paste(command)
+        note("pasting \(text.count) characters into \(target.appName)")
+        try paste(text)
 
-        // Let the destination process the paste before anything else. Claude
-        // Code's input needs a beat to take the text and settle its
-        // slash-command autocomplete; a key in the same instant lands on the
-        // wrong state.
+        // Let the destination process the paste before anything else. A large
+        // multi-line paste needs a beat to land in the input before a Return
+        // arrives, and 250ms was already measured as sufficient for the
+        // slash-command this replaced (`mddocs/spikes/T4.6-handoff-keystroke.md`).
         try await Task.sleep(for: .milliseconds(250))
 
-        // PASTE, WAIT, ONE RETURN — measured, not assumed
-        // (`mddocs/spikes/T4.6-handoff-keystroke.md`). Four other sequences were
-        // tried against real hosts: two Returns, Escape-then-Return, a pasted
-        // trailing newline, and paste-only. This is the one that submits, and
-        // the 250ms above is why — the autocomplete eats a Return that arrives
-        // before it has settled, which is what made the alternatives look
-        // necessary. Change the delay before you change the sequence.
+        // PASTE, WAIT, ONE RETURN. Four other sequences were tried against real
+        // hosts: two Returns, Escape-then-Return, a pasted trailing newline, and
+        // paste-only. This is the one that submits.
+        //
+        // MULTI-LINE PASTE RELIES ON BRACKETED PASTE. A single-line command
+        // could not be split; this text can. A host that does not honour
+        // bracketed paste will submit at each newline, which looks like the
+        // prompt fragmenting itself. Claude Code's TUI and VS Code's chat input
+        // both honour it — verified before this shipped.
         tap(keyCode: kReturn)
         note("done")
     }

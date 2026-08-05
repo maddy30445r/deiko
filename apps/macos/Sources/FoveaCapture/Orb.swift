@@ -424,26 +424,19 @@ final class OrbController: NSObject {
         state.aim = .idle
     }
 
-    /// Send first, keystroke second, always. If the keystroke half fails the
-    /// brief is already pending, so the remedy is the old flow — type the
-    /// command yourself — and the orb says exactly that, naming the command
-    /// form that host actually uses.
+    /// The drop pastes and submits. If either half misses, `prompt.txt` is
+    /// still on disk — that is the fallback, and the orb names the file rather
+    /// than a command form, because there is no longer a command to type.
     private func send(to target: HandoffTarget) {
-        // Resolved BEFORE deliver runs, while the app is still known to be
-        // alive. `command(for:)` reads the bundle id through the pid, and the
-        // commonest failure here is "the app is no longer running" — so
-        // resolving it in the catch block finds nothing, misses the terminal
-        // list, and tells the user to type the VS Code form at a terminal. This
-        // file's own history is that handing over the wrong command form looks
-        // exactly like a broken keystroke.
-        let command = Handoff.command(for: target)
-        model.approve(handingTo: target.appName) {
+        let sessionDir = model.currentSessionDir
+        model.approve(handingTo: target.appName) { text in
             do {
-                try await Handoff.deliver(to: target)
+                try await Handoff.deliver(to: target, text: text)
             } catch {
+                let where_ = sessionDir.map { "\($0)/prompt.txt" } ?? "the session folder"
                 throw HandoffError(
-                    "the brief is sent and waiting, but \(error.localizedDescription) "
-                        + "Type \(command) in \(target.appName) to pick it up."
+                    "\(error.localizedDescription) Your prompt is at \(where_) — "
+                        + "paste it into \(target.appName) yourself."
                 )
             }
         }

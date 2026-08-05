@@ -155,16 +155,17 @@ final class ReviewModel: ObservableObject {
     /// developer can always answer "has anything been sent?" by whether they
     /// have thrown.
     ///
-    /// On the fling path the order is edit → send → keystroke, and **the phase
-    /// does not read `.sent` until the keystroke returns.** The first version
-    /// set `.sent` before running it — so the orb said "Handed over" while
-    /// nothing had reached the editor, and the checkmark was evidence only of
-    /// a file copy. A success state must not outrun the work it claims.
+    /// On the fling path the order is edit → read `prompt.txt` → keystroke, and
+    /// **the phase does not read `.sent` until the keystroke returns.** The
+    /// first version set `.sent` before running it — so the orb said "Handed
+    /// over" while nothing had reached the editor, and the checkmark was
+    /// evidence only of a file being on disk. A success state must not outrun
+    /// the work it claims.
     ///
-    /// The copy still happens before the keystroke, deliberately: if the
-    /// handoff half fails, the brief is already pending and typing the command
-    /// by hand still works.
-    func approve(handingTo appName: String? = nil, then after: (@MainActor () async throws -> Void)? = nil) {
+    /// `prompt.txt` is read fresh here rather than passed down from `load`,
+    /// deliberately: if the paste or keystroke fails, the file is still there
+    /// and the orb points at it — pasting it by hand still works.
+    func approve(handingTo appName: String? = nil, then after: (@MainActor (String) async throws -> Void)? = nil) {
         guard let sessionDir else { return }
         task?.cancel()
         task = Task {
@@ -182,11 +183,10 @@ final class ReviewModel: ObservableObject {
                     phase = .ready
                     return
                 }
-                phase = .working("Sending…")
-                try await BriefPipeline.send(sessionDir: sessionDir)
+                let text = try BriefPipeline.promptText(sessionDir: sessionDir)
                 guard stillCurrent(sessionDir) else { return }
                 phase = .working("Handing to \(appName ?? "your editor")…")
-                try await after()
+                try await after(text)
                 guard stillCurrent(sessionDir) else { return }
                 handedTo = appName
                 phase = .sent
