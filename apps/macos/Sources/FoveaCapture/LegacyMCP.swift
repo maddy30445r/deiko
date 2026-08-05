@@ -81,16 +81,29 @@ enum LegacyMCP {
             return false  // exists but we can't parse it — can't confirm either way
         }
         let servers = document[containerKey] as? [String: Any]
-        guard looksLikeFoveaEntry(servers?["fovea"]) else {
-            // Already clean — no entry here, or one that is not ours. Either
-            // way this counts as clean going in, and either way it means any
-            // backup we left beside this file is now an orphan: nothing here
-            // to remove could mean the user pressed Disconnect back when
-            // 0.2.x still offered it, or that a previous launch already did
-            // this removal — both want the backup gone, and neither should be
-            // held up by the flag rule above, which is about the ENTRY, not
-            // about tidying a leftover file that carries no risk either way.
+        let entry = servers?["fovea"]
+
+        // THREE OUTCOMES, spelled out rather than left to fall out of one
+        // guard's else — collapsing "absent" and "present but not ours" into
+        // one branch once already shipped a bug: it deleted the backup beside
+        // a hand-registered `fovea` entry this app never touched.
+        guard entry != nil else {
+            // No `fovea` key at all — already clean. Any backup we left
+            // beside this file is now an orphan: this could mean the user
+            // pressed Disconnect back when 0.2.x still offered it, or that a
+            // previous launch already did this removal. Either way the
+            // backup goes; neither is held up by the flag rule above, which
+            // is about the ENTRY, not about tidying a file that carries no
+            // risk either way.
             removeBackup(beside: url)
+            return true
+        }
+        guard looksLikeFoveaEntry(entry) else {
+            // Something IS registered under `fovea`, but it does not look
+            // like ours. Touch NOTHING — not the entry, not the backup beside
+            // it, no log line. Counted as clean for flag purposes: there is
+            // nothing here Fovea will ever remove, so waiting for it to
+            // change would wait forever and cost a parse every launch.
             return true
         }
 
@@ -130,8 +143,17 @@ enum LegacyMCP {
         guard let text = try? String(contentsOf: url, encoding: .utf8) else {
             return true  // no file — nothing of ours can be in it
         }
-        guard looksLikeFoveaTable(TomlConfig.lines(of: "fovea", in: text)) else {
-            removeBackup(beside: url)  // see cleanJSON's "already clean" branch
+        let table = TomlConfig.lines(of: "fovea", in: text)
+
+        // Same three outcomes as `cleanJSON`, kept explicit for the same
+        // reason — see the comment there.
+        guard let table else {
+            // No `[mcp_servers.fovea]` table at all — already clean.
+            removeBackup(beside: url)
+            return true
+        }
+        guard looksLikeFoveaTable(table) else {
+            // A table exists but is not ours — leave it and its backup alone.
             return true
         }
 
@@ -199,13 +221,15 @@ enum LegacyMCP {
     /// The one-time backup Fovea's old connector wrote beside a config the
     /// first time it ever touched it — `<filename>.before-fovea`, a full
     /// snapshot of whatever was there before (for `~/.claude.json`, that
-    /// includes the user's `oauthAccount`). Called from two places, both of
-    /// which mean the entry is gone right now: right after a removal this
-    /// call just made, and from the "already clean" branch, which covers
-    /// both "user pressed Disconnect years ago" and "a previous launch
-    /// already did this." Only this exact name — never anything else found
-    /// beside the config — and `try?`: a backup that fails to delete is not
-    /// worth retrying for, unlike the entry itself.
+    /// includes the user's `oauthAccount`). Only ever called once the entry
+    /// is confirmed gone: right after a removal this call just made, or from
+    /// the "no `fovea` key at all" branch, which covers both "user pressed
+    /// Disconnect years ago" and "a previous launch already did this."
+    /// NEVER called from the "present but not ours" branch — a hand-
+    /// registered `fovea` entry means this backup is not ours to judge
+    /// either. Only this exact name — never anything else found beside the
+    /// config — and `try?`: a backup that fails to delete is not worth
+    /// retrying for, unlike the entry itself.
     private static func removeBackup(beside url: URL) {
         let backup = url.deletingLastPathComponent()
             .appendingPathComponent("\(url.lastPathComponent).before-fovea")
