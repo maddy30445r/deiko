@@ -62,10 +62,48 @@ final class ReviewModel: ObservableObject {
     /// PNG decode would run again on every keystroke, for every crop on
     /// screen. Loading once when the digest arrives — and only then — keeps
     /// typing free of disk I/O it has no reason to pay for.
+    ///
+    /// That fixed the FREQUENCY, not the cost of any one decode. These are
+    /// full-resolution Retina screenshots of whatever the lasso enclosed, so
+    /// a large region is a multi-megabyte PNG, and the first version still
+    /// ran `NSImage(contentsOfFile:)` for every path right here on the main
+    /// actor — once instead of once-per-keystroke, but still synchronously,
+    /// still capable of hitching the review card at the exact moment `phase`
+    /// flips to `.ready` and it first appears. `loadCropThumbnails` below is
+    /// `async`, and the actual read-and-decode (`decodeThumbnails`) is
+    /// `nonisolated`: awaiting a `nonisolated` function from this
+    /// `@MainActor` class hops execution off the main actor for its body and
+    /// back only when it returns, so the disk read and PNG decode happen off
+    /// the main thread and only the finished `NSImage` values ever cross back
+    /// to be published here.
     @Published private(set) var cropThumbnails: [String: NSImage] = [:]
 
-    private func loadCropThumbnails(_ digest: BriefDigest) {
-        cropThumbnails = Dictionary(uniqueKeysWithValues: digest.cropPaths.compactMap { path in
+    /// Reads and decodes every crop, off the main actor — see the comment on
+    /// `cropThumbnails` for why this is `async`/`nonisolated` rather than a
+    /// plain synchronous call.
+    ///
+    /// `stillCurrent` is checked again after the `await`, exactly as it is
+    /// after every other suspension point in this file: the decode is now a
+    /// real await, so a session switch (or a second edit re-rendering the
+    /// same session) can land while it is in flight, and a slow decode for a
+    /// session nobody is looking at anymore must not overwrite a newer one's
+    /// thumbnails once it finally finishes. This is the same guard used
+    /// everywhere else here — not a second mechanism.
+    private func loadCropThumbnails(_ digest: BriefDigest, sessionDir: String) async {
+        let thumbnails = await decodeThumbnails(digest.cropPaths)
+        guard stillCurrent(sessionDir) else { return }
+        cropThumbnails = thumbnails
+    }
+
+    /// `nonisolated` so it carries no actor of its own: called with `await`
+    /// from the `@MainActor` `loadCropThumbnails`, it runs the disk read and
+    /// PNG decode on the cooperative thread pool rather than the main thread,
+    /// and control returns to the main actor the moment it completes. No
+    /// `Task.detached` and nothing to cancel separately — the enclosing
+    /// `Task` in `load`/`approve`/`reload(afterExtending:)` already owns
+    /// that, via `stillCurrent`.
+    nonisolated private func decodeThumbnails(_ cropPaths: [String]) async -> [String: NSImage] {
+        Dictionary(uniqueKeysWithValues: cropPaths.compactMap { path in
             NSImage(contentsOfFile: path).map { (path, $0) }
         })
     }
@@ -153,7 +191,8 @@ final class ReviewModel: ObservableObject {
                 let digest = try await BriefPipeline.run(sessionDir: sessionDir)
                 guard stillCurrent(sessionDir) else { return }
                 self.digest = digest
-                self.loadCropThumbnails(digest)
+                await self.loadCropThumbnails(digest, sessionDir: sessionDir)
+                guard stillCurrent(sessionDir) else { return }
                 self.narration = digest.summary.narration
                 self.originalNarration = digest.summary.narration
                 self.phase = .ready
@@ -195,7 +234,8 @@ final class ReviewModel: ObservableObject {
                     let rerendered = try await BriefPipeline.rerender(sessionDir: sessionDir)
                     guard stillCurrent(sessionDir) else { return }
                     self.digest = rerendered
-                    self.loadCropThumbnails(rerendered)
+                    await self.loadCropThumbnails(rerendered, sessionDir: sessionDir)
+                    guard stillCurrent(sessionDir) else { return }
                 }
                 guard let after else {
                     // The panel's path ends here: corrected, re-rendered,
@@ -289,7 +329,8 @@ final class ReviewModel: ObservableObject {
                 }
 
                 self.digest = digest
-                self.loadCropThumbnails(digest)
+                await self.loadCropThumbnails(digest, sessionDir: sessionDir)
+                guard stillCurrent(sessionDir) else { return }
                 self.narration = digest.summary.narration
                 self.originalNarration = digest.summary.narration
                 self.phase = .ready
