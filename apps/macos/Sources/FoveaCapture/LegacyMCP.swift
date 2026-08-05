@@ -27,6 +27,15 @@ import FoveaHandoff
 // costs one extra check, on one extra launch, only for someone who had
 // something to clean up.
 //
+// "Clean" here does NOT mean "no `fovea` key exists anywhere" — it means
+// nothing Fovea would ever touch remains. A `fovea` entry present but not
+// ours (someone's own server, hand-registered under the same name) counts as
+// clean too, deliberately: it can never become ours to remove, so waiting for
+// it to change would wait forever, and re-parsing it on every launch buys
+// nothing. The per-function comments below spell this out as the third of
+// three outcomes; a reader who stops at this header would otherwise come away
+// with the narrower, wrong reading.
+//
 // Every check is by CONTENT, not by key name — reuses `ClientConfig.remove` /
 // `TomlConfig.remove` for the actual edit rather than reimplementing them:
 // those are the tested ones, and this is not the place to have a second

@@ -12,9 +12,10 @@ import SwiftUI
 //
 // So this appears once, unprompted. One column, one read: what Fovea does,
 // each permission with the DATA it takes (that is what earns trust, not
-// reassurance copy), the key — its row granting itself directly — and the
-// gesture. The primary button is "Start pointing", not "Done": the moment
-// everything is in, the next action is the product.
+// reassurance copy), the key — its row deep-links to Settings to add one,
+// rather than granting itself — and the gesture. The primary button is
+// "Start pointing", not "Done": the moment everything is in, the next action
+// is the product.
 //
 // Shown again from the menu's "Getting started…", because "I clicked past it"
 // is not a reason to have to reinstall.

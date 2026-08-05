@@ -102,6 +102,18 @@ final class ReviewModel: ObservableObject {
     /// `Task.detached` and nothing to cancel separately — the enclosing
     /// `Task` in `load`/`approve`/`reload(afterExtending:)` already owns
     /// that, via `stillCurrent`.
+    ///
+    /// This off-main-thread hop is SE-0338's behaviour, not `nonisolated`'s
+    /// universal meaning, and it only holds because `Package.swift` still
+    /// declares `swift-tools-version:6.0`. SE-0461 (Swift 6.2) flips the
+    /// default: under a 6.2-or-later tools-version, a `nonisolated async`
+    /// function runs on the *caller's* actor instead of hopping off, so this
+    /// exact code would silently decode back on the main actor — no compiler
+    /// error, no test failure, just a hitch the first time a multi-megabyte
+    /// Retina PNG decodes. Established empirically, by building a probe
+    /// package at each tools-version, not from documentation. Do not raise
+    /// the tools-version without re-proving this decode still leaves the main
+    /// thread.
     nonisolated private func decodeThumbnails(_ cropPaths: [String]) async -> [String: NSImage] {
         Dictionary(uniqueKeysWithValues: cropPaths.compactMap { path in
             NSImage(contentsOfFile: path).map { (path, $0) }

@@ -4,11 +4,9 @@ import Foundation
 // FINDING NODE
 //
 // The transcribe-and-render work is Node, and a shipped app cannot assume the
-// machine has any. One resolver answers "which node" for everything: the
-// pipeline the app runs itself, AND the `command` written into a client's MCP
-// config when the user connects one — so the bridge Claude Code spawns is the
-// same runtime the app used, rather than whatever that process happens to find
-// on its PATH.
+// machine has any. One resolver answers "which node" for the pipeline the app
+// runs itself — `BriefPipeline` shells out to it for every stage, and
+// `Diagnostics` reports what it found.
 //
 // The order matters and is deliberate:
 //

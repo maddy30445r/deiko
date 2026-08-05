@@ -293,9 +293,8 @@ icon: $(DEBUG_BIN)
 ## resources — the pipeline, inside the bundle
 ##
 ## MIRRORS THE REPO LAYOUT, and that is the whole trick. The scripts import
-## their packages by relative path (`../packages/alignment/dist/src/align.js`)
-## and Node also finds `node_modules` by walking up from the script it is
-## running. Reproduce the shape and every one of those resolves unchanged — no
+## their packages by relative path (`../packages/alignment/dist/src/align.js`).
+## Reproduce the shape and every one of those resolves unchanged — no
 ## rewriting imports, no bundler, nothing to keep in sync.
 ##
 ## `make bundle` runs this every time: it is a few hundred KB of scripts and

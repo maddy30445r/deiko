@@ -97,8 +97,7 @@ enum Capture {
 
     // ── Capturing ───────────────────────────────────────────────────────────
 
-    /// Screenshot `rect`, optionally clipped to the freehand path, optionally
-    /// OCR'd, optionally written to disk.
+    /// Screenshot `rect`, optionally OCR'd, optionally written to disk.
     ///
     /// `runOCR` is passed in rather than decided here: OCR costs 50-200ms and is
     /// only worth paying when AX came back empty.

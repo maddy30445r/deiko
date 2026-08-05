@@ -116,7 +116,9 @@ final class OrbController: NSObject {
         // hook lived in a test subcommand, so the field run was undiagnosable
         // and the whole investigation started from "nothing happened". A field
         // run must never be quieter than a harness; this is now the only hook,
-        // and `make show-brief` plus Diagnostics are what read it back.
+        // and Diagnostics (`fovea-capture diagnostics`, or Settings' "Copy
+        // diagnostics") is what reads it back, alongside
+        // `~/Library/Logs/Fovea/launch.jsonl` directly.
         if Handoff.trace == nil {
             Handoff.trace = { Emit.log("handoff: \($0)") }
         }
