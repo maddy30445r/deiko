@@ -60,6 +60,7 @@ enum BriefPipelineError: LocalizedError {
     case nodeNotFound
     case commandFailed(stage: String, output: String)
     case noManifest(String)
+    case noPrompt(String)
 
     var errorDescription: String? {
         switch self {
@@ -71,6 +72,16 @@ enum BriefPipelineError: LocalizedError {
             return "\(stage) failed.\n\n\(output)"
         case .noManifest(let path):
             return "The brief rendered but \(path) is missing."
+        case .noPrompt(let path):
+            // Distinct from `.noManifest` on purpose: by the time this throws,
+            // `brief.json` already loaded fine, so this is not "nothing
+            // rendered" — it is "rendering didn't finish". And unlike a
+            // `Handoff.deliver` failure, the file this names does NOT exist,
+            // so telling the user to go paste it themselves would send them
+            // looking for something that isn't there. "Point at more" re-runs
+            // the render and is the recourse that actually exists here.
+            return "The brief didn't finish rendering — \(path) is missing. "
+                + "Use \"Point at more\" to re-run it before sending again."
         }
     }
 }
@@ -389,7 +400,10 @@ enum BriefPipeline {
     /// and the file is the only thing that saw that.
     static func promptText(sessionDir: String) throws -> String {
         let path = URL(fileURLWithPath: sessionDir).appendingPathComponent("prompt.txt")
-        return try String(contentsOf: path, encoding: .utf8)
+        guard let text = try? String(contentsOf: path, encoding: .utf8) else {
+            throw BriefPipelineError.noPrompt(path.path)
+        }
+        return text
     }
 
     /// Save the developer's corrected narration next to the session. The renderer

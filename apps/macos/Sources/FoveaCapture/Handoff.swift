@@ -161,8 +161,12 @@ enum Handoff {
         // MULTI-LINE PASTE RELIES ON BRACKETED PASTE. A single-line command
         // could not be split; this text can. A host that does not honour
         // bracketed paste will submit at each newline, which looks like the
-        // prompt fragmenting itself. Claude Code's TUI and VS Code's chat input
-        // both honour it — verified before this shipped.
+        // prompt fragmenting itself — several messages arriving instead of
+        // one, each a partial line. Claude Code's TUI and VS Code's chat input
+        // are BOTH EXPECTED to honour it, but that is an assumption, not a
+        // measurement: the live check against real hosts is a field
+        // verification step, not something this file can run on its own. If
+        // the fragmenting happens, this is where to look first.
         tap(keyCode: kReturn)
         note("done")
     }

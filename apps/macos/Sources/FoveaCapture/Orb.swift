@@ -9,8 +9,9 @@ import FoveaHandoff
 // A session ends and the orb appears: a small always-on-top glass card, centred,
 // showing Fovea's three-line reading of what it heard. Its 56pt COIN — a disc
 // wearing the fovea mark — is the drag handle: fling it onto the window running
-// Claude Code and the brief lands in that live session, the send, the app
-// switch and the typing of the slash command all inside one gesture.
+// Claude Code and the brief lands in that live session — the app switch, the
+// paste of the prompt itself, and the Return that submits it — all inside one
+// gesture.
 //
 // While you aim, the coin DETACHES: it follows the cursor at full weight with
 // the aim label riding underneath, and the card stays behind at 35% opacity
