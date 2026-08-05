@@ -159,15 +159,19 @@ const released = referents.map((r) => {
   return { ...r, cropPath: path, cropWithheld: reason };
 });
 
-const prompt = buildPrompt({
+const { text, evidence } = buildPrompt({
   narration: narrationOverride ?? utteranceText(words).replace(/\s*\n\s*/g, " "),
   referents: released,
 });
 
-// Fail closed on the thing that crosses the wire. `buildPrompt` redacts as it
-// builds; this is the assertion that the redaction actually held.
-assertNoSecrets(prompt);
-writeFileSync(outPath, prompt);
+// Fail closed on the captured content, not on the assembled prompt. `text`
+// includes crop paths Fovea minted itself — an absolute POSIX path is a
+// 40-character run of `[A-Za-z0-9/_]` and trips the long-opaque-string rule
+// on sight, so running the guard over `text` rejected every real prompt.
+// `evidence` is narration and screen text only, which is the only place a
+// secret this renderer didn't put there could hide.
+assertNoSecrets(evidence);
+writeFileSync(outPath, text);
 
 const manifest = {
   sessionId: basename(dir),

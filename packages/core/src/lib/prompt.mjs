@@ -16,6 +16,23 @@
  *
  * Redaction happens HERE, not in the caller. There is no route to a prompt that
  * skipped it.
+ *
+ * Returns `{ text, evidence }`, not a bare string. `text` is the whole
+ * assembled prompt — narration, screenshot paths, the withheld note, the
+ * fenced screen text. `evidence` is narrower: the redacted narration and the
+ * redacted screen-text lines, joined by newlines, and nothing else.
+ *
+ * The split exists because `assertNoSecrets` has to run on `evidence`, never
+ * on `text`. The guard's subject is captured screen content — narration and
+ * what a referent's accessibility/OCR text says — because that is the only
+ * place a secret can appear that this code did not put there itself. The
+ * screenshot paths in `text` are strings Fovea minted, not content it
+ * captured, and an absolute POSIX path is a 40-character run of
+ * `[A-Za-z0-9/_]`, which trips the long-opaque-string rule on sight. Widening
+ * that rule to admit paths would blunt it for the content it exists to
+ * police — an exemption the guard must honour is an exemption that OCR'd
+ * screen text can imitate. So the boundary sits here, at what the guard is
+ * handed, exactly as it did in the bridge server this renderer replaced.
  */
 
 import { redact, redactBlock } from "./redact.mjs";
@@ -27,8 +44,37 @@ const MAX_TEXT_LINES = 40;
 /** One rendered line's ceiling — matches what the old renderer's fences used. */
 const MAX_LINE_LENGTH = 500;
 
+/**
+ * Why a screenshot didn't make it, in the words the developer would plausibly
+ * have typed themselves — never a system-notice tone, and never wrong about
+ * the reason. `(n)` only matters for the pronoun at the end.
+ */
+const WITHHELD_PHRASE = {
+  "credential visible in this capture": () => "a credential was visible",
+  "never OCR'd — contents unverified": (n) =>
+    `it was never checked, so I can't vouch for what's in ${n === 1 ? "it" : "them"}`,
+};
+
+/** One parenthetical per distinct reason, grouped so two reasons don't read
+ *  as one muddled sentence. Order follows first appearance among referents. */
+function withheldNote(referents) {
+  const counts = new Map();
+  for (const r of referents) {
+    if (!r.cropWithheld) continue;
+    counts.set(r.cropWithheld, (counts.get(r.cropWithheld) ?? 0) + 1);
+  }
+  if (!counts.size) return null;
+  const clauses = [...counts.entries()].map(([reason, n]) => {
+    const phrase = (WITHHELD_PHRASE[reason] ?? (() => reason))(n);
+    const subject = n === 1 ? "one screenshot" : `${n} screenshots`;
+    return `${subject} left out — ${phrase}`;
+  });
+  return `(${clauses.join("; ")})`;
+}
+
 export function buildPrompt({ narration, referents }) {
-  const out = [redact(narration ?? "").trim()];
+  const narrationRedacted = redact(narration ?? "").trim();
+  const out = [narrationRedacted];
 
   const shots = referents.filter((r) => r.cropPath);
   if (shots.length) {
@@ -43,15 +89,8 @@ export function buildPrompt({ narration, referents }) {
 
   // Stated, never silent. Saying nothing would read as "no screenshot was
   // taken", which is a different fact from "one exists and you may not have it".
-  const withheld = referents.filter((r) => r.cropWithheld).length;
-  if (withheld) {
-    out.push(
-      "",
-      withheld === 1
-        ? "(one screenshot left out — a credential was visible)"
-        : `(${withheld} screenshots left out — a credential was visible)`,
-    );
-  }
+  const note = withheldNote(referents);
+  if (note) out.push("", note);
 
   // Accessibility text is the literal string the app rendered; OCR is a guess
   // off pixels that routinely substitutes lookalike characters. Where a referent
@@ -68,15 +107,15 @@ export function buildPrompt({ narration, referents }) {
       lines.push(text);
     }
   }
-  if (lines.length) {
-    out.push(
-      "",
-      "Exact text from the things I pointed at:",
-      "```",
-      ...redactBlock(lines.slice(0, MAX_TEXT_LINES)),
-      "```",
-    );
+  const linesRedacted = lines.length ? redactBlock(lines.slice(0, MAX_TEXT_LINES)) : [];
+  if (linesRedacted.length) {
+    out.push("", "Exact text from the things I pointed at:", "```", ...linesRedacted, "```");
   }
 
-  return out.join("\n") + "\n";
+  return {
+    text: out.join("\n") + "\n",
+    // No headings, no fences, no paths — just the redacted content a secret
+    // could actually hide in.
+    evidence: [narrationRedacted, ...linesRedacted].join("\n"),
+  };
 }
