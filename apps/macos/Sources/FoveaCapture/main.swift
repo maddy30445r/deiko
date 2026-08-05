@@ -169,7 +169,6 @@ func runAXProbe(_ args: Args) async {
             )
             cropIndex += 1
             let crop = await Capture.crop(
-                shape: event.shape,
                 snapshot: event.snapshot,
                 outputPath: "\(cropDir)/probe-\(String(format: "%03d", cropIndex)).png",
                 // Unconditional, matching the recorder — this is the tool used
@@ -525,8 +524,7 @@ func summarize(_ event: ProbeEvent) -> String {
             let ocr = crop.ocr.isEmpty
                 ? ""
                 : " · ocr \(crop.ocr.count) lines in \(Int(crop.ocrElapsedMs ?? 0))ms: \"\(crop.ocr.prefix(3).map(\.text).joined(separator: " ⏐ ").prefix(60))…\""
-            let masked = crop.masked ? " masked" : ""
-            cropLine = "\n      crop \(size) \(source)\(masked) \(Int(crop.captureElapsedMs))ms\(ocr)"
+            cropLine = "\n      crop \(size) \(source) \(Int(crop.captureElapsedMs))ms\(ocr)"
         }
     }
 

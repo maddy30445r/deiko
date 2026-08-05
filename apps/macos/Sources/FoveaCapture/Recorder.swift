@@ -847,16 +847,25 @@ final class Recorder {
                 let (rect, fromAX) = Capture.rect(
                     for: shape, snapshot: event.snapshot, screenArea: AXProbe.screenArea()
                 )
-                let path = dir.map {
-                    "\($0)/crops/h\(String(format: "%02d", hold))-r\(String(format: "%03d", index)).png"
-                }
+                // A file only for what was DRAWN. A settle still gets captured
+                // and OCR'd in memory — `Capture.crop` documents `outputPath:
+                // nil` as exactly that — so every word of text evidence
+                // survives. What goes is the image, and with it the whole class
+                // of failure where the agent was handed a screenshot of a
+                // background window: a point's rectangle comes from the AX
+                // element under the cursor, which is frequently not the thing
+                // the developer meant.
+                let path = shape.kind == .region
+                    ? dir.map {
+                        "\($0)/crops/h\(String(format: "%02d", hold))-r\(String(format: "%03d", index)).png"
+                    }
+                    : nil
 
                 // Always. Deciding when accessibility text is "enough" is what
                 // cost us referents twice — see the note where `OCR.isNeeded`
                 // used to live. This runs on a detached task; nothing waits on
                 // it but the end of the session.
                 let crop = await Capture.crop(
-                    shape: shape,
                     snapshot: event.snapshot,
                     outputPath: path,
                     runOCR: true,

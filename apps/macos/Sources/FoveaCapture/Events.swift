@@ -264,8 +264,8 @@ enum ShapeKind: String, Codable {
 
 /// The indicated area. `path` is the raw freehand polygon in screen coords
 /// (absent for points). `bounds` is its bounding box — what gets cropped — and
-/// the path is retained so the crop can be masked to the exact drawn area
-/// rather than the rectangle containing it.
+/// the path is retained so the bounding box of the stroke is known, and so a
+/// later reader can see the shape that was drawn.
 struct Shape: Codable {
     let kind: ShapeKind
     let origin: Point
@@ -414,9 +414,6 @@ struct CropResult: Codable {
     let path: String?
     /// The region actually captured, in global screen coordinates.
     let rect: Frame
-    /// True when the image was clipped to the freehand path rather than left as
-    /// the bounding rectangle.
-    let masked: Bool
     /// Whether `rect` came from an AX element frame rather than a default box.
     /// This is where a "failed" AX hit still pays: Compass gives no text but it
     /// does give the row's rectangle, which is a far better crop than a fixed

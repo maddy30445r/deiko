@@ -103,7 +103,6 @@ enum Capture {
     /// `runOCR` is passed in rather than decided here: OCR costs 50-200ms and is
     /// only worth paying when AX came back empty.
     static func crop(
-        shape: Shape,
         snapshot: AXSnapshot,
         outputPath: String?,
         runOCR: Bool,
@@ -125,7 +124,7 @@ enum Capture {
                           error: "region is off-screen")
         }
 
-        var image: CGImage
+        let image: CGImage
         do {
             image = try await screenshot(of: clamped, on: display, scale: scale)
         } catch {
@@ -134,13 +133,6 @@ enum Capture {
             // it is granted to the launching process just the same.
             return failed(rect: clamped, fromAX: rectFromAX, started: started,
                           error: "capture failed: \(error.localizedDescription)")
-        }
-
-        var masked = false
-        if shape.kind == .region, let path = shape.path, path.count >= 3,
-           let clippedImage = maskToPath(image, path: path, rect: clamped, scale: scale) {
-            image = clippedImage
-            masked = true
         }
 
         let captureElapsed = Clock.nowMs() - started
@@ -170,7 +162,6 @@ enum Capture {
         return CropResult(
             path: writtenPath,
             rect: clamped,
-            masked: masked,
             rectFromAX: rectFromAX,
             ocr: ocrLines,
             captureElapsedMs: captureElapsed,
@@ -183,7 +174,7 @@ enum Capture {
         rect: Frame, fromAX: Bool, started: Double, error: String
     ) -> CropResult {
         CropResult(
-            path: nil, rect: rect, masked: false, rectFromAX: fromAX,
+            path: nil, rect: rect, rectFromAX: fromAX,
             ocr: [], captureElapsedMs: Clock.nowMs() - started,
             ocrElapsedMs: nil, error: error
         )
@@ -294,51 +285,6 @@ enum Capture {
         let maxX = min(rect.maxX, bounds.maxX)
         let maxY = min(rect.maxY, bounds.maxY)
         return Frame(x: x, y: y, width: max(0, maxX - x), height: max(0, maxY - y))
-    }
-
-    // ── Masking to the drawn path ───────────────────────────────────────────
-
-    /// Clips the image to the freehand polygon, dimming what falls outside.
-    ///
-    /// Dimming rather than erasing is deliberate: the surrounding pixels still
-    /// carry context a model can use ("this is inside a table"), while the
-    /// bright area is unambiguously what the user circled.
-    private static func maskToPath(
-        _ image: CGImage, path: [Point], rect: Frame, scale: Double
-    ) -> CGImage? {
-        let w = image.width
-        let h = image.height
-
-        guard let context = CGContext(
-            data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { return nil }
-
-        let full = CGRect(x: 0, y: 0, width: w, height: h)
-        context.draw(image, in: full)
-
-        // Bitmap contexts are bottom-left origin; flip so the polygon can be
-        // plotted in the same top-left space everything else uses.
-        context.translateBy(x: 0, y: CGFloat(h))
-        context.scaleBy(x: 1, y: -1)
-
-        let cgPath = CGMutablePath()
-        let points = path.map { p in
-            CGPoint(x: (p.x - rect.x) * scale, y: (p.y - rect.y) * scale)
-        }
-        cgPath.addLines(between: points)
-        cgPath.closeSubpath()
-
-        context.saveGState()
-        context.addRect(full)
-        context.addPath(cgPath)
-        context.clip(using: .evenOdd)   // everything EXCEPT the drawn shape
-        context.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 0.55))
-        context.fill(full)
-        context.restoreGState()
-
-        return context.makeImage()
     }
 
     // ── Writing ─────────────────────────────────────────────────────────────
