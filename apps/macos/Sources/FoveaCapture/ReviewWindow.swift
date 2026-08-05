@@ -52,6 +52,24 @@ final class ReviewModel: ObservableObject {
     @Published var digest: BriefDigest?
     @Published var narration: String = ""
 
+    /// Crop thumbnails, keyed by the path in `digest.cropPaths`, loaded once
+    /// here rather than in the view body.
+    ///
+    /// `narration` is `@Published` and bound to the TextEditor below, so every
+    /// keystroke while correcting the transcript republishes this object and
+    /// re-evaluates `ReviewView.body` — including `cropRow`. If the thumbnail
+    /// read `NSImage(contentsOfFile:)` itself, that synchronous disk read and
+    /// PNG decode would run again on every keystroke, for every crop on
+    /// screen. Loading once when the digest arrives — and only then — keeps
+    /// typing free of disk I/O it has no reason to pay for.
+    @Published private(set) var cropThumbnails: [String: NSImage] = [:]
+
+    private func loadCropThumbnails(_ digest: BriefDigest) {
+        cropThumbnails = Dictionary(uniqueKeysWithValues: digest.cropPaths.compactMap { path in
+            NSImage(contentsOfFile: path).map { (path, $0) }
+        })
+    }
+
     /// Who the brief was handed to, once it was — the sent pill names the app
     /// ("Handed to Claude Code") rather than claiming a vague success.
     @Published var handedTo: String?
@@ -135,6 +153,7 @@ final class ReviewModel: ObservableObject {
                 let digest = try await BriefPipeline.run(sessionDir: sessionDir)
                 guard stillCurrent(sessionDir) else { return }
                 self.digest = digest
+                self.loadCropThumbnails(digest)
                 self.narration = digest.summary.narration
                 self.originalNarration = digest.summary.narration
                 self.phase = .ready
@@ -176,6 +195,7 @@ final class ReviewModel: ObservableObject {
                     let rerendered = try await BriefPipeline.rerender(sessionDir: sessionDir)
                     guard stillCurrent(sessionDir) else { return }
                     self.digest = rerendered
+                    self.loadCropThumbnails(rerendered)
                 }
                 guard let after else {
                     // The panel's path ends here: corrected, re-rendered,
@@ -269,6 +289,7 @@ final class ReviewModel: ObservableObject {
                 }
 
                 self.digest = digest
+                self.loadCropThumbnails(digest)
                 self.narration = digest.summary.narration
                 self.originalNarration = digest.summary.narration
                 self.phase = .ready
@@ -493,33 +514,106 @@ struct ReviewView: View {
     /// The withheld line NEVER collapses into the stats — its own orange row,
     /// even mid-flow. Watching Fovea refuse to share a credential is the
     /// privacy model, visible.
+    ///
+    /// The released ones are SHOWN, not counted. A miscropped screenshot used
+    /// to surface ten minutes later as an agent reasoning about the wrong
+    /// window; here it is visible in the second before Good to go.
     @ViewBuilder private func cropRow(_ d: BriefDigest) -> some View {
-        if d.cropsWithheld > 0 {
-            HStack(spacing: 8) {
-                Text("!")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(FoveaStyle.needsYou)
-                    .frame(width: 16, height: 16)
-                    .overlay(Circle().strokeBorder(FoveaStyle.needsYou, lineWidth: 1.5))
-                (
-                    Text("\(d.cropsWithheld) screenshot\(d.cropsWithheld == 1 ? "" : "s") withheld — a credential was visible. ")
-                        .font(.system(size: 12.5, weight: .semibold))
+        VStack(alignment: .leading, spacing: 7) {
+            if d.cropsWithheld > 0 {
+                HStack(spacing: 8) {
+                    Text("!")
+                        .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(FoveaStyle.needsYou)
-                    + Text("\(d.cropsReleased) \(d.cropsReleased == 1 ? "is" : "are") going.")
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(.secondary)
+                        .frame(width: 16, height: 16)
+                        .overlay(Circle().strokeBorder(FoveaStyle.needsYou, lineWidth: 1.5))
+                    (
+                        Text("\(d.cropsWithheld) screenshot\(d.cropsWithheld == 1 ? "" : "s") withheld — a credential was visible. ")
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .foregroundStyle(FoveaStyle.needsYou)
+                        + Text("\(d.cropsReleased) \(d.cropsReleased == 1 ? "is" : "are") going.")
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(.secondary)
+                    )
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(FoveaStyle.needsYou.opacity(0.09), in: RoundedRectangle(cornerRadius: 8))
+            } else {
+                Label(
+                    d.cropsReleased == 1 ? "1 screenshot going" : "\(d.cropsReleased) screenshots going",
+                    systemImage: "photo.on.rectangle"
                 )
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(FoveaStyle.needsYou.opacity(0.09), in: RoundedRectangle(cornerRadius: 8))
-            .padding(.top, 3)
-        } else {
-            Label("\(d.cropsReleased) screenshots going", systemImage: "photo.on.rectangle")
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
+            }
+
+            if !d.cropPaths.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(d.cropPaths, id: \.self) { path in
+                            thumbnail(path)
+                        }
+                    }
+                }
+                .frame(height: 72)
+            }
         }
+        .padding(.top, 3)
+    }
+
+    /// One crop, at a size you can recognise a window in without it dominating
+    /// the card. `contentMode: .fit` so a wide lasso and a tall one are both
+    /// shown whole — cropping the preview would hide exactly the mistake this
+    /// exists to catch.
+    ///
+    /// Read from `model.cropThumbnails`, not the disk — see that cache's own
+    /// comment for why.
+    @ViewBuilder private func thumbnail(_ path: String) -> some View {
+        if let image = model.cropThumbnails[path] {
+            Image(nsImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: thumbnailWidth(image.size), height: 68)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(FoveaStyle.accent.opacity(0.25), lineWidth: 1)
+                )
+        } else {
+            // The session directory belongs to the user, not to Fovea — it can
+            // be moved or deleted between capture and reopening this card. A
+            // path `cropPaths` promised and can no longer deliver must not just
+            // vanish from the row: the header line still says how many are
+            // going, and a row one thumbnail short of that count reads as "the
+            // rest loaded fine" rather than "one is unaccounted for."
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.primary.opacity(0.05))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(FoveaStyle.accent.opacity(0.25), lineWidth: 1)
+                )
+                .overlay(
+                    Image(systemName: "photo")
+                        .font(.system(size: 16))
+                        .foregroundStyle(.secondary.opacity(0.6))
+                )
+                .frame(width: 68, height: 68)
+        }
+    }
+
+    /// A crop is a screenshot of whatever the lasso enclosed, so its aspect
+    /// ratio is whatever the developer drew: one line of code is wide and
+    /// short, a sidebar is tall and narrow. `.fit` against a bare
+    /// `height: 68` follows that ratio all the way down — a narrow-enough
+    /// crop would render at a handful of points wide, a sliver with no
+    /// visible border. Flooring the width keeps every thumbnail a legible box
+    /// even when the image inside it is thin; wide crops are left uncapped,
+    /// since the row already scrolls horizontally for them.
+    private func thumbnailWidth(_ size: NSSize) -> CGFloat {
+        guard size.width > 0, size.height > 0 else { return 68 }
+        return max(68 * size.width / size.height, 36)
     }
 
     @ViewBuilder private func repoRow(_ d: BriefDigest) -> some View {
