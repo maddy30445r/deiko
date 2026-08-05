@@ -138,20 +138,56 @@ test("evidence carries no crop path, even though the prompt does", () => {
 // 40-char opaque-run rule because it was run over the whole assembled prompt.
 // Fails against the old code (which ran the guard over the string `buildPrompt`
 // used to return, paths included) — passes once the guard runs on `evidence`.
+// Screen text is included too, so the path stays clear of `evidence` even
+// once the fences (added for the fence-scoped-check fix below) are present.
 test("assertNoSecrets does not throw on a prompt carrying a real-shaped absolute path", () => {
   const { evidence } = buildPrompt({
     narration: "fix this",
-    referents: [{ ...bare, cropPath: "/Users/developer/Documents/Fovea/20260805-141122/crops/h01-r002.png" }],
+    referents: [
+      {
+        ...bare,
+        cropPath: "/Users/developer/Documents/Fovea/20260805-141122/crops/h01-r002.png",
+        text: { ax: ["Submit"], ocr: [] },
+      },
+    ],
   });
   assert.doesNotThrow(() => assertNoSecrets(evidence));
 });
 
 test("assertNoSecrets still throws when screen text carries a credential-shaped string", () => {
-  // Built the way `evidence` is shaped — narration plus screen-text lines,
-  // no headings, no fences — to prove the guard itself still catches a real
-  // secret rather than having been quietly defeated along with the path fix.
-  const evidence = ["fix this", "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJ\n-----END RSA PRIVATE KEY-----"].join(
+  // Built the way `evidence` is shaped — narration plus a fenced screen-text
+  // block, no headings, no paths — to prove the guard itself still catches a
+  // real secret rather than having been quietly defeated along with the path
+  // fix. A private key block is caught by `assertNoSecrets`'s fence-independent
+  // check, so this one alone would not have caught a regression in the
+  // fence-scoped check below — kept as a second, independent line of defense.
+  const evidence = ["fix this", "```", "-----BEGIN RSA PRIVATE KEY-----", "MIIBOgIBAAJ", "-----END RSA PRIVATE KEY-----", "```"].join(
     "\n",
   );
   assert.throws(() => assertNoSecrets(evidence));
+});
+
+// Regression: `evidence` used to be narration + raw screen-text lines with no
+// fences. `assertNoSecrets`'s own comment calls its fenced-block check "the
+// check that matters" — the one built for an OCR-shattered key fragment with
+// no marker of its own on its line — and that check ONLY looks inside ```
+// blocks. Unfenced, a marker-adjacent opaque token sails through it; only the
+// weaker, fence-independent 40-char rule remains, and this string is too
+// short to trip that. Fenced, the same content is caught. This fails on the
+// old unfenced shape and passes on the fenced shape `buildPrompt` now produces.
+test("assertNoSecrets(evidence) catches a marker-adjacent opaque token only when it is fenced", () => {
+  const line = "password: aB3xY9kLm2Qz77";
+  assert.doesNotThrow(() => assertNoSecrets(`fix this\n${line}`));
+  assert.throws(() => assertNoSecrets(`fix this\n\`\`\`\n${line}\n\`\`\``));
+});
+
+test("evidence fences the screen text exactly when there is any, and not otherwise", () => {
+  const withText = buildPrompt({
+    narration: "fix this",
+    referents: [{ ...bare, text: { ax: ["Submit"], ocr: [] } }],
+  }).evidence;
+  assert.match(withText, /```\nSubmit\n```/);
+
+  const withoutText = buildPrompt({ narration: "fix this", referents: [] }).evidence;
+  assert.doesNotMatch(withoutText, /```/);
 });

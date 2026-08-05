@@ -19,8 +19,9 @@
  *
  * Returns `{ text, evidence }`, not a bare string. `text` is the whole
  * assembled prompt — narration, screenshot paths, the withheld note, the
- * fenced screen text. `evidence` is narrower: the redacted narration and the
- * redacted screen-text lines, joined by newlines, and nothing else.
+ * fenced screen text. `evidence` is narrower: the redacted narration, then
+ * the redacted screen-text lines in the same fenced block `text` uses (fences
+ * omitted when there's no screen text) — nothing else, no headings, no paths.
  *
  * The split exists because `assertNoSecrets` has to run on `evidence`, never
  * on `text`. The guard's subject is captured screen content — narration and
@@ -33,6 +34,15 @@
  * police — an exemption the guard must honour is an exemption that OCR'd
  * screen text can imitate. So the boundary sits here, at what the guard is
  * handed, exactly as it did in the bridge server this renderer replaced.
+ *
+ * `evidence`'s screen text stays inside ``` fences — DO NOT "clean up" that
+ * quoting because `evidence` is never written to disk. `assertNoSecrets` has
+ * two checks, and the one it calls "the check that matters" — the one built
+ * to catch an OCR-shattered key fragment sitting on a line with no marker of
+ * its own — only inspects text inside fenced blocks. Unfence this and that
+ * check stops running on screen text at all; only the weaker,
+ * fence-independent 40-char rule is left, and the guard goes quiet on
+ * exactly the case it exists for.
  */
 
 import { redact, redactBlock } from "./redact.mjs";
@@ -112,10 +122,15 @@ export function buildPrompt({ narration, referents }) {
     out.push("", "Exact text from the things I pointed at:", "```", ...linesRedacted, "```");
   }
 
-  return {
-    text: out.join("\n") + "\n",
-    // No headings, no fences, no paths — just the redacted content a secret
-    // could actually hide in.
-    evidence: [narrationRedacted, ...linesRedacted].join("\n"),
-  };
+  // No headings, no paths — just the redacted content a secret could actually
+  // hide in. The screen text keeps its fences (see the doc comment above):
+  // `assertNoSecrets`'s stronger check only looks inside them, and dropping
+  // them here would silently downgrade the guard to its weaker fallback.
+  // Omitted entirely when there's no screen text — an empty fenced block
+  // would just be noise for a value nobody reads.
+  const evidence = linesRedacted.length
+    ? [narrationRedacted, "```", ...linesRedacted, "```"].join("\n")
+    : narrationRedacted;
+
+  return { text: out.join("\n") + "\n", evidence };
 }
