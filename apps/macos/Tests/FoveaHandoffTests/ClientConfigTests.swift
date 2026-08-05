@@ -67,6 +67,14 @@ func removeKeepsTheContainer() throws {
     #expect(servers.isEmpty)
 }
 
+@Test("an mcpServers of the wrong shape is left alone, not crashed on or coerced")
+func removeRefusesWrongShape() {
+    // Something else wrote a string here instead of an object. `LegacyMCP`
+    // depends on this reading as "nothing to remove" rather than trapping —
+    // it runs against configs it has never seen the shape of.
+    #expect(ClientConfig.remove(from: ["mcpServers": "not an object"], serverKey: "fovea") == nil)
+}
+
 // ── The container key is a parameter, not a constant ────────────────────────
 
 @Test("VS Code's own MCP config uses `servers`, not `mcpServers`")

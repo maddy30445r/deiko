@@ -36,6 +36,17 @@ public enum TomlConfig {
         return lines.joined(separator: "\n")
     }
 
+    /// The raw lines of `[mcp_servers.<serverKey>]`, if it exists — for a
+    /// caller that needs to look at what is actually IN the table before
+    /// deciding whether to touch it, without this becoming a TOML parser.
+    /// `LegacyMCP` uses this to check the table looks like one Fovea itself
+    /// wrote before removing it; nobody else needs to see inside a table this
+    /// file itself never interprets.
+    public static func lines(of serverKey: String, in existing: String) -> [String]? {
+        guard let range = tableRange(in: existing, serverKey: serverKey) else { return nil }
+        return Array(existing.components(separatedBy: "\n")[range])
+    }
+
     // ── Mechanics ───────────────────────────────────────────────────────────
 
     /// The line range our table occupies: its header, through to the line
