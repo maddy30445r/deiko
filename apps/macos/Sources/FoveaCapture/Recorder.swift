@@ -715,9 +715,22 @@ final class Recorder {
             Task { _ = await self.stopSession() }
         }
 
+        // `quietFor`, not `msSinceVoice` — and it deliberately warns in one
+        // case `detectSettle` does NOT gate.
+        //
+        // Both use `silenceGateMs`, but the gate reads `if let msSinceVoice`,
+        // so a microphone that has never delivered a voiced buffer leaves it
+        // nil and capture keeps everything on purpose (see the note there: a
+        // silent gate would turn a permission problem into a session that
+        // records nothing and says nothing about why). The pill takes the
+        // opposite side of that same fact. Capture staying permissive is right
+        // — a referent thrown away is unrecoverable — but "we have heard
+        // nothing at all, ever" is the loudest possible reason to tell someone,
+        // and it is the exact shape of the 44-second session that prompted
+        // this. So: gate stays quiet and keeps capturing; pill speaks up.
         overlay.update(
             cursor: position, trail: trail, lasso: lassoPath,
-            pulses: pulses
+            pulses: pulses, hearingVoice: quietFor <= silenceGateMs
         )
     }
 

@@ -124,8 +124,13 @@ final class Overlay {
     }
 
     func update(
-        cursor: Point, trail: [TrailPoint], lasso: [Point]?, pulses: [Pulse]
+        cursor: Point, trail: [TrailPoint], lasso: [Point]?, pulses: [Pulse],
+        hearingVoice: Bool
     ) {
+        // Every pill, because the microphone belongs to the session rather than
+        // to a screen — and the one thing worse than a silent failure is a
+        // silent failure the user could only have seen on the other monitor.
+        for pill in pills { pill.hearingVoice = hearingVoice }
         guard let view else { return }
         view.cursor = cursor
         // Reduce Motion: the trail is pure motion — a comet tail — so it is
@@ -282,6 +287,21 @@ final class CapturePill {
     private let label = NSTextField(labelWithString: "")
     private let onStop: () -> Void
 
+    /// Whether the microphone has heard anything recently. Set by `Overlay`
+    /// from the recorder's own gate, so the pill warns at exactly the moment
+    /// capture starts discarding what you point at, not on a second guess.
+    ///
+    /// This exists because the failure it catches has now happened three times
+    /// in this project's life — twice recorded in comments, both at a 27%
+    /// system input volume — and every time the user found out AFTER the
+    /// session, from a pipeline that had 44 seconds of unusable audio and
+    /// nothing to say about it until then. Everything needed to say so
+    /// earlier was already here: the gate is live, the pill redraws every
+    /// second, and it never mentioned it.
+    var hearingVoice = true {
+        didSet { if hearingVoice != oldValue { layout() } }
+    }
+
     init(screen: NSScreen, onStop: @escaping () -> Void) {
         self.screen = screen
         self.onStop = onStop
@@ -333,11 +353,22 @@ final class CapturePill {
                 .foregroundColor: NSColor.white.withAlphaComponent(0.9),
             ]
         ))
+        // The warning REPLACES the stop hint rather than joining it. Both at
+        // once is a pill nobody finishes reading, and the hint is the more
+        // expendable of the two: the pill is clickable either way, and a
+        // session recording silence is worth more attention than a keyboard
+        // shortcut already printed in the log when it started.
         text.append(NSAttributedString(
-            string: "  ·  tap right ⌥ to stop",
+            string: hearingVoice
+                ? "  ·  tap right ⌥ to stop"
+                : "  ·  not hearing you — check Sound input",
             attributes: [
-                .font: NSFont.systemFont(ofSize: 12, weight: .regular),
-                .foregroundColor: NSColor.white.withAlphaComponent(0.8),
+                .font: NSFont.systemFont(
+                    ofSize: 12, weight: hearingVoice ? .regular : .semibold
+                ),
+                .foregroundColor: hearingVoice
+                    ? NSColor.white.withAlphaComponent(0.8)
+                    : NSColor.white,
             ]
         ))
         label.attributedStringValue = text
