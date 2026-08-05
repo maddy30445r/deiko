@@ -99,9 +99,6 @@ case "timing":
 case "icon":
     renderIconset(args)
 
-case "connect":
-    runConnect(args)
-
 // Also a subcommand, not only a Settings button. The moment diagnostics are
 // worth having is the moment the app is not working — and if it will not
 // launch, a button inside it is not reachable.
@@ -270,47 +267,6 @@ func runApp(_ args: Args) {
     app.run()
 }
 
-
-/// Show which coding clients Fovea can see, and optionally register with them.
-///
-/// The Settings window does the same thing with a button. This exists because
-/// the interesting question — "did writing to a config file that another program
-/// owns damage it?" — is answered by a diff, and a diff needs a scriptable way
-/// to trigger the write against a throwaway copy:
-///
-///   CLAUDE_CONFIG_DIR=/tmp/fakehome fovea-capture connect --write
-///
-/// `ClaudeCodeConnector` reads `CLAUDE_CONFIG_DIR` (as Claude Code itself does),
-/// so that runs the real code path against a config nobody depends on.
-@MainActor
-func runConnect(_ args: Args) {
-    Emit.log("node:   \(NodeRuntime.resolve()?.path ?? "NOT FOUND")")
-    Emit.log("layout: \(Layout.resolve().map(String.init(describing:)) ?? "NOT FOUND")")
-
-    for connector in Connectors.all {
-        Emit.log("")
-        Emit.log("\(connector.name)")
-        Emit.log("  installed: \(connector.isInstalled)")
-        Emit.log("  connected: \(connector.isConnected)")
-        Emit.log("  command:   \(connector.commandForm)")
-
-        do {
-            if args.has("disconnect") {
-                try Connectors.disconnect(connector)
-                Emit.log("  → connected: \(connector.isConnected)")
-            } else if args.has("write") {
-                try Connectors.connect(connector)
-                Emit.log("  → connected: \(connector.isConnected)")
-            }
-        } catch {
-            Emit.log("  ✗ \(error.localizedDescription)")
-        }
-    }
-    if !args.has("write"), !args.has("disconnect") {
-        Emit.log("")
-        Emit.log("nothing written — pass --write to register, --disconnect to remove")
-    }
-}
 
 /// Word timings for a recorded WAV, on-device. Emits JSON on stdout so the
 /// Node side can merge these times with Sarvam's better text.
@@ -627,13 +583,10 @@ fovea-capture \(FoveaVersion.current)
                                 open -n -a build/Fovea.app --args timing \\
                                   --wav f.wav --live --out /tmp/t.json
 
-  diagnostics                 Version, permissions, connectors and where the
-                              log is — the block the Settings button copies.
-                              Contains nothing from inside a session, so it is
-                              safe to paste into a bug report.
-
-  connect [--write]           Show every coding client's state; --write
-                              registers Fovea, --disconnect removes it.
+  diagnostics                 Version, permissions and where the log is — the
+                              block the Settings button copies. Contains
+                              nothing from inside a session, so it is safe to
+                              paste into a bug report.
 
   icon --out <dir>            Render the fovea mark into an .iconset. Build
                               step, not a runtime one — `make icon` runs this

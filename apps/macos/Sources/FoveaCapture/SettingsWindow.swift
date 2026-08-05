@@ -2,21 +2,12 @@ import AppKit
 import SwiftUI
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SETTINGS — the two things a fresh install needs
+// SETTINGS — the one thing a fresh install needs
 //
-// A connected coding client, and a transcription key. Nothing else belongs
-// here: every other decision Fovea makes is either settled in the design or
-// answered per-session on the orb.
-//
-// The connector rows are modelled on JetBrains Rider's MCP pane, which offers
-// exactly this — one row per coding client, with a button that writes that
-// client's config. There is no documented third-party API for registering an
-// MCP server, so this is the shape the ecosystem has converged on.
-//
-// The three agent states keep their exact distinctions — "Connected ·
-// /fovea:brief" (mono, because it is a command), "Installed, not connected",
-// "Not found on this Mac" — because collapsing them is how a user ends up
-// connecting a client they don't have, or hunting for one they do.
+// A transcription key. Nothing else belongs here: every other decision Fovea
+// makes is either settled in the design or answered per-session on the orb.
+// There used to be a row per coding client, writing that client's MCP config —
+// gone along with the bridge it pointed at. Nothing needs connecting any more.
 // ─────────────────────────────────────────────────────────────────────────────
 
 @MainActor
@@ -54,17 +45,6 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
 @MainActor
 final class SettingsModel: ObservableObject {
-
-    struct Row: Identifiable {
-        let id: String
-        let name: String
-        let isInstalled: Bool
-        let isConnected: Bool
-        let commandForm: String
-    }
-
-    @Published var rows: [Row] = []
-    @Published var problem: String?
 
     /// The boxes start EMPTY even when a key is stored.
     ///
@@ -112,40 +92,6 @@ final class SettingsModel: ObservableObject {
         stored ? "•••••••••• — type to replace" : "paste a key…"
     }
 
-    func refresh() {
-        rows = Connectors.all.map {
-            Row(
-                id: $0.name,
-                name: $0.name,
-                isInstalled: $0.isInstalled,
-                isConnected: $0.isConnected,
-                commandForm: $0.commandForm
-            )
-        }
-    }
-
-    func connect(_ id: String) {
-        guard let connector = Connectors.all.first(where: { $0.name == id }) else { return }
-        problem = nil
-        do {
-            try Connectors.connect(connector)
-        } catch {
-            problem = error.localizedDescription
-        }
-        refresh()
-    }
-
-    func disconnect(_ id: String) {
-        guard let connector = Connectors.all.first(where: { $0.name == id }) else { return }
-        problem = nil
-        do {
-            try Connectors.disconnect(connector)
-        } catch {
-            problem = error.localizedDescription
-        }
-        refresh()
-    }
-
     /// Only boxes the developer actually touched are written. An untouched
     /// empty box must not delete a perfectly good stored key — which is
     /// exactly what saving would have done once the boxes stopped pre-filling.
@@ -177,10 +123,7 @@ private struct SettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                SectionLabel("CODING AGENTS — WHERE BRIEFS LAND")
-                clients
                 SectionLabel("TRANSCRIPTION")
-                    .padding(.top, 2)
                 keys
                 Text("Keys never leave the login keychain. Your recording is deleted as soon as the brief is made — what stays on this Mac is the brief and its screenshots.")
                     .font(.system(size: 11))
@@ -191,103 +134,6 @@ private struct SettingsView: View {
             }
             .padding(24)
         }
-        .onAppear { model.refresh() }
-    }
-
-    private var clients: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            InsetCard {
-                ForEach(Array(model.rows.enumerated()), id: \.element.id) { index, row in
-                    if index > 0 { Divider().padding(.horizontal, 14) }
-                    // Dims the DESCRIPTION of a not-found client, never its
-                    // button. Dimming the whole row made the button read as
-                    // disabled while it stayed fully clickable — so it looked
-                    // broken when pressed and worked anyway. The button is
-                    // deliberately always live (see below); it must therefore
-                    // always look live.
-                    let dim = row.isConnected || row.isInstalled ? 1.0 : 0.55
-                    HStack(spacing: 12) {
-                        roundel(for: row)
-                            .opacity(dim)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(row.name)
-                                .font(.system(size: 13, weight: .semibold))
-                            if row.isConnected, !row.isInstalled {
-                                // Registered in a config file for a client that
-                                // is not here. Saying "Connected" alone would
-                                // promise a handoff that cannot land.
-                                Text("Set up · install \(row.name) to use it")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(FoveaStyle.needsYou)
-                            } else if row.isConnected {
-                                Text("Connected · \(row.commandForm)")
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                Text(row.isInstalled ? "Installed, not connected" : "Not found on this Mac")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .opacity(dim)
-                        Spacer()
-                        if row.isConnected {
-                            // Every state this window can reach has to be one
-                            // you can leave. Connect without Disconnect is a
-                            // one-way door into a file the user cannot see.
-                            Button("Disconnect") { model.disconnect(row.id) }
-                        } else {
-                            // The canvas drops this button on not-found rows.
-                            // Kept, deliberately: "Not found" is a guess from
-                            // three filesystem signals, all of which have false
-                            // negatives — a wrong guess must not stand between
-                            // someone and the button they came here to press.
-                            Button("Connect") { model.connect(row.id) }
-                        }
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 11)
-                }
-            }
-
-            if let problem = model.problem {
-                // The whole message, selectable. A connector failure is about a
-                // file path, and a truncated path is not actionable.
-                Text(problem)
-                    .font(.system(size: 11))
-                    .foregroundStyle(FoveaStyle.needsYou)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-
-    @ViewBuilder private func roundel(for row: SettingsModel.Row) -> some View {
-        ZStack {
-            // GREEN MEANS USABLE, which takes both halves: registered with the
-            // client AND the client actually on this Mac. Registered-but-absent
-            // gets the needs-you colour, because a green tick on a client that
-            // cannot run is the window telling a comfortable lie.
-            if row.isConnected, row.isInstalled {
-                Circle().fill(FoveaStyle.sentGreen.opacity(0.14))
-                Circle().strokeBorder(FoveaStyle.sentGreen, lineWidth: 1.5)
-                Image(systemName: "checkmark")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(FoveaStyle.sentGreen)
-            } else if row.isConnected {
-                Circle().fill(FoveaStyle.needsYou.opacity(0.14))
-                Circle().strokeBorder(FoveaStyle.needsYou, lineWidth: 1.5)
-                Image(systemName: "exclamationmark")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(FoveaStyle.needsYou)
-            } else {
-                Circle().strokeBorder(Color.secondary.opacity(row.isInstalled ? 0.5 : 0.35), lineWidth: 1.5)
-                if !row.isInstalled {
-                    Text("–").font(.system(size: 11, weight: .semibold)).foregroundStyle(.tertiary)
-                }
-            }
-        }
-        .frame(width: 22, height: 22)
     }
 
     private var keys: some View {
@@ -338,7 +184,7 @@ private struct SettingsView: View {
                 // stuck reading "Copied" the next time somebody needs it.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
             }
-            .help("Version, permissions, connectors and where the log is — no session content.")
+            .help("Version, permissions and where the log is — no session content.")
             Button("Reveal log") { Diagnostics.revealLog() }
         }
         .font(.system(size: 12))

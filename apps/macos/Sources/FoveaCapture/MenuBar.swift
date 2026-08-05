@@ -214,13 +214,9 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.review.extendPresentedSession() ?? false
         }
         review.onOpenSettings = { [weak self] in self?.settings.present() }
-        // Put back a connection that has gone missing. Two ordinary things
-        // break it: Claude Code rewrites `~/.claude.json` wholesale and can drop
-        // our entry, and moving Fovea (to /Applications, say) invalidates the
-        // absolute paths the entry points at. Both look identical to the user —
-        // the brief stops arriving — and both are repaired by rewriting the
-        // entry. Only clients they actually connected are touched.
-        Connectors.selfHeal()
+        // Remove the MCP entry earlier versions wrote. Nothing registers
+        // anything any more; this is only clearing up after what did.
+        LegacyMCP.cleanUpOnce()
 
         startListeningIfPermitted()
         refresh()

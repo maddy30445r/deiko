@@ -4,8 +4,7 @@
   "private": true,
   "description": "Point-and-speak task capture for macOS. Eyes for Claude Code.",
   "workspaces": [
-    "packages/*",
-    "apps/bridge"
+    "packages/*"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",

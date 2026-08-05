@@ -1,4 +1,4 @@
-.PHONY: dev build test probe watch region clean setup bundle install icon dmg release guard-clean relay-deploy relay-dev site-deploy resources dist record transcribe align ground brief summarize send bridge-install bridge-test show-brief signing-setup reset-permissions
+.PHONY: dev build test probe watch region clean setup bundle install icon dmg release guard-clean relay-deploy relay-dev site-deploy resources dist record transcribe align ground brief summarize signing-setup reset-permissions
 
 # Code-signing identity for the bundle.
 #
@@ -190,7 +190,9 @@ dmg: dist
 		'3. Launch it. Fovea lives in the menu bar, and a first-run window' \
 		'   explains the four permissions it needs and why.' \
 		'' \
-		'4. Settings -> connect your coding agent.' \
+		'4. Double-tap Right Option, point at something and talk, tap Right' \
+		'   Option to stop — then drag the resulting coin onto your Claude' \
+		'   Code window.' \
 		'' \
 		'Full documentation: README.md, beside this file.' \
 		> 'build/dmg/Read me first.txt'
@@ -233,7 +235,8 @@ release: guard-clean
 		'   which shows up later as a session stuck at "Transcribing…".' \
 		'' \
 		'3. Launch it. A first-run window covers the four permissions.' \
-		'4. Settings → connect your coding agent.' \
+		'4. Double-tap Right Option, point at something and talk, tap Right' \
+		'   Option to stop — then drag the coin onto your Claude Code window.' \
 		'' \
 		'Full documentation is in README.md in the repo.' \
 		'' \
@@ -291,41 +294,26 @@ icon: $(DEBUG_BIN)
 ##
 ## MIRRORS THE REPO LAYOUT, and that is the whole trick. The scripts import
 ## their packages by relative path (`../packages/alignment/dist/src/align.js`)
-## and the bridge reaches back for `../../../scripts/lib/redact.mjs`; Node also
-## finds `node_modules` by walking up from the script it is running. Reproduce
-## the shape and every one of those resolves unchanged — no rewriting imports,
-## no bundler, nothing to keep in sync.
-##
-## The dependency closure is COPIED rather than tree-shaken with esbuild. It is
-## 24MB against the 106MB Node runtime that ships beside it, so bundling would
-## optimise the small half — and esbuild on an SDK with dynamic requires is a
-## real chance of a break that only shows up in the shipped app.
+## and Node also finds `node_modules` by walking up from the script it is
+## running. Reproduce the shape and every one of those resolves unchanged — no
+## rewriting imports, no bundler, nothing to keep in sync.
 ##
 ## `make bundle` runs this every time: it is a few hundred KB of scripts and
-## built packages, and a bundle whose Resources lag its binary is a bug you find
-## in the DMG. `node_modules` is rebuilt only when the bridge's manifest changes.
-resources: build/bridge-deps/node_modules
+## built packages, and a bundle whose Resources lag its binary is a bug you
+## find in the DMG.
+##
+## No `node_modules` in the bundle any more. The bridge was the only thing that
+## needed a dependency closure; every remaining script imports node builtins,
+## `packages/*/dist`, or its own sibling in `scripts/lib`.
+resources:
 	@rm -rf $(RES)
-	@mkdir -p $(RES)/apps $(APP)/Contents/MacOS
+	@mkdir -p $(RES) $(APP)/Contents/MacOS
 	@npm run build --workspaces --if-present --silent >/dev/null
 	@rsync -a --delete scripts $(RES)/
 	@rsync -a --delete --prune-empty-dirs \
 		--include='*/' --include='dist/***' --include='package.json' --exclude='*' \
 		packages $(RES)/
-	@rsync -a --delete apps/bridge $(RES)/apps/
-	@rsync -a --delete build/bridge-deps/node_modules $(RES)/
-	@echo "  resources: scripts + packages/dist + bridge + node_modules"
-
-## The bridge's PRODUCTION dependency closure, staged once.
-##
-## A separate tree from the repo's own `node_modules` (49MB, dev deps and all)
-## because a shipped app should carry what the bridge needs and nothing else.
-## Make rebuilds it only when `apps/bridge/package.json` is newer.
-build/bridge-deps/node_modules: apps/bridge/package.json
-	@mkdir -p build/bridge-deps
-	@cp apps/bridge/package.json build/bridge-deps/
-	@cd build/bridge-deps && npm install --omit=dev --silent --no-audit --no-fund
-	@touch $@
+	@echo "  resources: scripts + packages/dist"
 
 ## dist — the shippable bundle: everything in `bundle`, plus the Node runtime
 ##
@@ -391,38 +379,12 @@ brief:
 
 ## summarize — three lines about the session, FOR YOUR SCREEN ONLY
 ##
-## Written to review-summary.txt, which `send` does not copy: the coding agent
-## receives evidence and states its own reading back, and an interpretation
-## shipped alongside would undo that. Never fatal — no key, no summary, no fuss.
+## Written to review-summary.txt, which the pasted prompt does not copy: the
+## coding agent receives evidence and states its own reading back, and an
+## interpretation shipped alongside would undo that. Never fatal — no key, no
+## summary, no fuss.
 summarize:
 	@node scripts/summarize.mjs $(SESSION)
-
-## send — hand a rendered brief to Claude Code (the approval step)
-##
-## Nothing reaches your editor until you run this. A tool that injected itself
-## the moment you stopped talking is a tool you would stop trusting.
-send:
-	@node scripts/send-brief.mjs $(SESSION)
-
-## bridge-install — register the MCP server with Claude Code, once
-bridge-install:
-	@claude mcp add fovea --scope user -- node "$(CURDIR)/apps/bridge/src/server.mjs"
-	@echo "  then, in any repo:  /fovea:brief  (VS Code)  ·  /mcp__fovea__brief  (CLI)"
-
-## bridge-test — drive the bridge over MCP, no Claude Code needed
-bridge-test:
-	@node scripts/bridge-smoke.mjs
-
-## show-brief — print exactly what the bridge would hand Claude Code
-##
-## Not the same as the session's brief.md: the server appends the crop section
-## at delivery. That section is what tells the agent how to treat screenshots,
-## so it is the part you want when asking why it did or didn't open one.
-##
-##   make show-brief              → stdout
-##   make show-brief OUT=/tmp/b.md → a file
-show-brief:
-	@node scripts/show-brief.mjs $(OUT)
 
 ## ground — score how well a session resolved its referents, and check M1
 ##

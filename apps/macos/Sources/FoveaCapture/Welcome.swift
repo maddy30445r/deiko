@@ -12,9 +12,9 @@ import SwiftUI
 //
 // So this appears once, unprompted. One column, one read: what Fovea does,
 // each permission with the DATA it takes (that is what earns trust, not
-// reassurance copy), the key and the agent — each row granting or connecting
-// itself directly — and the gesture. The primary button is "Start pointing",
-// not "Done": the moment everything is in, the next action is the product.
+// reassurance copy), the key — its row granting itself directly — and the
+// gesture. The primary button is "Start pointing", not "Done": the moment
+// everything is in, the next action is the product.
 //
 // Shown again from the menu's "Getting started…", because "I clicked past it"
 // is not a reason to have to reinstall.
@@ -100,8 +100,6 @@ final class WelcomeModel: ObservableObject {
     @Published var rows: [Row] = []
     @Published var needsRelaunch = false
     @Published var keyPresent = Credentials.exists("SARVAM_API_KEY")
-    @Published var agentConnected = false
-    @Published var connectProblem: String?
 
     var onOpenSettings: (() -> Void)?
     var onDone: (() -> Void)?
@@ -115,12 +113,6 @@ final class WelcomeModel: ObservableObject {
 
     private var screenRecordingWasMissing = false
 
-    /// The one connector first-run offers. More clients live in Settings;
-    /// this screen is a path, not a catalogue.
-    private var claude: Connector? {
-        Connectors.all.first { $0.name == "Claude Code" }
-    }
-
     init() { refresh() }
 
     func refresh() {
@@ -130,7 +122,6 @@ final class WelcomeModel: ObservableObject {
         // `exists`, not `value` — first run must not demand the login password
         // just to draw a checkmark.
         keyPresent = Credentials.exists("SARVAM_API_KEY")
-        agentConnected = claude?.isConnected ?? false
     }
 
     /// Ask for one permission, then re-read the whole set.
@@ -165,18 +156,6 @@ final class WelcomeModel: ObservableObject {
         }
     }
 
-    /// The agent row connects itself — the row IS the deep link.
-    func connectAgent() {
-        guard let claude else { return }
-        connectProblem = nil
-        do {
-            try Connectors.connect(claude)
-        } catch {
-            connectProblem = error.localizedDescription
-        }
-        refresh()
-    }
-
     func relaunch() { Relauncher.relaunch() }
 }
 
@@ -191,7 +170,7 @@ private struct WelcomeView: View {
                 header
                 SectionLabel("FOVEA NEEDS TO SEE AND HEAR WHAT YOU POINT AT")
                 permissions
-                SectionLabel("TWO MORE THINGS")
+                SectionLabel("ONE MORE THING")
                 setupRows
                 gestureStrip
                 footer
@@ -268,55 +247,26 @@ private struct WelcomeView: View {
     }
 
     private var setupRows: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            InsetCard {
-                HStack(spacing: 12) {
-                    glyphTile("key")
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Your own Sarvam key").font(.system(size: 13, weight: .semibold))
-                        Text(model.keyPresent
-                            ? "in your login keychain — Fovea's servers never see your narration"
-                            : "optional — transcription works without one")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    if model.keyPresent {
-                        grantedTag("Added")
-                    } else {
-                        Button("Add key…") { model.onOpenSettings?() }
-                    }
+        InsetCard {
+            HStack(spacing: 12) {
+                glyphTile("key")
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Your own Sarvam key").font(.system(size: 13, weight: .semibold))
+                    Text(model.keyPresent
+                        ? "in your login keychain — Fovea's servers never see your narration"
+                        : "optional — transcription works without one")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 11)
-
-                Divider().padding(.horizontal, 14)
-
-                HStack(spacing: 12) {
-                    glyphTile("terminal")
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Claude Code").font(.system(size: 13, weight: .semibold))
-                        Text(model.agentConnected ? "Connected · /fovea:brief" : "where briefs land — installs /fovea:brief")
-                            .font(.system(size: 11, design: model.agentConnected ? .monospaced : .default))
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    if model.agentConnected {
-                        grantedTag("Connected")
-                    } else {
-                        Button("Connect") { model.connectAgent() }
-                    }
+                Spacer()
+                if model.keyPresent {
+                    grantedTag("Added")
+                } else {
+                    Button("Add key…") { model.onOpenSettings?() }
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 11)
             }
-            if let problem = model.connectProblem {
-                Text(problem)
-                    .font(.system(size: 11))
-                    .foregroundStyle(FoveaStyle.needsYou)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
         }
     }
 

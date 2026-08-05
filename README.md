@@ -13,8 +13,8 @@ hold Left Option + drag        lasso a region
 tap Right Option               stop
 
                                → a small orb appears with what Fovea heard
-drag the coin onto your        → the brief lands in that live session, and the
-Claude Code window               command is typed and submitted for you
+drag the coin onto your        → your prompt is pasted into that live session
+Claude Code window               and submitted for you
 ```
 
 ---
@@ -26,8 +26,8 @@ Claude Code window               command is typed and submitted for you
    ```sh
    xattr -dr com.apple.quarantine /Applications/Fovea.app
    ```
-3. Launch it. A first-run window walks you through four permissions.
-4. Connect your coding agent in Settings, and you're done.
+3. Launch it. A first-run window walks you through four permissions, and
+   you're done — the gesture above is all it takes from there.
 
 ### Why step 2, and why that way round
 
@@ -90,25 +90,6 @@ Transcription picks the first of these that is available:
 3. **this Mac alone** — no upload at all. Accuracy is lower, especially for
    mixed-language speech.
 
-## Connecting a coding agent
-
-Settings has a row per agent. Connecting registers Fovea's bridge so the agent
-can fetch a brief you hand it.
-
-| | |
-|---|---|
-| **Claude Code** | `~/.claude.json` — both the CLI and the VS Code extension |
-| **Cursor** | `~/.cursor/mcp.json` |
-| **Antigravity** | `~/.gemini/config/mcp_config.json` |
-| **Codex CLI** | `~/.codex/config.toml` |
-
-Fovea reads the file, changes one key, and writes everything else back
-untouched — with a one-time backup beside it, and a read-back to confirm. If it
-cannot parse the file, it refuses rather than overwriting it.
-
-Claude Code turns the brief into the slash command `/fovea:brief`. The others
-are tool-first, so Fovea types a sentence asking for the brief instead.
-
 ## Using it
 
 **Talk while you point.** The narration *is* the task — Fovea deliberately
@@ -121,8 +102,8 @@ with everything you happened to scroll past.
 
 When you stop, the orb appears with Fovea's reading of what it heard. Then:
 
-- **drag the coin** onto the window running your agent — the brief is sent, the
-  app is brought forward, and the command is typed and submitted;
+- **drag the coin** onto the window running your agent — the app is brought
+  forward, and your prompt is pasted in and submitted;
 - **click the coin** to review — the transcript is editable there, and it is
   the one thing worth correcting, because a mis-heard identifier does more
   damage than anything else in the document;

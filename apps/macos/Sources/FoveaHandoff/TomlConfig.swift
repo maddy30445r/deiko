@@ -1,6 +1,6 @@
 import Foundation
 
-/// Merging Fovea into a coding client's TOML MCP config, as pure logic.
+/// Removing Fovea's entry from Codex CLI's TOML MCP config, as pure logic.
 ///
 /// Codex CLI is the odd one out: every other client here keeps its MCP servers
 /// in JSON, and Codex keeps them in `~/.codex/config.toml` under
@@ -19,37 +19,6 @@ import Foundation
 /// `ClientConfig`.
 public enum TomlConfig {
 
-    /// Add or update `[mcp_servers.<serverKey>]` in an existing document.
-    ///
-    /// - Parameters:
-    ///   - existing: the file's text, or nil when it does not exist yet.
-    ///   - serverKey: the name the server is registered under (`"fovea"`).
-    ///   - command: absolute path to the runtime.
-    ///   - arguments: the server's arguments.
-    ///
-    /// Every line outside our table survives byte-for-byte, comments included.
-    public static func merge(
-        into existing: String?,
-        serverKey: String,
-        command: String,
-        arguments: [String]
-    ) -> String {
-        let table = render(serverKey: serverKey, command: command, arguments: arguments)
-        guard let existing, !existing.isEmpty else { return table }
-
-        guard let range = tableRange(in: existing, serverKey: serverKey) else {
-            // Appended, with exactly one blank line before it — enough to
-            // separate our table from whatever precedes it, not enough to keep
-            // growing the gap every time this runs.
-            let trimmed = existing.hasSuffix("\n") ? String(existing.dropLast()) : existing
-            return trimmed + "\n\n" + table
-        }
-
-        var lines = existing.components(separatedBy: "\n")
-        lines.replaceSubrange(range, with: table.components(separatedBy: "\n").dropLast())
-        return lines.joined(separator: "\n")
-    }
-
     /// Strip `[mcp_servers.<serverKey>]` out again. Returns nil when it was not
     /// there, so the caller can skip a pointless write.
     public static func remove(from existing: String?, serverKey: String) -> String? {
@@ -67,53 +36,7 @@ public enum TomlConfig {
         return lines.joined(separator: "\n")
     }
 
-    /// Whether the config already registers this server with exactly this
-    /// command and arguments.
-    ///
-    /// Compared by value like `ClientConfig.isRegistered`, and for the same
-    /// reason: an entry pointing at a runtime that no longer exists is worse
-    /// than no entry, because the client keeps trying to spawn it and the
-    /// failure surfaces inside Codex rather than here.
-    public static func isRegistered(
-        in existing: String?,
-        serverKey: String,
-        command: String,
-        arguments: [String]
-    ) -> Bool {
-        guard let existing, let range = tableRange(in: existing, serverKey: serverKey) else {
-            return false
-        }
-        let found = existing.components(separatedBy: "\n")[range]
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-        let wanted = render(serverKey: serverKey, command: command, arguments: arguments)
-            .components(separatedBy: "\n")
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-        return found == wanted
-    }
-
     // ── Mechanics ───────────────────────────────────────────────────────────
-
-    /// The table, with a trailing newline.
-    static func render(serverKey: String, command: String, arguments: [String]) -> String {
-        let args = arguments.map(quote).joined(separator: ", ")
-        return """
-            [mcp_servers.\(serverKey)]
-            command = \(quote(command))
-            args = [\(args)]
-
-            """
-    }
-
-    /// TOML basic strings escape the same two characters JSON does; a macOS
-    /// path can legally contain either.
-    private static func quote(_ value: String) -> String {
-        let escaped = value
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        return "\"\(escaped)\""
-    }
 
     /// The line range our table occupies: its header, through to the line
     /// before the next top-level `[` — which is how TOML delimits tables.

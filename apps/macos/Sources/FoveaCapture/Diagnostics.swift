@@ -6,8 +6,8 @@ import FoveaHandoff
 // DIAGNOSTICS — one paste that answers most of "it didn't work"
 //
 // Written for a team rollout. Without this, a report is "Fovea broke"; with it,
-// the version, the grants, the connectors and which transcriber would have run
-// arrive in one block, and most questions are answered before anybody asks.
+// the version, the grants and which transcriber would have run arrive in one
+// block, and most questions are answered before anybody asks.
 //
 // WHAT THIS MUST NEVER CONTAIN, and the reason the code is arranged so that
 // adding it would be a deliberate act rather than an oversight: nothing from
@@ -52,15 +52,6 @@ enum Diagnostics {
         if isatty(STDOUT_FILENO) == 1 || isatty(STDERR_FILENO) == 1 || isatty(STDIN_FILENO) == 1 {
             lines.append("  (run from a terminal — these are attributed to your")
             lines.append("   terminal, not to Fovea.app. Settings reports them correctly.)")
-        }
-        lines.append("")
-
-        lines.append("coding agents")
-        for connector in Connectors.all {
-            let state =
-                connector.isConnected
-                ? "connected" : (connector.isInstalled ? "installed, not connected" : "not found")
-            lines.append("  \(connector.name): \(state)")
         }
         lines.append("")
 

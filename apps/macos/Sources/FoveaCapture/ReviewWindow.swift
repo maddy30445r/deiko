@@ -112,7 +112,7 @@ final class ReviewModel: ObservableObject {
     ///
     /// `commandFailed` carries the stage and the script's raw output, which is
     /// what the taxonomy classifies. Everything else already has a written
-    /// message — `HandoffError`, `ConnectorError` — and passes through.
+    /// message — `HandoffError` and the like — and passes through.
     private func describe(_ error: Error) -> PipelineFailure {
         if case BriefPipelineError.commandFailed(let stage, let output) = error {
             return PipelineFailure.classify(stage: stage, output: output)

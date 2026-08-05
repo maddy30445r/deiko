@@ -12,9 +12,9 @@
  * renderer emits evidence and the agent states its own reading back — the one
  * hand-written brief that phrased a task as imperatives presumed work that
  * already existed. So this is written to `review-summary.txt`, a file
- * `send-brief.mjs` does not copy. That is a structural guarantee rather than a
- * promise: putting the text in `brief.json` would ship it, and no comment would
- * stop that.
+ * `prompt.txt` (the drop pastes only that) does not copy. That is a structural
+ * guarantee rather than a promise: putting the text in `brief.json` would ship
+ * it, and no comment would stop that.
  *
  * Failure is not fatal, ever. No key, no network, a bad response — the file is
  * simply absent and the window shows no summary. Nothing downstream waits on it.
