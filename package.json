@@ -9,7 +9,7 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
-    "test": "npm test --workspaces --if-present",
+    "test": "npm test --workspaces --if-present && node --test scripts/test/*.test.mjs",
     "hello": "node scripts/hello.mjs"
   },
   "devDependencies": {
