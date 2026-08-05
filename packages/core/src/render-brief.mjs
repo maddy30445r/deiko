@@ -114,6 +114,9 @@ if (!words?.length) {
 
 const referents = loadSession(events).all();
 const { bindings, unbound } = align(toCandidates(referents), words);
+/// Keyed by `candidateId`, which is the referent's own id — this is how a
+/// screenshot finds the sentence it was drawn during.
+const bindingById = new Map(bindings.map((b) => [b.candidateId, b]));
 
 // The developer's own correction of the narration, written by the review window
 // before they press Good to go. Absent for a brief rendered straight from the
@@ -154,9 +157,20 @@ function cropRelease(r) {
 // never be written into a document — the old design let the path exist and
 // relied on the delivery layer to refuse it, which is one more place to get it
 // wrong.
+// `said` is what makes a screenshot mean something. The aligner has always
+// computed which words were spoken while each referent was pointed at — that
+// binding IS the product — and the payload was listing paths without it, so an
+// agent handed two screenshots had to guess which sentence went with which.
+// The alignment is right here, one line away; not passing it on was the
+// omission, not the alignment.
 const released = referents.map((r) => {
   const { path, reason } = cropRelease(r);
-  return { ...r, cropPath: path, cropWithheld: reason };
+  return {
+    ...r,
+    cropPath: path,
+    cropWithheld: reason,
+    said: bindingById.get(r.id)?.utterance ?? null,
+  };
 });
 
 const { text, evidence } = buildPrompt({

@@ -192,6 +192,18 @@ enum Capture {
     /// referents both missing the cache used to assign this array from two
     /// threads at once. The lock is never held across an await.
     nonisolated(unsafe) private static var cachedDisplays: [SCDisplay] = []
+
+    /// Fovea itself, so the capture can leave our own drawing out of it.
+    ///
+    /// Every crop was photographing the overlay: the accent cursor ring sits on
+    /// the pointer, and a region's teal capture pulse fires at the moment the
+    /// lasso closes — which is exactly the moment the screenshot is taken. Both
+    /// landed in the middle of the delivered image. `showsCursor = false` never
+    /// covered it, because these are a real window, not the system pointer.
+    ///
+    /// Cached beside the displays and cleared by the same hook: it comes from
+    /// the same `SCShareableContent` query, so fetching it costs nothing extra.
+    nonisolated(unsafe) private static var cachedSelf: SCRunningApplication?
     private static let displayLock = NSLock()
 
     /// CGDisplayRegisterReconfigurationCallback fires on ANY arrangement
@@ -203,6 +215,7 @@ enum Capture {
         CGDisplayRegisterReconfigurationCallback({ _, _, _ in
             displayLock.lock()
             cachedDisplays = []
+            cachedSelf = nil
             displayLock.unlock()
         }, nil)
     }()
@@ -215,10 +228,17 @@ enum Capture {
         return cachedDisplays.first { $0.frameInScreenSpace.contains(center) }
     }
 
-    private static func storeDisplays(_ displays: [SCDisplay]) {
+    private static func store(displays: [SCDisplay], selfApp: SCRunningApplication?) {
         displayLock.lock()
         defer { displayLock.unlock() }
         cachedDisplays = displays
+        cachedSelf = selfApp
+    }
+
+    private static func ownApplication() -> SCRunningApplication? {
+        displayLock.lock()
+        defer { displayLock.unlock() }
+        return cachedSelf
     }
 
     private static func display(containing rect: Frame) async throws -> SCDisplay {
@@ -231,7 +251,11 @@ enum Capture {
         let content = try await SCShareableContent.excludingDesktopWindows(
             false, onScreenWindowsOnly: true
         )
-        storeDisplays(content.displays)
+        let me = getpid()
+        store(
+            displays: content.displays,
+            selfApp: content.applications.first { $0.processID == me }
+        )
 
         guard let display = content.displays.first(where: {
             $0.frameInScreenSpace.contains(center)
@@ -247,7 +271,16 @@ enum Capture {
         // Capture ONLY the region, via sourceRect, rather than grabbing the
         // whole display and cropping. sourceRect is in points relative to the
         // display's top-left, which is the same space `rect` is already in.
-        let filter = SCContentFilter(display: display, excludingWindows: [])
+        //
+        // Fovea excluded from its own screenshots — by APPLICATION rather than
+        // by window, which covers the overlay canvas, the capturing pill and
+        // the orb together and keeps covering whatever is added next. The
+        // fallback is deliberate: a crop with our ring in it is worth far more
+        // than no crop, so an unresolved self reverts to the old filter rather
+        // than throwing.
+        let filter = ownApplication().map {
+            SCContentFilter(display: display, excludingApplications: [$0], exceptingWindows: [])
+        } ?? SCContentFilter(display: display, excludingWindows: [])
         let config = SCStreamConfiguration()
 
         let origin = display.frameInScreenSpace

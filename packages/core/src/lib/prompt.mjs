@@ -18,10 +18,12 @@
  * skipped it.
  *
  * Returns `{ text, evidence }`, not a bare string. `text` is the whole
- * assembled prompt — narration, screenshot paths, the withheld note, the
- * fenced screen text. `evidence` is narrower: the redacted narration, then
- * the redacted screen-text lines in the same fenced block `text` uses (fences
- * omitted when there's no screen text) — nothing else, no headings, no paths.
+ * assembled prompt — narration, screenshot paths each labelled with the
+ * sentence it was drawn during, the withheld note, the fenced screen text.
+ * `evidence` is narrower: the redacted narration and those redacted quotes,
+ * then the redacted screen-text lines in the same fenced block `text` uses
+ * (fences omitted when there's no screen text) — nothing else, no headings,
+ * no paths.
  *
  * The split exists because `assertNoSecrets` has to run on `evidence`, never
  * on `text`. The guard's subject is captured screen content — narration and
@@ -86,14 +88,41 @@ export function buildPrompt({ narration, referents }) {
   const narrationRedacted = redact(narration ?? "").trim();
   const out = [narrationRedacted];
 
+  // Each path carries the sentence it was drawn during. Without it the agent is
+  // handed two screenshots and a paragraph and has to guess which is which —
+  // and Fovea already KNOWS, from word timings, having bound `r8` to "what does
+  // this code do" and `r13` to "learn about route 53 here" in the session that
+  // exposed this. Computing that and then dropping it threw away the one thing
+  // pointing-while-talking produces that a screenshot alone does not.
+  //
+  // The full bound utterance, not a phrase trimmed to the deictic's
+  // neighbourhood: `align` already scopes it to one sentence, and trimming
+  // further would put words in the developer's mouth.
+  //
+  // LABELLED, not spliced into the narration at the word that named it. That
+  // would read better and would break: `narration.override.txt` — the
+  // developer's own correction from the review window — has no word timings at
+  // all, so any inline form collapses the moment somebody fixes a mis-heard
+  // identifier. A missing quote here just omits a clause.
   const shots = referents.filter((r) => r.cropPath);
+  // Redacted once, here, and reused for both `text` and `evidence`. A quote is
+  // SPEECH, not something this module minted, so the guard has to see it — and
+  // it is not covered by the narration: `said` comes from the raw transcript
+  // while the narration may be the developer's hand-typed correction, so an
+  // identifier they edited out of one still travels in the other.
+  const quotes = new Map(
+    shots.filter((r) => r.said).map((r) => [r, redact(r.said).trim()]),
+  );
   if (shots.length) {
     out.push(
       "",
       shots.length === 1
         ? "Screenshot of what I circled:"
         : "Screenshots of what I circled:",
-      ...shots.map((r) => `- ${r.cropPath}`),
+      ...shots.map((r) => {
+        const quote = quotes.get(r);
+        return quote ? `- ${r.cropPath} — while I said "${quote}"` : `- ${r.cropPath}`;
+      }),
     );
   }
 
@@ -102,13 +131,30 @@ export function buildPrompt({ narration, referents }) {
   const note = withheldNote(referents);
   if (note) out.push("", note);
 
-  // Accessibility text is the literal string the app rendered; OCR is a guess
-  // off pixels that routinely substitutes lookalike characters. Where a referent
-  // has both, only the exact one travels — carrying both would hand over two
-  // spellings of the same identifier with nothing saying which is real.
+  // TEXT ONLY WHERE THERE IS NO IMAGE, and only for something the narration
+  // actually reached.
+  //
+  // A circled region ships its screenshot, and the agent reads those pixels
+  // directly — OCR of the same pixels is a second, worse copy. Including it
+  // cost a real session everything: 14 referents contributed ~250 lines, the
+  // cap filled with one file's comment block in referent order, and the Route
+  // 53 sidebar the developer had circled and named never appeared at all. What
+  // did arrive was gutter fragments (`15+`, `//`, `8`) and OCR garbage
+  // (`HICALUVLLULo`).
+  //
+  // So: a referent contributes text only if it has no screenshot AND the
+  // aligner bound speech to it. A pause nobody was talking through is not
+  // something the developer pointed at, and the recorder over-captures on
+  // purpose precisely so the narration can be the filter.
   const seen = new Set();
   const lines = [];
   for (const r of referents) {
+    if (r.cropPath || !r.said) continue;
+    // Accessibility text is the literal string the app rendered; OCR is a guess
+    // off pixels that routinely substitutes lookalike characters. Where a
+    // referent has both, only the exact one travels — carrying both would hand
+    // over two spellings of the same identifier with nothing saying which is
+    // real.
     const source = r.text?.ax?.length ? r.text.ax : (r.text?.ocr ?? []);
     for (const line of source) {
       const text = line.trim().slice(0, MAX_LINE_LENGTH);
@@ -119,18 +165,25 @@ export function buildPrompt({ narration, referents }) {
   }
   const linesRedacted = lines.length ? redactBlock(lines.slice(0, MAX_TEXT_LINES)) : [];
   if (linesRedacted.length) {
-    out.push("", "Exact text from the things I pointed at:", "```", ...linesRedacted, "```");
+    // Not "Exact text" any more. With regions excluded, what is left is mostly
+    // OCR — a guess off pixels — and the old heading asserted the opposite of
+    // the truth about its own contents.
+    out.push("", "Text from other things I pointed at:", "```", ...linesRedacted, "```");
   }
 
   // No headings, no paths — just the redacted content a secret could actually
-  // hide in. The screen text keeps its fences (see the doc comment above):
+  // hide in. Speech first (the narration, then every quote that reached a path
+  // line), then the screen text.
+  //
+  // The screen text keeps its fences (see the doc comment above):
   // `assertNoSecrets`'s stronger check only looks inside them, and dropping
   // them here would silently downgrade the guard to its weaker fallback.
   // Omitted entirely when there's no screen text — an empty fenced block
   // would just be noise for a value nobody reads.
+  const spoken = [narrationRedacted, ...quotes.values()];
   const evidence = linesRedacted.length
-    ? [narrationRedacted, "```", ...linesRedacted, "```"].join("\n")
-    : narrationRedacted;
+    ? [...spoken, "```", ...linesRedacted, "```"].join("\n")
+    : spoken.join("\n");
 
   return { text: out.join("\n") + "\n", evidence };
 }
