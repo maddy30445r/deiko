@@ -49,6 +49,10 @@ struct BriefDigest {
     let summary: BriefSummary
     let cropsReleased: Int
     let cropsWithheld: Int
+    /// The images themselves, so the window can show what is about to go
+    /// rather than a count of it. A count cannot be wrong in a way anybody
+    /// notices; a thumbnail can.
+    let cropPaths: [String]
 }
 
 enum BriefPipelineError: LocalizedError {
@@ -415,7 +419,8 @@ enum BriefPipeline {
             sessionDir: sessionDir,
             summary: manifest.summary,
             cropsReleased: manifest.referents.filter { $0.cropPath != nil }.count,
-            cropsWithheld: manifest.referents.filter { $0.cropWithheld != nil }.count
+            cropsWithheld: manifest.referents.filter { $0.cropWithheld != nil }.count,
+            cropPaths: manifest.referents.compactMap(\.cropPath)
         )
     }
 
