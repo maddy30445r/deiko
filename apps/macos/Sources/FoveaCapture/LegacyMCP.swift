@@ -13,15 +13,21 @@ import FoveaHandoff
 // `fovea` is a name, not a marker, and somebody may have registered their own
 // server under it. Second, believe a removal happened when it did not: Claude
 // Code rewrites `~/.claude.json` wholesale and can resurrect a stale entry
-// after we remove it, so a flag set on the strength of a write call — rather
-// than a write CONFIRMED by reading the file back — would let that entry keep
-// spawning a missing bridge forever, silently, with the one mechanism built to
-// catch it disarmed.
+// SECONDS after we remove it, from an in-memory copy it already had open — and
+// reading our own write back only proves the write landed, not that it stuck.
+// That race is exactly what the deleted `Connectors.selfHeal()` ran on every
+// launch to survive; this only runs once, so it has to be more careful about
+// what "once" means.
 //
-// So every check here is by CONTENT, not by key name, and the flag is only
-// set once every target has been positively confirmed clean this pass —
-// "nothing of ours was ever there" counts as clean; "wrote, but could not
-// verify it stuck" does not. It reuses `ClientConfig.remove` /
+// So the flag is only set on a pass where every target was ALREADY clean —
+// nothing found to remove. A pass that found and removed something leaves the
+// flag unset regardless of how the write and its read-back went: the next
+// launch checks again, and either finds it genuinely clean by then (and sets
+// the flag) or removes an entry that got resurrected. That converges, and it
+// costs one extra check, on one extra launch, only for someone who had
+// something to clean up.
+//
+// Every check is by CONTENT, not by key name — reuses `ClientConfig.remove` /
 // `TomlConfig.remove` for the actual edit rather than reimplementing them:
 // those are the tested ones, and this is not the place to have a second
 // opinion about how to touch one key and leave the rest of the file alone.
@@ -40,17 +46,17 @@ enum LegacyMCP {
             (home.appendingPathComponent(".gemini/config/mcp_config.json"), "mcpServers"),
         ]
 
-        // Every target has to come back clean before the flag is set — see the
-        // header comment. `&=` rather than early-exit: a config we can't clear
-        // must not stop us checking the others.
-        var confirmedClean = true
+        // Every target has to have been ALREADY clean for the flag to be set
+        // — see the header comment. `&&` rather than early-exit: a config
+        // that had something to remove must not stop us checking the others.
+        var allAlreadyClean = true
         for (url, containerKey) in json {
-            confirmedClean = cleanJSON(url: url, containerKey: containerKey) && confirmedClean
+            allAlreadyClean = cleanJSON(url: url, containerKey: containerKey) && allAlreadyClean
         }
         let toml = codexHome().appendingPathComponent("config.toml")
-        confirmedClean = cleanTOML(url: toml) && confirmedClean
+        allAlreadyClean = cleanTOML(url: toml) && allAlreadyClean
 
-        if confirmedClean {
+        if allAlreadyClean {
             UserDefaults.standard.set(true, forKey: doneKey)
         }
         // Left unset otherwise. The cost of that is one more parse of these
@@ -62,11 +68,11 @@ enum LegacyMCP {
     /// Strip a Fovea entry from one JSON MCP config, if — and only if — the
     /// entry under `fovea` actually looks like ours.
     ///
-    /// Returns whether `url` is confirmed to hold no Fovea entry once this
-    /// call returns: true covers both "there never was one" and "there was
-    /// one and the read-back proves it's gone"; false means the file could
-    /// not be read, parsed, written, or verified, and the caller should try
-    /// again next launch.
+    /// Returns whether `url` was ALREADY clean going into this call — true
+    /// only when there was nothing of ours to remove (no entry, or one that
+    /// is not ours). Finding and removing an entry returns false even when
+    /// the write is confirmed by reading it back: see the header comment for
+    /// why a same-call read-back is not enough to trust it stays removed.
     private static func cleanJSON(url: URL, containerKey: String) -> Bool {
         guard let data = try? Data(contentsOf: url) else {
             return true  // no file — nothing of ours can be in it
@@ -76,9 +82,15 @@ enum LegacyMCP {
         }
         let servers = document[containerKey] as? [String: Any]
         guard looksLikeFoveaEntry(servers?["fovea"]) else {
-            // Nothing under that key, or something under it that is not ours —
-            // either way we do not touch it, and either way this config is
-            // clean from OUR side.
+            // Already clean — no entry here, or one that is not ours. Either
+            // way this counts as clean going in, and either way it means any
+            // backup we left beside this file is now an orphan: nothing here
+            // to remove could mean the user pressed Disconnect back when
+            // 0.2.x still offered it, or that a previous launch already did
+            // this removal — both want the backup gone, and neither should be
+            // held up by the flag rule above, which is about the ENTRY, not
+            // about tidying a leftover file that carries no risk either way.
+            removeBackup(beside: url)
             return true
         }
 
@@ -98,19 +110,18 @@ enum LegacyMCP {
             return false
         }
 
-        // Read it back — an atomic write that reported success but left our
-        // entry readable (something else won a race to rewrite the file right
-        // after) is exactly the failure this pass exists to catch, and it is
-        // one read to rule out.
+        // Read it back — purely to log accurately. It does NOT gate the
+        // return value: this pass found an entry, so it is not "already
+        // clean" either way, and the flag stays unset regardless until a
+        // later pass confirms it stuck.
         let verifyServers = readJSON(url)?[containerKey] as? [String: Any]
-        guard !looksLikeFoveaEntry(verifyServers?["fovea"]) else {
+        if looksLikeFoveaEntry(verifyServers?["fovea"]) {
             Emit.log("wrote \(url.path), but the fovea MCP entry was still there on read-back")
-            return false
+        } else {
+            Emit.log("removed the old fovea MCP entry from \(url.path)")
+            removeBackup(beside: url)
         }
-
-        Emit.log("removed the old fovea MCP entry from \(url.path)")
-        removeBackup(beside: url)
-        return true
+        return false
     }
 
     /// The Codex CLI equivalent, over `TomlConfig`'s line-range surgery rather
@@ -120,7 +131,8 @@ enum LegacyMCP {
             return true  // no file — nothing of ours can be in it
         }
         guard looksLikeFoveaTable(TomlConfig.lines(of: "fovea", in: text)) else {
-            return true  // no table, or one that isn't ours
+            removeBackup(beside: url)  // see cleanJSON's "already clean" branch
+            return true
         }
 
         guard let stripped = TomlConfig.remove(from: text, serverKey: "fovea") else {
@@ -135,14 +147,13 @@ enum LegacyMCP {
         }
 
         let verifyText = try? String(contentsOf: url, encoding: .utf8)
-        guard let verifyText, !looksLikeFoveaTable(TomlConfig.lines(of: "fovea", in: verifyText)) else {
+        if let verifyText, looksLikeFoveaTable(TomlConfig.lines(of: "fovea", in: verifyText)) {
             Emit.log("wrote \(url.path), but the fovea MCP entry was still there on read-back")
-            return false
+        } else {
+            Emit.log("removed the old fovea MCP entry from \(url.path)")
+            removeBackup(beside: url)
         }
-
-        Emit.log("removed the old fovea MCP entry from \(url.path)")
-        removeBackup(beside: url)
-        return true
+        return false
     }
 
     // ── Recognising OUR entry, by shape rather than by the name it sits under ──
@@ -188,9 +199,13 @@ enum LegacyMCP {
     /// The one-time backup Fovea's old connector wrote beside a config the
     /// first time it ever touched it — `<filename>.before-fovea`, a full
     /// snapshot of whatever was there before (for `~/.claude.json`, that
-    /// includes the user's `oauthAccount`). Removed only from here, only after
-    /// the entry itself was confirmed gone, and only this exact name — never
-    /// anything else found beside the config.
+    /// includes the user's `oauthAccount`). Called from two places, both of
+    /// which mean the entry is gone right now: right after a removal this
+    /// call just made, and from the "already clean" branch, which covers
+    /// both "user pressed Disconnect years ago" and "a previous launch
+    /// already did this." Only this exact name — never anything else found
+    /// beside the config — and `try?`: a backup that fails to delete is not
+    /// worth retrying for, unlike the entry itself.
     private static func removeBackup(beside url: URL) {
         let backup = url.deletingLastPathComponent()
             .appendingPathComponent("\(url.lastPathComponent).before-fovea")
