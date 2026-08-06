@@ -86,6 +86,7 @@ enum Handoff {
     ///
     /// Throws rather than reporting partial success: every failure here has the
     /// same remedy — the orb points at `prompt.txt` — and the same severity.
+
     /// Destinations that cannot open a local file path, so the crops have to
     /// travel as bytes.
     ///
@@ -114,8 +115,25 @@ enum Handoff {
     }
 
     static func deliver(
-        to target: HandoffTarget, text: String, images: [String] = []
+        to target: HandoffTarget, text: String, images: [String]
     ) async throws {
+        // Read every crop BEFORE anything is activated, clicked or pasted.
+        //
+        // A session directory belongs to the developer and can be moved or
+        // deleted between the render and the fling. Discovering that halfway
+        // through the loop would leave images already sitting in the composer
+        // with no text under them and no Return — a partial send, which this
+        // file's header says it never reports. Failing here costs nothing: the
+        // target has not been touched yet.
+        let payloads: [(name: String, data: Data)] = try images.map { path in
+            guard let data = FileManager.default.contents(atPath: path) else {
+                throw HandoffError(
+                    "The screenshot at \(path) is no longer there, so nothing was sent."
+                )
+            }
+            return ((path as NSString).lastPathComponent, data)
+        }
+
         guard let app = NSRunningApplication(processIdentifier: target.pid) else {
             throw HandoffError("\(target.appName) is no longer running.")
         }
@@ -179,15 +197,22 @@ enum Handoff {
         // two screenshots, and here is what I was saying" rather than the
         // reverse — and `attachedText` numbers the images in exactly this
         // order, so the order is load-bearing, not cosmetic.
-        for (index, path) in images.enumerated() {
-            note("pasting image \(index + 1)/\(images.count): \((path as NSString).lastPathComponent)")
-            try pasteImage(at: path)
-            // Longer than the text's beat, and for a different reason. A
-            // browser composer does not merely accept an image, it UPLOADS it,
-            // and a second paste landing mid-upload is how one of them goes
-            // missing. This is a guess at a safe margin rather than a measured
-            // figure — the fix if an image is dropped is to raise it.
-            try await Task.sleep(for: .milliseconds(900))
+        for (index, payload) in payloads.enumerated() {
+            note("pasting image \(index + 1)/\(payloads.count): \(payload.name)")
+            try pasteImage(payload.data)
+            // `pasteboardRestoreDelay`, not a smaller number, and the reason is
+            // the one this file already worked out for the restore: nothing can
+            // observe that a paste has landed, because reading a pasteboard
+            // does not bump `changeCount`. The next image's `clearContents()`
+            // is the same hazard as an early restore — if the composer has not
+            // consumed this one yet, it is simply gone.
+            //
+            // And a lost image here is not a visibly missing attachment. The
+            // numbering in `attachedText` counts every crop, so image 2 going
+            // missing silently relabels 3 as 2 — every caption after the gap
+            // now names the wrong picture, which is worse than sending none.
+            // Slow and right beats fast and quietly wrong.
+            try await Task.sleep(for: .seconds(pasteboardRestoreDelay))
         }
 
         note("pasting \(text.count) characters into \(target.appName)")
@@ -225,30 +250,50 @@ enum Handoff {
     /// produce the wrong characters on a non-US keyboard. Cmd+V is
     /// layout-independent, and the pasteboard is restored afterwards.
     private static func paste(_ text: String) throws {
-        try pasteboardPaste(what: "command") { $0.setString(text, forType: .string) }
+        try pasteboardPaste(what: "prompt") { pasteboard in
+            let item = NSPasteboardItem()
+            item.setString(text, forType: .string)
+            // Transient for the same reason a crop is: this text is the
+            // developer's narration plus strings read off their screen, and a
+            // clipboard manager that archives it has taken a copy of session
+            // content nobody offered it.
+            item.setString("", forType: transientType)
+            return pasteboard.writeObjects([item])
+        }
     }
 
     /// One crop, as image BYTES on the clipboard.
     ///
-    /// PNG data rather than a file URL: a browser composer turns pasted image
-    /// data into an attachment, which is the whole point of this path — the
-    /// destination is a model that cannot reach this filesystem, so a reference
-    /// of any kind is useless to it. The file URL rides along as a second
-    /// flavour for destinations that prefer it; a pasteboard item may carry
-    /// both, and the receiver picks.
-    private static func pasteImage(at path: String) throws {
-        guard let data = FileManager.default.contents(atPath: path) else {
-            throw HandoffError("Could not read the screenshot at \(path).")
-        }
-        try pasteboardPaste(what: "image") { pasteboard in
+    /// The destination is a model that cannot reach this filesystem, so a
+    /// reference of any kind is useless to it — the pixels have to travel.
+    private static func pasteImage(_ data: Data) throws {
+        try pasteboardPaste(what: "screenshot") { pasteboard in
             let item = NSPasteboardItem()
             item.setData(data, forType: .png)
-            item.setString(
-                URL(fileURLWithPath: path).absoluteString, forType: .fileURL
-            )
+            // PNG BYTES ONLY — no `.fileURL` flavour riding along.
+            //
+            // It was there "for destinations that prefer it", and no such
+            // destination exists: this path is reached only for a browser, and
+            // a browser preferring the URL flavour inserts
+            // `file:///Users/…/h01-r002.png` as TEXT and attaches nothing —
+            // putting back the dead link this whole feature removes, under
+            // numbered captions naming attachments that never arrived.
+            item.setString("", forType: transientType)
             return pasteboard.writeObjects([item])
         }
     }
+
+    /// `org.nspasteboard.TransientType` — the convention clipboard managers
+    /// watch to leave an item out of their history.
+    ///
+    /// Not decoration. A crop is a photograph of the developer's screen, and
+    /// `redact.mjs` is explicit that redaction cannot touch pixels: text gets
+    /// scrubbed, an image cannot be. Putting raw crops on the system pasteboard
+    /// hands them to every clipboard manager running — and some of those sync
+    /// their history to a cloud account. That is screen content leaving the Mac
+    /// by a route nobody chose, which is the one thing this product promises
+    /// does not happen.
+    private static let transientType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
 
     /// Save the developer's clipboard, put ours on it, Cmd+V, and schedule the
     /// restore. Shared by the text and image paths because every subtle part of
@@ -278,12 +323,21 @@ enum Handoff {
         // paste and hand that back as the user's clipboard, permanently.
         pendingRestore?.work.cancel()
 
+        // BOTH failure exits clear `pendingRestore` as well as restoring.
+        //
+        // They used to only restore. The record stayed behind holding the
+        // developer's clipboard and a work item that had already been
+        // cancelled, so nothing would ever nil it — and the next paste, however
+        // much later, read its `saved` in preference to the live pasteboard and
+        // put a stale clipboard back three seconds after pasting. Copy a
+        // password in between and that is what gets restored over it.
         pasteboard.clearContents()
         guard write(pasteboard) else {
             // Abort BEFORE any keystroke. The old code carried on: Cmd+V pasted
             // nothing into an emptied pasteboard and Return was posted anyway,
             // submitting whatever half-typed message was already in the input.
             restore(saved, to: pasteboard, ifStillAt: pasteboard.changeCount)
+            pendingRestore = nil
             throw HandoffError("Could not put the \(what) on the clipboard.")
         }
         let ours = pasteboard.changeCount
@@ -291,6 +345,7 @@ enum Handoff {
 
         guard tap(keyCode: 9, flags: .maskCommand) else { // 9 = V
             restore(saved, to: pasteboard, ifStillAt: ours)
+            pendingRestore = nil
             throw HandoffError("Could not synthesize the paste keystroke.")
         }
         note("Cmd+V posted")
@@ -311,8 +366,18 @@ enum Handoff {
             pendingRestore = nil
         }
         pendingRestore = (items: saved, work: work)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + pasteboardRestoreDelay, execute: work)
     }
+
+    /// How long to assume a destination needs to read the pasteboard.
+    ///
+    /// One number, used twice, because both uses are the same unanswerable
+    /// question: reading a pasteboard does not bump `changeCount`, so nothing
+    /// can observe that a paste landed. Restoring early hands the destination
+    /// the developer's previous clipboard; overwriting early for the next image
+    /// simply loses that image. Two constants would eventually disagree and
+    /// only one of them would be right.
+    private static let pasteboardRestoreDelay: TimeInterval = 3.0
 
     /// The user's clipboard, held between a paste and its restore. Keyed on
     /// nothing — there is one system pasteboard, so there is one of these.

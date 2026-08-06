@@ -356,3 +356,27 @@ test("both variants present the guard with the same evidence", () => {
   const attached = buildPrompt({ narration: "fix this", referents, attached: true });
   assert.equal(paths.evidence, attached.evidence);
 });
+
+// ── the correction UI's promise ─────────────────────────────────────────────
+
+// `said` is sliced from the RAW transcript and the review window never shows
+// it, so a developer who edits something out of their narration must not have
+// it ship in a label underneath a screenshot. render-brief.mjs enforces this by
+// passing `said: null` for every referent once an override exists; this pins
+// the half buildPrompt owns — that a null `said` leaves no trace of a quote.
+test("a referent with no quote produces no 'while I said' text at all", () => {
+  const paths = buildPrompt({
+    narration: "corrected narration",
+    referents: [{ ...bare, cropPath: "/tmp/a.png", said: null }],
+  });
+  const attached = buildPrompt({
+    narration: "corrected narration",
+    referents: [{ ...bare, cropPath: "/tmp/a.png", said: null }],
+    attached: true,
+  });
+  assert.doesNotMatch(paths.text, /while I said/);
+  assert.doesNotMatch(attached.text, /while I said/);
+  // The screenshot itself still travels — the developer drew it deliberately.
+  assert.match(paths.text, /\/tmp\/a\.png/);
+  assert.match(attached.text, /^1\./m);
+});

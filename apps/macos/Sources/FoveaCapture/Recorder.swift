@@ -715,22 +715,29 @@ final class Recorder {
             Task { _ = await self.stopSession() }
         }
 
-        // `quietFor`, not `msSinceVoice` — and it deliberately warns in one
-        // case `detectSettle` does NOT gate.
+        // NEVER HEARD ANYTHING, EVER — not "has gone quiet".
         //
-        // Both use `silenceGateMs`, but the gate reads `if let msSinceVoice`,
-        // so a microphone that has never delivered a voiced buffer leaves it
-        // nil and capture keeps everything on purpose (see the note there: a
-        // silent gate would turn a permission problem into a session that
-        // records nothing and says nothing about why). The pill takes the
-        // opposite side of that same fact. Capture staying permissive is right
-        // — a referent thrown away is unrecoverable — but "we have heard
-        // nothing at all, ever" is the loudest possible reason to tell someone,
-        // and it is the exact shape of the 44-second session that prompted
-        // this. So: gate stays quiet and keeps capturing; pill speaks up.
+        // The first version read `quietFor <= silenceGateMs`, which fires on
+        // any six-second pause: lasso a function, read it silently while you
+        // think, and the pill asserts a hardware fault and hides the stop hint.
+        // Six seconds of silence while reading code is not a broken microphone,
+        // it is reading code.
+        //
+        // `msSinceVoice == nil` is the honest signal, because it means no
+        // voiced buffer has arrived in the whole session. Once one has, the
+        // microphone has demonstrably worked and a later silence says nothing
+        // about the hardware. That is also exactly the 44-second session this
+        // was built for: a Bluetooth earbud at 27% input volume never delivered
+        // one, so the value stayed nil throughout.
+        //
+        // `detectSettle` reads the same nil and does the opposite — it keeps
+        // capturing, because a silent gate would turn a microphone problem into
+        // a session that records nothing and explains nothing. Capture stays
+        // permissive; the pill speaks up. Both are right about the same fact.
         overlay.update(
             cursor: position, trail: trail, lasso: lassoPath,
-            pulses: pulses, hearingVoice: quietFor <= silenceGateMs
+            pulses: pulses,
+            hearingVoice: msSinceVoice != nil || runningFor <= silenceGateMs
         )
     }
 

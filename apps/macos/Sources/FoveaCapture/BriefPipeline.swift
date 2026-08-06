@@ -423,15 +423,35 @@ enum BriefPipeline {
         guard let text = try? String(contentsOf: path, encoding: .utf8) else {
             throw BriefPipelineError.noPrompt(path.path)
         }
-        // The attached variant and the manifest are both best-effort: a session
-        // rendered by an older build has neither, and the path form still works
-        // everywhere it ever did. Falling back beats refusing to hand over
-        // anything at all.
-        let attached = (try? String(
+        // THE TWO MUST FALL BACK TOGETHER, and they used to fall back
+        // independently.
+        //
+        // `brief.json` has carried `cropPath` since long before
+        // `prompt-attached.txt` existed, so a session rendered by an older
+        // build has the manifest but not the attached text. Read separately,
+        // that produced the one combination neither form is: N images pasted
+        // into the composer AND a text block naming `/Users/…/h01-r002.png`
+        // underneath them — the dead link this feature exists to remove, beside
+        // the attachments that made it unnecessary. The mirror case is worse
+        // still: `attachedText` announcing "The 3 screenshots above" with
+        // nothing attached, which is a message inviting the model to describe
+        // pictures it was never given.
+        //
+        // So: no attached text, no attaching. The path form works everywhere it
+        // ever did, and re-rendering the session produces both.
+        guard let attached = try? String(
             contentsOf: dir.appendingPathComponent("prompt-attached.txt"), encoding: .utf8
-        )) ?? text
+        ) else {
+            return Prompt(text: text, attachedText: text, images: [])
+        }
         let images = (try? digest(sessionDir: sessionDir).cropPaths) ?? []
-        return Prompt(text: text, attachedText: attached, images: images)
+        // Same rule from the other side: an attached text that numbers
+        // screenshots is only usable if there are screenshots to number.
+        return Prompt(
+            text: text,
+            attachedText: images.isEmpty ? text : attached,
+            images: images
+        )
     }
 
     /// Save the developer's corrected narration next to the session. The renderer

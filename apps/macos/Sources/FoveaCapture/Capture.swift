@@ -225,14 +225,31 @@ enum Capture {
     private static func cachedDisplay(containing center: Point) -> SCDisplay? {
         displayLock.lock()
         defer { displayLock.unlock() }
+        // A warm display cache is not enough on its own: `cachedSelf` is filled
+        // by the same query, and if the first one did not find us the display
+        // cache would short-circuit every later attempt and we would never look
+        // again. So the first miss on `cachedSelf` refuses the hit and pays for
+        // one more query.
+        //
+        // ONCE, though — `selfLookupTried` is what stops this becoming a
+        // ~200ms `SCShareableContent` call on every single crop, which is the
+        // exact cost this cache was introduced to remove.
+        guard cachedSelf != nil || selfLookupTried else { return nil }
         return cachedDisplays.first { $0.frameInScreenSpace.contains(center) }
     }
+
+    /// Whether the self-lookup has been attempted at all. See `cachedDisplay`.
+    nonisolated(unsafe) private static var selfLookupTried = false
 
     private static func store(displays: [SCDisplay], selfApp: SCRunningApplication?) {
         displayLock.lock()
         defer { displayLock.unlock() }
         cachedDisplays = displays
-        cachedSelf = selfApp
+        selfLookupTried = true
+        // Never overwrite a good answer with nil: one query that failed to find
+        // us in `applications` would otherwise pin `cachedSelf` to nil, putting
+        // the cursor ring and the capture pulse back into every crop.
+        if let selfApp { cachedSelf = selfApp }
     }
 
     private static func ownApplication() -> SCRunningApplication? {

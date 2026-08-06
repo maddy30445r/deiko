@@ -163,13 +163,27 @@ function cropRelease(r) {
 // agent handed two screenshots had to guess which sentence went with which.
 // The alignment is right here, one line away; not passing it on was the
 // omission, not the alignment.
+// A CORRECTED NARRATION SILENCES THE QUOTES.
+//
+// `said` is sliced from the raw transcript. The review window shows the
+// narration "verbatim and editable" and promises that only the narration
+// travels — but it never shows these quotes, so a developer who edits a client
+// name out of what they said would have had it ship anyway, in a label under a
+// screenshot, with no way to see it going. The correction UI is a promise about
+// what leaves the Mac; a quote it cannot reach breaks that promise silently.
+//
+// So an edited narration drops every quote. The screenshots still travel, just
+// unlabelled — which is a real loss (the label is what ties an image to a
+// sentence) and the right trade: the alternative is shipping words the
+// developer believes they deleted.
+const quotesAreStale = narrationOverride != null;
 const released = referents.map((r) => {
   const { path, reason } = cropRelease(r);
   return {
     ...r,
     cropPath: path,
     cropWithheld: reason,
-    said: bindingById.get(r.id)?.utterance ?? null,
+    said: quotesAreStale ? null : (bindingById.get(r.id)?.utterance ?? null),
   };
 });
 
