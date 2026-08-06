@@ -84,9 +84,27 @@ function withheldNote(referents) {
   return `(${clauses.join("; ")})`;
 }
 
+/**
+ * Asked, not assumed, and asked EVERY time rather than only when the narration
+ * looks non-English.
+ *
+ * Sarvam transcribes Hinglish as Hinglish, which is the right call — the
+ * narration is primary evidence and paraphrasing it into English would replace
+ * what the developer said with a machine's reading of it. But a model handed
+ * Hinglish tends to answer in Hinglish, and the answer is not evidence; it is
+ * the work.
+ *
+ * Unconditional because the alternative is a language heuristic, and a
+ * heuristic that guesses "this is English" wrong fails SILENTLY — the line is
+ * simply absent and nobody learns why the reply came back in Hindi. One
+ * sentence a developer would plausibly type themselves costs nothing on a
+ * session that was already in English.
+ */
+const REPLY_LANGUAGE = "Reply in English.";
+
 export function buildPrompt({ narration, referents }) {
   const narrationRedacted = redact(narration ?? "").trim();
-  const out = [narrationRedacted];
+  const out = [narrationRedacted, "", REPLY_LANGUAGE];
 
   // Each path carries the sentence it was drawn during. Without it the agent is
   // handed two screenshots and a paragraph and has to guess which is which —

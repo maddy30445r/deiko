@@ -10,9 +10,9 @@ const bare = { cropPath: null, cropWithheld: null, said: null, text: { ax: [], o
 /** A referent the narration reached — the only kind whose text travels. */
 const heard = { ...bare, said: "fix this" };
 
-test("narration alone is the whole prompt", () => {
+test("narration with nothing pointed at is the narration and the language ask", () => {
   const { text } = buildPrompt({ narration: "the retry banner keeps flashing", referents: [] });
-  assert.equal(text.trim(), "the retry banner keeps flashing");
+  assert.equal(text.trim(), "the retry banner keeps flashing\n\nReply in English.");
 });
 
 test("drawn screenshots are listed by absolute path", () => {
@@ -277,4 +277,25 @@ test("evidence fences the screen text exactly when there is any, and not otherwi
 
   const withoutText = buildPrompt({ narration: "fix this", referents: [] }).evidence;
   assert.doesNotMatch(withoutText, /```/);
+});
+
+// ── the reply language ──────────────────────────────────────────────────────
+
+test("every prompt asks for an English reply", () => {
+  const { text } = buildPrompt({ narration: "yeh code kya karta hai", referents: [] });
+  assert.match(text, /Reply in English\./);
+});
+
+// Unconditional on purpose: a language heuristic that guesses wrong fails
+// silently, and the line costs nothing on a session that was already English.
+test("the English line is there even when the narration is already English", () => {
+  const { text } = buildPrompt({ narration: "what does this code do", referents: [] });
+  assert.match(text, /Reply in English\./);
+});
+
+// It is an instruction to the model, not something read off anybody's screen,
+// so it must not become one of the strings the redaction guard is asked to vet.
+test("the English line is not part of the evidence the guard inspects", () => {
+  const { evidence } = buildPrompt({ narration: "yeh code kya karta hai", referents: [] });
+  assert.doesNotMatch(evidence, /Reply in English/);
 });
