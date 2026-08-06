@@ -432,9 +432,20 @@ final class OrbController: NSObject {
     /// than a command form, because there is no longer a command to type.
     private func send(to target: HandoffTarget) {
         let sessionDir = model.currentSessionDir
-        model.approve(handingTo: target.appName) { text in
+        model.approve(handingTo: target.appName) { prompt in
             do {
-                try await Handoff.deliver(to: target, text: text)
+                // Decided HERE, at the release, from the app actually under the
+                // cursor — not baked into the rendered file, which is written
+                // long before anybody knows where this is going. A browser gets
+                // the image bytes because the model behind it cannot open a
+                // path on this Mac; everything else gets the paths, which is
+                // what Claude Code reads with its own tools.
+                let attach = Handoff.needsAttachedImages(target)
+                try await Handoff.deliver(
+                    to: target,
+                    text: attach ? prompt.attachedText : prompt.text,
+                    images: attach ? prompt.images : []
+                )
             } catch {
                 let where_ = sessionDir.map { "\($0)/prompt.txt" } ?? "the session folder"
                 throw HandoffError(

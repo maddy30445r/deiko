@@ -102,7 +102,20 @@ function withheldNote(referents) {
  */
 const REPLY_LANGUAGE = "Reply in English.";
 
-export function buildPrompt({ narration, referents }) {
+/**
+ * `attached` — whether the screenshots themselves are being handed over.
+ *
+ * A path is only readable by a model on this machine. Claude Code opens one
+ * with its own `Read` tool; a browser chat has no filesystem, so
+ * `/Users/…/h01-r008.png` is a string it cannot follow and may quietly claim
+ * to have looked at. When the delivery pastes the image bytes instead, the
+ * paths stop being useful and start being a lie, so this drops them and
+ * numbers the images in the order they were attached.
+ *
+ * Both variants are rendered up front because the renderer runs long before
+ * anybody knows where the coin will land.
+ */
+export function buildPrompt({ narration, referents, attached = false }) {
   const narrationRedacted = redact(narration ?? "").trim();
   const out = [narrationRedacted, "", REPLY_LANGUAGE];
 
@@ -134,11 +147,24 @@ export function buildPrompt({ narration, referents }) {
   if (shots.length) {
     out.push(
       "",
-      shots.length === 1
-        ? "Screenshot of what I circled:"
-        : "Screenshots of what I circled:",
-      ...shots.map((r) => {
+      attached
+        ? shots.length === 1
+          ? "The screenshot above is what I circled:"
+          : `The ${shots.length} screenshots above are what I circled, in this order:`
+        : shots.length === 1
+          ? "Screenshot of what I circled:"
+          : "Screenshots of what I circled:",
+      ...shots.map((r, i) => {
         const quote = quotes.get(r);
+        if (attached) {
+          // Numbered, because the image is no longer named by a path and its
+          // position in the message is the only thing identifying it — which
+          // also means every one needs a line, including the ones nothing was
+          // said over, or the numbering stops matching the attachments.
+          return quote
+            ? `${i + 1}. while I said "${quote}"`
+            : `${i + 1}. (I wasn't saying anything while I drew this one)`;
+        }
         return quote ? `- ${r.cropPath} — while I said "${quote}"` : `- ${r.cropPath}`;
       }),
     );

@@ -86,7 +86,36 @@ enum Handoff {
     ///
     /// Throws rather than reporting partial success: every failure here has the
     /// same remedy — the orb points at `prompt.txt` — and the same severity.
-    static func deliver(to target: HandoffTarget, text: String) async throws {
+    /// Destinations that cannot open a local file path, so the crops have to
+    /// travel as bytes.
+    ///
+    /// A browser chat runs the model somewhere else entirely. Handing it
+    /// `/Users/…/h01-r008.png` is handing it a string it cannot follow — and
+    /// the failure is the bad kind, because a model will often carry on as if
+    /// it had looked rather than say it could not.
+    ///
+    /// A LIST, with all the staleness a list implies — but the asymmetry is
+    /// what makes it safe here, and it is the opposite of the asymmetry that
+    /// made the old terminal list dangerous. A browser missing from this set
+    /// falls back to pasting paths, which is exactly what every destination got
+    /// before this existed: no worse than yesterday. Guessing the other way is
+    /// what would hurt, so nothing is added on a hunch.
+    private static let browserBundleIDs: Set<String> = [
+        "com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.canary",
+        "com.apple.Safari", "com.apple.SafariTechnologyPreview",
+        "company.thebrowser.Browser", "company.thebrowser.dia",
+        "com.microsoft.edgemac", "org.mozilla.firefox", "com.brave.Browser",
+        "com.vivaldi.Vivaldi", "com.operasoftware.Opera", "com.kagi.kagimacOS",
+    ]
+
+    static func needsAttachedImages(_ target: HandoffTarget) -> Bool {
+        let bundleID = NSRunningApplication(processIdentifier: target.pid)?.bundleIdentifier
+        return browserBundleIDs.contains(bundleID ?? "")
+    }
+
+    static func deliver(
+        to target: HandoffTarget, text: String, images: [String] = []
+    ) async throws {
         guard let app = NSRunningApplication(processIdentifier: target.pid) else {
             throw HandoffError("\(target.appName) is no longer running.")
         }
@@ -145,6 +174,22 @@ enum Handoff {
             try await Task.sleep(for: .milliseconds(150))
         }
 
+        // IMAGES FIRST, TEXT LAST. A chat composer puts an attachment above the
+        // message being written, so this is the order that produces "here are
+        // two screenshots, and here is what I was saying" rather than the
+        // reverse — and `attachedText` numbers the images in exactly this
+        // order, so the order is load-bearing, not cosmetic.
+        for (index, path) in images.enumerated() {
+            note("pasting image \(index + 1)/\(images.count): \((path as NSString).lastPathComponent)")
+            try pasteImage(at: path)
+            // Longer than the text's beat, and for a different reason. A
+            // browser composer does not merely accept an image, it UPLOADS it,
+            // and a second paste landing mid-upload is how one of them goes
+            // missing. This is a guess at a safe margin rather than a measured
+            // figure — the fix if an image is dropped is to raise it.
+            try await Task.sleep(for: .milliseconds(900))
+        }
+
         note("pasting \(text.count) characters into \(target.appName)")
         try paste(text)
 
@@ -180,6 +225,38 @@ enum Handoff {
     /// produce the wrong characters on a non-US keyboard. Cmd+V is
     /// layout-independent, and the pasteboard is restored afterwards.
     private static func paste(_ text: String) throws {
+        try pasteboardPaste(what: "command") { $0.setString(text, forType: .string) }
+    }
+
+    /// One crop, as image BYTES on the clipboard.
+    ///
+    /// PNG data rather than a file URL: a browser composer turns pasted image
+    /// data into an attachment, which is the whole point of this path — the
+    /// destination is a model that cannot reach this filesystem, so a reference
+    /// of any kind is useless to it. The file URL rides along as a second
+    /// flavour for destinations that prefer it; a pasteboard item may carry
+    /// both, and the receiver picks.
+    private static func pasteImage(at path: String) throws {
+        guard let data = FileManager.default.contents(atPath: path) else {
+            throw HandoffError("Could not read the screenshot at \(path).")
+        }
+        try pasteboardPaste(what: "image") { pasteboard in
+            let item = NSPasteboardItem()
+            item.setData(data, forType: .png)
+            item.setString(
+                URL(fileURLWithPath: path).absoluteString, forType: .fileURL
+            )
+            return pasteboard.writeObjects([item])
+        }
+    }
+
+    /// Save the developer's clipboard, put ours on it, Cmd+V, and schedule the
+    /// restore. Shared by the text and image paths because every subtle part of
+    /// it — what gets saved, which restore owns the true original, aborting
+    /// before the keystroke — was hard-won and must not exist twice.
+    private static func pasteboardPaste(
+        what: String, write: (NSPasteboard) -> Bool
+    ) throws {
         let pasteboard = NSPasteboard.general
 
         // EVERY representation, not just the string. `clearContents()` destroys
@@ -202,15 +279,15 @@ enum Handoff {
         pendingRestore?.work.cancel()
 
         pasteboard.clearContents()
-        guard pasteboard.setString(text, forType: .string) else {
+        guard write(pasteboard) else {
             // Abort BEFORE any keystroke. The old code carried on: Cmd+V pasted
             // nothing into an emptied pasteboard and Return was posted anyway,
             // submitting whatever half-typed message was already in the input.
             restore(saved, to: pasteboard, ifStillAt: pasteboard.changeCount)
-            throw HandoffError("Could not put the command on the clipboard.")
+            throw HandoffError("Could not put the \(what) on the clipboard.")
         }
         let ours = pasteboard.changeCount
-        note("pasteboard now holds command (changeCount \(ours)); posting Cmd+V")
+        note("pasteboard now holds \(what) (changeCount \(ours)); posting Cmd+V")
 
         guard tap(keyCode: 9, flags: .maskCommand) else { // 9 = V
             restore(saved, to: pasteboard, ifStillAt: ours)

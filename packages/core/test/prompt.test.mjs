@@ -299,3 +299,60 @@ test("the English line is not part of the evidence the guard inspects", () => {
   const { evidence } = buildPrompt({ narration: "yeh code kya karta hai", referents: [] });
   assert.doesNotMatch(evidence, /Reply in English/);
 });
+
+// ── the attached variant: for a model that cannot open a local path ─────────
+
+test("attached mode carries no crop paths at all", () => {
+  const { text } = buildPrompt({
+    narration: "fix this",
+    attached: true,
+    referents: [
+      { ...bare, cropPath: "/Users/dev/Documents/Fovea/s/crops/h01-r002.png", said: "fix this" },
+    ],
+  });
+  assert.doesNotMatch(text, /h01-r002|\/Users\/|crops/);
+});
+
+// The number IS the identifier once the path is gone, so it has to match the
+// order the images were pasted in.
+test("attached mode numbers the screenshots in order", () => {
+  const { text } = buildPrompt({
+    narration: "fix this",
+    attached: true,
+    referents: [
+      { ...bare, cropPath: "/tmp/a.png", said: "the code" },
+      { ...bare, cropPath: "/tmp/b.png", said: "the sidebar" },
+    ],
+  });
+  assert.match(text, /1\. while I said "the code"/);
+  assert.match(text, /2\. while I said "the sidebar"/);
+});
+
+// Every attachment needs a line even when nothing was said over it, or the
+// numbering silently stops matching what was pasted.
+test("attached mode still numbers a screenshot with no bound speech", () => {
+  const { text } = buildPrompt({
+    narration: "fix this",
+    attached: true,
+    referents: [
+      { ...bare, cropPath: "/tmp/a.png" },
+      { ...bare, cropPath: "/tmp/b.png", said: "the sidebar" },
+    ],
+  });
+  assert.match(text, /1\. \(I wasn't saying anything while I drew this one\)/);
+  assert.match(text, /2\. while I said "the sidebar"/);
+});
+
+// The two variants differ only in how Fovea words its own screenshot section,
+// so the captured content the guard inspects must be identical. If this ever
+// fails, one variant is carrying screen content the other is not, and the
+// single-assertion assumption in render-brief.mjs no longer holds.
+test("both variants present the guard with the same evidence", () => {
+  const referents = [
+    { ...bare, cropPath: "/tmp/a.png", said: "the code" },
+    { ...heard, text: { ax: ["Submit"], ocr: [] } },
+  ];
+  const paths = buildPrompt({ narration: "fix this", referents });
+  const attached = buildPrompt({ narration: "fix this", referents, attached: true });
+  assert.equal(paths.evidence, attached.evidence);
+});

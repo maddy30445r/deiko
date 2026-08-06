@@ -173,10 +173,21 @@ const released = referents.map((r) => {
   };
 });
 
-const { text, evidence } = buildPrompt({
-  narration: narrationOverride ?? utteranceText(words).replace(/\s*\n\s*/g, " "),
-  referents: released,
-});
+const narration = narrationOverride ?? utteranceText(words).replace(/\s*\n\s*/g, " ");
+const { text, evidence } = buildPrompt({ narration, referents: released });
+
+// The same message for a destination that cannot open a local path.
+//
+// Claude Code reads a crop with its own `Read` tool because the file is on the
+// same machine; a browser chat has no filesystem, so the paths in `text` are
+// links it cannot follow and may quietly claim to have followed. The handoff
+// pastes the image bytes there instead and uses this variant, which numbers the
+// screenshots by their position in the message rather than naming files.
+//
+// Rendered now, both of them, because nobody knows where the coin will land
+// until the developer throws it — and re-running the renderer at that moment
+// would put a Node spawn between letting go and the paste landing.
+const attached = buildPrompt({ narration, referents: released, attached: true });
 
 // Fail closed on the captured content, not on the assembled prompt. `text`
 // includes crop paths Fovea minted itself — an absolute POSIX path is a
@@ -186,6 +197,13 @@ const { text, evidence } = buildPrompt({
 // secret this renderer didn't put there could hide.
 assertNoSecrets(evidence);
 writeFileSync(outPath, text);
+// One assertion covers both: the two variants differ only in how the SCREENSHOT
+// SECTION is written — Fovea's own words either way — and are built from the
+// same narration and the same referents, so their evidence is identical. Guard
+// it anyway rather than assume: the cost is microseconds and the assumption is
+// exactly the kind that quietly stops being true.
+assertNoSecrets(attached.evidence);
+writeFileSync(join(dir, "prompt-attached.txt"), attached.text);
 
 const manifest = {
   sessionId: basename(dir),

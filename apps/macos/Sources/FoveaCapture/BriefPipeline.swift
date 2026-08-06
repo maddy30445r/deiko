@@ -395,15 +395,43 @@ enum BriefPipeline {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    /// The message the drop pastes. Read from disk rather than held in memory:
-    /// the review window may have re-rendered it after a narration correction,
-    /// and the file is the only thing that saw that.
-    static func promptText(sessionDir: String) throws -> String {
-        let path = URL(fileURLWithPath: sessionDir).appendingPathComponent("prompt.txt")
+    /// What the drop hands over, in both the forms a destination might need.
+    ///
+    /// Which one travels is decided at the moment of release, by `Handoff`,
+    /// from the app under the cursor — so both have to be in hand before the
+    /// developer lets go.
+    struct Prompt {
+        /// Names the crops by absolute path. For a destination that can open
+        /// one: Claude Code reads a local file with its own tools.
+        let text: String
+        /// Numbers the crops by their position in the message instead. For a
+        /// destination that gets the image bytes pasted in, where a path would
+        /// be a link it cannot follow.
+        let attachedText: String
+        /// The crops themselves, in the order `attachedText` numbers them.
+        /// Only the released ones — a withheld crop has no path in the
+        /// manifest, so it cannot be pasted by accident here either.
+        let images: [String]
+    }
+
+    /// Read from disk rather than held in memory: the review window may have
+    /// re-rendered after a narration correction, and the files are the only
+    /// things that saw that.
+    static func prompt(sessionDir: String) throws -> Prompt {
+        let dir = URL(fileURLWithPath: sessionDir)
+        let path = dir.appendingPathComponent("prompt.txt")
         guard let text = try? String(contentsOf: path, encoding: .utf8) else {
             throw BriefPipelineError.noPrompt(path.path)
         }
-        return text
+        // The attached variant and the manifest are both best-effort: a session
+        // rendered by an older build has neither, and the path form still works
+        // everywhere it ever did. Falling back beats refusing to hand over
+        // anything at all.
+        let attached = (try? String(
+            contentsOf: dir.appendingPathComponent("prompt-attached.txt"), encoding: .utf8
+        )) ?? text
+        let images = (try? digest(sessionDir: sessionDir).cropPaths) ?? []
+        return Prompt(text: text, attachedText: attached, images: images)
     }
 
     /// Save the developer's corrected narration next to the session. The renderer

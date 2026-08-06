@@ -235,7 +235,7 @@ final class ReviewModel: ObservableObject {
     /// `prompt.txt` is read fresh here rather than passed down from `load`,
     /// deliberately: if the paste or keystroke fails, the file is still there
     /// and the orb points at it — pasting it by hand still works.
-    func approve(handingTo appName: String? = nil, then after: (@MainActor (String) async throws -> Void)? = nil) {
+    func approve(handingTo appName: String? = nil, then after: (@MainActor (BriefPipeline.Prompt) async throws -> Void)? = nil) {
         guard let sessionDir else { return }
         task?.cancel()
         task = Task {
@@ -255,10 +255,10 @@ final class ReviewModel: ObservableObject {
                     phase = .ready
                     return
                 }
-                let text = try BriefPipeline.promptText(sessionDir: sessionDir)
+                let prompt = try BriefPipeline.prompt(sessionDir: sessionDir)
                 guard stillCurrent(sessionDir) else { return }
                 phase = .working("Handing to \(appName ?? "your editor")…")
-                try await after(text)
+                try await after(prompt)
                 guard stillCurrent(sessionDir) else { return }
                 handedTo = appName
                 phase = .sent
