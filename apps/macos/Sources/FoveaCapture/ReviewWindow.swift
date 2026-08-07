@@ -209,11 +209,36 @@ final class ReviewModel: ObservableObject {
                 self.originalNarration = digest.summary.narration
                 self.phase = .ready
                 self.fetchSummary(sessionDir: sessionDir)
+                self.runQueuedHandoff()
             } catch {
                 guard stillCurrent(sessionDir) else { return }
                 self.phase = .failed(describe(error))
+                // The throw was waiting on this render, and it is not coming.
+                // Leaving the queue armed would hand the developer an error
+                // while they believed their fling was still in flight.
+                self.queuedHandoff = nil
             }
         }
+    }
+
+    /// A fling thrown before the brief existed.
+    ///
+    /// The orb appears the moment a session closes, but the pipeline needs a
+    /// few seconds more — so whether reaching for the coin worked came down to
+    /// how fast you reached. The gesture armed only on `.ready`, and an unarmed
+    /// press produced no detached coin, no aim label, no highlight and no
+    /// message: it simply died, differently on different days. That is the
+    /// whole of "sometimes nothing happens".
+    ///
+    /// Throwing it IS the decision. Holding the throw until there is something
+    /// to send honours it, rather than discarding it for being early.
+    private var queuedHandoff: (appName: String?, deliver: @MainActor (BriefPipeline.Prompt) async throws -> Void)?
+
+    private func runQueuedHandoff() {
+        guard let queued = queuedHandoff else { return }
+        queuedHandoff = nil
+        Handoff.trace?("fling: brief ready — sending the throw that was waiting")
+        approve(handingTo: queued.appName, then: queued.deliver)
     }
 
     /// Save the edit, re-render, then — only on the fling path — send.
@@ -237,6 +262,22 @@ final class ReviewModel: ObservableObject {
     /// and the orb points at it — pasting it by hand still works.
     func approve(handingTo appName: String? = nil, then after: (@MainActor (BriefPipeline.Prompt) async throws -> Void)? = nil) {
         guard let sessionDir else { return }
+
+        // THROWN BEFORE THERE WAS ANYTHING TO SEND — hold it, do not cancel.
+        //
+        // `digest == nil` is the test for "the pipeline is still producing the
+        // brief", and it has to be checked before the `task?.cancel()` below:
+        // that line exists to stop a stale send racing a newer one, but the
+        // task in flight right now IS the render this fling is waiting for.
+        // Cancelling it would answer an early throw by destroying the thing
+        // that would have satisfied it.
+        if digest == nil, let after {
+            queuedHandoff = (appName: appName, deliver: after)
+            phase = .working("Sending to \(appName ?? "your editor") when it's ready…")
+            Handoff.trace?("fling: queued for \(appName ?? "an editor") — brief not rendered yet")
+            return
+        }
+
         task?.cancel()
         task = Task {
             do {
@@ -365,6 +406,13 @@ final class ReviewModel: ObservableObject {
         task = nil
         summaryTask?.cancel()
         summaryTask = nil
+        // A held throw belongs to the session it was thrown at, and nothing
+        // else. `load` calls this on entry, so without it a fling queued
+        // against one session would fire the moment the NEXT session finished
+        // rendering — pasting a brief the developer never aimed at, into a
+        // window they aimed at minutes ago. The same class of bug `stillCurrent`
+        // exists to prevent, arriving by a route that predates it.
+        queuedHandoff = nil
     }
 }
 

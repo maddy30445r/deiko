@@ -354,15 +354,31 @@ final class OrbController: NSObject {
     // ── The fling ───────────────────────────────────────────────────────────
 
     private func flingPressed() {
-        // Armed exactly when a brief exists to send — `.ready`, or a `.failed`
-        // whose digest survived (a send that can be retried).
+        // Armed whenever a throw can still mean something — which now includes
+        // BEFORE the brief exists. `.working` with no digest is the pipeline
+        // still rendering; the throw is held and delivered the moment it
+        // finishes (`ReviewModel.queuedHandoff`). It used to refuse, and refuse
+        // in complete silence: no detached coin, no aim label, no highlight, no
+        // message. Whether the gesture worked came down to how fast you reached
+        // for the coin after the orb appeared.
+        //
+        // `.working` WITH a digest is a different thing — a correction being
+        // applied, or a send already in flight — and a second throw on top of
+        // that is not a throw anyone meant.
         fling.isArmed = {
             switch model.phase {
-            case .ready: return model.digest != nil
-            case .failed: return model.digest != nil
-            case .working, .sent: return false
+            case .ready, .failed: return model.digest != nil
+            case .working: return model.digest == nil
+            case .sent: return false
             }
         }()
+        if !fling.isArmed {
+            // Said out loud, because this is the branch that made the bug
+            // undiagnosable: a refused press left nothing on screen AND nothing
+            // on disk, so the report could only ever be "sometimes nothing
+            // happens". A field run must never be quieter than a harness.
+            Handoff.trace?("fling: not armed — phase \(model.phase), digest \(model.digest == nil ? "absent" : "present")")
+        }
         _ = fling.press()
     }
 
@@ -415,7 +431,13 @@ final class OrbController: NSObject {
             } else {
                 send(to: target)
             }
-        case .none, .aiming, .cancelled:
+        case .cancelled:
+            // Released back over the orb, or over something with no app behind
+            // it — the desktop, a menu, one of Fovea's own windows. Deliberate
+            // for the first, a miss for the rest, and indistinguishable on disk
+            // until now.
+            Handoff.trace?("fling: cancelled — released over nothing sendable")
+        case .none, .aiming:
             break
         }
     }
