@@ -27,13 +27,20 @@ on-device words.
 
 ## Shape
 
-Three files, because the same logic has to run in two places:
+Five files, because the same logic has to run in two places and because the
+decisions worth testing should not need a database to run:
 
 | | |
 |---|---|
-| `relay.mjs` | every decision — routing, auth, rate limit, proxying. Knows nothing about a transport. |
+| `relay.mjs` | routing, auth, proxying, and the order everything happens in. Knows nothing about a transport. |
+| `quota.mjs` | **pure.** Tiers, caps, storage keys, and the allow/refuse decision. No network, no database. |
+| `usage.mjs` | the numbers — DynamoDB counters and the cached Lemon Squeezy verdict |
 | `lambda.mjs` | the AWS entry point |
 | `server.mjs` | a `node:http` entry point, for local testing and containers |
+
+The split between `quota.mjs` and `usage.mjs` is the same one the Swift package
+makes: the arithmetic that decides whether somebody gets transcribed is checked
+by `npm test` in milliseconds, with no AWS account involved.
 
 What you `curl` on localhost is therefore the same code that runs in
 production, which is the point: a bug found locally is a bug fixed everywhere.
@@ -59,15 +66,25 @@ Knobs, all overridable in the environment:
 | | |
 |---|---|
 | `AWS_REGION` | `ap-south-1` — closest to Sarvam |
-| `FOVEA_LAMBDA_CONCURRENCY` | `5` reserved — a blast radius, not a quota |
-| `FOVEA_REVOKED_TOKENS` | comma-separated device tokens to refuse |
+| `FOVEA_LAMBDA_CONCURRENCY` | `5` reserved — a blast radius, not a quota. Past ~12, raise the table's write units with it. |
+| `FOVEA_REVOKED_TOKENS` | comma-separated tokens to refuse |
+| `FOVEA_USAGE_TABLE` | `fovea-usage` — the DynamoDB table holding every counter |
+| `FOVEA_GLOBAL_DAILY_SECONDS` | `14400` (4 hours) — the ceiling on the whole service's daily audio |
+| `FOVEA_PRO_VARIANT_IDS` | Lemon Squeezy variant ids that mean Pro. Unset = any live licence is Pro. |
+| `LEMONSQUEEZY_API_KEY` | only if the validate endpoint starts demanding one |
 
 Then verify — and check `transcription`, not just `ok`:
 
 ```sh
 curl -s https://<id>.lambda-url.<region>.on.aws/health
-# {"ok":true,"transcription":true,"summary":true}
+# {"ok":true,"transcription":true,"summary":true,"metering":true,"table":"fovea-usage"}
 ```
+
+`metering` is a real `DescribeTable`, not a check on whether the table's name is
+configured — the name has a default, so the cheap version reports healthy on
+precisely the deploy where the table is missing or the role has no policy.
+**A relay answering `"metering":false` will 503 every transcription**, on
+purpose: not knowing what anybody has spent should stop the buying.
 
 A relay with no key answers `ok` happily and then 503s every real request.
 
@@ -83,7 +100,11 @@ A relay with no key answers `ok` happily and then 503s every real request.
 | `SARVAM_API_KEY` | required for `/v1/transcribe` |
 | `GROQ_API_KEY` | required for `/v1/summarize` |
 | `PORT` | default 8787 |
-| `FOVEA_REVOKED_TOKENS` | comma-separated device tokens to refuse |
+| `FOVEA_REVOKED_TOKENS` | comma-separated tokens to refuse |
+| `FOVEA_USAGE_TABLE` | `fovea-usage` — the DynamoDB table holding every counter |
+| `FOVEA_GLOBAL_DAILY_SECONDS` | `14400` (4 hours) — the ceiling on the whole service's daily audio |
+| `FOVEA_PRO_VARIANT_IDS` | Lemon Squeezy variant ids that mean Pro. Unset = any live licence is Pro. |
+| `LEMONSQUEEZY_API_KEY` | only if the validate endpoint starts demanding one |
 
 Then set `defaultRelayURL` in `apps/capture/Sources/FoveaCapture/Credentials.swift`
 to the deployed origin. It is `nil` until you do — deliberately, because a relay
@@ -105,34 +126,87 @@ than an oversight:
 
 ## What the token is, and is not
 
-An opaque per-install identifier, minted on first use and kept in the app's
-preferences. It lets you rate-limit and revoke one abusive install without
-stopping everybody.
+An opaque per-MACHINE identifier: `SHA256(salt + IOPlatformUUID)`, truncated,
+computed fresh on every launch. It lets you meter a free trial, rate-limit, and
+revoke one abusive install without stopping everybody.
 
-**Deliberately not in the keychain.** It used to be, and that cost every user a
+**It is derived from the hardware, and that is a deliberate trade worth stating
+plainly.** It used to be a random UUID in the app's preferences, which meant one
+`defaults delete` bought another thirty free minutes, and so did a second macOS
+login on the same Mac. Deriving from the machine closes both — at the cost of a
+*more* identifying id than a random one, on a product sold on privacy. What
+keeps that honest:
+
+- the raw `IOPlatformUUID` is **never stored, never written to disk, and never
+  sent** — only the digest leaves the function that computes it;
+- it is **salted**, so the digest cannot be lined up against another product
+  that fingerprints the same Mac. The salt ships inside the app, so this
+  defeats correlation by a third party, **not by us** — claiming otherwise
+  would be theatre;
+- it identifies a **machine, not a person**. No account, no email, nothing here
+  that says who you are.
+
+Consequences to know: the identifier now **survives reinstalls and OS updates**,
+and two macOS logins on one Mac share one trial. A Mac that cannot answer (a VM,
+say) falls back to the old random-id-in-preferences path, so it gets a trial
+rather than an error.
+
+**Deliberately not in the keychain.** The stored fallback lives in preferences
+because it used to live in the keychain, and that cost every user a
 login-password prompt on their first session after every app update: a keychain
 read decrypts, decryption is checked against an ACL pinned to one exact binary,
-and an update always changes the binary. Since this is a random identifier
-rather than a secret — anyone holding the app can read it out either way —
-the keychain was buying nothing and charging a prompt. A user who updates now
-simply gets a new token, which is indistinguishable from a new install.
+and an update always changes the binary. Since this is an identifier rather than
+a secret — anyone holding the app can read it out either way — the keychain was
+buying nothing and charging a prompt.
 
 **It is not authentication.** A token that ships inside a client can be read
 out of it by anyone who wants to. Real per-user identity means accounts — a
-product decision, not a line of code. Until then the mitigations are the rate
-limit, the revocation list, and watching your provider bill.
+product decision, not a line of code.
 
-**The rate limit is weaker on Lambda than it looks**, and that is worth saying
-plainly rather than leaving you to assume you are covered. It counts in memory,
-so on Lambda it is per warm container: a determined caller gets a fresh
-container and a fresh counter. It catches a client stuck in a loop and nothing
-more.
+**A licence key is not authentication either**, and is not pretending to be.
+It is the same kind of bearer: something the client holds that says which tier
+to meter against. What makes it worth more than a device token is that Lemon
+Squeezy can say whether it is still paid for.
 
-What actually bounds your spend is **reserved concurrency** (5 by default — at
-most five transcriptions in flight at once), the revocation list, and watching
-the Sarvam dashboard in the first week. A real quota means a shared store —
-DynamoDB with a TTL would do it for pennies — and is worth adding the moment
-this serves anybody outside the team.
+**The prefix is what tells them apart.** `lic_…` is a licence, `dev_…` is a
+device token, and a bare value is a device token because that is what every
+build up to 0.3.0 sends. This matters more than it looks: both are v4-shaped
+UUIDs, so without the prefix the two are indistinguishable — every free user's
+token would be sent to Lemon Squeezy for validation and every licence would
+meter as a free trial.
+
+## What actually bounds the spend
+
+In order, cheapest first:
+
+1. **The burst limiter** — in memory, 30 requests a minute, per warm container.
+   Catches a client stuck in a loop before it costs a database write. It is not
+   a quota and does not pretend to be; on Lambda a determined caller gets a
+   fresh container and a fresh counter.
+2. **Per-subject quota** — DynamoDB, counted in audio seconds. A free install
+   gets 30 minutes *once*; a Pro licence gets 5 hours a month. Incremented and
+   then judged, in one round trip, so concurrent chunks cannot both claim room
+   only one of them has.
+3. **The global daily ceiling** — the one that does not depend on honest
+   clients. Every per-subject limit above is forgeable: the device token lives
+   in `UserDefaults`, so `defaults delete` buys another free trial, and nothing
+   in a client we ship can change that. The ceiling caps the whole service's
+   audio for a day no matter how many tokens somebody mints. Four hours is
+   ₹120/day.
+4. **Reserved concurrency** — 5 by default. A blast radius, not a quota.
+5. **The revocation list, and the AWS budget alarm.** The alarm should fire long
+   before the ceiling does: the ceiling stops a disaster, the alarm tells you
+   one is starting.
+
+**Being over by one chunk is fine and deliberate.** The counter is incremented
+before the audio is bought, so an upstream failure still counts. Twenty-five
+seconds of Sarvam is about ₹0.2; a race that lets a cap be exceeded by however
+many containers happen to be warm is not.
+
+**If the table cannot be reached, transcription 503s.** Failing closed is the
+whole point — not knowing what somebody has spent is a reason to stop buying,
+not to buy an unbounded amount and find out at the end of the month. The app
+keeps working on Apple's on-device words.
 
 ## The privacy promise changes when you turn this on
 

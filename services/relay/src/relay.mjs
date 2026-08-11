@@ -23,6 +23,9 @@
 //     them.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { audioSeconds, capFor, decide, subjectFrom } from "./quota.mjs";
+import { USAGE_TABLE, meteringHealthy, peek, record, tierFor } from "./usage.mjs";
+
 const SARVAM_STT_URL = "https://api.sarvam.ai/speech-to-text";
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
@@ -31,16 +34,19 @@ const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 /// us hold much memory. Also comfortably under Lambda's 6MB request cap.
 export const MAX_BODY_BYTES = 12 * 1024 * 1024;
 
-// ── Rate limiting ───────────────────────────────────────────────────────────
+// ── Burst limiting ──────────────────────────────────────────────────────────
 //
 // In memory, and therefore per-process: one warm Lambda container, or one
 // long-running server. A speed bump that catches a client stuck in a loop, NOT
 // a quota — on Lambda especially, a determined caller gets a fresh container
-// and a fresh counter. The real protections are the provider dashboard, the
-// revocation list below, and reserved concurrency on the function.
+// and a fresh counter.
 //
-// Said plainly here because a rate limiter that is quietly ineffective is
-// worse than none: it invites you to stop watching the bill.
+// It used to be the ONLY limit, and this comment used to say so at length,
+// because a rate limiter that is quietly ineffective invites you to stop
+// watching the bill. There is now a real one: `quota.mjs` decides and
+// `usage.mjs` counts, in DynamoDB, across every container. This stays in front
+// of it as the cheap check — a client in a tight loop is refused here without
+// spending a write.
 
 const WINDOW_MS = 60_000;
 const MAX_REQUESTS_PER_WINDOW = 30;
@@ -86,23 +92,84 @@ export async function handle({ method, path, token, contentType, body }) {
 
   if (method === "GET" && path === "/health") {
     // `ok` alone is not enough to trust: a relay with no key answers happily
-    // and then 503s every real request. Both flags travel so a deploy can be
-    // checked with one curl.
+    // and then 503s every real request. Every flag travels so a deploy can be
+    // checked with one curl — including metering, because a relay that cannot
+    // count must not be quietly buying audio for anyone who asks.
+    //
+    // `metering` is a real DescribeTable, not a check on whether the table's
+    // NAME is configured. The name always has a default, so the cheap version
+    // reports healthy on precisely the deploy where the table is missing or the
+    // role has no policy.
     return json(200, {
       ok: true,
       transcription: Boolean(sarvamKey),
       summary: Boolean(groqKey),
+      metering: await meteringHealthy(),
+      table: USAGE_TABLE,
     });
   }
 
-  if (method !== "POST") return json(405, { error: "method not allowed" });
+  if (method !== "POST" && !(method === "GET" && path === "/v1/quota")) {
+    return json(405, { error: "method not allowed" });
+  }
   if (!token) return json(401, { error: "missing token" });
   if (revoked().has(token)) return json(403, { error: "token revoked" });
+
+  const subject = subjectFrom(token);
+  if (!subject) return json(401, { error: "malformed token" });
+
+  // WHAT AM I, AND WHAT IS LEFT. Read-only, and the only route the app itself
+  // calls rather than the pipeline. Settings asks the instant a licence key is
+  // pasted, because "Pro · 5 hours a month" is the confirmation that the key
+  // worked — and the app must be able to say that before a session has ever
+  // run. A quota that could only be learned by spending some would be useless
+  // at exactly the moment somebody has just paid.
+  if (path === "/v1/quota") {
+    try {
+      const tier = await tierFor(subject);
+      const usedSeconds = await peek(subject);
+      const capSeconds = capFor(tier);
+      return json(200, {
+        tier,
+        usedSeconds: Math.round(usedSeconds),
+        capSeconds,
+        remainingSeconds: Math.max(0, Math.round(capSeconds - usedSeconds)),
+      });
+    } catch (err) {
+      return json(503, {
+        error: `usage service unavailable: ${String(err?.message ?? err).slice(0, 120)}`,
+      });
+    }
+  }
+
   if (overRateLimit(token)) return json(429, { error: "rate limit exceeded" });
   if (body && body.length > MAX_BODY_BYTES) return json(413, { error: "body too large" });
 
   if (path === "/v1/transcribe") {
     if (!sarvamKey) return json(503, { error: "relay has no transcription key configured" });
+
+    // METERED BEFORE IT IS SPENT. The counter is incremented and then judged,
+    // so two chunks arriving together cannot both see room that only one of
+    // them has. Being over by one chunk costs a few paise; a race that lets a
+    // cap be exceeded by however many containers are warm does not.
+    let verdict;
+    try {
+      const tier = await tierFor(subject);
+      const seconds = audioSeconds(body?.length ?? 0);
+      const { usedSeconds, globalUsedSeconds } = await record({ subject, seconds });
+      verdict = decide({ tier, usedSeconds, globalUsedSeconds });
+    } catch (err) {
+      // FAILING CLOSED, DELIBERATELY. If the usage table cannot be reached we
+      // do not know what anybody has spent, and the honest answer is to stop
+      // buying audio rather than to buy an unbounded amount and find out
+      // later. The client keeps working on Apple's on-device words.
+      return json(503, {
+        error: `usage service unavailable: ${String(err?.message ?? err).slice(0, 120)}`,
+      });
+    }
+
+    if (!verdict.allowed) return json(verdict.status, { error: verdict.error });
+
     return await proxy(SARVAM_STT_URL, {
       // The client's own multipart body and boundary, forwarded verbatim.
       // Parsing and re-encoding it would mean touching the audio for no reason.
@@ -113,6 +180,10 @@ export async function handle({ method, path, token, contentType, body }) {
 
   if (path === "/v1/summarize") {
     if (!groqKey) return json(503, { error: "relay has no summary key configured" });
+    // NOT METERED. Groq's three-line reading is a couple of thousand tokens —
+    // a rounding error beside the audio — and somebody who has used up their
+    // trial should still get the sentence that tells them what Fovea heard.
+    // Charging for it would cost more in explanation than it does in tokens.
     return await proxy(GROQ_URL, {
       authorization: `Bearer ${groqKey}`,
       "content-type": "application/json",

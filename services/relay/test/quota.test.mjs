@@ -1,0 +1,167 @@
+// The decisions that stand between a stranger and our Sarvam bill, checked
+// without an AWS account. Everything here is pure: `usage.mjs` moves the
+// numbers, `quota.mjs` says what they mean, and only the second one can be
+// wrong in a way that costs money quietly.
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+
+import {
+  BYTES_PER_SECOND,
+  FREE_TRIAL_SECONDS,
+  GLOBAL_DAILY_SECONDS,
+  PRO_MONTHLY_SECONDS,
+  audioSeconds,
+  capFor,
+  dayKey,
+  decide,
+  globalKey,
+  licenseKey,
+  monthKey,
+  subjectFrom,
+  usageKey,
+} from "../quota.mjs";
+
+// ── Who is calling ──────────────────────────────────────────────────────────
+
+test("a prefixed licence and a prefixed device token are told apart", () => {
+  assert.deepEqual(subjectFrom("lic_ABC-123"), { kind: "license", id: "ABC-123" });
+  assert.deepEqual(subjectFrom("dev_ABC-123"), { kind: "device", id: "ABC-123" });
+});
+
+test("an unprefixed token is a device — every build up to 0.3.0 sends one", () => {
+  const legacy = "7C6C4E1A-58F9-4E2E-9E1B-2F0A3B4C5D6E";
+  assert.deepEqual(subjectFrom(legacy), { kind: "device", id: legacy });
+});
+
+test("a licence key and a device token are indistinguishable WITHOUT the prefix", () => {
+  // Both are v4-shaped UUIDs. This is why the prefix exists at all, and the
+  // assertion is here so that removing it fails loudly rather than silently
+  // metering every paying customer as a free trial.
+  const uuid = "7C6C4E1A-58F9-4E2E-9E1B-2F0A3B4C5D6E";
+  assert.equal(subjectFrom(uuid).kind, "device");
+  assert.equal(subjectFrom(`lic_${uuid}`).kind, "license");
+});
+
+test("nothing, an empty string, or a bare prefix is not a subject", () => {
+  for (const bad of [null, undefined, "", "lic_", "dev_", 42, {}]) {
+    assert.equal(subjectFrom(bad), null, `${JSON.stringify(bad)} should not be a subject`);
+  }
+});
+
+// ── Where the numbers live ──────────────────────────────────────────────────
+
+const AUG = Date.UTC(2026, 7, 10, 12, 0, 0);
+const SEP = Date.UTC(2026, 8, 1, 0, 0, 0);
+
+test("a device's trial key carries no month — the trial is once, not monthly", () => {
+  const device = subjectFrom("dev_abc");
+  assert.equal(usageKey(device, AUG), "dev:abc");
+  assert.equal(usageKey(device, SEP), "dev:abc", "a new month must not reset a lifetime trial");
+});
+
+test("a licence meters per calendar month, so the key rolls over on its own", () => {
+  const licence = subjectFrom("lic_xyz");
+  assert.equal(usageKey(licence, AUG), "lic:xyz#2026-08");
+  assert.equal(usageKey(licence, SEP), "lic:xyz#2026-09");
+});
+
+test("a licence's cached verdict is a different row from its usage", () => {
+  const licence = subjectFrom("lic_xyz");
+  assert.notEqual(licenseKey(licence), usageKey(licence, AUG));
+  assert.equal(licenseKey(licence), "lic:xyz");
+});
+
+test("month and day keys are UTC, so a limit never resets at an unpredictable hour", () => {
+  // 23:30 UTC on the 10th is already the 11th in India. The key must not care.
+  const lateUTC = Date.UTC(2026, 7, 10, 23, 30, 0);
+  assert.equal(dayKey(lateUTC), "2026-08-10");
+  assert.equal(monthKey(lateUTC), "2026-08");
+  assert.equal(globalKey(lateUTC), "global#2026-08-10");
+});
+
+test("the last instant of a month and the first of the next differ", () => {
+  assert.equal(monthKey(Date.UTC(2026, 7, 31, 23, 59, 59)), "2026-08");
+  assert.equal(monthKey(Date.UTC(2026, 8, 1, 0, 0, 0)), "2026-09");
+});
+
+// ── Seconds from bytes, without touching the audio ──────────────────────────
+
+test("audio seconds come from the body's length, never from its contents", () => {
+  assert.equal(audioSeconds(BYTES_PER_SECOND), 1);
+  assert.equal(audioSeconds(BYTES_PER_SECOND * 25), 25, "one 25s chunk");
+  assert.equal(audioSeconds(0), 0);
+  assert.equal(audioSeconds(null), 0);
+  assert.equal(audioSeconds(-5), 0);
+});
+
+test("multipart overhead over-counts, which is the safe direction for a limit", () => {
+  const overhead = 400;
+  const seconds = audioSeconds(BYTES_PER_SECOND * 25 + overhead);
+  assert.ok(seconds > 25, "must not under-count");
+  assert.ok(seconds < 25.02, `overhead should be well under 1%, got ${seconds}`);
+});
+
+// ── The decision ────────────────────────────────────────────────────────────
+
+const under = { tier: "free", usedSeconds: 60, globalUsedSeconds: 60 };
+
+test("a fresh free install is allowed, and is told what is left", () => {
+  const v = decide(under);
+  assert.equal(v.allowed, true);
+  assert.equal(v.status, 200);
+  assert.equal(v.remainingSeconds, FREE_TRIAL_SECONDS - 60);
+});
+
+test("free past the trial is 402, not 429 — it is a state, not a hiccup", () => {
+  const v = decide({ ...under, usedSeconds: FREE_TRIAL_SECONDS + 1 });
+  assert.equal(v.allowed, false);
+  assert.equal(v.status, 402);
+  assert.match(v.error, /on your Mac/, "the message must say the app keeps working");
+});
+
+test("exactly at the cap is still allowed; past it is not", () => {
+  assert.equal(decide({ ...under, usedSeconds: FREE_TRIAL_SECONDS }).allowed, true);
+  assert.equal(decide({ ...under, usedSeconds: FREE_TRIAL_SECONDS + 0.1 }).allowed, false);
+});
+
+test("pro gets ten times the free allowance, per month", () => {
+  assert.equal(capFor("pro"), PRO_MONTHLY_SECONDS);
+  assert.equal(capFor("free"), FREE_TRIAL_SECONDS);
+  assert.equal(capFor(undefined), FREE_TRIAL_SECONDS, "an unknown tier must not be generous");
+});
+
+test("pro past fair use is 429 — there is nothing to buy, so it is not 402", () => {
+  const v = decide({ tier: "pro", usedSeconds: PRO_MONTHLY_SECONDS + 1, globalUsedSeconds: 0 });
+  assert.equal(v.status, 429);
+  assert.match(v.error, /fair-use/);
+});
+
+test("the global ceiling stops everybody, including pro", () => {
+  const v = decide({
+    tier: "pro",
+    usedSeconds: 0,
+    globalUsedSeconds: GLOBAL_DAILY_SECONDS + 1,
+  });
+  assert.equal(v.allowed, false);
+  assert.equal(v.status, 429);
+});
+
+test("the global ceiling is reported as ours, not as the caller's fault", () => {
+  const v = decide({
+    tier: "pro",
+    usedSeconds: PRO_MONTHLY_SECONDS + 1,
+    globalUsedSeconds: GLOBAL_DAILY_SECONDS + 1,
+  });
+  // Both limits are blown. The service's own ceiling wins the explanation,
+  // because telling a paying customer they are out of quota when the service
+  // is would send them to support instead of to a retry.
+  assert.match(v.error, /daily ceiling/);
+});
+
+test("a refusal always reports zero remaining, never a negative number", () => {
+  for (const tier of ["free", "pro"]) {
+    const v = decide({ tier, usedSeconds: 10 ** 9, globalUsedSeconds: 0 });
+    assert.equal(v.remainingSeconds, 0);
+  }
+});
