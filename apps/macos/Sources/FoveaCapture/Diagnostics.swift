@@ -57,6 +57,11 @@ enum Diagnostics {
 
         lines.append("transcription: \(transcriberDescription())")
         lines.append("relay configured: \(Credentials.relayURL ?? "none — this build has no relay")")
+        // WHICH SUBJECT THE QUOTA IS COUNTED AGAINST. A PREFIX ONLY, matching
+        // what the relay logs — enough to line a bug report up with a row in
+        // the usage table, and not the whole bearer, which a diagnostics blob
+        // gets pasted into public issue trackers.
+        lines.append("plan: \(License.isPro ? "Pro" : "Free") · subject \(License.bearerToken().prefix(12))…")
         lines.append("runtime: \(NodeRuntime.resolve()?.path ?? "NOT FOUND")")
         lines.append("layout: \(Layout.resolve().map(String.init(describing:)) ?? "NOT FOUND")")
         lines.append("sessions recorded: \(sessionCount())")

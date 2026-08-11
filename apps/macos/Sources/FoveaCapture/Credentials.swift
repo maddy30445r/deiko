@@ -1,4 +1,6 @@
+import CryptoKit
 import Foundation
+import IOKit
 import Security
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -28,7 +30,20 @@ enum Credentials {
     /// thing the pipeline cannot work out for itself.
     static func childEnvironment() -> [String: String] {
         var env = ProcessInfo.processInfo.environment
-        for name in names {
+
+        // BRINGING YOUR OWN KEY IS PART OF PRO, and the gate has to be HERE
+        // rather than only on the Settings boxes. A disabled text field stops
+        // somebody typing a new key; it does nothing about a key already in the
+        // keychain from before there was anything to pay for, and a gate that
+        // only guards the door people are not using is decoration.
+        //
+        // A developer checkout is never gated: a key in the process environment
+        // or in the `.env` beside the app belongs to whoever is building this,
+        // and `make dev` must not need a licence.
+        //
+        // Skipping the read also skips a keychain DECRYPT for everybody on the
+        // free tier, which is a password prompt they now never see.
+        for name in names where willUse(name) {
             if let value = value(for: name) { env[name] = value }
         }
         // WHERE THE APP IS. `transcribe.mjs` relaunches Fovea through
@@ -46,9 +61,14 @@ enum Credentials {
         // set, so a developer with their own Sarvam key never touches the
         // relay, and everybody else transcribes without holding an account
         // anywhere. Absent both, they still get a brief from on-device words.
+        //
+        // The token is `License.bearerToken()` rather than the device token
+        // directly, so a paying install sends `lic_…` and everybody else sends
+        // `dev_…`. The relay cannot tell the two apart by shape — both are
+        // v4-shaped UUIDs — and gets it wrong in both directions if it tries.
         if let relay = relayURL {
             env["FOVEA_RELAY_URL"] = relay
-            env["FOVEA_RELAY_TOKEN"] = deviceToken()
+            env["FOVEA_RELAY_TOKEN"] = License.bearerToken()
         }
         return env
     }
@@ -110,6 +130,13 @@ enum Credentials {
            !fromProcess.isEmpty {
             return fromProcess
         }
+        // THE MACHINE, NOT THE PREFERENCES FILE. See `hardwareIdentifier`.
+        if let derived = hardwareIdentifier() { return derived }
+
+        // Nothing to derive from — a VM, or hardware that stops answering.
+        // A Mac we cannot identify gets a trial rather than an error: the
+        // stored random id is the pre-existing behaviour, kept exactly as it
+        // was for this one case.
         if let existing = UserDefaults.standard.string(forKey: tokenKey), !existing.isEmpty {
             return existing
         }
@@ -121,10 +148,16 @@ enum Credentials {
         // afresh rather than migrated: reading the old one across would have
         // charged the exact prompt this change exists to remove.
         //
-        // Losing the old value costs nothing. The token identifies an install
-        // for rate-limiting, and a new install is what a re-minted token looks
-        // like — there is no server-side state keyed to it beyond a warm
-        // container's counter.
+        // THIS USED TO SAY losing the old value costs nothing, because there
+        // was no server-side state keyed to it beyond a warm container's
+        // counter. That stopped being true the day the relay started metering:
+        // a lifetime free-trial balance now hangs off this exact string, so a
+        // re-mint is a fresh thirty minutes at our expense.
+        //
+        // It is still the right call HERE, because this branch only runs when
+        // there was nothing to lose — the keychain item is being deleted
+        // precisely because we are about to stop using it, and any Mac that
+        // reaches this line had no derivable hardware id either.
         SecItemDelete([
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -134,6 +167,52 @@ enum Credentials {
     }
 
     private static let tokenKey = "FOVEA_DEVICE_TOKEN"
+
+    /// This Mac, as a number that cannot be turned back into this Mac.
+    ///
+    /// The free trial is thirty minutes ONCE, and it used to be keyed to a
+    /// random id in `~/Library/Preferences/com.fovea.capture.plist` — so
+    /// `defaults delete` bought another thirty, and so did a second macOS
+    /// login. Deriving from the hardware closes both.
+    ///
+    /// WHAT THIS COSTS, said out loud because the product is sold on privacy:
+    /// a stable machine-derived identifier IS more identifying than a random
+    /// per-install one. That is a real regression, accepted deliberately, and
+    /// mitigated rather than hidden:
+    ///
+    ///   • the raw `IOPlatformUUID` is never stored, never written to disk and
+    ///     never sent — only the digest leaves this function;
+    ///   • it is SALTED, so the digest cannot be lined up against any other
+    ///     product that fingerprints the same Mac. The salt ships inside the
+    ///     app and is therefore readable by anyone holding it: this defeats
+    ///     cross-service correlation by a third party, NOT by us. Claiming
+    ///     more would be the kind of privacy theatre this file exists to avoid;
+    ///   • it identifies a machine, not a person. There is still no account, no
+    ///     email, and nothing here that says who you are.
+    ///
+    /// Returns nil rather than trapping when IOKit has nothing to say — a VM,
+    /// or hardware that answers differently one day. The caller falls back.
+    private static func hardwareIdentifier() -> String? {
+        let service = IOServiceGetMatchingService(
+            kIOMainPortDefault, IOServiceMatching("IOPlatformExpertDevice")
+        )
+        guard service != 0 else { return nil }
+        defer { IOObjectRelease(service) }
+
+        guard let property = IORegistryEntryCreateCFProperty(
+            service, kIOPlatformUUIDKey as CFString, kCFAllocatorDefault, 0
+        )?.takeRetainedValue() as? String, !property.isEmpty else { return nil }
+
+        // Versioned, so that changing what we hash is a deliberate act with a
+        // visible consequence — every install becomes a new subject — rather
+        // than something that happens quietly during a refactor.
+        let salt = "fovea.device.v1:"
+        let digest = SHA256.hash(data: Data((salt + property).utf8))
+        let hex = digest.map { String(format: "%02x", $0) }.joined()
+        // Half a SHA-256 is 128 bits: far past any collision concern for a
+        // population of Macs, and short enough to read in a log line.
+        return String(hex.prefix(32))
+    }
 
     /// Where a key comes from, in order.
     ///
@@ -156,6 +235,32 @@ enum Credentials {
             return fromKeychain
         }
         return dotEnv()[name]
+    }
+
+    /// WILL THE PIPELINE ACTUALLY USE THIS KEY?
+    ///
+    /// The single source of truth for the BYO gate. `childEnvironment()` asks it
+    /// to decide what to pass, and Settings asks it to decide what to say —
+    /// because the rule was briefly written out in both places and they
+    /// disagreed. The window told a developer whose `.env` key was live that
+    /// "transcription runs on this Mac. Nothing is uploaded", which is the one
+    /// sentence in this app that must never be wrong.
+    ///
+    /// Asks only `exists`-style questions, so it never decrypts and never
+    /// prompts.
+    static func willUse(_ name: String) -> Bool {
+        guard exists(name) else { return false }
+        return License.isPro || isDeveloperSourced(name)
+    }
+
+    /// Did this key come from a checkout rather than from the Settings window?
+    ///
+    /// Both sources belong to whoever is building Fovea rather than to somebody
+    /// who installed it, so neither is gated behind a licence. Asks only
+    /// `exists`-style questions, so it cannot prompt.
+    private static func isDeveloperSourced(_ name: String) -> Bool {
+        if ProcessInfo.processInfo.environment[name]?.isEmpty == false { return true }
+        return dotEnv()[name]?.isEmpty == false
     }
 
     /// Is a key set — without decrypting it, and therefore without a prompt.

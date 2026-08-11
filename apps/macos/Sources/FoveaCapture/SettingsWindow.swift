@@ -4,10 +4,16 @@ import SwiftUI
 // ─────────────────────────────────────────────────────────────────────────────
 // SETTINGS — the one thing a fresh install needs
 //
-// A transcription key. Nothing else belongs here: every other decision Fovea
-// makes is either settled in the design or answered per-session on the orb.
-// There used to be a row per coding client, writing that client's MCP config —
-// gone along with the bridge it pointed at. Nothing needs connecting any more.
+// A licence key, and a transcription key. Nothing else belongs here: every
+// other decision Fovea makes is either settled in the design or answered
+// per-session on the orb. There used to be a row per coding client, writing
+// that client's MCP config — gone along with the bridge it pointed at. Nothing
+// needs connecting any more.
+//
+// The licence row is not a sign-in. There is no email, no password, no account
+// to recover — the key IS the entitlement, and the window says so, because a
+// box that looks like a login makes people go looking for a password they were
+// never given.
 // ─────────────────────────────────────────────────────────────────────────────
 
 @MainActor
@@ -28,7 +34,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         let window = NSWindow(contentViewController: hosting)
         window.title = "Fovea Settings"
         window.styleMask = [.titled, .closable, .miniaturizable]
-        window.setContentSize(NSSize(width: 520, height: 460))
+        // Tall enough that Save is reachable without scrolling. 460 was right
+        // when this window held two key rows; the plan card added ~160pt and
+        // pushed the button below the fold, which makes a form look broken.
+        window.setContentSize(NSSize(width: 520, height: 620))
         window.center()
         window.delegate = self
         window.isReleasedWhenClosed = false
@@ -62,18 +71,81 @@ final class SettingsModel: ObservableObject {
     @Published private(set) var sarvamStored = Credentials.exists("SARVAM_API_KEY")
     @Published private(set) var groqStored = Credentials.exists("GROQ_API_KEY")
 
+    // ── Licence ─────────────────────────────────────────────────────────────
+
+    /// Shown in full rather than masked. It is not a secret — the relay treats
+    /// it as a bearer and says so out loud — and somebody who has just pasted a
+    /// key out of an email needs to be able to see that they pasted it right.
+    @Published var licenseKey: String = License.key ?? ""
+    @Published private(set) var checking = false
+
+    /// What the relay last said about this install, in one line.
+    @Published private(set) var plan = "Free"
+    @Published private(set) var planDetail = "checking…"
+    @Published private(set) var planIsProblem = false
+
+    var isPro: Bool { License.isPro }
+
+    /// Ask the relay what this install is. Also the confirmation that a pasted
+    /// key worked, which is why it runs on open and again on save.
+    func refreshPlan() async {
+        checking = true
+        defer { checking = false }
+        do {
+            let quota = try await License.refresh()
+            plan = quota.isPro ? "Pro" : "Free"
+            planDetail = quota.isPro
+                ? "\(quota.remainingSentence) this month"
+                : (License.key == nil
+                    ? "\(quota.remainingSentence) of your trial"
+                    : "that key is not active — \(quota.remainingSentence) of your trial")
+            planIsProblem = !quota.isPro && License.key != nil
+        } catch License.Failure.noRelay {
+            plan = "On-device"
+            planDetail = "this build has no transcription service — nothing is uploaded"
+            planIsProblem = false
+        } catch {
+            // An unreachable relay is NOT reported as a downgrade. The cached
+            // verdict still stands for a week, and telling somebody who has
+            // paid that they are on Free because their wifi dropped is the
+            // wrong failure to make loud.
+            plan = License.isPro ? "Pro" : "Free"
+            planDetail = "could not reach Fovea just now"
+            planIsProblem = false
+        }
+    }
+
+    func saveLicense() async {
+        License.store(licenseKey)
+        await refreshPlan()
+    }
+
     /// "Sarvam: from your login keychain · Groq: not set" — per key, because
     /// the two can genuinely come from different places.
     var keySources: String {
         "Sarvam: \(Credentials.source(of: "SARVAM_API_KEY")) · Groq: \(Credentials.source(of: "GROQ_API_KEY"))"
     }
 
-    /// Whether a key is set at all — no longer a warning, because a session
-    /// without one now works. What it changes is WHO transcribes, and that is
-    /// worth saying plainly rather than as an alarm.
+    /// Whether a key will actually be USED — not merely whether one is stored.
+    ///
+    /// The two differ now that BYO is gated: a key can sit in the keychain and
+    /// be ignored, and a `.env` key is used even without a licence. `willUse`
+    /// is the same question the pipeline asks, which is the point — this used
+    /// to be its own rule and told a developer their live key was not in play.
     var usingOwnKey: Bool {
         if sarvamTouched { return !sarvamKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        return sarvamStored
+        return Credentials.willUse("SARVAM_API_KEY")
+    }
+
+    /// The little grey word beside a key's label.
+    ///
+    /// "Pro" would be a lie on a checkout, where the `.env` key is live without
+    /// anybody having paid — so the tag reports what is TRUE of this key rather
+    /// than what is true of the plan.
+    func tag(for name: String) -> String {
+        if License.isPro { return "optional" }
+        if Credentials.willUse(name) { return "in use" }
+        return "Pro"
     }
 
     /// Where narration audio goes, in one sentence, stated before anything is
@@ -83,7 +155,9 @@ final class SettingsModel: ObservableObject {
             return "Your narration goes straight to Sarvam with your key. Fovea's servers never see it."
         }
         if Credentials.relayURL != nil {
-            return "Your narration goes to Fovea, which passes it to a transcription service and keeps nothing. Add your own key below to skip Fovea entirely."
+            return isPro
+                ? "Your narration goes to Fovea, which passes it to a transcription service and keeps nothing. Add your own key below to skip Fovea entirely."
+                : "Your narration goes to Fovea, which passes it to a transcription service and keeps nothing. When your trial runs out, transcription continues on this Mac."
         }
         return "Transcription runs on this Mac. Nothing is uploaded — accuracy is lower, especially for mixed-language speech."
     }
@@ -123,6 +197,8 @@ private struct SettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                SectionLabel("PLAN")
+                licence
                 SectionLabel("TRANSCRIPTION")
                 keys
                 Text("Keys never leave the login keychain. Your recording is deleted as soon as the brief is made — what stays on this Mac is the brief and its screenshots.")
@@ -133,6 +209,46 @@ private struct SettingsView: View {
                 about
             }
             .padding(24)
+        }
+        .task { await model.refreshPlan() }
+    }
+
+    /// The plan, and the box that changes it. No email, no password — the line
+    /// underneath says so, because a key field with a Save button next to it
+    /// otherwise reads as half a login form.
+    private var licence: some View {
+        InsetCard {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Text(model.plan)
+                        .font(.system(size: 13, weight: .semibold))
+                    Text(model.checking ? "checking…" : model.planDetail)
+                        .font(.system(size: 11))
+                        .foregroundStyle(model.planIsProblem ? FoveaStyle.needsYou : .secondary)
+                    Spacer()
+                }
+
+                HStack(spacing: 10) {
+                    Text("Licence key")
+                        .font(.system(size: 13))
+                        .frame(width: 96, alignment: .leading)
+                    TextField("paste the key from your email…", text: $model.licenseKey)
+                        .font(.system(size: 12, design: .monospaced))
+                        .textFieldStyle(.roundedBorder)
+                }
+
+                HStack {
+                    Text("No account, no password. The key is the whole thing.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Apply") { Task { await model.saveLicense() } }
+                        .disabled(model.checking)
+                        .tint(FoveaStyle.accent)
+                }
+                .padding(.top, 2)
+            }
+            .padding(14)
         }
     }
 
@@ -145,12 +261,22 @@ private struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.bottom, 2)
 
-                keyRow(label: "Sarvam", tag: "optional", text: $model.sarvamKey,
+                keyRow(label: "Sarvam", tag: model.tag(for: "SARVAM_API_KEY"),
+                       text: $model.sarvamKey,
                        touched: $model.sarvamTouched,
-                       prompt: model.placeholder(stored: model.sarvamStored))
-                keyRow(label: "Groq", tag: "optional", text: $model.groqKey,
+                       prompt: model.placeholder(stored: model.sarvamStored),
+                       enabled: model.isPro)
+                keyRow(label: "Groq", tag: model.tag(for: "GROQ_API_KEY"),
+                       text: $model.groqKey,
                        touched: $model.groqTouched,
-                       prompt: model.groqStored ? model.placeholder(stored: true) : "gsk_…")
+                       prompt: model.groqStored ? model.placeholder(stored: true) : "gsk_…",
+                       enabled: model.isPro)
+                if !model.isPro && !model.usingOwnKey {
+                    Text("Using your own keys is part of Pro — then your narration never touches Fovea's servers at all.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 HStack {
                     // No longer a warning. A missing key used to mean briefs
                     // stopped at "Transcribing…"; now it means somebody else
@@ -162,6 +288,7 @@ private struct SettingsView: View {
                     Button("Save") { model.saveKeys() }
                         .keyboardShortcut(.defaultAction)
                         .tint(FoveaStyle.accent)
+                        .disabled(!model.isPro)
                 }
                 .padding(.top, 2)
             }
@@ -192,7 +319,7 @@ private struct SettingsView: View {
 
     private func keyRow(
         label: String, tag: String, text: Binding<String>,
-        touched: Binding<Bool>, prompt: String
+        touched: Binding<Bool>, prompt: String, enabled: Bool
     ) -> some View {
         HStack(spacing: 10) {
             (Text(label).font(.system(size: 13))
@@ -201,8 +328,10 @@ private struct SettingsView: View {
             SecureField(prompt, text: text)
                 .font(.system(size: 12, design: .monospaced))
                 .textFieldStyle(.roundedBorder)
+                .disabled(!enabled)
                 .onChange(of: text.wrappedValue) { touched.wrappedValue = true }
         }
+        .opacity(enabled ? 1 : 0.55)
     }
 }
 
