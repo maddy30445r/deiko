@@ -106,10 +106,19 @@ A relay with no key answers `ok` happily and then 503s every real request.
 | `FOVEA_PRO_VARIANT_IDS` | Lemon Squeezy variant ids that mean Pro. Unset = any live licence is Pro. |
 | `LEMONSQUEEZY_API_KEY` | only if the validate endpoint starts demanding one |
 
-Then set `defaultRelayURL` in `apps/capture/Sources/FoveaCapture/Credentials.swift`
-to the deployed origin. It is `nil` until you do — deliberately, because a relay
-that fails on every session is worse than no relay: the on-device fallback is
-silent and the failure is not.
+Then point a build at it — **not by editing Swift.** The origin is deployment
+configuration, stamped into the bundle's `Info.plist`:
+
+```sh
+make install RELAY_URL=https://<id>.lambda-url.<region>.on.aws
+```
+
+`Credentials.relayURL` reads the `FoveaRelayURL` key back out, and it is empty
+until a build stamps it — deliberately, because a relay that fails on every
+session is worse than no relay: the on-device fallback is silent and the failure
+is not. This used to say "set `defaultRelayURL` in `Credentials.swift`", which
+has not been a source constant since it moved to the plist; anyone following it
+edited a file that changes nothing and shipped a build with no relay.
 
 ## What this service must never do
 
@@ -188,11 +197,12 @@ In order, cheapest first:
    then judged, in one round trip, so concurrent chunks cannot both claim room
    only one of them has.
 3. **The global daily ceiling** — the one that does not depend on honest
-   clients. Every per-subject limit above is forgeable: the device token lives
-   in `UserDefaults`, so `defaults delete` buys another free trial, and nothing
-   in a client we ship can change that. The ceiling caps the whole service's
-   audio for a day no matter how many tokens somebody mints. Four hours is
-   ₹120/day.
+   clients. Per-subject limits are *harder* to forge than they were, not
+   impossible: the identifier is derived from the machine rather than stored in
+   preferences, so `defaults delete` no longer buys a trial — but a VM, a
+   borrowed Mac, or anyone willing to patch the client still can. The ceiling
+   caps the whole service's audio for a day no matter how many subjects exist.
+   Four hours is ₹120/day.
 4. **Reserved concurrency** — 5 by default. A blast radius, not a quota.
 5. **The revocation list, and the AWS budget alarm.** The alarm should fire long
    before the ceiling does: the ceiling stops a disaster, the alarm tells you

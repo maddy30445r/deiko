@@ -98,12 +98,33 @@ setting that makes them.
 
 Transcription picks the first of these that is available:
 
-1. **your own Sarvam API key**, if you add one in Settings — your key, your
-   bill, and Fovea's servers never see the audio;
-2. **Fovea's service**, which forwards the audio to a transcription provider
-   and keeps nothing;
-3. **this Mac alone** — no upload at all. Accuracy is lower, especially for
-   mixed-language speech.
+1. **your own Sarvam API key** — your key, your bill, and Fovea's servers never
+   see the audio. Part of Pro; a checkout using a `.env` is never gated.
+2. **Fovea's service**, which forwards the audio to a transcription provider and
+   keeps nothing. Free installs get **30 minutes of it, once**; Pro gets five
+   hours a month.
+3. **this Mac alone** — no upload at all, using Apple's on-device recogniser.
+   Accuracy is lower, especially for mixed-language speech.
+
+**Running out is not an error.** When the free 30 minutes are gone, sessions keep
+working on option 3 — the brief still renders, from Apple's words. Nothing breaks
+and nothing stops; the accuracy is just the accuracy Apple gives you.
+
+## Plans
+
+| | |
+|---|---|
+| **Free** | The whole app. 30 minutes of Fovea's transcription, once, then on-device forever. |
+| **Pro — $4/mo or $40/yr** | Five hours of transcription a month, or bring your own Sarvam key and use none of ours. |
+
+A licence key is pasted into Settings. **There is no account** — no email, no
+password, no profile, nothing to sign into and nothing of yours to breach. The
+key is the whole thing.
+
+The free trial is counted against your Mac using a one-way hash of its hardware
+id. We never see or store the id itself, and it identifies a machine rather than
+a person — but it is a stable pseudonym that survives reinstalling, and it would
+be dishonest to say otherwise.
 
 ## Using it
 

@@ -32,11 +32,13 @@ export const PRO_MONTHLY_SECONDS = 5 * 60 * 60;
 
 /// THE BACKSTOP THAT DOES NOT DEPEND ON HONEST CLIENTS.
 ///
-/// Every per-subject limit above is forgeable: a device token lives in
-/// `UserDefaults`, so `defaults delete` buys another free trial, and no amount
-/// of cleverness in a client we ship can change that. This is the number that
-/// actually bounds the bill — whatever anybody mints, the service will not buy
-/// more than this much audio in a day.
+/// Per-subject limits are harder to forge than they were and are not
+/// unforgeable: the device token is derived from the machine's hardware id
+/// rather than kept in preferences, so `defaults delete` no longer mints a
+/// fresh trial — but a VM, a second Mac, or a patched client still will, and no
+/// amount of cleverness in a client we ship can change that. This is the number
+/// that actually bounds the bill — whatever anybody mints, the service will not
+/// buy more than this much audio in a day.
 ///
 /// Four hours is ₹120/day, so a maximally bad month is ~₹3,600 against an AWS
 /// budget alarm set at ₹500. That gap is deliberate: the alarm should fire long
