@@ -226,6 +226,14 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // is installed until every grant is in.
         welcome.onOpenSettings = { [weak self] in self?.settings.present() }
         welcome.presentIfNeeded()
+
+        // Detached, and nothing waits for it: the menu is already usable, and a
+        // slow or absent network must not delay the app coming up. When it
+        // finds something the menu rebuilds and grows one item.
+        Task { @MainActor in
+            await Update.check()
+            if Update.available != nil { rebuildMenu() }
+        }
     }
 
     private func refresh() {
@@ -311,6 +319,15 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
             action: #selector(openWelcome),
             keyEquivalent: ""
         ))
+        // Only when there is one. An always-present "Check for updates…" is a
+        // chore the user has to perform; this is an answer they already have.
+        if let update = Update.available {
+            menu.addItem(NSMenuItem(
+                title: "Update to \(update.version)…",
+                action: #selector(openUpdatePage),
+                keyEquivalent: ""
+            ))
+        }
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Fovea", action: #selector(quit), keyEquivalent: "q"))
 
@@ -439,6 +456,10 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Task { @MainActor in
             _ = await recorder.stopSession()
         }
+    }
+
+    @objc private func openUpdatePage() {
+        Update.openReleasePage()
     }
 
     /// Ask for every missing permission in turn.

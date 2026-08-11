@@ -27,6 +27,15 @@
 	<key>FoveaRelayURL</key>
 	<string></string>
 
+	<!--
+	  Where the site is, stamped by `make bundle SITE_URL=…` for the same reason
+	  as the relay above. The app asks it once at launch whether there is a newer
+	  release. Empty means no site yet, and therefore no update check — the local
+	  build's normal state.
+	-->
+	<key>FoveaSiteURL</key>
+	<string></string>
+
 	<key>CFBundleIconFile</key>
 	<string>Fovea</string>
 	<key>LSMinimumSystemVersion</key>

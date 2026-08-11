@@ -21,6 +21,21 @@ Claude Code window               and submitted for you
 
 ## Install
 
+Requires macOS 14 or later.
+
+```sh
+curl -fsSL https://<site>/install.sh | sh
+```
+
+That fetches the latest release, copies it to `/Applications`, clears the
+download quarantine and launches it. [Read it first](scripts/install.sh) — it is
+short, and piping a stranger's script into `sh` deserves a look.
+
+The site has no domain yet, so there is no `<site>` to paste. Until there is,
+builds are handed over as a DMG directly and installed by hand:
+
+### By hand
+
 1. Open the DMG and drag **Fovea** to Applications.
 2. **Before launching**, clear the quarantine:
    ```sh
@@ -164,20 +179,25 @@ transcriber would run, and your own Sarvam key outranks the relay — so on your
 machine it reads "your own Sarvam key" whether the URL was stamped or not. It
 cannot fail, which makes it the worse kind of check: the trusted kind.
 
-**Access is repo access.** The repository is private, so a release asset
-returns **404** to anyone who is not a collaborator — not a login page, a plain
-404, which reads like a broken link. Sharing the URL is therefore not enough:
-add each teammate under Settings → Collaborators first, or
-`gh api -X PUT repos/<owner>/Fovea/collaborators/<user> -f permission=pull`.
-Whoever can see the repo can fetch the build, and nobody else can — which is
-the access list you want while the app is unsigned anyway.
+**Builds go to the site, not to this repo.** `make release SITE_URL=…` puts the
+DMG and a `version.json` under `/download` on the landing site, and tags *this*
+repo, which stays private — the site holds the binary, this repo holds the
+commit that produced it. "Who may read the code" and "who may download the app"
+are separate questions; they were the same answer only because releases used to
+be cut here, and an asset on a private repo returns a bare **404** to a
+stranger, which reads like a broken link rather than a permission problem.
 
-**What a teammate does to update:** quit Fovea, drag the new build over the old
-one in Applications, and clear quarantine again
-(`xattr -dr com.apple.quarantine /Applications/Fovea.app`). The four
-permissions survive, because the app keeps the same signing identity. Anyone
-who pasted their own Sarvam key gets one login-password prompt on their first
-session after updating — see below.
+`make release` refuses when `SITE_URL` is empty. A build nobody can reach is
+not a release.
+
+**What somebody does to update:** re-run the install command — it replaces the
+existing install and clears quarantine again. The four permissions survive,
+because the app keeps the same signing identity. Anyone who pasted their own
+Sarvam key gets one login-password prompt on their first session after updating
+— see below.
+
+Fovea checks for a newer release once at launch and, if there is one, grows an
+**"Update to …"** item in its menu. It never installs anything by itself.
 
 ### The one rough edge in updates
 

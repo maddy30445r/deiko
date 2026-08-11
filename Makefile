@@ -84,6 +84,24 @@ BUILD := $(shell git rev-list --count HEAD 2>/dev/null || echo 1)
 # generator has not been chosen yet.
 SITE_DIR ?= site
 
+# WHERE THE SITE IS SERVED FROM, once it has a domain.
+#
+# ONE download location, and it is the site — the same place the landing page,
+# the pricing and the docs live. The app fetches `$(SITE_URL)/download/version.json`
+# to find out whether it is out of date, and `install.sh` fetches the DMG from
+# beside it.
+#
+# Empty until the domain exists, and that is a supported state: an app with no
+# site URL simply never checks for updates, exactly as an app with no RELAY_URL
+# transcribes on-device. Better than pointing at a host that does not answer.
+#
+# This deliberately does NOT use GitHub Releases. It would be free bandwidth,
+# but it is a second place to publish and to keep in step, and its unauthenticated
+# API allows 60 requests/hour PER IP — a team behind one NAT shares that budget
+# for a check that should never be able to fail noisily. A static JSON on
+# CloudFront has no such limit.
+SITE_URL ?=
+
 bundle: $(DEBUG_BIN) resources
 	@cp $(CAPTURE_DIR)/Sources/FoveaCapture/Info.plist $(APP)/Contents/Info.plist
 	@cp $(DEBUG_BIN) $(APP)/Contents/MacOS/fovea-capture
@@ -91,6 +109,7 @@ bundle: $(DEBUG_BIN) resources
 	@/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $(VERSION)" $(APP)/Contents/Info.plist
 	@/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(BUILD)" $(APP)/Contents/Info.plist
 	@/usr/libexec/PlistBuddy -c "Set :FoveaRelayURL $(RELAY_URL)" $(APP)/Contents/Info.plist
+	@/usr/libexec/PlistBuddy -c "Set :FoveaSiteURL $(SITE_URL)" $(APP)/Contents/Info.plist
 ifneq ($(RELAY_URL),)
 	@echo "  relay: $(RELAY_URL)"
 else
@@ -169,6 +188,14 @@ dmg: dist
 	@printf '%s\n' \
 		'Fovea $(VERSION)' \
 		'' \
+		'EASIEST: skip this disk image entirely. Paste this into Terminal and' \
+		'it does all of the below for you:' \
+		'' \
+		'     curl -fsSL $(SITE_URL)/install.sh | sh' \
+		'' \
+		'' \
+		'BY HAND:' \
+		'' \
 		'1. Drag Fovea onto the Applications folder.' \
 		'' \
 		'2. BEFORE LAUNCHING, run this once in Terminal:' \
@@ -194,6 +221,8 @@ dmg: dist
 		'   Option to stop — then drag the resulting coin onto your Claude' \
 		'   Code window.' \
 		'' \
+		'Requires macOS 14 or later.' \
+		'' \
 		'Full documentation: README.md, beside this file.' \
 		> 'build/dmg/Read me first.txt'
 	@hdiutil create -volname "Fovea $(VERSION)" -srcfolder build/dmg \
@@ -202,50 +231,34 @@ dmg: dist
 	@echo "  the app inside is SELF-SIGNED — the receiver must bypass Gatekeeper."
 	@echo "  'Read me first.txt' in the window tells them how."
 
-## release — cut a GitHub Release with the DMG attached
+## release — publish the DMG on the site and tag the commit it came from
 ##
-##   make release RELAY_URL=https://fovea-relay.fly.dev
+##   make release RELAY_URL=https://… SITE_URL=https://…
 ##
-## A PRIVATE repo is the access list. Whoever can see `maddy30445r/Fovea` can
-## download the build and nobody else can — no bucket to secure, no link to
-## leak, and the same permission the code already lives behind.
+## ONE download location, and it is the site. This used to cut a GitHub Release
+## on the private source repo, which made repo access the access list: an asset
+## returned a bare 404 to anyone who was not a collaborator, which reads like a
+## broken link rather than a permission problem. Correct for a team of three,
+## wrong for a stranger who wants to try the app.
+##
+## The TAG STILL LANDS HERE, on the source, because that is what a version has
+## to be checkable against — the site holds the binary, this repo holds the
+## commit that produced it.
 ##
 ## Refuses on a dirty tree or an existing tag. A release whose contents do not
 ## correspond to a commit is worse than no release: the first bug report cites
 ## a version that cannot be checked out.
 release: guard-clean
+	@test -n "$(SITE_URL)" \
+		|| (echo "✗ SITE_URL is empty — a build nobody can reach is not a release"; exit 1)
 	@test -z "$$(git tag -l v$(VERSION))" \
 		|| (echo "✗ tag v$(VERSION) already exists — bump VERSION first"; exit 1)
-	@$(MAKE) --no-print-directory dmg RELAY_URL=$(RELAY_URL)
-	@printf '%s\n' \
-		'## Install' \
-		'' \
-		'1. Open the DMG and drag **Fovea** to Applications.' \
-		'2. Clear the download quarantine — **do this before launching**:' \
-		'   ```' \
-		'   xattr -dr com.apple.quarantine /Applications/Fovea.app' \
-		'   ```' \
-		'   Fovea is signed with a self-signed certificate rather than an Apple' \
-		'   Developer ID, so macOS quarantines it. This one command clears the' \
-		'   whole bundle, including the Node runtime inside it that the app' \
-		'   spawns to transcribe.' \
-		'' \
-		'   The GUI route (System Settings → Privacy & Security → Open Anyway)' \
-		'   lets the app launch, but may leave that nested runtime quarantined —' \
-		'   which shows up later as a session stuck at "Transcribing…".' \
-		'' \
-		'3. Launch it. A first-run window covers the four permissions.' \
-		'4. Double-tap Right Option, point at something and talk, tap Right' \
-		'   Option to stop — then drag the coin onto your Claude Code window.' \
-		'' \
-		'Full documentation is in README.md in the repo.' \
-		'' \
-		'Built from $(shell git rev-parse --short HEAD).' \
-		> build/release-notes.md
-	@gh release create v$(VERSION) $(DMG) \
-		--title "Fovea $(VERSION)" \
-		--notes-file build/release-notes.md
-	@echo "✓ https://github.com/$$(gh repo view --json nameWithOwner -q .nameWithOwner)/releases/tag/v$(VERSION)"
+	@$(MAKE) --no-print-directory dmg RELAY_URL=$(RELAY_URL) SITE_URL=$(SITE_URL)
+	@./scripts/publish-release.sh $(DMG) $(VERSION)
+	@git tag v$(VERSION)
+	@git push origin v$(VERSION)
+	@echo "✓ v$(VERSION) tagged and published"
+	@echo "  the release notes live with the site, not here — this repo ships the binary."
 
 ## Refuse to build a release out of uncommitted work.
 guard-clean:

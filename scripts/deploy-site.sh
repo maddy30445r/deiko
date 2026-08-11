@@ -115,11 +115,21 @@ DOMAIN=$(aws cloudfront get-distribution --id "$DIST_ID" --query Distribution.Do
 # HTML gets a short cache so a copy fix is live in a minute; everything else is
 # assumed to be content-addressed by the site generator and cached hard.
 
+#
+# `download/` IS NOT OURS TO DELETE. Builds are published there by
+# `scripts/publish-release.sh` on a different day from any site change, and
+# `--delete` removes whatever is in the bucket but not in $SITE_DIR — so without
+# this exclusion the next copy fix on the landing page would quietly take every
+# downloadable build with it, including the one the app's update check points at.
 say "uploading $SITE_DIR"
-aws s3 sync "$SITE_DIR" "s3://$BUCKET" --delete \
+aws s3 sync "$SITE_DIR" "s3://$BUCKET" --delete --exclude "download/*" \
   --exclude "*.html" --cache-control "public,max-age=31536000,immutable" >/dev/null
+# The download exclusion comes LAST here, not first: s3 filters are applied in
+# order and the last match wins, so putting it before `--include "*.html"` would
+# let that include put `download/*.html` back in scope for deletion.
 aws s3 sync "$SITE_DIR" "s3://$BUCKET" --delete \
-  --exclude "*" --include "*.html" --cache-control "public,max-age=60" >/dev/null
+  --exclude "*" --include "*.html" --exclude "download/*" \
+  --cache-control "public,max-age=60" >/dev/null
 
 aws cloudfront create-invalidation --distribution-id "$DIST_ID" --paths "/*" \
   --query Invalidation.Id --output text >/dev/null
