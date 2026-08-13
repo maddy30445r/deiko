@@ -113,16 +113,27 @@ const MARK_VERB = {
   emphasis: "scribbled over",
 };
 
+/** A connector's endpoint texts, redacted and truncated. These are real
+ *  captured accessibility text — from `probe.startSnapshot`/`probe.snapshot`,
+ *  same as any other referent's `ax` — not strings this module minted, so
+ *  they get the same treatment as a quote before they reach the label or the
+ *  guard. Redacted BEFORE truncation: a credential sitting past character 60
+ *  must not be sliced off and forgotten about, it has to be stripped either
+ *  way. Null unless both ends resolved. */
+function connectorEndpoints(r) {
+  if (r.mark?.kind !== "connector") return null;
+  const from = r.text?.axStart?.[0];
+  const to = r.text?.ax?.[0];
+  if (!from || !to) return null;
+  return { from: redact(from).trim().slice(0, 60), to: redact(to).trim().slice(0, 60) };
+}
+
 /** `[2] swept across` — or, when both endpoint texts exist for a connector,
  *  `[2] swept from "fetchUser()" to "OrderList"`. Null for unmarked referents,
  *  which keep the pre-mark copy so old sessions re-render byte-identical. */
-function markLabel(r) {
+function markLabel(r, endpoints) {
   if (!r.mark) return null;
-  const from = r.text?.axStart?.[0]?.slice(0, 60);
-  const to = r.text?.ax?.[0]?.slice(0, 60);
-  if (r.mark.kind === "connector" && from && to) {
-    return `[${r.mark.number}] swept from "${from}" to "${to}"`;
-  }
+  if (endpoints) return `[${r.mark.number}] swept from "${endpoints.from}" to "${endpoints.to}"`;
   return `[${r.mark.number}] ${MARK_VERB[r.mark.kind] ?? "marked"}`;
 }
 
@@ -168,6 +179,11 @@ export function buildPrompt({ narration, referents, attached = false }) {
   const quotes = new Map(
     shots.filter((r) => r.said).map((r) => [r, redact(r.said).trim()]),
   );
+  // A connector's endpoint texts are screen content spliced into the label
+  // below (see `connectorEndpoints`) — collected here so they also reach
+  // `evidence`'s fenced block, the only place `assertNoSecrets`'s stronger
+  // check looks. Already redacted per-string by `connectorEndpoints`.
+  const connectorLines = [];
   if (shots.length) {
     // "marked" copy only when EVERY shot carries a mark — a mix of marked and
     // unmarked referents is a session recorded partway through the rollout,
@@ -194,7 +210,9 @@ export function buildPrompt({ narration, referents, attached = false }) {
             : "Screenshots of what I circled:",
       ...shots.map((r, i) => {
         const quote = quotes.get(r);
-        const label = markLabel(r);
+        const endpoints = connectorEndpoints(r);
+        if (endpoints) connectorLines.push(endpoints.from, endpoints.to);
+        const label = markLabel(r, endpoints);
         if (attached) {
           // Numbered, because the image is no longer named by a path and its
           // position in the message is the only thing identifying it — which
@@ -270,9 +288,15 @@ export function buildPrompt({ narration, referents, attached = false }) {
   // them here would silently downgrade the guard to its weaker fallback.
   // Omitted entirely when there's no screen text — an empty fenced block
   // would just be noise for a value nobody reads.
+  //
+  // Connector endpoint texts join this block too, even though they never
+  // appear in `text`'s "Text from other things I pointed at" section — they
+  // already surfaced in `text` via the `[n] swept from … to …` label, and
+  // this is what makes that captured screen content visible to the guard.
+  const screenText = [...linesRedacted, ...connectorLines];
   const spoken = [narrationRedacted, ...quotes.values()];
-  const evidence = linesRedacted.length
-    ? [...spoken, "```", ...linesRedacted, "```"].join("\n")
+  const evidence = screenText.length
+    ? [...spoken, "```", ...screenText, "```"].join("\n")
     : spoken.join("\n");
 
   return { text: out.join("\n") + "\n", evidence };

@@ -437,3 +437,23 @@ test("an unknown mark kind still renders a line", () => {
   });
   assert.match(text, /- \[1\] marked: \/tmp\/s\/crops\/h01-r001\.png/);
 });
+
+// A connector's endpoint text is real captured accessibility text — same as
+// any other referent's `ax` — not something this module minted, so a secret
+// sitting in it must be redacted before it reaches the label, and the
+// redacted form must still reach `evidence` so `assertNoSecrets` can see it.
+test("a connector's endpoint text is redacted before it reaches the label or the guard", () => {
+  const token = "ghp_aB3xY9kLm2Qz77wRtNpQeVh1sFgU6cDj"; // matches redact.mjs's GITHUB-TOKEN pattern
+  const { text, evidence } = buildPrompt({
+    narration: "this feeds that",
+    referents: [
+      marked("connector", 1, {
+        text: { ax: ["OrderList"], ocr: [], axStart: [token] },
+      }),
+    ],
+  });
+  assert.doesNotMatch(text, new RegExp(token));
+  assert.match(text, /swept from "<REDACTED-GITHUB-TOKEN>" to "OrderList"/);
+  assert.doesNotMatch(evidence, new RegExp(token));
+  assert.doesNotThrow(() => assertNoSecrets(evidence));
+});
