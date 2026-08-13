@@ -190,6 +190,26 @@ enum Handoff {
             // Let the click settle — a web view (VS Code's chat) moves focus on
             // the mouse-up, and pasting before that lands in the old widget.
             try await Task.sleep(for: .milliseconds(150))
+
+            // VERIFY the click moved keyboard focus, because a click on a
+            // window that was not KEY can be spent making it key and never
+            // reach the widget under the cursor. `app.activate()` restores key
+            // to whatever window had it last — with two windows (or a window
+            // on another display, unmaximized, as in the field failure this
+            // paragraph is for), that is not necessarily the window flung at.
+            // The paste's fate rides entirely on this, and no CGEvent reports
+            // back — but Accessibility can say what holds focus NOW. If the
+            // focused element does not contain the drop point, one more click
+            // lands on a window that is key by then, which is the case that
+            // has always worked. The trace records both readings either way.
+            let focus = focusedElementFrame()
+            note("focus after click: \(focus.map(describe) ?? "nothing focused")")
+            if !(focus?.frame?.contains(point) ?? false) {
+                note("focus is not the widget under the drop point — clicking again")
+                _ = click(at: point)
+                try await Task.sleep(for: .milliseconds(150))
+                note("focus after second click: \(focusedElementFrame().map(describe) ?? "nothing focused")")
+            }
         }
 
         // IMAGES FIRST, TEXT LAST. A chat composer puts an attachment above the
@@ -425,6 +445,48 @@ enum Handoff {
         usleep(20_000)
         up.post(tap: .cghidEventTap)
         return true
+    }
+
+    /// What holds keyboard focus right now, per Accessibility — role and
+    /// frame in top-left global coordinates, the same space the drop point
+    /// lives in. Nil when AX answers nothing (an app with no AX support, or
+    /// focus genuinely nowhere). The frame can be nil for a real element that
+    /// exposes no geometry; the caller treats that as "cannot confirm".
+    private static func focusedElementFrame() -> (role: String, frame: CGRect?)? {
+        let systemWide = AXUIElementCreateSystemWide()
+        var focusedRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+                  systemWide, kAXFocusedUIElementAttribute as CFString, &focusedRef
+              ) == .success,
+              let focusedRef,
+              CFGetTypeID(focusedRef) == AXUIElementGetTypeID()
+        else { return nil }
+        let element = focusedRef as! AXUIElement
+
+        var roleRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef)
+        let role = roleRef as? String ?? "?"
+
+        var posRef: CFTypeRef?
+        var sizeRef: CFTypeRef?
+        var frame: CGRect?
+        if AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posRef) == .success,
+           AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRef) == .success,
+           let posRef, CFGetTypeID(posRef) == AXValueGetTypeID(),
+           let sizeRef, CFGetTypeID(sizeRef) == AXValueGetTypeID() {
+            var position = CGPoint.zero
+            var size = CGSize.zero
+            if AXValueGetValue(posRef as! AXValue, .cgPoint, &position),
+               AXValueGetValue(sizeRef as! AXValue, .cgSize, &size) {
+                frame = CGRect(origin: position, size: size)
+            }
+        }
+        return (role, frame)
+    }
+
+    private static func describe(_ focus: (role: String, frame: CGRect?)) -> String {
+        guard let f = focus.frame else { return "\(focus.role) (no frame)" }
+        return "\(focus.role) at (\(Int(f.origin.x)), \(Int(f.origin.y))) \(Int(f.width))×\(Int(f.height))"
     }
 
     /// One left click at a CG-global point — the focus half of a drop.
