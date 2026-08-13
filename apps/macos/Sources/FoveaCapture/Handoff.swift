@@ -114,23 +114,32 @@ enum Handoff {
         return browserBundleIDs.contains(bundleID ?? "")
     }
 
-    /// Hosts whose composer can be focused by their OWN keyboard command —
-    /// the Claude Code extension binds Cmd+Esc to open-and-focus its chat in
-    /// VS Code, Insiders and Cursor. The same list discipline as
+    /// Hosts whose chat panel gets the input-strip treatment when the drop's
+    /// click secured no usable focus. The same list discipline as
     /// `browserBundleIDs`: this decides HOW focus is secured, never WHETHER
     /// delivery happens, and a host missing from it just gets the generic
     /// click path — no worse than yesterday.
     ///
     /// It exists because the generic path measurably cannot reach a VS Code
     /// chat: the webview exposes no text-input roles to Accessibility in its
-    /// resting state (the composer materializes only once FOCUSED, as a
-    /// 0-wide Monaco caret textarea), and a synthetic click on the panel's
-    /// non-interactive regions moves no DOM focus at all.
-    private static let composerChordByBundleID: [String: (keyCode: CGKeyCode, flags: CGEventFlags)] = [
-        "com.microsoft.VSCode": (53, .maskCommand),          // 53 = Escape
-        "com.microsoft.VSCodeInsiders": (53, .maskCommand),
-        "com.todesktop.230313mzl4w4u92": (53, .maskCommand), // Cursor
+    /// resting state, a click on the transcript leaves DOM focus on a
+    /// non-editable group, and the extension's documented Cmd+Esc chord was
+    /// posted in the field and observably changed nothing. What HAS worked
+    /// since the first live fling is a click that lands on the input box
+    /// itself — which lives in the panel's bottom strip.
+    private static let chatPanelHosts: Set<String> = [
+        "com.microsoft.VSCode",
+        "com.microsoft.VSCodeInsiders",
+        "com.todesktop.230313mzl4w4u92", // Cursor
     ]
+
+    /// The focus signatures a paste is known to reach. A concrete text role
+    /// is the composer itself; AXWebArea is Chromium reporting "the webview
+    /// has DOM focus" — the measured signature of every fling that worked
+    /// into a chat webview (the composer holds DOM focus behind it).
+    private static func focusReachesAPaste(_ role: String?) -> Bool {
+        isTextEditable(role) || role == "AXWebArea"
+    }
 
     static func deliver(
         to target: HandoffTarget, text: String, images: [String]
@@ -282,7 +291,7 @@ enum Handoff {
             // poked tree takes ~300ms to build (AXProbe's retry sleeps
             // exactly that), so the search WAITS, and retries once more.
             var container: (element: AXUIElement, frame: CGRect)?
-            if !isTextEditable(after?.role) {
+            if !focusReachesAPaste(after?.role) {
                 AXProbe.enableManualAccessibility(pid: target.pid)
                 try await Task.sleep(for: .milliseconds(400))
                 container = dropContainer(near: point)
@@ -308,23 +317,40 @@ enum Handoff {
                     note("focus after composer hunt: \(after.map(describe) ?? "nothing focused")")
                 } else {
                     note("no composer found under the drop")
-                    // The host's OWN focus command, when it has one. The
-                    // measured truth is that a VS Code chat is unreachable
-                    // generically: no editable roles in its resting AX tree,
-                    // and panel clicks move no DOM focus. Cmd+Esc is the
-                    // Claude extension's open-and-focus chord; it is sent
-                    // only here, where the composer provably does not hold
-                    // focus, and the re-read below decides what it earned.
+                    // The input-strip click. A chat's input box lives in the
+                    // bottom strip of its panel — the one place a click has
+                    // ALWAYS reached the composer, back to the first live
+                    // fling. Known chat hosts only; one click, ~55pt above
+                    // the panel's bottom edge, then read the signature. No
+                    // second guesses: a miss here could be sitting on a
+                    // control row, and a blind paste-and-Return after a
+                    // misclick can activate whatever the click opened. The
+                    // honest refusal below handles the miss instead.
                     let bundleID = NSRunningApplication(
                         processIdentifier: target.pid
                     )?.bundleIdentifier
-                    if let bundleID, let chord = composerChordByBundleID[bundleID] {
-                        note("nudging \(bundleID) with its composer chord")
-                        _ = tap(keyCode: chord.keyCode, flags: chord.flags)
-                        try await Task.sleep(for: .milliseconds(400))
+                    if let bundleID, chatPanelHosts.contains(bundleID),
+                       let panel = container?.frame, panel.height > 120 {
+                        let strip = CGPoint(x: panel.midX, y: panel.maxY - 55)
+                        note("clicking the panel's input strip at (\(Int(strip.x)), \(Int(strip.y)))")
+                        _ = click(at: strip)
+                        try await Task.sleep(for: .milliseconds(200))
                         after = focusedElement()
-                        repairedFocus = repairedFocus || isTextEditable(after?.role)
-                        note("focus after composer chord: \(after.map(describe) ?? "nothing focused")")
+                        repairedFocus = repairedFocus || focusReachesAPaste(after?.role)
+                        note("focus after input-strip click: \(after.map(describe) ?? "nothing focused")")
+                    }
+
+                    // Still nowhere a paste is known to reach, on a host
+                    // whose panels are known opaque? Refuse honestly. A
+                    // paste and a Return into an unverifiable widget is how
+                    // the prompt vanished three times — and after a strip
+                    // click that may have landed on a control, a blind
+                    // Return is worse than nothing.
+                    if let bundleID, chatPanelHosts.contains(bundleID),
+                       !focusReachesAPaste(after?.role) {
+                        throw HandoffError(
+                            "The chat's input box never took focus — pasting would have gone nowhere you could see. Nothing was sent; the prompt is still on disk beside the session. Click into the chat input once, then throw again."
+                        )
                     }
                 }
             }
