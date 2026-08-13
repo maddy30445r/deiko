@@ -91,8 +91,32 @@ enum Capture {
         )
     }
 
-    private static func padded(_ f: Frame, by p: Double) -> Frame {
+    static func padded(_ f: Frame, by p: Double) -> Frame {
         Frame(x: f.x - p, y: f.y - p, width: f.width + p * 2, height: f.height + p * 2)
+    }
+
+    /// A mark's crop extent. The raw stroke bbox is not enough — a sweep from
+    /// the edge of box A to the edge of box B bounds only the line between
+    /// them, clipping the very things being connected. So: the stroke's own
+    /// bounds, unioned with the guarded AX frame at each anchor locus
+    /// (`Capture.rect` supplies the guards and the default-box floor, so a
+    /// container can never blow the crop up to half a screen, and a canvas
+    /// with no AX still gets a neighbourhood instead of a pixel-thin ribbon).
+    static func markRect(
+        strokeBounds: Frame,
+        loci: [(point: Point, snapshot: AXSnapshot)],
+        screenArea: Double
+    ) -> Frame {
+        var rect = padded(strokeBounds, by: 8)
+        for locus in loci {
+            let (r, _) = Capture.rect(
+                for: Shape.point(locus.point),
+                snapshot: locus.snapshot,
+                screenArea: screenArea
+            )
+            rect = rect.union(r)
+        }
+        return rect
     }
 
     // ── Capturing ───────────────────────────────────────────────────────────

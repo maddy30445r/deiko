@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import FoveaGesture
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE RECORDER
@@ -97,9 +98,9 @@ final class Recorder {
     private var holdIndex = 0
     private var globalReferentIndex = 0
 
-    /// A drag smaller than this is a flick, not a circle. One recorded "region"
-    /// was 170x1 points from a single grid sample.
-    private let minimumRegionArea: Double = 400
+    /// Marks numbered in capture order across the session — the badge number.
+    /// Separate from `globalReferentIndex`, which also counts plain settles.
+    private var markIndex = 0
 
     /// How long after speech a settle still counts as pointing. See the gate in
     /// `detectSettle`. Regions are exempt — nobody draws a loop by accident.
@@ -292,6 +293,7 @@ final class Recorder {
 
         var holds = 0
         var referents = 0
+        var marks = 0
         for line in raw.split(separator: "\n") {
             guard let data = line.data(using: .utf8),
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -305,6 +307,7 @@ final class Recorder {
             // sessions: 16 probes / 16 referents, 35 / 35, where the candidate
             // counts were 10 and 25.
             if type == "probe" { referents += 1 }
+            if type == "probe", obj["mark"] != nil { marks += 1 }
         }
         guard holds > 0 else { return false }
 
@@ -316,6 +319,7 @@ final class Recorder {
         sessionStartedMs = nil
         holdIndex = holds
         globalReferentIndex = referents
+        markIndex = marks
         sessionReferentCount = referents
         gatedSettleCount = 0
 
@@ -372,6 +376,7 @@ final class Recorder {
         sessionStartedMs = Clock.nowMs()
         holdIndex = 0
         globalReferentIndex = 0
+        markIndex = 0
         sessionReferentCount = 0
         gatedSettleCount = 0
 
@@ -820,14 +825,18 @@ final class Recorder {
         }
         lassoPath = nil
 
-        var shape = Shape.region(path: path)
+        // The stroke itself is the meaning. Classification picks the verb and
+        // the dressing; every kind captures the same way — stroke bounds plus
+        // what sits at the anchors, with the ink drawn on.
+        let kind = StrokeClassifier.classify(path.map { StrokePoint(x: $0.x, y: $0.y) })
+        markIndex += 1
+        let mark = MarkInfo(kind: kind.rawValue, number: markIndex)
 
-        // A drag too small to enclose anything is a flick, not a circle — it
-        // grid-samples to a single point and produces a 1px-tall "region".
-        // Treat it as what the user actually did: point at somewhere.
-        if shape.bounds.width * shape.bounds.height < minimumRegionArea {
-            shape = Shape.point(shape.origin)
-        }
+        // Geometry container on the wire: a tap stays a point, everything with
+        // extent is a region. `mark.kind` carries the finer reading.
+        let shape = kind == .point
+            ? Shape.point(Shape.region(path: path).origin)
+            : Shape.region(path: path)
 
         let now = Clock.nowMs()
         pulses.append(
@@ -835,13 +844,10 @@ final class Recorder {
         )
         holdReferentCount += 1
         sessionReferentCount += 1
-        // The measured drag interval rides along for regions: the narration for
-        // a lasso happens while DRAWING it, and downstream needs the real span,
-        // not a reconstruction.
-        let span = shape.kind == .region
-            ? startT.map { TimeSpan(start: $0, end: now) }
-            : nil
-        resolve(shape: shape, span: span)
+        // The narration for a stroke happens while DRAWING it — every mark
+        // kind gets the measured span, not only lassos.
+        let span = startT.map { TimeSpan(start: $0, end: now) }
+        resolve(shape: shape, span: span, mark: mark, strokePath: path)
     }
 
     /// AX + crop, off the sampling path. Resolution can take a few hundred
@@ -851,40 +857,89 @@ final class Recorder {
     /// The task handle is retained so `stopSession` can wait on it. The session
     /// directory is read HERE and captured by value, not read inside the task —
     /// by the time a slow OCR finishes, `sessionDir` may already be nil.
-    private func resolve(shape: Shape, span: TimeSpan?) {
+    private func resolve(
+        shape: Shape, span: TimeSpan?,
+        mark: MarkInfo? = nil, strokePath: [Point]? = nil
+    ) {
         globalReferentIndex += 1
         let hold = holdIndex
         let index = globalReferentIndex
         let dir = sessionDir
 
         let task = Task.detached { [captureCrops] in
-            var event = shape.kind == .region
-                ? AXProbe.probeRegion(shape)
-                : AXProbe.probePoint(shape.origin)
+            let kind = mark.flatMap { StrokeKind(rawValue: $0.kind) }
+
+            var event: ProbeEvent
+            var loci: [(point: Point, snapshot: AXSnapshot)] = []
+
+            switch kind {
+            case .connector, .trace:
+                // The endpoints are the content; the line between them is
+                // mostly whitespace. Probe both — release end is primary.
+                let start = strokePath?.first ?? shape.origin
+                let end = strokePath?.last ?? shape.origin
+                let startProbe = AXProbe.probePoint(start)
+                let endProbe = AXProbe.probePoint(end)
+                event = ProbeEvent(
+                    shape: shape,
+                    app: endProbe.app ?? startProbe.app,
+                    windowTitle: endProbe.windowTitle ?? startProbe.windowTitle,
+                    snapshot: endProbe.snapshot,
+                    mark: mark,
+                    startSnapshot: startProbe.snapshot
+                )
+                loci = [(start, startProbe.snapshot), (end, endProbe.snapshot)]
+            case .point:
+                let probe = AXProbe.probePoint(shape.origin)
+                event = ProbeEvent(
+                    shape: shape, app: probe.app, windowTitle: probe.windowTitle,
+                    snapshot: probe.snapshot, mark: mark
+                )
+                loci = [(shape.origin, probe.snapshot)]
+            case .lasso, .emphasis:
+                let probe = AXProbe.probeRegion(shape)
+                event = ProbeEvent(
+                    shape: shape, app: probe.app, windowTitle: probe.windowTitle,
+                    snapshot: probe.snapshot, mark: mark
+                )
+                // Emphasis breathes around what was scribbled over; a lasso's
+                // own loop already declares its extent.
+                if kind == .emphasis { loci = [(shape.origin, probe.snapshot)] }
+            case nil:
+                // A plain settle — exactly the old path.
+                event = shape.kind == .region
+                    ? AXProbe.probeRegion(shape)
+                    : AXProbe.probePoint(shape.origin)
+            }
             if let span { event = event.with(span: span) }
 
             if captureCrops {
-                let (rect, fromAX) = Capture.rect(
-                    for: shape, snapshot: event.snapshot, screenArea: AXProbe.screenArea()
-                )
-                // A file only for what was DRAWN. A settle still gets captured
-                // and OCR'd in memory — `Capture.crop` documents `outputPath:
-                // nil` as exactly that — so every word of text evidence
-                // survives. What goes is the image, and with it the whole class
-                // of failure where the agent was handed a screenshot of a
-                // background window: a point's rectangle comes from the AX
-                // element under the cursor, which is frequently not the thing
-                // the developer meant.
-                let path = shape.kind == .region
+                let screenArea = AXProbe.screenArea()
+                let rect: Frame
+                let fromAX: Bool
+                if mark != nil, !loci.isEmpty {
+                    rect = Capture.markRect(
+                        strokeBounds: shape.bounds, loci: loci, screenArea: screenArea
+                    )
+                    fromAX = loci.contains { locus in
+                        Capture.rect(for: Shape.point(locus.point),
+                                     snapshot: locus.snapshot,
+                                     screenArea: screenArea).fromAX
+                    }
+                } else {
+                    (rect, fromAX) = Capture.rect(
+                        for: shape, snapshot: event.snapshot, screenArea: screenArea
+                    )
+                }
+
+                // A file for every MARK — everything under the modifier is
+                // deliberate. A settle still captures in memory only.
+                let path = mark != nil || shape.kind == .region
                     ? dir.map {
                         "\($0)/crops/h\(String(format: "%02d", hold))-r\(String(format: "%03d", index)).png"
                     }
                     : nil
 
-                // Always. Deciding when accessibility text is "enough" is what
-                // cost us referents twice — see the note where `OCR.isNeeded`
-                // used to live. This runs on a detached task; nothing waits on
-                // it but the end of the session.
                 let crop = await Capture.crop(
                     snapshot: event.snapshot,
                     outputPath: path,
@@ -893,6 +948,18 @@ final class Recorder {
                     rect: rect
                 )
                 event = event.with(crop: crop)
+
+                // Ink AFTER capture and OCR: recognition reads clean pixels,
+                // the file the agent sees carries the stroke and its number.
+                if let mark, let kind, let written = crop.path {
+                    InkRenderer.ink(
+                        file: written,
+                        strokePath: strokePath ?? [shape.origin],
+                        cropRect: crop.rect,
+                        kind: kind,
+                        number: mark.number
+                    )
+                }
             }
 
             Emit.event(event)
