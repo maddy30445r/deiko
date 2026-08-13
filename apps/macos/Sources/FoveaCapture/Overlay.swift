@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import FoveaGesture
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE OVERLAY
@@ -10,6 +11,8 @@ import Foundation
 //   • the lasso stroke while dragging
 //   • a pulse when a referent is captured (PRD §9.2) — accent for a point,
 //     teal for a region, distinguishable mid-session at a glance
+//   • a flourish when a stroke commits — the CLASSIFIED shape, briefly, so a
+//     misread is visible at the moment it happens
 //
 // Everything here is translucent accent — quiet receipts, not decoration.
 // The ONE loud thing is the capturing pill, and it is loud on purpose: an
@@ -44,6 +47,15 @@ struct Pulse {
     let position: Point
     let t: Double
     let isRegion: Bool
+}
+
+/// The classified form of the stroke that just committed, shown briefly where
+/// it was drawn — so a misread (a scribble read as emphasis, a tap read as a
+/// point) is visible the instant it happens, not discovered later in a crop.
+struct Flourish {
+    let path: [Point]
+    let kind: StrokeKind
+    let t: Double
 }
 
 @MainActor
@@ -139,6 +151,13 @@ final class Overlay {
         view.lasso = lasso
         view.pulses = pulses
     }
+
+    /// Called once per committed stroke, from `Recorder.commitLasso`. A new
+    /// flourish replaces whatever was still fading — there is only ever one
+    /// stroke to answer for at a time.
+    func flourish(path: [Point], kind: StrokeKind) {
+        view?.flourish = Flourish(path: path, kind: kind, t: Clock.nowMs())
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -152,6 +171,7 @@ final class OverlayView: NSView {
     var trail: [TrailPoint] = []
     var lasso: [Point]?
     var pulses: [Pulse] = []
+    var flourish: Flourish?
     override var isFlipped: Bool { false }
 
     /// The single top-left → bottom-left conversion in the drawing layer.
@@ -169,6 +189,7 @@ final class OverlayView: NSView {
         drawTrail(ctx, now: now)
         if let lasso { drawLasso(ctx, path: lasso) }
         drawPulses(ctx, now: now)
+        drawFlourish(ctx, now: now)
         drawCursor(ctx)
     }
 
@@ -248,6 +269,102 @@ final class OverlayView: NSView {
                     width: radius * 2, height: radius * 2
                 )
             )
+        }
+    }
+
+    /// Shows the CLASSIFIED form of the stroke that just committed — not the
+    /// raw pixels drawn, but what `StrokeClassifier` read them as. A misread
+    /// (a scribble read as `.emphasis`, a real loop read as `.trace`) is
+    /// visible right here, at release, instead of discovered later in a crop.
+    private func drawFlourish(_ ctx: CGContext, now: Double) {
+        guard let flourish else { return }
+        let reduce = FoveaStyle.reduceMotion
+        let lifetime = reduce ? reducedPulseLifetimeMs : pulseLifetimeMs
+        let age = now - flourish.t
+        guard age < lifetime else { return }
+
+        // Reduce Motion: no fade, a fixed-alpha blink — the same treatment
+        // pulses get, for the same reason.
+        let alpha = reduce ? 0.9 : 0.9 * (1 - age / lifetime)
+        let color = FoveaStyle.accentNS.withAlphaComponent(alpha).cgColor
+        let points = flourish.path.map(viewPoint(from:))
+        guard let first = points.first else { return }
+
+        switch flourish.kind {
+        case .point:
+            ctx.setFillColor(color)
+            ctx.fillEllipse(in: CGRect(x: first.x - 4, y: first.y - 4, width: 8, height: 8))
+
+        case .lasso:
+            guard points.count >= 2 else { break }
+            // Same stroke as the live lasso — accent, 2.5pt, round joins —
+            // but CLOSED even if the release point never made it back to the
+            // start: the flourish shows the shape it was READ as, not the
+            // exact pixels drawn.
+            ctx.beginPath()
+            ctx.move(to: first)
+            for p in points.dropFirst() { ctx.addLine(to: p) }
+            ctx.closePath()
+            ctx.setStrokeColor(color)
+            ctx.setLineWidth(2.5)
+            ctx.setLineJoin(.round)
+            ctx.setLineCap(.round)
+            ctx.strokePath()
+
+        case .connector:
+            // The classifier discarded the wobble and kept only the relation:
+            // one straight line between the two endpoints, arrow pointing at
+            // whatever the stroke ended on.
+            guard let last = points.last, points.count >= 2 else { break }
+            ctx.setStrokeColor(color)
+            ctx.setLineWidth(2.5)
+            ctx.setLineCap(.round)
+            ctx.move(to: first)
+            ctx.addLine(to: last)
+            ctx.strokePath()
+            drawArrowhead(ctx, from: first, to: last, color: color)
+
+        case .trace:
+            guard points.count >= 2 else { break }
+            ctx.beginPath()
+            ctx.move(to: first)
+            for p in points.dropFirst() { ctx.addLine(to: p) }
+            ctx.setStrokeColor(color)
+            ctx.setLineWidth(2.5)
+            ctx.setLineJoin(.round)
+            ctx.setLineCap(.round)
+            ctx.strokePath()
+            drawArrowhead(
+                ctx, from: points[points.count - 2], to: points[points.count - 1], color: color
+            )
+
+        case .emphasis:
+            guard points.count >= 2 else { break }
+            ctx.beginPath()
+            ctx.move(to: first)
+            for p in points.dropFirst() { ctx.addLine(to: p) }
+            ctx.setStrokeColor(color)
+            ctx.setLineWidth(3.5)
+            ctx.setLineJoin(.round)
+            ctx.setLineCap(.round)
+            ctx.strokePath()
+        }
+    }
+
+    /// Two barbs at ±30° off the line's direction, 12pt long — the same
+    /// geometry `InkRenderer` burns into the saved crop, so the live answer
+    /// and the receipt agree.
+    private func drawArrowhead(_ ctx: CGContext, from a: NSPoint, to b: NSPoint, color: CGColor) {
+        let angle = atan2(b.y - a.y, b.x - a.x)
+        let len: CGFloat = 12
+        ctx.setStrokeColor(color)
+        ctx.setLineWidth(2.5)
+        for side in [-1.0, 1.0] {
+            let barb = angle + .pi + side * (.pi / 6)
+            ctx.beginPath()
+            ctx.move(to: b)
+            ctx.addLine(to: CGPoint(x: b.x + len * cos(barb), y: b.y + len * sin(barb)))
+            ctx.strokePath()
         }
     }
 

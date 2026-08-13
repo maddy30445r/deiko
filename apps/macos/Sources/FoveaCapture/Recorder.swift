@@ -842,6 +842,7 @@ final class Recorder {
         pulses.append(
             Pulse(position: shape.origin, t: now, isRegion: shape.kind == .region)
         )
+        overlay.flourish(path: path, kind: kind)
         holdReferentCount += 1
         sessionReferentCount += 1
         // The narration for a stroke happens while DRAWING it — every mark
