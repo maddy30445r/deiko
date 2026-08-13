@@ -114,6 +114,24 @@ enum Handoff {
         return browserBundleIDs.contains(bundleID ?? "")
     }
 
+    /// Hosts whose composer can be focused by their OWN keyboard command —
+    /// the Claude Code extension binds Cmd+Esc to open-and-focus its chat in
+    /// VS Code, Insiders and Cursor. The same list discipline as
+    /// `browserBundleIDs`: this decides HOW focus is secured, never WHETHER
+    /// delivery happens, and a host missing from it just gets the generic
+    /// click path — no worse than yesterday.
+    ///
+    /// It exists because the generic path measurably cannot reach a VS Code
+    /// chat: the webview exposes no text-input roles to Accessibility in its
+    /// resting state (the composer materializes only once FOCUSED, as a
+    /// 0-wide Monaco caret textarea), and a synthetic click on the panel's
+    /// non-interactive regions moves no DOM focus at all.
+    private static let composerChordByBundleID: [String: (keyCode: CGKeyCode, flags: CGEventFlags)] = [
+        "com.microsoft.VSCode": (53, .maskCommand),          // 53 = Escape
+        "com.microsoft.VSCodeInsiders": (53, .maskCommand),
+        "com.todesktop.230313mzl4w4u92": (53, .maskCommand), // Cursor
+    ]
+
     static func deliver(
         to target: HandoffTarget, text: String, images: [String]
     ) async throws {
@@ -232,7 +250,12 @@ enum Handoff {
             var repairedFocus = false
             if let before, isTextEditable(before.role), let beforeFrame = before.frame,
                !isTextEditable(after?.role),
-               let afterFrame = after?.frame, afterFrame.intersects(beforeFrame) {
+               let afterFrame = after?.frame,
+               // Midpoint containment, NOT intersects: a focused Monaco
+               // composer manifests as a ZERO-WIDTH caret textarea, and an
+               // empty rect intersects nothing — the repair would never fire
+               // for exactly the input it exists to restore.
+               afterFrame.contains(CGPoint(x: beforeFrame.midX, y: beforeFrame.midY)) {
                 note("the click blurred the text input it was aimed near — restoring focus")
                 AXUIElementSetAttributeValue(
                     before.element, kAXFocusedAttribute as CFString, kCFBooleanTrue
@@ -255,10 +278,21 @@ enum Handoff {
             // somewhere a paste can land, find the panel's own input: the
             // lowest text-editable element inside the container under the
             // drop. Chromium only exposes that tree once poked — the same
-            // AXManualAccessibility poke capture already relies on.
+            // AXManualAccessibility poke capture already relies on — and the
+            // poked tree takes ~300ms to build (AXProbe's retry sleeps
+            // exactly that), so the search WAITS, and retries once more.
+            var container: (element: AXUIElement, frame: CGRect)?
             if !isTextEditable(after?.role) {
                 AXProbe.enableManualAccessibility(pid: target.pid)
-                if let found = composer(near: point) {
+                try await Task.sleep(for: .milliseconds(400))
+                container = dropContainer(near: point)
+                var found = container.flatMap { composer(in: $0.element) }
+                if found == nil {
+                    try await Task.sleep(for: .milliseconds(300))
+                    container = dropContainer(near: point)
+                    found = container.flatMap { composer(in: $0.element) }
+                }
+                if let found {
                     note("composer found at (\(Int(found.frame.midX)), \(Int(found.frame.midY))) — focusing it")
                     AXUIElementSetAttributeValue(
                         found.element, kAXFocusedAttribute as CFString, kCFBooleanTrue
@@ -273,25 +307,56 @@ enum Handoff {
                     repairedFocus = repairedFocus || isTextEditable(after?.role)
                     note("focus after composer hunt: \(after.map(describe) ?? "nothing focused")")
                 } else {
-                    note("no composer found under the drop — proceeding with the click's focus")
+                    note("no composer found under the drop")
+                    // The host's OWN focus command, when it has one. The
+                    // measured truth is that a VS Code chat is unreachable
+                    // generically: no editable roles in its resting AX tree,
+                    // and panel clicks move no DOM focus. Cmd+Esc is the
+                    // Claude extension's open-and-focus chord; it is sent
+                    // only here, where the composer provably does not hold
+                    // focus, and the re-read below decides what it earned.
+                    let bundleID = NSRunningApplication(
+                        processIdentifier: target.pid
+                    )?.bundleIdentifier
+                    if let bundleID, let chord = composerChordByBundleID[bundleID] {
+                        note("nudging \(bundleID) with its composer chord")
+                        _ = tap(keyCode: chord.keyCode, flags: chord.flags)
+                        try await Task.sleep(for: .milliseconds(400))
+                        after = focusedElement()
+                        repairedFocus = repairedFocus || isTextEditable(after?.role)
+                        note("focus after composer chord: \(after.map(describe) ?? "nothing focused")")
+                    }
                 }
             }
 
-            // THE FILE GUARD. If keyboard focus provably never left the text
-            // area it was in before the click — same element, editable, and
-            // not under the drop point — then pasting would write the prompt
-            // into that text area: the measured failure was 4k characters
-            // into an open source file. An honest refusal beats that; the
-            // rendered prompt stays on disk beside the session either way.
-            // Deliberately narrow: an unknown or non-editable focus (a
-            // browser's coarse web area, a terminal) proceeds exactly as
-            // before, so no working host regresses.
+            // THE FILE GUARD. When focus ends on something text-editable that
+            // is NOT under the drop point and NOT inside the panel the drop
+            // landed in, pasting would write the prompt into a text area the
+            // user never aimed at — the measured failure was 4k characters
+            // into an open source file, via a click that bounced focus to the
+            // editor's caret. An honest refusal beats that; the rendered
+            // prompt stays on disk beside the session either way.
+            //
+            // Geometry by MIDPOINT, not intersection — a Monaco caret
+            // textarea is zero-width and an empty rect intersects nothing.
+            // Deliberately narrow: unknown or non-editable focus (a
+            // browser's coarse web area) proceeds exactly as before, so no
+            // working host regresses; focus this code placed itself
+            // (`repairedFocus`) is trusted.
             if let landing = after, !repairedFocus, isTextEditable(landing.role),
-               let before, CFEqual(landing.element, before.element),
-               !(landing.frame?.contains(point) ?? false) {
-                throw HandoffError(
-                    "The drop landed on \(target.appName), but keyboard focus stayed in the text area it was already in — pasting would have written the prompt there, not where you aimed. Nothing was sent. Try dropping on the chat's input box itself."
-                )
+               let landingFrame = landing.frame,
+               !landingFrame.contains(point) {
+                let panel = (container ?? dropContainer(near: point))?.frame
+                let landingMid = CGPoint(x: landingFrame.midX, y: landingFrame.midY)
+                let outsidePanel = panel.map { !$0.contains(landingMid) }
+                    // No panel geometry to judge by — fall back to identity:
+                    // focus never moved off the pre-click element at all.
+                    ?? (before.map { CFEqual(landing.element, $0.element) } ?? false)
+                if outsidePanel {
+                    throw HandoffError(
+                        "The drop landed on \(target.appName), but keyboard focus ended in a text area far from where you aimed — pasting would have written the prompt there. Nothing was sent; the prompt is still on disk beside the session. Try dropping on the chat's input box itself."
+                    )
+                }
             }
         }
 
@@ -587,20 +652,12 @@ enum Handoff {
         return "\(focus.role) at (\(Int(f.origin.x)), \(Int(f.origin.y))) \(Int(f.width))×\(Int(f.height))"
     }
 
-    /// The text input belonging to the panel the drop landed in — a chat's
-    /// composer sits at the BOTTOM of its panel, under a transcript that eats
-    /// stray clicks, so a drop anywhere on the panel means "the chat" and the
-    /// lowest editable descendant is the input meant.
-    ///
-    /// The container is found by ascending from the element under the drop
-    /// while the ancestor still contains the point, is not the window, and
-    /// stays narrower than ~70% of a screen — the panel, never the whole
-    /// window, which is what keeps a code editor's text area out of the
-    /// search entirely.
-    ///
-    /// ponytail: bounded DFS, 400-node budget, depth 12 — a panel that hides
-    /// its composer deeper than that fails safe to the caller's file guard.
-    private static func composer(near point: CGPoint) -> (element: AXUIElement, frame: CGRect)? {
+    /// The panel the drop landed in: ascend from the element under the point
+    /// while the ancestor still contains it, is not the window, and stays
+    /// narrower than ~70% of a screen — the panel, never the whole window,
+    /// which is what keeps a code editor's text area out of both the
+    /// composer search and the file guard's notion of "where you aimed".
+    private static func dropContainer(near point: CGPoint) -> (element: AXUIElement, frame: CGRect)? {
         let systemWide = AXUIElementCreateSystemWide()
         var hitRef: AXUIElement?
         guard AXUIElementCopyElementAtPosition(
@@ -626,14 +683,24 @@ enum Handoff {
             container = parent
             cursor = parent
         }
+        return (container, frame(of: container) ?? .zero)
+    }
 
+    /// The text input belonging to a panel — a chat's composer sits at the
+    /// BOTTOM, under a transcript that eats stray clicks, so the lowest
+    /// editable descendant is the input meant. NO minimum size: a focused
+    /// Monaco composer manifests as a zero-width caret textarea, and a size
+    /// filter here is how the first hunt missed it.
+    ///
+    /// ponytail: bounded DFS, 400-node budget, depth 12 — a panel that hides
+    /// its composer deeper than that fails safe to the caller's file guard.
+    private static func composer(in container: AXUIElement) -> (element: AXUIElement, frame: CGRect)? {
         var budget = 400
         var best: (element: AXUIElement, frame: CGRect)?
         func walk(_ element: AXUIElement, depth: Int) {
             guard budget > 0, depth < 12 else { return }
             budget -= 1
-            if isTextEditable(role(of: element)),
-               let f = frame(of: element), f.width > 40 {
+            if isTextEditable(role(of: element)), let f = frame(of: element) {
                 if best == nil || f.minY > best!.frame.minY { best = (element, f) }
             }
             var kidsRef: CFTypeRef?
