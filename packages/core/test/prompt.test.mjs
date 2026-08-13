@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { buildPrompt } from "../lib/prompt.mjs";
-import { assertNoSecrets } from "../lib/redact.mjs";
+import { assertNoSecrets, carriesSecret } from "../lib/redact.mjs";
 
 /** A referent nobody was talking through: no screenshot, no bound speech. */
 const bare = { cropPath: null, cropWithheld: null, said: null, text: { ax: [], ocr: [] } };
@@ -456,4 +456,17 @@ test("a connector's endpoint text is redacted before it reaches the label or the
   assert.match(text, /swept from "<REDACTED-GITHUB-TOKEN>" to "OrderList"/);
   assert.doesNotMatch(evidence, new RegExp(token));
   assert.doesNotThrow(() => assertNoSecrets(evidence));
+});
+
+// A connector's crop CONTAINS the start endpoint's pixels, so `carriesSecret`
+// — the check that gates whether render-brief.mjs releases the crop image at
+// all — must see `axStart` too, not just `ax`/`ocr`. Otherwise a credential
+// sitting only at the swept-from end releases the image with nothing but OCR
+// standing guard on it.
+test("carriesSecret flags a referent whose only credential text is in axStart", () => {
+  const token = "ghp_aB3xY9kLm2Qz77wRtNpQeVh1sFgU6cDj"; // matches redact.mjs's GITHUB-TOKEN pattern
+  assert.equal(
+    carriesSecret({ text: { ax: ["OrderList"], ocr: [], axStart: [token] } }),
+    true,
+  );
 });

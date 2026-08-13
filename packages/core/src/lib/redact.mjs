@@ -134,7 +134,12 @@ export function redactBlock(lines) {
  * screenshot, and a credential anywhere in it makes the whole image unsafe.
  */
 export function carriesSecret(r) {
-  const text = [...(r?.text?.ax ?? []), ...(r?.text?.ocr ?? []), r?.window ?? ""].join("\n");
+  const text = [
+    ...(r?.text?.ax ?? []),
+    ...(r?.text?.axStart ?? []),
+    ...(r?.text?.ocr ?? []),
+    r?.window ?? "",
+  ].join("\n");
   const stripped = stripStandalone(text);
   // Either a marker word puts a credential nearby, or something matched a
   // standalone pattern — an AWS key id, a JWT, a private key block — which

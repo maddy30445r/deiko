@@ -105,9 +105,17 @@ export function loadSession(events: RawEvent[]): ReferentStack {
       // A flick demoted to a point: real referent — it grounded something and
       // has a crop — just no candidate and no settle features. It used to be
       // silently dropped, which lost h01-r005 of the reference session.
+      //
+      // Marked taps now carry the recorder's measured `span` too, same as
+      // regions — so where it's present, use it the same way: the midpoint is
+      // where the narration sits, not `probe.t`, which is the async probe's
+      // own emission time, 50-300ms after the tap actually happened. Legacy
+      // probes with no span fall back to the probe's own time, as before.
+      const span: { start: number; end: number } | undefined = probe.span;
       drafts.push({
-        hold: holdAt(probe.t),
-        t: probe.t,
+        hold: holdAt(span ? span.start : probe.t),
+        t: span ? span.start + (span.end - span.start) / 2 : probe.t,
+        ...(span ? { span } : {}),
         kind: "point",
         app: { name: probe.app?.name, bundleId: probe.app?.bundleId },
         window: probe.windowTitle,

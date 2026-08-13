@@ -457,7 +457,7 @@ struct ProbeEvent: Codable {
     /// while the TS loader used to reconstruct it from frozen cursor samples,
     /// which could not tell "cursor frozen mid-drag" from "cursor parked here
     /// before pressing" and once recovered a 9.7-second phantom drag. Nil for
-    /// points.
+    /// plain settles; a marked tap carries the measured stroke interval too.
     let span: TimeSpan?
     let app: AppIdentity?
     let windowTitle: String?

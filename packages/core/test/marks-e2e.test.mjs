@@ -54,6 +54,7 @@ const events = [
     app,
     windowTitle: "AuthView.swift — acme-portal",
     shape: { kind: "point", origin: { x: 100, y: 200 } },
+    span: { start: 100, end: 112 },
     mark: { kind: "point", number: 1 },
     snapshot: { elements: [{ value: "Sign In" }] },
     crop: crop("/tmp/e2e/h01-r001.png"),
@@ -192,6 +193,12 @@ test("loadSession yields six referents, five badged 1-5, the settle bare", () =>
   assert.ok(settle, "the settle referent survived pairing");
   assert.equal(settle.mark, undefined);
   assert.equal(settle.cropPath, null);
+
+  // [1]'s `t` is its measured span's midpoint (106), not the probe's own
+  // emission time (110) — the probe resolves asynchronously, 50-300ms after
+  // the tap actually happened, and the span is what the recorder measured.
+  const tap = marked.find((r) => r.mark.kind === "point");
+  assert.equal(tap.t, 106);
 });
 
 test("buildPrompt renders the five marks with their verbs and withholds nothing about the settle", () => {
