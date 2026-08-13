@@ -41,6 +41,11 @@ enum FoveaStyle {
         dark: NSColor(srgbRed: 146 / 255, green: 166 / 255, blue: 241 / 255, alpha: 1)
     )
 
+    /// The ink drawn onto a crop's own pixels — fixed, not dynamic. The crop
+    /// was captured under whatever appearance the SOURCE app was in, so the
+    /// ink drawn onto it must not shift with Fovea's own light/dark setting.
+    static let inkNS = NSColor(srgbRed: 74 / 255, green: 91 / 255, blue: 172 / 255, alpha: 1)
+
     /// The fovea mark's stroke on the coin — brighter than the accent so it
     /// reads against the coin's accent-washed fill.
     /// oklch(0.46 0.13 272) light · oklch(0.82 0.09 272) dark.

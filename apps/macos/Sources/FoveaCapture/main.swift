@@ -2,6 +2,7 @@ import AVFoundation
 import AppKit
 import Carbon.HIToolbox
 import Foundation
+import FoveaGesture
 import FoveaHandoff
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -98,6 +99,12 @@ case "timing":
 
 case "icon":
     renderIconset(args)
+
+// fovea-capture ink-demo --out /tmp/ink-demo.png
+// Draws all five mark kinds on a flat background — the smallest thing that
+// fails if the geometry (flip, scale, arrowhead, badge) breaks.
+case "ink-demo":
+    runInkDemo(args)
 
 // Also a subcommand, not only a Settings button. The moment diagnostics are
 // worth having is the moment the app is not working — and if it will not
@@ -461,6 +468,53 @@ func circlePath(around center: Point, radius: Double, segments: Int = 24) -> [Po
     }
 }
 
+/// Draws all five `StrokeKind`s onto a flat 900×300 background and writes it
+/// to `--out` (default `/tmp/ink-demo.png`) — a synthetic crop so InkRenderer
+/// can be eyeballed without a real session. The five calls ink the SAME file
+/// in sequence, so the result accumulates; that is fine, and makes a single
+/// image reviewable for all five kinds at once.
+func runInkDemo(_ args: Args) {
+    let outPath = args.string("out") ?? "/tmp/ink-demo.png"
+    let w = 900, h = 300
+
+    guard let ctx = CGContext(
+        data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+        space: CGColorSpace(name: CGColorSpace.sRGB)!,
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    ) else {
+        Emit.event(ErrorEvent("could not create demo context"))
+        exit(1)
+    }
+    ctx.setFillColor(NSColor(white: 0.85, alpha: 1).cgColor)
+    ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+    guard let base = ctx.makeImage(), Capture.writePNG(base, to: outPath) else {
+        Emit.event(ErrorEvent("could not write demo background to \(outPath)"))
+        exit(1)
+    }
+
+    let cropRect = Frame(x: 0, y: 0, width: 900, height: 300)
+    let marks: [(strokePath: [Point], kind: StrokeKind, number: Int)] = [
+        // 1. tap
+        ([Point(x: 80, y: 150)], .point, 1),
+        // 2. circle
+        (circlePath(around: Point(x: 250, y: 150), radius: 50), .lasso, 2),
+        // 3. straight line
+        ([Point(x: 380, y: 200), Point(x: 560, y: 90)], .connector, 3),
+        // 4. L-shaped path
+        ([Point(x: 600, y: 250), Point(x: 600, y: 80), Point(x: 720, y: 80)], .trace, 4),
+        // 5. zigzag
+        ([Point(x: 760, y: 130), Point(x: 790, y: 170), Point(x: 820, y: 130),
+          Point(x: 850, y: 170), Point(x: 870, y: 130)], .emphasis, 5),
+    ]
+    for mark in marks {
+        InkRenderer.ink(
+            file: outPath, strokePath: mark.strokePath, cropRect: cropRect,
+            kind: mark.kind, number: mark.number
+        )
+    }
+    print(outPath)
+}
+
 /// One-line human summary for stderr while hand-testing the app matrix.
 func summarize(_ event: ProbeEvent) -> String {
     let app = event.app?.name ?? "?"
@@ -591,6 +645,13 @@ fovea-capture \(FoveaVersion.current)
   icon --out <dir>            Render the fovea mark into an .iconset. Build
                               step, not a runtime one — `make icon` runs this
                               and hands the result to iconutil.
+
+  ink-demo                    Draws all five stroke kinds (point, lasso,
+                              connector, trace, emphasis) onto a flat
+                              background — the runnable check for
+                              InkRenderer's geometry (flip, scale, arrowhead,
+                              badge).
+    --out <path>              Where the demo PNG is written (/tmp/ink-demo.png).
 
 Events go to stdout as JSON Lines. Logs go to stderr.
 """
