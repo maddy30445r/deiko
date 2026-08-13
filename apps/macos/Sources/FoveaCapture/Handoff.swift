@@ -191,24 +191,107 @@ enum Handoff {
             // the mouse-up, and pasting before that lands in the old widget.
             try await Task.sleep(for: .milliseconds(150))
 
-            // VERIFY the click moved keyboard focus, because a click on a
-            // window that was not KEY can be spent making it key and never
-            // reach the widget under the cursor. `app.activate()` restores key
-            // to whatever window had it last — with two windows (or a window
-            // on another display, unmaximized, as in the field failure this
-            // paragraph is for), that is not necessarily the window flung at.
-            // The paste's fate rides entirely on this, and no CGEvent reports
-            // back — but Accessibility can say what holds focus NOW. If the
-            // focused element does not contain the drop point, one more click
-            // lands on a window that is key by then, which is the case that
-            // has always worked. The trace records both readings either way.
-            let focus = focusedElementFrame()
-            note("focus after click: \(focus.map(describe) ?? "nothing focused")")
-            if !(focus?.frame?.contains(point) ?? false) {
+            // THE CLICK CUTS BOTH WAYS, so focus is verified around it, not
+            // assumed. It exists because activation alone restores focus to
+            // whatever had it last — the first live fling pasted into a widget
+            // nobody was looking at. But the field also produced the OPPOSITE
+            // failure: the caret was already blinking in the chat input, the
+            // drop landed on the panel's transcript a few hundred points away,
+            // and the click BLURRED the input — focus ended on a non-editable
+            // AXGroup and the paste vanished. No CGEvent reports where a paste
+            // will land; Accessibility can say what holds focus. So: read
+            // focus before, click, read after, and repair what the readings
+            // show. The trace records every step either way.
+            let before = focusedElement()
+            note("focus before click: \(before.map(describe) ?? "nothing focused")")
+            guard click(at: point) else {
+                throw HandoffError("Could not synthesize the click at the drop point.")
+            }
+            try await Task.sleep(for: .milliseconds(150))
+            var after = focusedElement()
+            note("focus after click: \(after.map(describe) ?? "nothing focused")")
+
+            // A click on a window that was not KEY can be spent making it key
+            // and never reach a widget — focus lands somewhere unrelated. One
+            // more click lands on a window that is key by then.
+            if !(after?.frame?.contains(point) ?? false) {
                 note("focus is not the widget under the drop point — clicking again")
                 _ = click(at: point)
                 try await Task.sleep(for: .milliseconds(150))
-                note("focus after second click: \(focusedElementFrame().map(describe) ?? "nothing focused")")
+                after = focusedElement()
+                note("focus after second click: \(after.map(describe) ?? "nothing focused")")
+            }
+
+            // The blur repair. The field produced a drop on the chat panel's
+            // TRANSCRIPT while the caret sat in its composer: the click
+            // blurred the input the user was aiming beside. When something
+            // text-editable was focused before the click, the click demoted
+            // focus to something that is not, and the two overlap (the input
+            // sits inside the panel that took the click), put focus back.
+            // AX-refocus first (no side effects); its own click second.
+            var repairedFocus = false
+            if let before, isTextEditable(before.role), let beforeFrame = before.frame,
+               !isTextEditable(after?.role),
+               let afterFrame = after?.frame, afterFrame.intersects(beforeFrame) {
+                note("the click blurred the text input it was aimed near — restoring focus")
+                AXUIElementSetAttributeValue(
+                    before.element, kAXFocusedAttribute as CFString, kCFBooleanTrue
+                )
+                try await Task.sleep(for: .milliseconds(100))
+                after = focusedElement()
+                if !isTextEditable(after?.role) {
+                    _ = click(at: CGPoint(x: beforeFrame.midX, y: beforeFrame.midY))
+                    try await Task.sleep(for: .milliseconds(150))
+                    after = focusedElement()
+                }
+                repairedFocus = isTextEditable(after?.role)
+                note("focus after restore: \(after.map(describe) ?? "nothing focused")")
+            }
+
+            // The composer hunt. A synthetic click on an Electron panel often
+            // moves no keyboard focus at all — the field measured a maximized
+            // window, caret in a source file, drop on the chat, and the paste
+            // followed the caret into the FILE. So when focus is still not
+            // somewhere a paste can land, find the panel's own input: the
+            // lowest text-editable element inside the container under the
+            // drop. Chromium only exposes that tree once poked — the same
+            // AXManualAccessibility poke capture already relies on.
+            if !isTextEditable(after?.role) {
+                AXProbe.enableManualAccessibility(pid: target.pid)
+                if let found = composer(near: point) {
+                    note("composer found at (\(Int(found.frame.midX)), \(Int(found.frame.midY))) — focusing it")
+                    AXUIElementSetAttributeValue(
+                        found.element, kAXFocusedAttribute as CFString, kCFBooleanTrue
+                    )
+                    try await Task.sleep(for: .milliseconds(100))
+                    after = focusedElement()
+                    if !isTextEditable(after?.role) {
+                        _ = click(at: CGPoint(x: found.frame.midX, y: found.frame.midY))
+                        try await Task.sleep(for: .milliseconds(150))
+                        after = focusedElement()
+                    }
+                    repairedFocus = repairedFocus || isTextEditable(after?.role)
+                    note("focus after composer hunt: \(after.map(describe) ?? "nothing focused")")
+                } else {
+                    note("no composer found under the drop — proceeding with the click's focus")
+                }
+            }
+
+            // THE FILE GUARD. If keyboard focus provably never left the text
+            // area it was in before the click — same element, editable, and
+            // not under the drop point — then pasting would write the prompt
+            // into that text area: the measured failure was 4k characters
+            // into an open source file. An honest refusal beats that; the
+            // rendered prompt stays on disk beside the session either way.
+            // Deliberately narrow: an unknown or non-editable focus (a
+            // browser's coarse web area, a terminal) proceeds exactly as
+            // before, so no working host regresses.
+            if let landing = after, !repairedFocus, isTextEditable(landing.role),
+               let before, CFEqual(landing.element, before.element),
+               !(landing.frame?.contains(point) ?? false) {
+                throw HandoffError(
+                    "The drop landed on \(target.appName), but keyboard focus stayed in the text area it was already in — pasting would have written the prompt there, not where you aimed. Nothing was sent. Try dropping on the chat's input box itself."
+                )
             }
         }
 
@@ -447,12 +530,46 @@ enum Handoff {
         return true
     }
 
-    /// What holds keyboard focus right now, per Accessibility — role and
-    /// frame in top-left global coordinates, the same space the drop point
-    /// lives in. Nil when AX answers nothing (an app with no AX support, or
-    /// focus genuinely nowhere). The frame can be nil for a real element that
-    /// exposes no geometry; the caller treats that as "cannot confirm".
-    private static func focusedElementFrame() -> (role: String, frame: CGRect?)? {
+    /// Roles a paste can land in. Deliberately the concrete input roles, not
+    /// AXWebArea: a coarse web area MIGHT route a paste correctly, and the
+    /// callers treat "not editable" as "try to do better, then proceed
+    /// anyway" — never as a reason to refuse a host that works today.
+    private static let textEditableRoles: Set<String> = [
+        "AXTextArea", "AXTextField", "AXSearchField", "AXComboBox",
+    ]
+
+    private static func isTextEditable(_ role: String?) -> Bool {
+        role.map { textEditableRoles.contains($0) } ?? false
+    }
+
+    private static func role(of element: AXUIElement) -> String? {
+        var ref: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &ref)
+        return ref as? String
+    }
+
+    /// Top-left global coordinates — the same space the drop point lives in.
+    private static func frame(of element: AXUIElement) -> CGRect? {
+        var posRef: CFTypeRef?
+        var sizeRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posRef) == .success,
+              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRef) == .success,
+              let posRef, CFGetTypeID(posRef) == AXValueGetTypeID(),
+              let sizeRef, CFGetTypeID(sizeRef) == AXValueGetTypeID()
+        else { return nil }
+        var position = CGPoint.zero
+        var size = CGSize.zero
+        guard AXValueGetValue(posRef as! AXValue, .cgPoint, &position),
+              AXValueGetValue(sizeRef as! AXValue, .cgSize, &size)
+        else { return nil }
+        return CGRect(origin: position, size: size)
+    }
+
+    /// What holds keyboard focus right now, per Accessibility. Nil when AX
+    /// answers nothing (an app with no AX support, or focus genuinely
+    /// nowhere). The frame can be nil for a real element that exposes no
+    /// geometry; callers treat that as "cannot confirm".
+    private static func focusedElement() -> (element: AXUIElement, role: String, frame: CGRect?)? {
         let systemWide = AXUIElementCreateSystemWide()
         var focusedRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(
@@ -462,31 +579,73 @@ enum Handoff {
               CFGetTypeID(focusedRef) == AXUIElementGetTypeID()
         else { return nil }
         let element = focusedRef as! AXUIElement
-
-        var roleRef: CFTypeRef?
-        AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef)
-        let role = roleRef as? String ?? "?"
-
-        var posRef: CFTypeRef?
-        var sizeRef: CFTypeRef?
-        var frame: CGRect?
-        if AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posRef) == .success,
-           AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRef) == .success,
-           let posRef, CFGetTypeID(posRef) == AXValueGetTypeID(),
-           let sizeRef, CFGetTypeID(sizeRef) == AXValueGetTypeID() {
-            var position = CGPoint.zero
-            var size = CGSize.zero
-            if AXValueGetValue(posRef as! AXValue, .cgPoint, &position),
-               AXValueGetValue(sizeRef as! AXValue, .cgSize, &size) {
-                frame = CGRect(origin: position, size: size)
-            }
-        }
-        return (role, frame)
+        return (element, role(of: element) ?? "?", frame(of: element))
     }
 
-    private static func describe(_ focus: (role: String, frame: CGRect?)) -> String {
+    private static func describe(_ focus: (element: AXUIElement, role: String, frame: CGRect?)) -> String {
         guard let f = focus.frame else { return "\(focus.role) (no frame)" }
         return "\(focus.role) at (\(Int(f.origin.x)), \(Int(f.origin.y))) \(Int(f.width))×\(Int(f.height))"
+    }
+
+    /// The text input belonging to the panel the drop landed in — a chat's
+    /// composer sits at the BOTTOM of its panel, under a transcript that eats
+    /// stray clicks, so a drop anywhere on the panel means "the chat" and the
+    /// lowest editable descendant is the input meant.
+    ///
+    /// The container is found by ascending from the element under the drop
+    /// while the ancestor still contains the point, is not the window, and
+    /// stays narrower than ~70% of a screen — the panel, never the whole
+    /// window, which is what keeps a code editor's text area out of the
+    /// search entirely.
+    ///
+    /// ponytail: bounded DFS, 400-node budget, depth 12 — a panel that hides
+    /// its composer deeper than that fails safe to the caller's file guard.
+    private static func composer(near point: CGPoint) -> (element: AXUIElement, frame: CGRect)? {
+        let systemWide = AXUIElementCreateSystemWide()
+        var hitRef: AXUIElement?
+        guard AXUIElementCopyElementAtPosition(
+                  systemWide, Float(point.x), Float(point.y), &hitRef
+              ) == .success,
+              let start = hitRef
+        else { return nil }
+
+        let widthCap = 0.7 * (NSScreen.screens.map { $0.frame.width }.max() ?? 1920)
+        var container = start
+        var cursor = start
+        for _ in 0..<8 {
+            var parentRef: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(
+                      cursor, kAXParentAttribute as CFString, &parentRef
+                  ) == .success,
+                  let parentRef, CFGetTypeID(parentRef) == AXUIElementGetTypeID()
+            else { break }
+            let parent = parentRef as! AXUIElement
+            guard let f = frame(of: parent), f.contains(point),
+                  role(of: parent) != "AXWindow", f.width < widthCap
+            else { break }
+            container = parent
+            cursor = parent
+        }
+
+        var budget = 400
+        var best: (element: AXUIElement, frame: CGRect)?
+        func walk(_ element: AXUIElement, depth: Int) {
+            guard budget > 0, depth < 12 else { return }
+            budget -= 1
+            if isTextEditable(role(of: element)),
+               let f = frame(of: element), f.width > 40 {
+                if best == nil || f.minY > best!.frame.minY { best = (element, f) }
+            }
+            var kidsRef: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(
+                      element, kAXChildrenAttribute as CFString, &kidsRef
+                  ) == .success,
+                  let kids = kidsRef as? [AXUIElement]
+            else { return }
+            for kid in kids { walk(kid, depth: depth + 1) }
+        }
+        walk(container, depth: 0)
+        return best
     }
 
     /// One left click at a CG-global point — the focus half of a drop.
