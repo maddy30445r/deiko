@@ -89,6 +89,7 @@ export function loadSession(events: RawEvent[]): ReferentStack {
       window: probe?.windowTitle,
       text: extractText(probe),
       cropPath: probe?.crop?.path,
+      mark: probe?.mark,
       // Carried through verbatim: these are the recorder's honest notes on how
       // suspicious the settle was, and the aligner is what decides.
       capture: candidate.features,
@@ -112,6 +113,7 @@ export function loadSession(events: RawEvent[]): ReferentStack {
         window: probe.windowTitle,
         text: extractText(probe),
         cropPath: probe.crop?.path,
+        mark: probe?.mark,
       });
       continue;
     }
@@ -135,6 +137,7 @@ export function loadSession(events: RawEvent[]): ReferentStack {
       window: probe.windowTitle,
       text: extractText(probe),
       cropPath: probe.crop?.path,
+      mark: probe?.mark,
     });
   }
 
@@ -156,12 +159,16 @@ function recoverDragStart(probe: any, cursors: any[]): number {
   return dragStart;
 }
 
-function extractText(probe: any): { ax: string[]; ocr: string[] } {
+function extractText(probe: any): { ax: string[]; ocr: string[]; axStart?: string[] } {
   const ax: string[] = (probe?.snapshot?.elements ?? [])
     .map((e: any) => e.value || e.title || e.elementDescription || e.selectedText)
     .filter((t: unknown): t is string => typeof t === "string" && t.trim().length > 0);
   const ocr: string[] = (probe?.crop?.ocr ?? [])
     .map((o: any) => o.text)
     .filter((t: unknown): t is string => typeof t === "string" && t.trim().length > 0);
-  return { ax, ocr };
+  // Connector/trace only: the OTHER end of the stroke, read at gesture start.
+  const axStart: string[] = (probe?.startSnapshot?.elements ?? [])
+    .map((e: any) => e.value || e.title || e.elementDescription || e.selectedText)
+    .filter((t: unknown): t is string => typeof t === "string" && t.trim().length > 0);
+  return axStart.length ? { ax, ocr, axStart } : { ax, ocr };
 }

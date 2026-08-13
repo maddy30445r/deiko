@@ -261,6 +261,7 @@ const manifest = {
     // is a different fact from "a crop exists and you may not have it".
     cropPath: r.cropPath,
     cropWithheld: r.cropWithheld,
+    mark: r.mark ?? null,
   })),
 };
 const withheld = manifest.referents.filter((r) => r.cropWithheld).length;

@@ -31,6 +31,12 @@ export interface ReferentText {
    * deserves a grep before it is edited; one from AX does not.
    */
   ocr: string[];
+  /**
+   * Connector/trace only: accessibility strings read at the STROKE'S START,
+   * from the probe's `startSnapshot`. A connector has two ends and `ax` alone
+   * only ever named the one under the cursor at commit — this is the other one.
+   */
+  axStart?: string[];
 }
 
 export interface Referent {
@@ -63,6 +69,10 @@ export interface Referent {
 
   text: ReferentText;
   cropPath?: string;
+  /** Present when a modifier stroke minted this referent: the badge number on
+   *  its crop and the classified gesture kind (point/lasso/connector/trace/
+   *  emphasis — or newer values this build has never heard of). */
+  mark?: { kind: string; number: number };
 
   /**
    * How the pointing act itself happened — recorded at capture, never judged

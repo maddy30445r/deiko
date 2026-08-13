@@ -102,6 +102,30 @@ function withheldNote(referents) {
  */
 const REPLY_LANGUAGE = "Reply in English.";
 
+/** The verb each stroke kind earns in the prompt. The wire's `mark.kind` comes
+ *  from Swift's StrokeKind — an unknown value (a newer app than this script)
+ *  degrades to "marked" rather than dropping the line. */
+const MARK_VERB = {
+  point: "pointed at",
+  lasso: "circled",
+  connector: "swept across",
+  trace: "traced through",
+  emphasis: "scribbled over",
+};
+
+/** `[2] swept across` — or, when both endpoint texts exist for a connector,
+ *  `[2] swept from "fetchUser()" to "OrderList"`. Null for unmarked referents,
+ *  which keep the pre-mark copy so old sessions re-render byte-identical. */
+function markLabel(r) {
+  if (!r.mark) return null;
+  const from = r.text?.axStart?.[0]?.slice(0, 60);
+  const to = r.text?.ax?.[0]?.slice(0, 60);
+  if (r.mark.kind === "connector" && from && to) {
+    return `[${r.mark.number}] swept from "${from}" to "${to}"`;
+  }
+  return `[${r.mark.number}] ${MARK_VERB[r.mark.kind] ?? "marked"}`;
+}
+
 /**
  * `attached` — whether the screenshots themselves are being handed over.
  *
@@ -145,27 +169,49 @@ export function buildPrompt({ narration, referents, attached = false }) {
     shots.filter((r) => r.said).map((r) => [r, redact(r.said).trim()]),
   );
   if (shots.length) {
+    // "marked" copy only when EVERY shot carries a mark — a mix of marked and
+    // unmarked referents is a session recorded partway through the rollout,
+    // and half-committing to the new wording would misdescribe the ones that
+    // aren't badged. Legacy sessions (no referent ever has `mark`) keep the
+    // "circled" copy verbatim so they re-render byte-identical.
+    const allMarked = shots.every((r) => r.mark);
     out.push(
       "",
       attached
         ? shots.length === 1
-          ? "The screenshot above is what I circled:"
-          : `The ${shots.length} screenshots above are what I circled, in this order:`
+          ? allMarked
+            ? "The screenshot above is what I marked:"
+            : "The screenshot above is what I circled:"
+          : allMarked
+            ? `The ${shots.length} screenshots above are what I marked, in this order:`
+            : `The ${shots.length} screenshots above are what I circled, in this order:`
         : shots.length === 1
-          ? "Screenshot of what I circled:"
-          : "Screenshots of what I circled:",
+          ? allMarked
+            ? "Screenshot of what I marked:"
+            : "Screenshot of what I circled:"
+          : allMarked
+            ? "Screenshots of what I marked (badge numbers match):"
+            : "Screenshots of what I circled:",
       ...shots.map((r, i) => {
         const quote = quotes.get(r);
+        const label = markLabel(r);
         if (attached) {
           // Numbered, because the image is no longer named by a path and its
           // position in the message is the only thing identifying it — which
           // also means every one needs a line, including the ones nothing was
           // said over, or the numbering stops matching the attachments.
-          return quote
-            ? `${i + 1}. while I said "${quote}"`
-            : `${i + 1}. (I wasn't saying anything while I drew this one)`;
+          const head = label ? `${i + 1}. ${label}` : `${i + 1}.`;
+          if (quote) {
+            // Only the labelled head gets the em-dash join ("[1] pointed at —
+            // while I said"); the legacy unlabelled line keeps its original
+            // direct join ("1. while I said") so old sessions render byte-
+            // identical.
+            return label ? `${head} — while I said "${quote}"` : `${i + 1}. while I said "${quote}"`;
+          }
+          return label ? head : `${i + 1}. (I wasn't saying anything while I drew this one)`;
         }
-        return quote ? `- ${r.cropPath} — while I said "${quote}"` : `- ${r.cropPath}`;
+        const head = label ? `- ${label}: ${r.cropPath}` : `- ${r.cropPath}`;
+        return quote ? `${head} — while I said "${quote}"` : head;
       }),
     );
   }

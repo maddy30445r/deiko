@@ -380,3 +380,60 @@ test("a referent with no quote produces no 'while I said' text at all", () => {
   assert.match(paths.text, /\/tmp\/a\.png/);
   assert.match(attached.text, /^1\./m);
 });
+
+// ── marks: numbered, verbed, additive ───────────────────────────────────────
+
+const marked = (kind, number, extra = {}) => ({
+  ...bare,
+  cropPath: `/tmp/s/crops/h01-r00${number}.png`,
+  mark: { kind, number },
+  ...extra,
+});
+
+test("a marked screenshot carries its badge number and verb", () => {
+  const { text } = buildPrompt({
+    narration: "look here",
+    referents: [marked("lasso", 1), marked("connector", 2)],
+  });
+  assert.match(text, /- \[1\] circled: \/tmp\/s\/crops\/h01-r001\.png/);
+  assert.match(text, /- \[2\] swept across: \/tmp\/s\/crops\/h01-r002\.png/);
+});
+
+test("attached marks keep both the position and the badge number", () => {
+  const { text } = buildPrompt({
+    narration: "look here",
+    referents: [marked("point", 1), marked("emphasis", 2)],
+    attached: true,
+  });
+  assert.match(text, /1\. \[1\] pointed at/);
+  assert.match(text, /2\. \[2\] scribbled over/);
+});
+
+test("a connector names both ends when AX heard them", () => {
+  const { text } = buildPrompt({
+    narration: "this feeds that",
+    referents: [
+      marked("connector", 1, {
+        text: { ax: ["OrderList"], ocr: [], axStart: ["fetchUser()"] },
+      }),
+    ],
+  });
+  assert.match(text, /swept from "fetchUser\(\)" to "OrderList"/);
+});
+
+test("referents without a mark keep the old copy", () => {
+  const { text } = buildPrompt({
+    narration: "fix this",
+    referents: [{ ...bare, cropPath: "/tmp/a.png" }],
+  });
+  assert.match(text, /- \/tmp\/a\.png/);
+  assert.doesNotMatch(text, /\[\d\]/);
+});
+
+test("an unknown mark kind still renders a line", () => {
+  const { text } = buildPrompt({
+    narration: "hm",
+    referents: [marked("wiggle", 1)],
+  });
+  assert.match(text, /- \[1\] marked: \/tmp\/s\/crops\/h01-r001\.png/);
+});
