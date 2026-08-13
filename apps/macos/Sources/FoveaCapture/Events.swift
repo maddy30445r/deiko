@@ -253,6 +253,18 @@ struct Frame: Codable {
         if abs(a.minY - b.minY) > rowTolerance { return a.minY < b.minY }
         return a.minX < b.minX
     }
+
+    /// Smallest frame containing both. Used to grow a mark's crop from the
+    /// stroke's own bounds to include what sits at its anchor points.
+    func union(_ other: Frame) -> Frame {
+        let minX = min(self.minX, other.minX)
+        let minY = min(self.minY, other.minY)
+        return Frame(
+            x: minX, y: minY,
+            width: max(self.maxX, other.maxX) - minX,
+            height: max(self.maxY, other.maxY) - minY
+        )
+    }
 }
 
 /// What the user indicated. A point is a cursor settle; a region is a freehand
@@ -260,6 +272,15 @@ struct Frame: Codable {
 enum ShapeKind: String, Codable {
     case point
     case region
+}
+
+/// Which gesture drew a mark, and its badge number — present only on referents
+/// minted by a modifier stroke. A plain settle carries nil. `kind` is
+/// `StrokeKind.rawValue` (point/lasso/connector/trace/emphasis); a string on
+/// the wire so old sessions and non-Swift readers need no enum.
+struct MarkInfo: Codable {
+    let kind: String
+    let number: Int
 }
 
 /// The indicated area. `path` is the raw freehand polygon in screen coords
@@ -442,13 +463,20 @@ struct ProbeEvent: Codable {
     let windowTitle: String?
     let snapshot: AXSnapshot
     let crop: CropResult?
+    /// Present only for modifier-stroke referents. See MarkInfo.
+    let mark: MarkInfo?
+    /// Connector/trace only: what the stroke STARTED on. The main `snapshot`
+    /// is the release end — the more deliberate of the two.
+    let startSnapshot: AXSnapshot?
 
     init(
         shape: Shape,
         app: AppIdentity?,
         windowTitle: String?,
         snapshot: AXSnapshot,
-        crop: CropResult? = nil
+        crop: CropResult? = nil,
+        mark: MarkInfo? = nil,
+        startSnapshot: AXSnapshot? = nil
     ) {
         self.init(
             t: Clock.nowMs(),
@@ -457,7 +485,9 @@ struct ProbeEvent: Codable {
             app: app,
             windowTitle: windowTitle,
             snapshot: snapshot,
-            crop: crop
+            crop: crop,
+            mark: mark,
+            startSnapshot: startSnapshot
         )
     }
 
@@ -468,7 +498,9 @@ struct ProbeEvent: Codable {
         app: AppIdentity?,
         windowTitle: String?,
         snapshot: AXSnapshot,
-        crop: CropResult?
+        crop: CropResult?,
+        mark: MarkInfo? = nil,
+        startSnapshot: AXSnapshot? = nil
     ) {
         self.type = .probe
         self.t = t
@@ -478,6 +510,8 @@ struct ProbeEvent: Codable {
         self.windowTitle = windowTitle
         self.snapshot = snapshot
         self.crop = crop
+        self.mark = mark
+        self.startSnapshot = startSnapshot
     }
 
     /// Attach a crop to an already-built probe. Capture is async and AX is not,
@@ -495,7 +529,9 @@ struct ProbeEvent: Codable {
             app: app,
             windowTitle: windowTitle,
             snapshot: snapshot,
-            crop: crop
+            crop: crop,
+            mark: mark,
+            startSnapshot: startSnapshot
         )
     }
 
@@ -508,7 +544,9 @@ struct ProbeEvent: Codable {
             app: app,
             windowTitle: windowTitle,
             snapshot: snapshot,
-            crop: crop
+            crop: crop,
+            mark: mark,
+            startSnapshot: startSnapshot
         )
     }
 }
