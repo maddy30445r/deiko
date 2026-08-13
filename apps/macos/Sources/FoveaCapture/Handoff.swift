@@ -210,14 +210,6 @@ enum Handoff {
                         + "."
                 )
             }
-            note("clicking drop point (\(Int(drop.x)), \(Int(drop.y))) — still \(target.appName)")
-            guard click(at: point) else {
-                throw HandoffError("Could not synthesize the click at the drop point.")
-            }
-            // Let the click settle — a web view (VS Code's chat) moves focus on
-            // the mouse-up, and pasting before that lands in the old widget.
-            try await Task.sleep(for: .milliseconds(150))
-
             // THE CLICK CUTS BOTH WAYS, so focus is verified around it, not
             // assumed. It exists because activation alone restores focus to
             // whatever had it last — the first live fling pasted into a widget
@@ -227,21 +219,36 @@ enum Handoff {
             // and the click BLURRED the input — focus ended on a non-editable
             // AXGroup and the paste vanished. No CGEvent reports where a paste
             // will land; Accessibility can say what holds focus. So: read
-            // focus before, click, read after, and repair what the readings
-            // show. The trace records every step either way.
+            // focus BEFORE the one click, read it after, and repair what the
+            // readings show. ONE click — a review caught this block briefly
+            // coexisting with the older click above it, which fired two clicks
+            // ~150ms apart at the same pixel: inside the double-click window,
+            // so hosts read them as a word-select, and the paste then REPLACED
+            // the selected text. The `before` reading also has to precede the
+            // only click, or the blur it exists to catch has already happened.
             let before = focusedElement()
             note("focus before click: \(before.map(describe) ?? "nothing focused")")
+            note("clicking drop point (\(Int(drop.x)), \(Int(drop.y))) — still \(target.appName)")
             guard click(at: point) else {
                 throw HandoffError("Could not synthesize the click at the drop point.")
             }
+            // Let the click settle — a web view (VS Code's chat) moves focus on
+            // the mouse-up, and pasting before that lands in the old widget.
             try await Task.sleep(for: .milliseconds(150))
             var after = focusedElement()
             note("focus after click: \(after.map(describe) ?? "nothing focused")")
 
             // A click on a window that was not KEY can be spent making it key
             // and never reach a widget — focus lands somewhere unrelated. One
-            // more click lands on a window that is key by then.
-            if !(after?.frame?.contains(point) ?? false) {
+            // more click lands on a window that is key by then. Only when a
+            // REAL frame excludes the point (or nothing is focused at all): a
+            // zero-size frame is a Monaco caret textarea that may be exactly
+            // right, and an empty rect contains nothing, so judging it here
+            // would spend a pointless click on a focus that was already good.
+            let excludesPoint = after?.frame.map {
+                $0.width > 0 && $0.height > 0 && !$0.contains(point)
+            } ?? (after == nil)
+            if excludesPoint {
                 note("focus is not the widget under the drop point — clicking again")
                 _ = click(at: point)
                 try await Task.sleep(for: .milliseconds(150))
@@ -280,57 +287,43 @@ enum Handoff {
                 note("focus after restore: \(after.map(describe) ?? "nothing focused")")
             }
 
-            // The composer hunt. A synthetic click on an Electron panel often
-            // moves no keyboard focus at all — the field measured a maximized
-            // window, caret in a source file, drop on the chat, and the paste
-            // followed the caret into the FILE. So when focus is still not
-            // somewhere a paste can land, find the panel's own input: the
-            // lowest text-editable element inside the container under the
-            // drop. Chromium only exposes that tree once poked — the same
-            // AXManualAccessibility poke capture already relies on — and the
-            // poked tree takes ~300ms to build (AXProbe's retry sleeps
-            // exactly that), so the search WAITS, and retries once more.
-            var container: (element: AXUIElement, frame: CGRect)?
+            // Two repair paths, chosen by what is KNOWN about the host.
+            //
+            // Chat-panel hosts (VS Code family): the webview is measurably
+            // opaque — every field hunt found nothing, because the composer
+            // exists in AX only once focused. Hunting is 700ms of proven
+            // futility there, so these hosts go straight to the input-strip
+            // click, and refuse honestly if even that secures nothing.
+            //
+            // Everyone else: the composer hunt. A native host's input DOES
+            // live in its AX tree, and Chromium exposes one once poked — the
+            // same AXManualAccessibility poke capture relies on. The poked
+            // tree takes ~300ms to build (AXProbe's retry sleeps exactly
+            // that), so the search waits, and retries once. No refusal on
+            // the generic path: an unverifiable focus proceeds exactly as it
+            // did before any of this existed — no worse than yesterday.
+            var container: (element: AXUIElement, frame: CGRect?)?
             if !focusReachesAPaste(after?.role) {
-                AXProbe.enableManualAccessibility(pid: target.pid)
-                try await Task.sleep(for: .milliseconds(400))
-                container = dropContainer(near: point)
-                var found = container.flatMap { composer(in: $0.element) }
-                if found == nil {
-                    try await Task.sleep(for: .milliseconds(300))
+                let bundleID = NSRunningApplication(
+                    processIdentifier: target.pid
+                )?.bundleIdentifier
+
+                if let bundleID, chatPanelHosts.contains(bundleID) {
                     container = dropContainer(near: point)
-                    found = container.flatMap { composer(in: $0.element) }
-                }
-                if let found {
-                    note("composer found at (\(Int(found.frame.midX)), \(Int(found.frame.midY))) — focusing it")
-                    AXUIElementSetAttributeValue(
-                        found.element, kAXFocusedAttribute as CFString, kCFBooleanTrue
-                    )
-                    try await Task.sleep(for: .milliseconds(100))
-                    after = focusedElement()
-                    if !isTextEditable(after?.role) {
-                        _ = click(at: CGPoint(x: found.frame.midX, y: found.frame.midY))
-                        try await Task.sleep(for: .milliseconds(150))
-                        after = focusedElement()
-                    }
-                    repairedFocus = repairedFocus || isTextEditable(after?.role)
-                    note("focus after composer hunt: \(after.map(describe) ?? "nothing focused")")
-                } else {
-                    note("no composer found under the drop")
                     // The input-strip click. A chat's input box lives in the
                     // bottom strip of its panel — the one place a click has
                     // ALWAYS reached the composer, back to the first live
-                    // fling. Known chat hosts only; one click, ~55pt above
-                    // the panel's bottom edge, then read the signature. No
-                    // second guesses: a miss here could be sitting on a
-                    // control row, and a blind paste-and-Return after a
-                    // misclick can activate whatever the click opened. The
-                    // honest refusal below handles the miss instead.
-                    let bundleID = NSRunningApplication(
-                        processIdentifier: target.pid
-                    )?.bundleIdentifier
-                    if let bundleID, chatPanelHosts.contains(bundleID),
-                       let panel = container?.frame, panel.height > 120 {
+                    // fling. One click, ~55pt above the panel's bottom edge,
+                    // then read the signature. No second guesses: a miss
+                    // here could be sitting on a control row, and a blind
+                    // paste-and-Return after a misclick can activate
+                    // whatever the click opened; the refusal below is the
+                    // net. The height gate skips panels too short to have a
+                    // strip — and degenerate geometry AX failed to read.
+                    // ponytail: 55pt is a fixed offset measured against
+                    // today's VS Code layout; zoom or a taller control row
+                    // moves the input and the refusal catches the miss.
+                    if let panel = container?.frame, panel.height > 120 {
                         let strip = CGPoint(x: panel.midX, y: panel.maxY - 55)
                         note("clicking the panel's input strip at (\(Int(strip.x)), \(Int(strip.y)))")
                         _ = click(at: strip)
@@ -339,18 +332,37 @@ enum Handoff {
                         repairedFocus = repairedFocus || focusReachesAPaste(after?.role)
                         note("focus after input-strip click: \(after.map(describe) ?? "nothing focused")")
                     }
-
-                    // Still nowhere a paste is known to reach, on a host
-                    // whose panels are known opaque? Refuse honestly. A
-                    // paste and a Return into an unverifiable widget is how
-                    // the prompt vanished three times — and after a strip
-                    // click that may have landed on a control, a blind
-                    // Return is worse than nothing.
-                    if let bundleID, chatPanelHosts.contains(bundleID),
-                       !focusReachesAPaste(after?.role) {
+                    if !focusReachesAPaste(after?.role) {
                         throw HandoffError(
                             "The chat's input box never took focus — pasting would have gone nowhere you could see. Nothing was sent; the prompt is still on disk beside the session. Click into the chat input once, then throw again."
                         )
+                    }
+                } else {
+                    AXProbe.enableManualAccessibility(pid: target.pid)
+                    try await Task.sleep(for: .milliseconds(400))
+                    container = dropContainer(near: point)
+                    var found = container.flatMap { composer(in: $0.element) }
+                    if found == nil {
+                        try await Task.sleep(for: .milliseconds(300))
+                        container = dropContainer(near: point)
+                        found = container.flatMap { composer(in: $0.element) }
+                    }
+                    if let found {
+                        note("composer found at (\(Int(found.frame.midX)), \(Int(found.frame.midY))) — focusing it")
+                        AXUIElementSetAttributeValue(
+                            found.element, kAXFocusedAttribute as CFString, kCFBooleanTrue
+                        )
+                        try await Task.sleep(for: .milliseconds(100))
+                        after = focusedElement()
+                        if !focusReachesAPaste(after?.role) {
+                            _ = click(at: CGPoint(x: found.frame.midX, y: found.frame.midY))
+                            try await Task.sleep(for: .milliseconds(150))
+                            after = focusedElement()
+                        }
+                        repairedFocus = repairedFocus || focusReachesAPaste(after?.role)
+                        note("focus after composer hunt: \(after.map(describe) ?? "nothing focused")")
+                    } else {
+                        note("no composer found under the drop — proceeding with the click's focus")
                     }
                 }
             }
@@ -372,7 +384,11 @@ enum Handoff {
             if let landing = after, !repairedFocus, isTextEditable(landing.role),
                let landingFrame = landing.frame,
                !landingFrame.contains(point) {
-                let panel = (container ?? dropContainer(near: point))?.frame
+                // Only REAL panel geometry may judge — an unreadable frame
+                // must not masquerade as a panel that contains nothing and
+                // refuse a delivery that was actually correct.
+                let panel = ((container ?? dropContainer(near: point))?.frame)
+                    .flatMap { $0.width > 0 && $0.height > 0 ? $0 : nil }
                 let landingMid = CGPoint(x: landingFrame.midX, y: landingFrame.midY)
                 let outsidePanel = panel.map { !$0.contains(landingMid) }
                     // No panel geometry to judge by — fall back to identity:
@@ -633,6 +649,18 @@ enum Handoff {
         role.map { textEditableRoles.contains($0) } ?? false
     }
 
+    /// Every AX round-trip is Mach IPC into the TARGET app's main thread — a
+    /// stuck modal or a debugger-paused process would otherwise block Fovea's
+    /// own main actor for the OS default. Same ceiling AXProbe uses, applied
+    /// to every element this file mints, because the timeout does not
+    /// propagate across separately-obtained refs.
+    private static let axTimeout: Float = 0.25
+
+    private static func withTimeout(_ element: AXUIElement) -> AXUIElement {
+        AXUIElementSetMessagingTimeout(element, axTimeout)
+        return element
+    }
+
     private static func role(of element: AXUIElement) -> String? {
         var ref: CFTypeRef?
         AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &ref)
@@ -661,7 +689,7 @@ enum Handoff {
     /// nowhere). The frame can be nil for a real element that exposes no
     /// geometry; callers treat that as "cannot confirm".
     private static func focusedElement() -> (element: AXUIElement, role: String, frame: CGRect?)? {
-        let systemWide = AXUIElementCreateSystemWide()
+        let systemWide = withTimeout(AXUIElementCreateSystemWide())
         var focusedRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(
                   systemWide, kAXFocusedUIElementAttribute as CFString, &focusedRef
@@ -669,7 +697,7 @@ enum Handoff {
               let focusedRef,
               CFGetTypeID(focusedRef) == AXUIElementGetTypeID()
         else { return nil }
-        let element = focusedRef as! AXUIElement
+        let element = withTimeout(focusedRef as! AXUIElement)
         return (element, role(of: element) ?? "?", frame(of: element))
     }
 
@@ -683,13 +711,13 @@ enum Handoff {
     /// narrower than ~70% of a screen — the panel, never the whole window,
     /// which is what keeps a code editor's text area out of both the
     /// composer search and the file guard's notion of "where you aimed".
-    private static func dropContainer(near point: CGPoint) -> (element: AXUIElement, frame: CGRect)? {
-        let systemWide = AXUIElementCreateSystemWide()
+    private static func dropContainer(near point: CGPoint) -> (element: AXUIElement, frame: CGRect?)? {
+        let systemWide = withTimeout(AXUIElementCreateSystemWide())
         var hitRef: AXUIElement?
         guard AXUIElementCopyElementAtPosition(
                   systemWide, Float(point.x), Float(point.y), &hitRef
               ) == .success,
-              let start = hitRef
+              let start = hitRef.map(withTimeout)
         else { return nil }
 
         let widthCap = 0.7 * (NSScreen.screens.map { $0.frame.width }.max() ?? 1920)
@@ -702,14 +730,16 @@ enum Handoff {
                   ) == .success,
                   let parentRef, CFGetTypeID(parentRef) == AXUIElementGetTypeID()
             else { break }
-            let parent = parentRef as! AXUIElement
+            let parent = withTimeout(parentRef as! AXUIElement)
             guard let f = frame(of: parent), f.contains(point),
                   role(of: parent) != "AXWindow", f.width < widthCap
             else { break }
             container = parent
             cursor = parent
         }
-        return (container, frame(of: container) ?? .zero)
+        // Nil frame stays nil — a `.zero` stand-in reads as "a panel that
+        // contains nothing" and once turned a correct delivery into a refusal.
+        return (container, frame(of: container))
     }
 
     /// The text input belonging to a panel — a chat's composer sits at the
@@ -735,13 +765,20 @@ enum Handoff {
                   ) == .success,
                   let kids = kidsRef as? [AXUIElement]
             else { return }
-            for kid in kids { walk(kid, depth: depth + 1) }
+            for kid in kids { walk(withTimeout(kid), depth: depth + 1) }
         }
         walk(container, depth: 0)
         return best
     }
 
     /// One left click at a CG-global point — the focus half of a drop.
+    ///
+    /// `clickState` is pinned to 1 on both halves: the focus ladder can
+    /// legitimately click the same neighbourhood twice inside the system
+    /// double-click interval (the key-window retry, the input-strip), and a
+    /// receiver that derives clickCount from the event would read that as a
+    /// word-select — after which a paste REPLACES the selection. Each of
+    /// these is a deliberate single click and says so.
     private static func click(at point: CGPoint) -> Bool {
         let source = CGEventSource(stateID: .hidSystemState)
         guard let down = CGEvent(
@@ -753,6 +790,8 @@ enum Handoff {
                   mouseCursorPosition: point, mouseButton: .left
               )
         else { return false }
+        down.setIntegerValueField(.mouseEventClickState, value: 1)
+        up.setIntegerValueField(.mouseEventClickState, value: 1)
         down.post(tap: .cghidEventTap)
         usleep(20_000)
         up.post(tap: .cghidEventTap)
