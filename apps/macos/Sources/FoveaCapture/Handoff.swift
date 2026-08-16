@@ -323,14 +323,30 @@ enum Handoff {
                     // ponytail: 55pt is a fixed offset measured against
                     // today's VS Code layout; zoom or a taller control row
                     // moves the input and the refusal catches the miss.
+                    // TWO OFFSETS, NOT ONE, AND THE SECOND IS ONLY REACHED ON
+                    // A VERIFIED MISS. 55pt was measured against today's VS
+                    // Code at default zoom; at 150% the input sits lower and
+                    // every fling at that editor was refused, permanently,
+                    // with no self-service fix. A second attempt is safe here
+                    // for exactly the reason a blind one is not — the focus
+                    // signature is read between them, so the retry only
+                    // happens when the first click provably did not land in
+                    // something that takes a paste, and the refusal below is
+                    // still the net when neither does.
+                    // ponytail: two measured offsets rather than a model of
+                    // the panel's layout; if a third editor needs a third
+                    // number, that is the point to derive it instead.
                     if let panel = container?.frame, panel.height > 120 {
-                        let strip = CGPoint(x: panel.midX, y: panel.maxY - 55)
-                        note("clicking the panel's input strip at (\(Int(strip.x)), \(Int(strip.y)))")
-                        _ = click(at: strip)
-                        try await Task.sleep(for: .milliseconds(200))
-                        after = focusedElement()
-                        repairedFocus = repairedFocus || focusReachesAPaste(after?.role)
-                        note("focus after input-strip click: \(after.map(describe) ?? "nothing focused")")
+                        for offset in [55.0, 30.0] {
+                            let strip = CGPoint(x: panel.midX, y: panel.maxY - offset)
+                            note("clicking the panel's input strip at (\(Int(strip.x)), \(Int(strip.y)))")
+                            _ = click(at: strip)
+                            try await Task.sleep(for: .milliseconds(200))
+                            after = focusedElement()
+                            repairedFocus = repairedFocus || focusReachesAPaste(after?.role)
+                            note("focus after input-strip click: \(after.map(describe) ?? "nothing focused")")
+                            if focusReachesAPaste(after?.role) { break }
+                        }
                     }
                     if !focusReachesAPaste(after?.role) {
                         throw HandoffError(
