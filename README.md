@@ -180,10 +180,18 @@ git commit -am "…"
 make release RELAY_URL=https://<your-relay>.lambda-url.ap-south-1.on.aws
 ```
 
-`make release` refuses a dirty tree or an existing tag, because a release whose
-contents do not match a commit is worse than no release. It stamps the version
-and the relay URL into the bundle, builds the DMG, and creates the GitHub
-Release with generated notes that lead with the quarantine step.
+`make release` refuses a dirty tree or an existing tag — in either spelling,
+`v0.4.1` or `0.4.1` — because a release whose contents do not match a commit is
+worse than no release. It stamps the version, the relay URL and the site URL
+into the bundle, builds the DMG, and hands it to `scripts/publish-release.sh`,
+which uploads the disk image to S3, writes the `version.json` the app's update
+check reads, and publishes `install.sh` stamped with the host serving it. Then
+it tags the commit here.
+
+It does **not** create a GitHub Release; that was true once and the Makefile
+explains at length why it no longer is — an asset behind repo access returns a
+bare 404 to a stranger, which reads as a broken link rather than a permission
+problem.
 
 **Always pass `RELAY_URL`.** It is not remembered between releases — a build
 made without it silently falls back to on-device words, which is a quieter
