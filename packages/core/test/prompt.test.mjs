@@ -470,3 +470,55 @@ test("carriesSecret flags a referent whose only credential text is in axStart", 
     true,
   );
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A MARKER WORD IS NOT A CREDENTIAL.
+//
+// `carriesSecret` unions every scrap of text in a referent, so before the
+// nearby-value rule a single "token" anywhere withheld the whole screenshot.
+// That fires constantly for the people this product is for: three VS Code
+// crops in session 20260730-004641 were withheld because `userAuth.ts`
+// contains the word "token". These two tests are the boundary, in both
+// directions, and the second one must never come back.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test("source code that merely talks about tokens keeps its screenshot", () => {
+  const referent = {
+    text: {
+      ax: [
+        "export async function refreshToken(session: Session) {",
+        "  // the refresh token is rotated on every call",
+        "  const token = await getAccessToken(session.userId)",
+        "  return { token, expiresIn: 3600 }",
+        "}",
+      ],
+      ocr: ["userAuth.ts", "Bearer", "password"],
+      axStart: [],
+    },
+    window: "userAuth.ts — Code",
+  };
+  assert.equal(carriesSecret(referent), false);
+});
+
+test("a marker beside an opaque value still withholds — the Azure shape", () => {
+  // Session 20260728-112323 burned a live Azure Storage account key into all
+  // twelve crops, with its label sitting directly above the field.
+  const referent = {
+    text: {
+      ax: ["Storage account", "account key", "MQULF+AStdFrlAKxUzvkZx7oHzB3KjQ9wEr=="],
+      ocr: [],
+      axStart: [],
+    },
+    window: "Azure Portal — Safari",
+  };
+  assert.equal(carriesSecret(referent), true);
+});
+
+test("a marker and its value on the SAME line withholds too", () => {
+  assert.equal(
+    carriesSecret({
+      text: { ax: ["api_key=UzvkZx7oHzB3KjQ9wErT"], ocr: [], axStart: [] },
+    }),
+    true,
+  );
+});

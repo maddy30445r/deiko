@@ -141,10 +141,34 @@ export function carriesSecret(r) {
     r?.window ?? "",
   ].join("\n");
   const stripped = stripStandalone(text);
-  // Either a marker word puts a credential nearby, or something matched a
-  // standalone pattern — an AWS key id, a JWT, a private key block — which
-  // announces itself without needing a marker.
-  return SECRET_MARKER.test(stripped) || stripped !== text;
+
+  // A standalone pattern needs no marker: an AWS key id, a JWT, a private key
+  // block all announce themselves. Unconditional, and first.
+  if (stripped !== text) return true;
+
+  // A MARKER ALONE IS NOT A SECRET, and treating it as one was costing this
+  // product its own audience. The union above is every scrap of text in a
+  // referent, so a single occurrence of "token" ANYWHERE in it withheld the
+  // whole screenshot — and the people Fovea is for spend their day looking at
+  // `auth.ts`, `getAccessToken`, `Bearer` in a header pane and a `password`
+  // field label. Three VS Code crops in session 20260730-004641 were withheld
+  // because `userAuth.ts` contains the word "token". Length is not opacity
+  // and vocabulary is not a credential.
+  //
+  // So a marker has to be near an opaque VALUE before it means anything. Same
+  // line, or the one after — because the thing this must never miss is a
+  // label above its own field, which is exactly how the Azure account key in
+  // session 20260728-112323 sat on screen.
+  //
+  // ponytail: a ±1-line window. OCR that shatters a value across a column
+  // boundary can push it out of reach and release where this used to
+  // withhold; widen the window if a real session shows that happening.
+  const lines = stripped.split("\n");
+  return lines.some((line, i) => {
+    if (!SECRET_MARKER.test(line)) return false;
+    const nearby = line + "\n" + (lines[i + 1] ?? "");
+    return nearby.split(TOKEN_SPLIT).some(looksOpaque);
+  });
 }
 
 /**
