@@ -182,15 +182,22 @@ final class ReviewModel: ObservableObject {
     /// what the taxonomy classifies. Everything else already has a written
     /// message — `HandoffError` and the like — and passes through.
     private func describe(_ error: Error) -> PipelineFailure {
+        let failure: PipelineFailure
         if case BriefPipelineError.commandFailed(let stage, let output) = error {
-            return PipelineFailure.classify(stage: stage, output: output)
+            failure = PipelineFailure.classify(stage: stage, output: output)
+        } else {
+            failure = PipelineFailure(
+                kind: .unknown,
+                message: error.localizedDescription,
+                opensSettings: false,
+                raw: ""
+            )
         }
-        return PipelineFailure(
-            kind: .unknown,
-            message: error.localizedDescription,
-            opensSettings: false,
-            raw: ""
-        )
+        // Remembered here because this is the only place a failure is ever
+        // named. Settings' "Copy diagnostics" is usually pressed minutes
+        // later, from a window that knows nothing about this session.
+        Diagnostics.lastFailure = failure
+        return failure
     }
 
     func load(sessionDir: String) {
@@ -577,6 +584,7 @@ struct ReviewView: View {
                 headline(d)
                 bindingLine(d)
                 cropRow(d)
+                degradedRow(d)
                 repoRow(d)
             }
         }
@@ -619,6 +627,53 @@ struct ReviewView: View {
     /// The released ones are SHOWN, not counted. A miscropped screenshot used
     /// to surface ten minutes later as an agent reasoning about the wrong
     /// window; here it is visible in the second before Good to go.
+    /// One quiet line when the words came from this Mac rather than the cloud.
+    ///
+    /// The fallback itself is correct and deliberate — a spent trial or an
+    /// unreachable relay keeps the session working instead of failing it. But
+    /// it was entirely silent, so the only thing the developer saw was a
+    /// transcript that read worse than usual, and the only thing that reached
+    /// the inbox was "the transcription is bad". Secondary styling on purpose:
+    /// this is an explanation, not a problem to solve.
+    @ViewBuilder private func degradedRow(_ d: BriefDigest) -> some View {
+        if d.summary.degraded == true {
+            Label(
+                "Some of this was transcribed on your Mac rather than in the cloud — accuracy may be lower.",
+                systemImage: "waveform.badge.exclamationmark"
+            )
+            .font(.system(size: 12))
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    /// WHY the screenshots were held back, in their own words.
+    ///
+    /// `render-brief.mjs` withholds for two different reasons and only one of
+    /// them is about a credential. The other — "never OCR'd, contents
+    /// unverified" — is what happens when Screen Recording has been granted
+    /// but Fovea has not been relaunched, which is to say on somebody's FIRST
+    /// SESSION. Saying "a credential was visible" there is a false alarm about
+    /// the user's own screen, raised in the one surface the entire privacy
+    /// promise rests on, at the worst possible moment to be wrong.
+    ///
+    /// So the unverified case says what actually happened and names the fix,
+    /// and the mixed case does not pretend to a single explanation.
+    static func withheldSentence(_ d: BriefDigest) -> String {
+        let n = d.cropsWithheld
+        let noun = "\(n) screenshot\(n == 1 ? "" : "s")"
+        let credential = d.withheldReasons.contains { $0.contains("credential") }
+        let unverified = d.withheldReasons.contains { $0.contains("OCR") }
+
+        if credential && !unverified {
+            return "\(noun) withheld — a credential was visible. "
+        }
+        if unverified && !credential {
+            return "\(noun) withheld — Fovea couldn't read \(n == 1 ? "it" : "them") to check. "
+                + "Relaunch Fovea and they'll be included next time. "
+        }
+        return "\(noun) withheld — some held a credential, some couldn't be read to check. "
+    }
+
     @ViewBuilder private func cropRow(_ d: BriefDigest) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             if d.cropsWithheld > 0 {
@@ -629,7 +684,7 @@ struct ReviewView: View {
                         .frame(width: 16, height: 16)
                         .overlay(Circle().strokeBorder(FoveaStyle.needsYou, lineWidth: 1.5))
                     (
-                        Text("\(d.cropsWithheld) screenshot\(d.cropsWithheld == 1 ? "" : "s") withheld — a credential was visible. ")
+                        Text(Self.withheldSentence(d))
                             .font(.system(size: 12.5, weight: .semibold))
                             .foregroundStyle(FoveaStyle.needsYou)
                         + Text("\(d.cropsReleased) \(d.cropsReleased == 1 ? "is" : "are") going.")

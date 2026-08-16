@@ -103,3 +103,16 @@ func caseInsensitive() {
     #expect(PipelineFailure.classify(stage: "s", output: "SARVAM 401: nope").kind == .authRejected)
     #expect(PipelineFailure.classify(stage: "s", output: "FETCH FAILED").kind == .offline)
 }
+
+@Test("a stage that never finished names the quarantine fix, not the timeout")
+func timedOut() {
+    // BriefPipeline's watchdog writes this after 180s. The commonest cause is
+    // a quarantined Node runtime: macOS refuses the spawned binary, nothing
+    // ever comes back, and the orb used to sit at "Transcribing…" forever.
+    let real = "timed out after 180s\n"
+    let failure = PipelineFailure.classify(stage: "Transcribing", output: real)
+
+    #expect(failure.kind == .timedOut)
+    #expect(failure.message.lowercased().contains("saved"))
+    #expect(failure.message.contains("xattr -dr com.apple.quarantine"))
+}

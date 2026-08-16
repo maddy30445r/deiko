@@ -256,6 +256,15 @@ final class Recorder {
         return hotkey.start()
     }
 
+    /// Drop the event tap without ending a session.
+    ///
+    /// The pair to `start()`, for when a permission is revoked while Fovea is
+    /// running: the tap is dead either way, and holding a stale one means the
+    /// grant coming back can never rebuild it.
+    func stopListening() {
+        hotkey.stop()
+    }
+
     // ── Session lifetime ────────────────────────────────────────────────────
 
     /// Mints `<root>/<stamp>` on the FIRST hold and not before.
@@ -364,10 +373,14 @@ final class Recorder {
                 atPath: "\(dir)/audio", withIntermediateDirectories: true
             )
         } catch {
-            Emit.event(ErrorEvent(
+            // SHOWN, not just filed. Without a session directory `beginRecording`
+            // guards out and returns, so the user double-taps Right Option and
+            // nothing happens — again, and again, with a perfectly good
+            // explanation sitting in a log file they will never open.
+            Emit.problem(
                 "could not create session directory \(dir): \(error.localizedDescription)",
-                hint: "Check that Fovea can write to \(sessionRoot) — System Settings → Privacy & Security → Files and Folders."
-            ))
+                hint: "Fovea could not create its session folder in \(sessionRoot). Check that it can write there — System Settings → Privacy & Security → Files and Folders."
+            )
             return false
         }
 

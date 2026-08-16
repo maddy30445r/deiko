@@ -106,11 +106,22 @@ if (!existsSync(transcriptPath)) {
 
 const events = loadEvents(dir);
 
-const { words } = JSON.parse(readFileSync(transcriptPath, "utf8"));
+const { words, source, degradedHolds } = JSON.parse(readFileSync(transcriptPath, "utf8"));
 if (!words?.length) {
   console.error("✗ transcript.json has no words");
   process.exit(1);
 }
+
+/// Did any of this transcript come from the on-device recogniser rather than
+/// the cloud?
+///
+/// `transcribe.mjs` falls back silently and by design — a spent trial, an
+/// unreachable relay, or a failed chunk all keep the session working on
+/// Apple's words rather than failing it. What was missing is anybody being
+/// TOLD: the brief just read worse, and "the transcription is bad" is what
+/// arrived in the inbox instead of "the relay was down". The flag travels so
+/// the review window can say so in one quiet line.
+const degraded = source === "text-only" || Boolean(degradedHolds?.length);
 
 const referents = loadSession(events).all();
 const { bindings, unbound } = align(toCandidates(referents), words);
@@ -252,6 +263,7 @@ const manifest = {
     needsReviewCount: bindings.filter((b) => b.needsReview).length,
     durationMs:
       words.length ? Math.max(...words.map((w) => w.end)) - Math.min(...words.map((w) => w.start)) : 0,
+    degraded,
   },
   referents: released.map((r) => ({
     id: r.id,

@@ -22,8 +22,19 @@ import FoveaHandoff
 @MainActor
 enum Diagnostics {
 
+    /// The most recent classified pipeline failure, remembered so the report
+    /// can name it.
+    ///
+    /// `report(lastFailure:)` has always been able to print this, and nothing
+    /// ever passed it: the block a user copies out of Settings described their
+    /// whole install and omitted the one thing they were writing in about.
+    /// Storing it here rather than threading it through means every caller
+    /// gets it, including the ones that have no idea a session just failed.
+    static var lastFailure: PipelineFailure?
+
     /// The block the Settings button copies.
     static func report(lastFailure: PipelineFailure? = nil) -> String {
+        let lastFailure = lastFailure ?? Self.lastFailure
         var lines: [String] = []
 
         lines.append("Fovea \(FoveaVersion.current) (build \(FoveaVersion.build))")

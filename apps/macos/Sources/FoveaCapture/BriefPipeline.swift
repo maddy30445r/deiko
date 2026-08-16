@@ -32,6 +32,14 @@ struct BriefSummary: Codable {
     var overlapCount: Int
     var needsReviewCount: Int
     var durationMs: Double
+    /// Some or all of the words came from the on-device recogniser rather than
+    /// the cloud — a spent trial, an unreachable relay, a chunk that failed.
+    ///
+    /// OPTIONAL because sessions rendered before this existed have no such key,
+    /// and a brief on disk from last week must still open. Absent reads as
+    /// false, which is the honest default: it means "nothing told us it was
+    /// degraded", not "we checked and it was fine".
+    var degraded: Bool?
 }
 
 private struct BriefManifest: Codable {
@@ -49,6 +57,15 @@ struct BriefDigest {
     let summary: BriefSummary
     let cropsReleased: Int
     let cropsWithheld: Int
+    /// WHY they were withheld, distinct and in the order the renderer gave
+    /// them. `render-brief.mjs` has two reasons and only one of them is about
+    /// a credential; the other is "Fovea could not read this to check", which
+    /// is what fires when Screen Recording has been granted but the app has
+    /// not been relaunched yet — i.e. on a first run. Carrying only the count
+    /// meant the window picked the alarming sentence for both, and told a
+    /// brand-new user that a credential had been visible on their screen when
+    /// nothing of the sort had happened.
+    let withheldReasons: [String]
     /// The images themselves, so the window can show what is about to go
     /// rather than a count of it. A count cannot be wrong in a way anybody
     /// notices; a thumbnail can.
@@ -480,6 +497,8 @@ enum BriefPipeline {
             summary: manifest.summary,
             cropsReleased: manifest.referents.filter { $0.cropPath != nil }.count,
             cropsWithheld: manifest.referents.filter { $0.cropWithheld != nil }.count,
+            withheldReasons: NSOrderedSet(array: manifest.referents.compactMap(\.cropWithheld))
+                .array as? [String] ?? [],
             cropPaths: manifest.referents.compactMap(\.cropPath)
         )
     }
@@ -539,6 +558,18 @@ enum BriefPipeline {
         return try await capture(process, stage: stage)
     }
 
+    /// How long any one stage may take before Fovea stops waiting for it.
+    ///
+    /// GENEROUS, because the honest slow case is real: a long session's audio
+    /// against a cold provider is tens of seconds, and cutting that off would
+    /// throw away work that was about to arrive. What this exists for is the
+    /// case that never arrives at all — most often a quarantined Node runtime,
+    /// which `isExecutableFile` cannot see (quarantine bites at exec, not at
+    /// stat), so the child is spawned, refused by Gatekeeper, and the
+    /// continuation is simply never resumed. The orb reads "Transcribing…"
+    /// until the app is quit.
+    private static let stageTimeout: DispatchTimeInterval = .seconds(180)
+
     /// Run a prepared process and collect everything it says.
     private static func capture(_ process: Process, stage: String) async throws -> String {
         try await withCheckedThrowingContinuation { continuation in
@@ -555,11 +586,25 @@ enum BriefPipeline {
                 if !chunk.isEmpty { collected.append(chunk) }
             }
 
+            // THE WATCHDOG RESUMES NOTHING. It only ends the process, which
+            // makes the termination handler fire on its own with a non-zero
+            // status — so there is exactly one path out of this continuation
+            // and no way to resume it twice. `timedOut` is read there to
+            // explain a status that would otherwise say only "exit 15".
+            let watchdog = Watchdog(process)
+            watchdog.arm(after: stageTimeout)
+
             process.terminationHandler = { proc in
+                watchdog.disarm()
                 pipe.fileHandleForReading.readabilityHandler = nil
                 let output = collected.text()
                 if proc.terminationStatus == 0 {
                     continuation.resume(returning: output)
+                } else if watchdog.firedOnTime {
+                    continuation.resume(throwing: BriefPipelineError.commandFailed(
+                        stage: stage,
+                        output: "timed out after 180s\n" + output
+                    ))
                 } else {
                     continuation.resume(throwing: BriefPipelineError.commandFailed(
                         stage: stage,
@@ -569,8 +614,55 @@ enum BriefPipeline {
             }
 
             do { try process.run() } catch {
+                watchdog.disarm()
                 pipe.fileHandleForReading.readabilityHandler = nil
                 continuation.resume(throwing: error)
+            }
+        }
+    }
+}
+
+/// A deadline for one child process.
+///
+/// Holds the process and two bools behind one lock, because the timer queue
+/// and the termination handler both touch them and neither can be told which
+/// arrives first. `@unchecked Sendable` for the same reason `OutputCollector`
+/// is: the lock is the checking.
+///
+/// It never resumes anything. Ending the process is enough — the termination
+/// handler fires on its own and stays the single exit from the continuation.
+private final class Watchdog: @unchecked Sendable {
+    private let lock = NSLock()
+    private let process: Process
+    private var done = false
+    private var fired = false
+
+    init(_ process: Process) { self.process = process }
+
+    /// True when the deadline ended this process, rather than the process
+    /// ending on its own with a status of its own.
+    var firedOnTime: Bool { lock.lock(); defer { lock.unlock() }; return fired }
+
+    func disarm() { lock.lock(); done = true; lock.unlock() }
+
+    func arm(after timeout: DispatchTimeInterval) {
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { [self] in
+            lock.lock()
+            if done { lock.unlock(); return }
+            fired = true
+            lock.unlock()
+
+            process.terminate()
+            // SIGTERM is a request. A process wedged in an uninterruptible
+            // state ignores it, and the hang we are fixing would simply move
+            // five seconds later.
+            DispatchQueue.global().asyncAfter(deadline: .now() + 5) { [self] in
+                lock.lock()
+                let stillWaiting = !done
+                lock.unlock()
+                if stillWaiting, process.isRunning {
+                    kill(process.processIdentifier, SIGKILL)
+                }
             }
         }
     }

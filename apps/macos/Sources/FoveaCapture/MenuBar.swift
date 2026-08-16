@@ -177,6 +177,9 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// its clock honest while the user is looking at it.
     private weak var capturingItem: NSMenuItem?
     private var menuClock: Timer?
+    /// Notices a permission granted or revoked in System Settings while Fovea
+    /// is running. Lives for the life of the app, unlike `menuClock`.
+    private var permissionPoll: Timer?
 
     init(recorder: Recorder) {
         self.recorder = recorder
@@ -221,6 +224,20 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         startListeningIfPermitted()
         refresh()
 
+        // PERMISSIONS CHANGE OUTSIDE THIS PROCESS, and macOS does not tell us.
+        // Without a poll the only things that re-read TCC are a recorder state
+        // change and opening the menu, so revoking Accessibility left the icon
+        // reading "ready" indefinitely, and re-granting it did nothing until
+        // the app was quit. Thirty seconds is far cheaper than it sounds —
+        // `AXIsProcessTrusted` and friends are local checks — and `refresh()`
+        // is idempotent, so this is the same work the menu already does on
+        // every open, just no longer waiting to be asked.
+        let poll = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refresh() }
+        }
+        RunLoop.main.add(poll, forMode: .common)
+        permissionPoll = poll
+
         // First run says something. Before this, a new install put an eye in
         // the menu bar and waited — and the hotkey did nothing, because no tap
         // is installed until every grant is in.
@@ -237,6 +254,16 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func refresh() {
+        // A REVOKED PERMISSION HAS TO TEAR THE TAP DOWN, or granting it again
+        // can never bring it back. `isListening` was set true once and never
+        // false, so `startListeningIfPermitted`'s guard short-circuited
+        // forever: revoke Accessibility, grant it again, and the only recovery
+        // was quitting the app — with nothing on screen saying so.
+        if isListening, !Permission.allCases.allSatisfy(\.isGranted) {
+            recorder.stopListening()
+            isListening = false
+        }
+        startListeningIfPermitted()
         setIcon()
         rebuildMenu()
     }
@@ -556,10 +583,13 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard !isListening, Permission.allCases.allSatisfy(\.isGranted) else { return }
         isListening = recorder.start()
         if !isListening {
-            Emit.event(ErrorEvent(
+            // The worst state the app can be in: every permission granted, the
+            // icon reading ready, the menu listing nothing missing, and the
+            // hotkey dead. Nothing on screen said so until this was shown.
+            Emit.problem(
                 "could not create the event tap",
-                hint: "Accessibility is granted but the tap was refused. Quit and relaunch Fovea; if it persists, remove Fovea from Accessibility and add it again."
-            ))
+                hint: "Accessibility is granted but macOS refused Fovea's keyboard listener, so the Right Option shortcut won't work. Quit and relaunch Fovea. If it persists, remove Fovea from System Settings → Privacy & Security → Accessibility and add it again."
+            )
         }
     }
 }

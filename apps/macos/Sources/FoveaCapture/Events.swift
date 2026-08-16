@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -624,6 +625,30 @@ enum Emit {
         e.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return e
     }()
+
+    /// An `ErrorEvent` that also reaches the person it is about.
+    ///
+    /// THE SECOND ERROR CHANNEL, AND WHY IT NEEDED ONE. `PipelineFailure` and
+    /// `HandoffError` produce sentences the user reads; `Emit.event(ErrorEvent)`
+    /// produces a line in `launch.jsonl` that nobody has ever read. That split
+    /// is right for diagnostics — most of these are for us — but three of them
+    /// are the difference between "Fovea is broken" and "Fovea told me why",
+    /// because they leave the app looking healthy while ignoring the user
+    /// completely: no session directory, no event tap, no microphone.
+    ///
+    /// The hint is the fix, in the user's words, and it is already written at
+    /// every call site — it was simply being filed rather than shown.
+    static func problem(_ message: String, hint: String) {
+        event(ErrorEvent(message, hint: hint))
+        DispatchQueue.main.async {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Fovea can't start a session"
+            alert.informativeText = hint
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        }
+    }
 
     /// One JSON object, one line, on stdout — flushed immediately so a Node
     /// parent reading line-by-line sees events live rather than all at exit.

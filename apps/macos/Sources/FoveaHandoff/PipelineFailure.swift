@@ -31,6 +31,8 @@ public struct PipelineFailure: Equatable, Sendable {
         case redactionRefused
         /// Node itself is missing.
         case noRuntime
+        /// The stage never finished and Fovea stopped waiting for it.
+        case timedOut
         /// Anything unclassified.
         case unknown
     }
@@ -125,6 +127,18 @@ public struct PipelineFailure: Equatable, Sendable {
             return make(
                 .noRuntime,
                 "Fovea could not find the Node runtime it needs to process this session. The session is saved."
+            )
+        }
+
+        // BriefPipeline's watchdog writes this when a stage never finishes. The
+        // commonest cause is a quarantined Node runtime — macOS refuses the
+        // spawned binary and nothing ever comes back — which is why the fix
+        // names the Terminal command rather than describing a timeout.
+        if text.contains("timed out after") {
+            return make(
+                .timedOut,
+                "That step took too long and Fovea stopped waiting. The session is saved on disk. "
+                    + "If this keeps happening, run: xattr -dr com.apple.quarantine /Applications/Fovea.app"
             )
         }
 
