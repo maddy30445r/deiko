@@ -715,19 +715,31 @@ enum AXProbe {
 
     /// AX values arrive as several unrelated CF types. Text roles give CFString;
     /// geometry gives an opaque AXValue; checkboxes give CFNumber/CFBoolean.
+    ///
+    /// TWO KINDS OF CAST LIVE HERE AND THE DIFFERENCE IS THE COMPILER'S, NOT A
+    /// PREFERENCE. A cast to a CoreFoundation type (`AXUIElement`, `AXValue`)
+    /// cannot fail — Swift rejects `as?` on one as "will always succeed" — so
+    /// those stay forced, guarded by the `CFGetTypeID` check above them. The
+    /// bridged Foundation casts (`String`, `Bool`, `NSNumber`) genuinely can
+    /// fail, and this runs against the accessibility tree of every third-party
+    /// app on the machine, where the type ID and the bridge have been known to
+    /// disagree. Those return nil rather than trapping: an attribute Fovea
+    /// cannot read is a missing label, not a reason to take the app down.
     private static func stringify(_ ref: CFTypeRef?) -> String? {
         guard let ref else { return nil }
 
         let typeID = CFGetTypeID(ref)
         if typeID == CFStringGetTypeID() {
-            let s = ref as! String
+            guard let s = ref as? String else { return nil }
             return s.isEmpty ? nil : s
         }
         if typeID == CFBooleanGetTypeID() {
-            return CFBooleanGetValue((ref as! CFBoolean)) ? "true" : "false"
+            guard let b = ref as? Bool else { return nil }
+            return b ? "true" : "false"
         }
         if typeID == CFNumberGetTypeID() {
-            return "\(ref as! NSNumber)"
+            guard let n = ref as? NSNumber else { return nil }
+            return "\(n)"
         }
         if typeID == AXValueGetTypeID() {
             let v = ref as! AXValue

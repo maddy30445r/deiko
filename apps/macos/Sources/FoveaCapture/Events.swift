@@ -727,6 +727,17 @@ enum Emit {
         )
         // Append rather than truncate: the diagnostics log is meant to survive
         // across launches, and a session file is only ever written once anyway.
+        //
+        // ROTATED AT 5MB, because "survives across launches" was being read as
+        // "forever". Every handoff trace and pipeline timing this install has
+        // ever written accumulates here, and nothing pruned it. One generation
+        // is kept — enough to still hold the crash that happened just before a
+        // restart, which is the only history anybody has ever wanted from it.
+        let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
+        if (size ?? 0) > 5 * 1024 * 1024 {
+            try? FileManager.default.removeItem(atPath: path + ".1")
+            try? FileManager.default.moveItem(atPath: path, toPath: path + ".1")
+        }
         if !FileManager.default.fileExists(atPath: path) {
             FileManager.default.createFile(atPath: path, contents: nil)
         }

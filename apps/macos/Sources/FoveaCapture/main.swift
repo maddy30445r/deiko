@@ -265,6 +265,9 @@ func runApp(_ args: Args) {
     // nowhere to print. Until a session exists they go to a launch log, so a
     // permission failure at startup is still recoverable after the fact.
     Emit.redirectToFile(Paths.launchLog)
+    // After the sink exists, because a crash report with nowhere to go is not
+    // a crash report.
+    CrashReport.install()
 
     let menu = MenuBar(recorder: recorder)
     app.delegate = menu

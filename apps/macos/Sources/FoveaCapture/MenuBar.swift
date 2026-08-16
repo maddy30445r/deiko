@@ -238,6 +238,27 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         RunLoop.main.add(poll, forMode: .common)
         permissionPoll = poll
 
+        // If the last run died, say so once — with the button that turns it
+        // into a bug report. A menu-bar app with no window and no Dock icon
+        // otherwise just "disappears", which is the whole of what a user is
+        // able to report about it.
+        if CrashReport.previousRunCrashed() {
+            CrashReport.clearPreviousRun()
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.alertStyle = .warning
+                alert.messageText = "Fovea quit unexpectedly last time"
+                alert.informativeText =
+                    "Sorry about that. Nothing recorded was lost — sessions are written to disk as they happen. "
+                    + "If you can, copy the diagnostics and send them over; they say what failed."
+                alert.addButton(withTitle: "Copy diagnostics")
+                alert.addButton(withTitle: "Ignore")
+                if alert.runModal() == .alertFirstButtonReturn {
+                    Diagnostics.copyToPasteboard()
+                }
+            }
+        }
+
         // First run says something. Before this, a new install put an eye in
         // the menu bar and waited — and the hotkey did nothing, because no tap
         // is installed until every grant is in.

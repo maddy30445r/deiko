@@ -477,6 +477,12 @@ struct ReviewView: View {
                         .keyboardShortcut(.defaultAction)
                 }
                 Button("Try again") { model.retry() }
+                // Here, because here is where somebody is when they decide to
+                // ask for help. It used to live only in Settings, two windows
+                // away, and the block it copied did not name the failure they
+                // were looking at — `Diagnostics.lastFailure` fixes the second
+                // half of that.
+                Button("Copy diagnostics") { Diagnostics.copyToPasteboard() }
                 Spacer()
             }
 
