@@ -102,7 +102,19 @@ SITE_DIR ?= site
 # CloudFront has no such limit.
 SITE_URL ?=
 
-bundle: $(DEBUG_BIN) resources
+## bundle — the dev loop's app: assemble, then sign.
+##
+## SIGNING IS ITS OWN TARGET AND IT RUNS LAST. It used to be the tail of this
+## one, which was fine until `dist` started copying a 110MB Node runtime into
+## Contents/Resources AFTER the seal had been computed over a bundle that did
+## not contain it. Every DMG ever handed to anybody — 0.3.0, 0.4.0, 0.4.1 —
+## failed `codesign --verify` with "a sealed resource is missing or invalid",
+## and Gatekeeper rejected all three. Nothing caught it because nothing ever
+## verified. Now assembling and sealing are separate steps, `dist` puts every
+## byte in place before calling `sign`, and `sign` verifies or fails the build.
+bundle: bundle-unsigned sign
+
+bundle-unsigned: $(DEBUG_BIN) resources
 	@cp $(CAPTURE_DIR)/Sources/FoveaCapture/Info.plist $(APP)/Contents/Info.plist
 	@cp $(DEBUG_BIN) $(APP)/Contents/MacOS/fovea-capture
 	@cp $(CAPTURE_DIR)/Sources/FoveaCapture/Fovea.icns $(RES)/Fovea.icns
@@ -118,15 +130,32 @@ endif
 	@/usr/libexec/PlistBuddy -c "Add :CFBundleExecutable string fovea-capture" $(APP)/Contents/Info.plist >/dev/null 2>&1 || true
 	@/usr/libexec/PlistBuddy -c "Add :CFBundlePackageType string APPL" $(APP)/Contents/Info.plist >/dev/null 2>&1 || true
 	@/usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" $(APP)/Contents/Info.plist >/dev/null 2>&1 || true
+	@echo "assembled $(APP)  (unsigned)"
+
+## sign — seal the bundle, then prove the seal.
+##
+## NO `--deep` ON THE SIGNATURE. `--deep` re-signs everything nested inside,
+## which for us means Contents/Resources/node — a binary that already carries
+## Node Foundation's own Developer ID signature and hardened runtime. Replacing
+## that with ours strips both and buys nothing; Apple deprecated `--deep` for
+## signing for exactly this reason. Nested code that arrives already signed
+## stays that way, and the outer seal simply records it.
+##
+## `--deep` on VERIFY is the opposite and is correct: it walks the nested code
+## and checks it, which is what catches a resource added after sealing.
+sign:
 ifeq ($(SIGN_FOUND),0)
-	@codesign --force --deep --sign - $(APP) 2>/dev/null
-	@echo "built $(APP)  ⚠ AD-HOC SIGNED"
+	@codesign --force --sign - $(APP) 2>/dev/null
+	@echo "signed $(APP)  ⚠ AD-HOC"
 	@echo "   macOS will drop all four permissions on the next rebuild."
 	@echo "   Fix it once:  make signing-setup"
 else
-	@codesign --force --deep --sign "$(SIGN_NAME)" $(APP) 2>/dev/null
-	@echo "built $(APP)  (signed: $(SIGN_NAME) — permissions survive rebuilds)"
+	@codesign --force --sign "$(SIGN_NAME)" $(APP) 2>/dev/null
+	@echo "signed $(APP)  ($(SIGN_NAME) — permissions survive rebuilds)"
 endif
+	@codesign --verify --strict --deep $(APP) \
+	  || (echo "✗ the seal does not match the bundle — something was added after signing"; exit 1)
+	@echo "  seal verified"
 	@echo "launch it:  open $(APP)      (menu-bar app; permissions attach to Fovea)"
 	@echo "subcommand: $(APP)/Contents/MacOS/fovea-capture <cmd>"
 
@@ -185,15 +214,23 @@ dmg: dist
 	@cp -R $(APP) build/dmg/
 	@ln -s /Applications build/dmg/Applications
 	@cp README.md build/dmg/
+	@# THE ONE-LINER ONLY APPEARS WHEN THERE IS A HOST TO FETCH IT FROM. Built
+	@# with an empty SITE_URL it rendered as `curl -fsSL /install.sh | sh` —
+	@# which is exactly what the 0.4.1 DMG on disk still offers, and it cannot
+	@# work. `make release` requires SITE_URL, so a real release always carries
+	@# the offer; a hand-built DMG gets the by-hand steps and no broken promise.
+	@printf '%s\n' 'Fovea $(VERSION)' '' > 'build/dmg/Read me first.txt'
+ifneq ($(SITE_URL),)
 	@printf '%s\n' \
-		'Fovea $(VERSION)' \
-		'' \
 		'EASIEST: skip this disk image entirely. Paste this into Terminal and' \
 		'it does all of the below for you:' \
 		'' \
 		'     curl -fsSL $(SITE_URL)/install.sh | sh' \
 		'' \
 		'' \
+		>> 'build/dmg/Read me first.txt'
+endif
+	@printf '%s\n' \
 		'BY HAND:' \
 		'' \
 		'1. Drag Fovea onto the Applications folder.' \
@@ -224,7 +261,7 @@ dmg: dist
 		'Requires macOS 14 or later.' \
 		'' \
 		'Full documentation: README.md, beside this file.' \
-		> 'build/dmg/Read me first.txt'
+		>> 'build/dmg/Read me first.txt'
 	@hdiutil create -volname "Fovea $(VERSION)" -srcfolder build/dmg \
 		-ov -format UDZO -quiet $(DMG)
 	@echo "built $(DMG)  ($$(du -h $(DMG) | cut -f1))"
@@ -251,10 +288,17 @@ dmg: dist
 release: guard-clean
 	@test -n "$(SITE_URL)" \
 		|| (echo "✗ SITE_URL is empty — a build nobody can reach is not a release"; exit 1)
-	@test -z "$$(git tag -l v$(VERSION))" \
-		|| (echo "✗ tag v$(VERSION) already exists — bump VERSION first"; exit 1)
+	@# BOTH SPELLINGS. Releases up to 0.3.0 were tagged `vX.Y.Z`, but `0.4.1`
+	@# was cut by hand without the prefix — and a guard that only knew about
+	@# `v0.4.1` waved that through and would have put a second tag on the same
+	@# commit. Whatever shape a version was tagged in, it counts as released.
+	@test -z "$$(git tag -l 'v$(VERSION)' -l '$(VERSION)')" \
+		|| (echo "✗ $(VERSION) is already tagged — bump VERSION first"; exit 1)
 	@$(MAKE) --no-print-directory dmg RELAY_URL=$(RELAY_URL) SITE_URL=$(SITE_URL)
-	@./scripts/publish-release.sh $(DMG) $(VERSION)
+	@# SITE_URL travels in the environment: publish-release.sh stamps it into
+	@# install.sh and into version.json, and without it both fall back to the
+	@# CloudFront hostname rather than the domain people actually type.
+	@SITE_URL=$(SITE_URL) ./scripts/publish-release.sh $(DMG) $(VERSION)
 	@git tag v$(VERSION)
 	@git push origin v$(VERSION)
 	@echo "✓ v$(VERSION) tagged and published"
@@ -336,10 +380,28 @@ resources:
 ## on PATH, so this is what makes the app work on a Mac with no Node at all.
 NODE_BIN := $(shell zsh -lc 'command -v node' 2>/dev/null)
 
-dist: bundle
+## The runtime that ships is whichever one the maintainer's shell happens to
+## resolve — an nvm default, usually. That is a wide door for shipping a
+## runtime nobody chose, so the three checks below refuse the obvious mistakes:
+## too old for the scripts, or the wrong architecture entirely. Pinning a
+## toolchain would be the thorough fix; refusing to ship a surprise is the
+## cheap one, and it catches what actually goes wrong.
+##
+## `dist` builds the RELEASE binary. `bundle-unsigned` stages the debug one for
+## the dev loop, and this overwrites it — before `sign` runs, which is the
+## whole point of the ordering. Until this line existed `make build` produced a
+## release binary that nothing ever consumed and every DMG shipped debug.
+dist: build bundle-unsigned
 	@test -n "$(NODE_BIN)" || (echo "✗ no node found to bundle"; exit 1)
+	@test "$$($(NODE_BIN) -p 'process.versions.node.split(".")[0]')" -ge 22 \
+	  || (echo "✗ bundled node is $$($(NODE_BIN) -v), the scripts need >= 22"; exit 1)
+	@file "$(NODE_BIN)" | grep -q arm64 \
+	  || (echo "✗ bundled node is not arm64: $$(file '$(NODE_BIN)')"; exit 1)
+	@cp $(RELEASE_BIN) $(APP)/Contents/MacOS/fovea-capture
 	@cp "$(NODE_BIN)" $(RES)/node
-	@echo "  node: $(NODE_BIN) → $(RES)/node  ($$(du -h "$(NODE_BIN)" | cut -f1))"
+	@echo "  binary: release"
+	@echo "  node: $(NODE_BIN) ($$($(NODE_BIN) -v), arm64) → $(RES)/node  ($$(du -h "$(NODE_BIN)" | cut -f1))"
+	@$(MAKE) --no-print-directory sign
 	@echo "⚠ signing is still the LOCAL cert — see Phase 5 for Developer ID + notarisation"
 	@echo "built $(APP) with a bundled runtime  ($$(du -sh $(APP) | cut -f1))"
 

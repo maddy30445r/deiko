@@ -30,7 +30,13 @@
 
 set -eu
 
-# Overridable so this can be tested against a local server before it is live.
+# THE PLACEHOLDER IS REPLACED AT PUBLISH TIME. `publish-release.sh` rewrites
+# this line as it uploads the file, so the copy being served always names the
+# host that served it. A script fetched from the real site cannot look up its
+# release on a domain that does not exist — which is what happened for as long
+# as this default was the only thing here.
+#
+# Still overridable, so it can be pointed at a local server before it is live.
 SITE="${FOVEA_SITE_URL:-https://fovea.example}"
 SITE="${SITE%/}"
 APP="/Applications/Fovea.app"
@@ -38,6 +44,14 @@ APP="/Applications/Fovea.app"
 fail() { printf '\n✗ %s\n' "$1" >&2; exit 1; }
 
 [ "$(uname -s)" = "Darwin" ] || fail "Fovea is macOS only."
+
+# Apple silicon only. Both the app binary and the bundled Node runtime are
+# arm64-thin, and Rosetta translates x86_64 onto arm64, never the other way —
+# so on an Intel Mac the download succeeds, the copy succeeds, and the launch
+# fails with a system dialog. Refusing here costs 41MB less and one clear
+# sentence more.
+[ "$(uname -m)" = "arm64" ] \
+  || fail "Fovea needs an Apple-silicon Mac (this one reports $(uname -m))."
 
 # macOS 14+. `sw_vers -productVersion` is "15.2" or "26.0"; the major is enough.
 major=$(sw_vers -productVersion | cut -d. -f1)
@@ -94,7 +108,11 @@ cp -R "$mounted/Fovea.app" /Applications/ || fail "Could not copy into /Applicat
 # THE LINE THIS SCRIPT EXISTS FOR.
 xattr -dr com.apple.quarantine "$APP"
 
-open "$APP"
+# Checked, because the success block below is a claim. An unchecked `open`
+# printed "installed and running" over the top of a system dialog saying the
+# app could not be opened — the install failed and the script congratulated
+# the user for it.
+open "$APP" || fail "Fovea installed to $APP but would not launch. Open it from Applications, and send what macOS says."
 
 cat <<'DONE'
 

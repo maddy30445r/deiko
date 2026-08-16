@@ -43,7 +43,15 @@ DIST_ID=$(aws cloudfront list-distributions \
 [ "$DIST_ID" != "None" ] && [ -n "$DIST_ID" ] || {
   echo "✗ no 'fovea-site' CloudFront distribution — run scripts/deploy-site.sh first"; exit 1; }
 
-DOMAIN=$(aws cloudfront get-distribution --id "$DIST_ID" --query Distribution.DomainName --output text)
+CF_DOMAIN=$(aws cloudfront get-distribution --id "$DIST_ID" --query Distribution.DomainName --output text)
+
+# The name users actually type, when there is one. CloudFront's own
+# `dxxxx.cloudfront.net` is the origin's address, not the product's, and once a
+# custom domain is aliased onto the distribution every URL we bake into
+# version.json and into the installer should say the real one — those strings
+# outlive this script by a release cycle.
+SITE_ORIGIN="${SITE_URL:-https://$CF_DOMAIN}"
+SITE_ORIGIN="${SITE_ORIGIN%/}"
 NAME=$(basename "$DMG")
 
 say "account $ACCOUNT · bucket $BUCKET"
@@ -58,16 +66,33 @@ aws s3 cp "$DMG" "s3://$BUCKET/download/$NAME" \
 TMP=$(mktemp)
 trap 'rm -f "$TMP"' EXIT
 cat > "$TMP" <<JSON
-{"version":"$VERSION","dmg":"$NAME","url":"https://$DOMAIN/download/"}
+{"version":"$VERSION","dmg":"$NAME","url":"$SITE_ORIGIN/download/"}
 JSON
 aws s3 cp "$TMP" "s3://$BUCKET/download/version.json" \
   --content-type application/json \
   --cache-control "public,max-age=60" >/dev/null
 
+# THE INSTALLER, STAMPED WITH THE HOST THAT WILL SERVE IT.
+#
+# `scripts/install.sh` carries a placeholder origin, and for a long time
+# nothing published the file at all: `deploy-site.sh` syncs the site directory
+# and the installer does not live there. So the documented one-liner —
+# `curl -fsSL https://<site>/install.sh | sh` — fetched a 404, and any copy
+# that did get served looked its release up on a domain that does not exist.
+# Publishing it here, from the script that already knows the domain and the
+# version it is publishing, is what keeps the two in step.
+sed "s|https://fovea.example|$SITE_ORIGIN|g" scripts/install.sh > "$TMP.sh"
+aws s3 cp "$TMP.sh" "s3://$BUCKET/install.sh" \
+  --content-type "text/x-shellscript" \
+  --cache-control "public,max-age=300" >/dev/null
+rm -f "$TMP.sh"
+say "published install.sh → $SITE_ORIGIN/install.sh"
+
 aws cloudfront create-invalidation --distribution-id "$DIST_ID" \
-  --paths "/download/version.json" --query Invalidation.Id --output text >/dev/null
-say "invalidated version.json"
+  --paths "/download/version.json" "/install.sh" --query Invalidation.Id --output text >/dev/null
+say "invalidated version.json and install.sh"
 
 echo
-echo "✓ https://$DOMAIN/download/$NAME"
+echo "✓ $SITE_ORIGIN/download/$NAME"
+echo "  install with:  curl -fsSL $SITE_ORIGIN/install.sh | sh"
 echo "  running installs will offer $VERSION on their next launch."
