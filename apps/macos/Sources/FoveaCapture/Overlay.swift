@@ -68,6 +68,10 @@ final class Overlay {
     /// Union of every screen, in top-left global coordinates — the overlay
     /// spans all displays so pointing across monitors stays continuous.
     private var canvas: NSRect = .zero
+    /// Registered once and never removed — the callback is cheap, checks
+    /// whether an overlay is even up, and unregistering would mean holding an
+    /// exactly-matching function pointer and context to pass back.
+    private var observingDisplays = false
 
     /// What the pill's click does — supplied by the recorder, because the
     /// pill's whole promise is "this stops it".
@@ -75,6 +79,7 @@ final class Overlay {
 
     func show() {
         guard window == nil else { return }
+        observeDisplayChanges()
 
         canvas = NSScreen.screens.reduce(NSRect.zero) { $0.union($1.frame) }
 
@@ -133,6 +138,46 @@ final class Overlay {
         view = nil
         for pill in pills { pill.hide() }
         pills = []
+    }
+
+    // ── Displays move while a session is running ────────────────────────────
+    //
+    // EVERY NUMBER IN `show()` IS READ ONCE. The canvas is the union of the
+    // screens as they were, `flipY` pivots on the main screen's top edge as it
+    // was, and there is exactly one `CapturePill` per screen that existed at
+    // the time. Plug in a monitor mid-session and that display gets no red
+    // capturing pill at all — which is not a cosmetic gap, it is the
+    // disclosure the product promises sits on every display, missing from the
+    // screen most likely to have somebody else looking at it.
+    //
+    // `Capture.swift` already registers a CGDisplayReconfiguration callback to
+    // invalidate its crop cache, and this uses the same mechanism rather than
+    // introducing the app's first NSNotification observer for the same event —
+    // one answer to "the displays moved", not two that can disagree.
+    //
+    // Rebuilding wholesale rather than patching: `show()` is idempotent behind
+    // its own guard, and re-deriving three values is cheaper to reason about
+    // than reconciling which screen gained or lost a pill.
+    private func observeDisplayChanges() {
+        guard !observingDisplays else { return }
+        observingDisplays = true
+        CGDisplayRegisterReconfigurationCallback({ _, flags, userInfo in
+            // Only once the change has landed. The "beginConfiguration" pass
+            // fires before the new geometry exists, and rebuilding against it
+            // would lay the overlay out for the displays we are leaving.
+            guard flags.contains(.setModeFlag) || flags.contains(.addFlag)
+                    || flags.contains(.removeFlag) || flags.contains(.desktopShapeChangedFlag)
+            else { return }
+            guard let userInfo else { return }
+            let overlay = Unmanaged<Overlay>.fromOpaque(userInfo).takeUnretainedValue()
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard overlay.window != nil else { return }
+                    overlay.hide()
+                    overlay.show()
+                }
+            }
+        }, Unmanaged.passUnretained(self).toOpaque())
     }
 
     func update(
