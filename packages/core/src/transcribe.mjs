@@ -83,6 +83,21 @@ const CHUNK_SECONDS = 25;
 const SAMPLE_RATE = 16000;
 const BYTES_PER_SAMPLE = 2;
 
+/// How many chunks may be in flight at once.
+///
+/// Four, because the relay's Lambda reserves five concurrent executions
+/// (`services/relay/deploy-aws.sh`). A long session split into two dozen
+/// chunks and fired all at once throttles against that reservation, and one
+/// throttled chunk used to lose the whole session's cloud text. Staying under
+/// the reservation is what makes the fallback rare rather than routine.
+const UPLOAD_CONCURRENCY = 4;
+
+/// A stalled upload should cost one chunk, not the session. Without a signal
+/// `fetch` falls through to undici's ~300s default, which is five minutes of
+/// an orb reading "Transcribing…" with nothing to show for it. Sixty seconds
+/// matches the relay's own Lambda timeout — past that there is nothing coming.
+const UPLOAD_TIMEOUT_MS = 60_000;
+
 /**
  * The chunking half, shared by every network transcriber.
  *
@@ -107,14 +122,47 @@ function chunkedTranscriber(name, uploadOne) {
       const chunks = splitAtSilence(pcm, CHUNK_SECONDS);
       process.stderr.write(`(${totalSeconds.toFixed(0)}s → ${chunks.length} chunks) `);
 
-      // Concurrently, not one after another. The chunks are independent uploads
-      // of a recording that already exists — waiting for each round trip before
-      // starting the next spent four times one chunk's latency to no purpose.
-      // `Promise.all` preserves order, which the join below depends on: these
-      // are consecutive stretches of one sentence, not a set.
-      const parts = await timed(name, () =>
-        Promise.all(chunks.map((data) => uploadOne(data, language))));
-      return { text: parts.map((p) => p.text).filter(Boolean).join(" ") };
+      // Concurrently, but IN SLICES, and never all at once. The chunks are
+      // independent uploads of a recording that already exists, so waiting for
+      // each round trip before starting the next spends latency for nothing —
+      // but firing all of them spends something worse. A ten-minute session is
+      // twenty-four uploads against a relay whose reserved concurrency is five;
+      // Lambda throttles the excess, and under a plain `Promise.all` one
+      // throttled chunk rejected the whole session and dropped every word to
+      // the on-device fallback. Four at a time stays under the reservation.
+      //
+      // `allSettled` per slice is the other half: a chunk that still fails
+      // costs its own stretch of sentence and nothing else. The failures are
+      // reported so the brief can say it is missing something rather than
+      // quietly reading short.
+      const parts = [];
+      const failures = [];
+      await timed(name, async () => {
+        for (let i = 0; i < chunks.length; i += UPLOAD_CONCURRENCY) {
+          const slice = chunks.slice(i, i + UPLOAD_CONCURRENCY);
+          const settled = await Promise.allSettled(
+            slice.map((data) => uploadOne(data, language)));
+          settled.forEach((outcome, n) => {
+            // Order is what the join depends on — these are consecutive
+            // stretches of one sentence, not a set — so a failed chunk holds
+            // its place with empty text rather than closing the gap.
+            if (outcome.status === "fulfilled") parts.push(outcome.value);
+            else {
+              parts.push({ text: "" });
+              failures.push({ chunk: i + n, reason: String(outcome.reason?.message ?? outcome.reason) });
+            }
+          });
+        }
+      });
+
+      if (failures.length) {
+        process.stderr.write(
+          `· ${failures.length}/${chunks.length} chunks failed — the transcript is missing some words `);
+      }
+      return {
+        text: parts.map((p) => p.text).filter(Boolean).join(" "),
+        failedChunks: failures.length,
+      };
     },
   };
 }
@@ -140,6 +188,7 @@ function sarvamTranscriber(apiKey) {
       method: "POST",
       headers: { "api-subscription-key": apiKey },
       body: sttForm(pcm, language),
+      signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
     });
 
     const bodyText = await response.text();
@@ -179,6 +228,7 @@ function relayTranscriber(endpoint, token) {
       method: "POST",
       headers: token ? { authorization: `Bearer ${token}` } : {},
       body: sttForm(pcm, language),
+      signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
     });
 
     const bodyText = await response.text();

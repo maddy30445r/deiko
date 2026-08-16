@@ -114,10 +114,10 @@ async function addSeconds(key, seconds, ttlSeconds) {
 /// key — the answer is the confirmation that the key worked, and it has to be
 /// available before a session has ever run. A read cannot be the same call as
 /// the increment for that reason alone.
-export async function peek(subject, now = Date.now()) {
+export async function peek(subject, tier, now = Date.now()) {
   const out = await db().send(new GetItemCommand({
     TableName: TABLE,
-    Key: { subject: { S: usageKey(subject, now) } },
+    Key: { subject: { S: usageKey(subject, now, tier) } },
   }));
   return Number(out.Item?.audioSeconds?.N ?? 0);
 }
@@ -127,16 +127,31 @@ export async function peek(subject, now = Date.now()) {
 ///
 /// The two writes are independent, so they go together — one round trip's
 /// latency rather than two, on the path a user is waiting on.
-export async function record({ subject, seconds, now = Date.now() }) {
+/// The TTL follows the KEY, not the token's shape. A monthly row expires so
+/// the next month starts clean; a lifetime row must not, or the trial renews
+/// itself every forty days. Only a Pro licence gets the monthly row, so only a
+/// Pro licence gets the TTL — a free licence is a trial like any other, and
+/// giving it an expiring row is exactly the bug `usageKey` documents.
+export async function record({ subject, seconds, tier, now = Date.now() }) {
+  const key = usageKey(subject, now, tier);
   const [usedSeconds, globalUsedSeconds] = await Promise.all([
-    addSeconds(
-      usageKey(subject, now),
-      seconds,
-      subject.kind === "device" ? null : MONTHLY_TTL_SECONDS,
-    ),
+    addSeconds(key, seconds, key.includes("#") && tier === "pro" ? MONTHLY_TTL_SECONDS : null),
     addSeconds(globalKey(now), seconds, DAILY_TTL_SECONDS),
   ]);
   return { usedSeconds, globalUsedSeconds };
+}
+
+/// Count something against the DAY only, and report the day's new total.
+///
+/// For work that costs the service money but is not the user's audio — the
+/// orb's three-line summary. Charging it to their own counter would spend a
+/// transcription allowance on a text call and make the trial run out faster
+/// than the thing the trial is for; leaving it uncounted entirely is how an
+/// unmetered route becomes an unbounded bill. The day's backstop is the right
+/// place: it bounds the service without touching what anybody was promised.
+export async function recordGlobal({ seconds, now = Date.now() }) {
+  const globalUsedSeconds = await addSeconds(globalKey(now), seconds, DAILY_TTL_SECONDS);
+  return { globalUsedSeconds };
 }
 
 /// Is this licence real, and what does it entitle its holder to?
@@ -161,12 +176,20 @@ export async function tierFor(subject, now = Date.now()) {
 
   // Written even when the answer is "not valid", so a garbage key cannot be
   // used to generate a Lemon Squeezy call per chunk.
+  //
+  // It expires, though — at four cache lifetimes, long after it stops being
+  // consulted. Without a TTL every distinct string anybody ever typed into the
+  // licence field left a permanent row, which is a slow storage leak with an
+  // obvious way to accelerate it.
   await db().send(new PutItemCommand({
     TableName: TABLE,
     Item: {
       subject: { S: key },
       tier: { S: tier },
       checkedAt: { N: String(now) },
+      expiresAt: {
+        N: String(Math.floor((now + LICENSE_CACHE_MS * 4) / 1000)),
+      },
     },
   }));
 

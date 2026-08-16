@@ -23,8 +23,17 @@
 //     them.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { createHash } from "node:crypto";
+
 import { audioSeconds, capFor, decide, subjectFrom } from "./quota.mjs";
-import { USAGE_TABLE, meteringHealthy, peek, record, tierFor } from "./usage.mjs";
+import {
+  USAGE_TABLE,
+  meteringHealthy,
+  peek,
+  record,
+  recordGlobal,
+  tierFor,
+} from "./usage.mjs";
 
 const SARVAM_STT_URL = "https://api.sarvam.ai/speech-to-text";
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
@@ -32,7 +41,42 @@ const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 /// Bigger than any chunk the client sends — `transcribe.mjs` splits at 25s of
 /// 16kHz mono, which is 0.76MB — and small enough that a bad actor cannot make
 /// us hold much memory. Also comfortably under Lambda's 6MB request cap.
-export const MAX_BODY_BYTES = 12 * 1024 * 1024;
+///
+/// 2MB rather than 12: the ceiling is a blast radius, not a courtesy. Audio is
+/// metered by LENGTH (`quota.mjs`'s `audioSeconds`), so an oversized body is
+/// counted as the audio it pretends to be, and a 12MB one counted as 375
+/// seconds meant ~39 junk requests could exhaust the whole service's daily
+/// ceiling and lock out every paying customer until UTC midnight. The real
+/// chunk is 0.76MB; 2MB is headroom, not a limit anybody honest will meet.
+export const MAX_BODY_BYTES = 2 * 1024 * 1024;
+
+/// The summary is JSON, not audio: a transcript and a system prompt, a few kB.
+/// It gets its own cap because sharing the audio one would let a caller post
+/// two megabytes of prompt to a model we pay for.
+export const MAX_SUMMARY_BYTES = 64 * 1024;
+
+// ── What a summary is allowed to be ─────────────────────────────────────────
+//
+// These MIRROR `scripts/summarize.mjs` — the same model, the same temperature,
+// the same 200-token answer. They are pinned HERE as well because the client
+// choosing them is the client choosing our bill: this route forwards to Groq
+// with Fovea's key, so an arbitrary caller with any bearer string could
+// otherwise name an expensive model and a large completion and bill it to us.
+// The caller's `messages` still travel (the system prompt lives on the client,
+// where the product's voice belongs); nothing else the caller sends does.
+const SUMMARY_MODEL = "llama-3.3-70b-versatile";
+const SUMMARY_TEMPERATURE = 0.2;
+const SUMMARY_MAX_COMPLETION_TOKENS = 200;
+
+/// The joined length of everything we will hand the model. A narration long
+/// enough to exceed this is already past the point where three lines help.
+const SUMMARY_MAX_CONTENT_CHARS = 8_000;
+
+/// What one summary counts as, for the GLOBAL ceiling only. Not measured in
+/// audio because it is not audio — it is a nominal price so that a flood of
+/// summaries trips the same backstop a flood of transcription would, instead
+/// of being invisible to it.
+const SUMMARY_NOMINAL_SECONDS = 5;
 
 // ── Burst limiting ──────────────────────────────────────────────────────────
 //
@@ -52,8 +96,17 @@ const WINDOW_MS = 60_000;
 const MAX_REQUESTS_PER_WINDOW = 30;
 const seen = new Map();
 
+/// ponytail: clear-all rather than an LRU. `seen` is keyed by token and a
+/// caller who rotates tokens is not rate-limited by it anyway, so the only
+/// thing eviction has to prevent is unbounded memory in a warm container.
+/// Dropping every window early under a flood of unique tokens costs the
+/// honest caller one reset; upgrade to an LRU only if that is ever measured
+/// to matter.
+const MAX_TRACKED_TOKENS = 5_000;
+
 function overRateLimit(token) {
   const now = Date.now();
+  if (seen.size > MAX_TRACKED_TOKENS) seen.clear();
   const entry = seen.get(token);
   if (!entry || now > entry.resetAt) {
     seen.set(token, { count: 1, resetAt: now + WINDOW_MS });
@@ -63,10 +116,25 @@ function overRateLimit(token) {
   return entry.count > MAX_REQUESTS_PER_WINDOW;
 }
 
+/// The identifier that appears in the logs, and the one you revoke by.
+///
+/// NOT the token itself: a bearer in CloudWatch is a credential in CloudWatch.
+/// A hash prefix is safe to write down, safe to paste into a ticket, and long
+/// enough not to collide across any user count this will ever have.
+export function tokenFingerprint(token) {
+  return createHash("sha256").update(token).digest("hex").slice(0, 12);
+}
+
 /// Tokens that have been abused. A plain comma-separated list because
 /// revocation should be one obvious edit away at three in the morning.
-function revoked() {
-  return new Set((process.env.FOVEA_REVOKED_TOKENS ?? "").split(",").filter(Boolean));
+///
+/// Matches EITHER the raw token or its fingerprint, and that is the whole
+/// point: the logs only ever carry the fingerprint, so before this the string
+/// you could find was never the string you could revoke. Now what you read in
+/// CloudWatch is what you paste into FOVEA_REVOKED_TOKENS.
+function revoked(token) {
+  const list = new Set((process.env.FOVEA_REVOKED_TOKENS ?? "").split(",").filter(Boolean));
+  return list.has(token) || list.has(tokenFingerprint(token));
 }
 
 // ── The one entry point ─────────────────────────────────────────────────────
@@ -113,10 +181,17 @@ export async function handle({ method, path, token, contentType, body }) {
     return json(405, { error: "method not allowed" });
   }
   if (!token) return json(401, { error: "missing token" });
-  if (revoked().has(token)) return json(403, { error: "token revoked" });
+  if (revoked(token)) return json(403, { error: "token revoked" });
 
   const subject = subjectFrom(token);
   if (!subject) return json(401, { error: "malformed token" });
+
+  // BEFORE the quota branch, not after it. /v1/quota does a DynamoDB read, a
+  // conditional write and — for an unseen licence — an outbound Lemon Squeezy
+  // call, so leaving it above the limiter made it the cheapest way to amplify
+  // writes against a 25-WCU table. Throttled writes there do not fail the
+  // attacker's request, they fail /v1/transcribe for whoever is paying.
+  if (overRateLimit(token)) return json(429, { error: "rate limit exceeded" });
 
   // WHAT AM I, AND WHAT IS LEFT. Read-only, and the only route the app itself
   // calls rather than the pipeline. Settings asks the instant a licence key is
@@ -127,7 +202,7 @@ export async function handle({ method, path, token, contentType, body }) {
   if (path === "/v1/quota") {
     try {
       const tier = await tierFor(subject);
-      const usedSeconds = await peek(subject);
+      const usedSeconds = await peek(subject, tier);
       const capSeconds = capFor(tier);
       return json(200, {
         tier,
@@ -142,7 +217,6 @@ export async function handle({ method, path, token, contentType, body }) {
     }
   }
 
-  if (overRateLimit(token)) return json(429, { error: "rate limit exceeded" });
   if (body && body.length > MAX_BODY_BYTES) return json(413, { error: "body too large" });
 
   if (path === "/v1/transcribe") {
@@ -156,7 +230,7 @@ export async function handle({ method, path, token, contentType, body }) {
     try {
       const tier = await tierFor(subject);
       const seconds = audioSeconds(body?.length ?? 0);
-      const { usedSeconds, globalUsedSeconds } = await record({ subject, seconds });
+      const { usedSeconds, globalUsedSeconds } = await record({ subject, seconds, tier });
       verdict = decide({ tier, usedSeconds, globalUsedSeconds });
     } catch (err) {
       // FAILING CLOSED, DELIBERATELY. If the usage table cannot be reached we
@@ -180,14 +254,61 @@ export async function handle({ method, path, token, contentType, body }) {
 
   if (path === "/v1/summarize") {
     if (!groqKey) return json(503, { error: "relay has no summary key configured" });
-    // NOT METERED. Groq's three-line reading is a couple of thousand tokens —
-    // a rounding error beside the audio — and somebody who has used up their
-    // trial should still get the sentence that tells them what Fovea heard.
-    // Charging for it would cost more in explanation than it does in tokens.
+    if (body && body.length > MAX_SUMMARY_BYTES) {
+      return json(413, { error: "body too large" });
+    }
+
+    // THE BODY IS REBUILT, NEVER FORWARDED.
+    //
+    // This route spends Fovea's Groq key, and it will accept any bearer string
+    // — that is what makes it usable by somebody whose trial has run out, and
+    // it is also what made forwarding the caller's JSON verbatim a mistake: it
+    // let anyone who found the URL name their own model and completion budget
+    // and bill it here. So we take the one field that carries the user's words
+    // and pin everything that costs money.
+    let messages;
+    try {
+      const sent = JSON.parse(Buffer.from(body ?? "").toString("utf8"));
+      messages = Array.isArray(sent?.messages) ? sent.messages : null;
+    } catch {
+      messages = null;
+    }
+    if (!messages?.length) return json(400, { error: "expected { messages: [...] }" });
+
+    let budget = SUMMARY_MAX_CONTENT_CHARS;
+    const trimmed = messages.map((m) => {
+      const content = String(m?.content ?? "").slice(0, Math.max(0, budget));
+      budget -= content.length;
+      return { role: m?.role === "system" ? "system" : "user", content };
+    });
+
+    // METERED AGAINST THE DAY ONLY. The promise this route was written for
+    // still holds — somebody who has used up their trial gets the sentence
+    // that tells them what Fovea heard — and their own counter is untouched,
+    // so a summary never spends the audio allowance it is not made of. What a
+    // flood cannot do any more is stay invisible to the one number that bounds
+    // the whole service's day.
+    try {
+      const { globalUsedSeconds } = await recordGlobal({
+        seconds: SUMMARY_NOMINAL_SECONDS,
+      });
+      const verdict = decide({ tier: "pro", usedSeconds: 0, globalUsedSeconds });
+      if (!verdict.allowed) return json(verdict.status, { error: verdict.error });
+    } catch (err) {
+      return json(503, {
+        error: `usage service unavailable: ${String(err?.message ?? err).slice(0, 120)}`,
+      });
+    }
+
     return await proxy(GROQ_URL, {
       authorization: `Bearer ${groqKey}`,
       "content-type": "application/json",
-    }, body);
+    }, JSON.stringify({
+      model: SUMMARY_MODEL,
+      messages: trimmed,
+      temperature: SUMMARY_TEMPERATURE,
+      max_completion_tokens: SUMMARY_MAX_COMPLETION_TOKENS,
+    }));
   }
 
   return json(404, { error: "no such endpoint" });
@@ -209,9 +330,15 @@ async function proxy(url, headers, body) {
   return { status: 200, body: text, contentType: "application/json" };
 }
 
-/// A token PREFIX, a path, a status and a duration. Never a body, never a
-/// transcript, never a whole token — enough to find an abusive install and
-/// nothing that would make these logs worth stealing.
+/// A token FINGERPRINT, a path, a status and a duration. Never a body, never a
+/// transcript, never the token itself.
+///
+/// It used to log the token's own first eight characters, which for `dev_xxxx`
+/// left four usable hex digits — too few to identify anybody, and the wrong
+/// string anyway, because revocation needs the value in full. The fingerprint
+/// is both safe to write down AND the exact string `FOVEA_REVOKED_TOKENS`
+/// accepts, so finding an abusive install in the logs and stopping it are now
+/// the same two minutes.
 export function logLine({ method, path, status, ms, token }) {
   return [
     new Date().toISOString(),
@@ -219,7 +346,7 @@ export function logLine({ method, path, status, ms, token }) {
     path,
     status,
     `${ms}ms`,
-    token ? `tok:${token.slice(0, 8)}` : "tok:none",
+    token ? `tok:${tokenFingerprint(token)}` : "tok:none",
   ].join(" ");
 }
 

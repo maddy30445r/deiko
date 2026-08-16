@@ -62,12 +62,17 @@ function ddb(target, body) {
 // ── What the relay tried to call ────────────────────────────────────────────
 
 let upstream = [];
+let upstreamBodies = [];
 let licenseValid = true;
 
 function stubFetch() {
   globalThis.fetch = async (url, init) => {
     const href = String(url);
     upstream.push(href);
+    // The body matters as well as the destination: the summarize route is
+    // supposed to REBUILD what it sends rather than forward what it was given,
+    // and only the body can show that.
+    upstreamBodies.push(typeof init?.body === "string" ? init.body : "");
     if (href.includes("lemonsqueezy")) {
       return new Response(
         JSON.stringify({ valid: licenseValid, license_key: { status: licenseValid ? "active" : "expired" } }),
@@ -85,6 +90,7 @@ function stubFetch() {
 }
 
 let handle;
+let logLine;
 
 before(async () => {
   server = createServer((req, res) => {
@@ -116,7 +122,7 @@ before(async () => {
   process.env.SARVAM_API_KEY = "test-sarvam";
   process.env.GROQ_API_KEY = "test-groq";
 
-  ({ handle } = await import("../relay.mjs"));
+  ({ handle, logLine } = await import("../relay.mjs"));
 });
 
 after(() => server?.close());
@@ -124,6 +130,7 @@ after(() => server?.close());
 beforeEach(() => {
   rows.clear();
   upstream = [];
+  upstreamBodies = [];
   licenseValid = true;
   stubFetch();
 });
@@ -151,6 +158,8 @@ const post = (token, seconds) => {
 const seed = (key, seconds) => rows.set(key, { ...(rows.get(key) ?? {}), audioSeconds: seconds });
 
 const monthRow = (id) => `lic:${id}#${monthKey(Date.now())}`;
+/// Where a licence that is NOT Pro accumulates: a lifetime row, like a device.
+const trialRow = (id) => `lic:${id}#trial`;
 
 // ── Tests ───────────────────────────────────────────────────────────────────
 
@@ -237,13 +246,29 @@ test("the Lemon Squeezy verdict is cached — dozens of chunks, one validation",
 
 test("an invalid licence is metered as free, and its verdict is cached too", async () => {
   licenseValid = false;
-  seed(monthRow("garbage"), FREE_TRIAL_SECONDS + 60);
+  seed(trialRow("garbage"), FREE_TRIAL_SECONDS + 60);
   const refused = await post("lic_garbage", 10);
   assert.equal(refused.status, 402, "a bad key must not buy Pro's allowance");
   await post("lic_garbage", 10);
   assert.equal(
     upstream.filter((u) => u.includes("lemonsqueezy")).length, 1,
     "a garbage key must not generate a validation per chunk",
+  );
+});
+
+test("a forged licence key does not get a fresh trial next month", async () => {
+  // THE FORGERY THIS CLOSES. A `lic_` subject used to land in a MONTHLY row
+  // carrying the FREE cap, so anybody who typed junk into Settings got thirty
+  // minutes every calendar month, forever, self-resetting — while an honest
+  // user got thirty minutes once, ever. The forgery beat the truth.
+  licenseValid = false;
+  await post("lic_forged", 20);
+  assert.equal(rows.get(trialRow("forged")).audioSeconds, 20, "lands in the lifetime row");
+  assert.equal(rows.get(monthRow("forged")), undefined, "and never in a monthly one");
+  assert.equal(
+    rows.get(trialRow("forged")).expiresAt,
+    undefined,
+    "a lifetime row must carry no TTL, or the trial renews itself every forty days",
   );
 });
 
@@ -254,14 +279,84 @@ test("a legacy unprefixed token still works, as a free device", async () => {
   assert.equal(rows.get(`dev:${uuid}`).audioSeconds, 10);
 });
 
-test("summaries are never metered — a used-up trial still gets its reading", async () => {
+const summarize = (token, body) => handle({
+  method: "POST", path: "/v1/summarize", token,
+  contentType: "application/json",
+  body: Buffer.from(JSON.stringify(body ?? { messages: [{ role: "user", content: "hi" }] })),
+});
+
+test("a used-up trial still gets its reading, and is not charged for it", async () => {
   seed("dev:spent", FREE_TRIAL_SECONDS + 60);
   const before = rows.get("dev:spent").audioSeconds;
-  await handle({
-    method: "POST", path: "/v1/summarize", token: "dev_spent",
-    contentType: "application/json", body: Buffer.from("{}"),
+  const r = await summarize("dev_spent");
+  assert.equal(r.status, 200, "the sentence that says what Fovea heard is not the paid part");
+  assert.equal(
+    rows.get("dev:spent").audioSeconds, before,
+    "a text summary must not spend an audio allowance",
+  );
+});
+
+test("a summary IS charged against the day, so a flood cannot stay invisible", async () => {
+  const key = `global#${new Date().toISOString().slice(0, 10)}`;
+  const before = rows.get(key)?.audioSeconds ?? 0;
+  await summarize("dev_anyone");
+  assert.ok(
+    (rows.get(key)?.audioSeconds ?? 0) > before,
+    "the global backstop is the only thing that bounds an unmetered route",
+  );
+});
+
+test("the caller does not get to choose the model or the token budget", async () => {
+  // This route spends Fovea's Groq key and accepts any bearer string. Before
+  // the body was rebuilt server-side, that made it an open LLM proxy: name an
+  // expensive model and a large completion, and bill it here.
+  await summarize("dev_greedy", {
+    model: "some-expensive-model",
+    max_completion_tokens: 100_000,
+    messages: [{ role: "user", content: "hi" }],
   });
-  assert.equal(rows.get("dev:spent").audioSeconds, before, "summarize must not count audio");
+  const sent = JSON.parse(upstreamBodies.at(-1));
+  assert.equal(sent.model, "llama-3.3-70b-versatile", "the model is ours to pick");
+  assert.equal(sent.max_completion_tokens, 200, "and so is the completion budget");
+});
+
+test("an oversized summary body is refused before it is parsed", async () => {
+  const r = await handle({
+    method: "POST", path: "/v1/summarize", token: "dev_big",
+    contentType: "application/json", body: Buffer.alloc(65 * 1024, "x"),
+  });
+  assert.equal(r.status, 413);
+});
+
+test("a token can be revoked by the fingerprint that appears in the logs", async () => {
+  // Before, the log carried the token's own first eight characters — for
+  // `dev_xxxx` that is four usable hex digits, and the wrong string anyway,
+  // because FOVEA_REVOKED_TOKENS needs the value in full. You could see an
+  // abusive install and still have no way to stop it.
+  const line = logLine({ method: "POST", path: "/v1/transcribe", status: 200, ms: 5, token: "dev_abuser" });
+  const printed = line.split("tok:")[1];
+  assert.ok(printed && printed.length === 12, "the log carries a fingerprint, not a token");
+  assert.ok(!line.includes("dev_abuser"), "and never the bearer itself");
+
+  process.env.FOVEA_REVOKED_TOKENS = printed;
+  try {
+    const r = await post("dev_abuser", 10);
+    assert.equal(r.status, 403, "the string you can read must be the string you can revoke");
+  } finally {
+    delete process.env.FOVEA_REVOKED_TOKENS;
+  }
+});
+
+test("the quota route is rate limited too", async () => {
+  // It reads DynamoDB, writes a verdict row, and for an unseen licence calls
+  // Lemon Squeezy — all of which sat ABOVE the limiter, making it the cheapest
+  // way to amplify writes against a 25-WCU table. Throttling there does not
+  // fail the attacker's request; it fails transcription for whoever is paying.
+  let last = 0;
+  for (let i = 0; i < 35; i++) {
+    last = (await handle({ method: "GET", path: "/v1/quota", token: "dev_loop" })).status;
+  }
+  assert.equal(last, 429);
 });
 
 test("when the usage table is unreachable the relay fails CLOSED", async () => {

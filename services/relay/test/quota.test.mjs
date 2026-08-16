@@ -11,6 +11,7 @@ import {
   FREE_TRIAL_SECONDS,
   GLOBAL_DAILY_SECONDS,
   PRO_MONTHLY_SECONDS,
+  MAX_SECONDS_PER_REQUEST,
   audioSeconds,
   capFor,
   dayKey,
@@ -60,16 +61,33 @@ test("a device's trial key carries no month — the trial is once, not monthly",
   assert.equal(usageKey(device, SEP), "dev:abc", "a new month must not reset a lifetime trial");
 });
 
-test("a licence meters per calendar month, so the key rolls over on its own", () => {
+test("a PRO licence meters per calendar month, so the key rolls over on its own", () => {
   const licence = subjectFrom("lic_xyz");
-  assert.equal(usageKey(licence, AUG), "lic:xyz#2026-08");
-  assert.equal(usageKey(licence, SEP), "lic:xyz#2026-09");
+  assert.equal(usageKey(licence, AUG, "pro"), "lic:xyz#2026-08");
+  assert.equal(usageKey(licence, SEP, "pro"), "lic:xyz#2026-09");
 });
 
-test("a licence's cached verdict is a different row from its usage", () => {
+test("a licence that is NOT Pro gets a lifetime row, like any other trial", () => {
+  // Typing junk into the licence field used to be strictly better than being
+  // honest: it bought the monthly row while keeping the free cap, so the
+  // once-ever trial renewed itself every calendar month, forever.
+  const licence = subjectFrom("lic_junk");
+  assert.equal(usageKey(licence, AUG, "free"), "lic:junk#trial");
+  assert.equal(
+    usageKey(licence, SEP, "free"),
+    "lic:junk#trial",
+    "a new month must not reset a forged trial any more than a real one",
+  );
+});
+
+test("a licence's cached verdict is a different row from its usage, on either tier", () => {
   const licence = subjectFrom("lic_xyz");
-  assert.notEqual(licenseKey(licence), usageKey(licence, AUG));
   assert.equal(licenseKey(licence), "lic:xyz");
+  assert.notEqual(licenseKey(licence), usageKey(licence, AUG, "pro"));
+  // The free case is the one that could collide: `tierFor` writes the verdict
+  // row with PutItem, which replaces the whole item — a trial counter sharing
+  // that key would be wiped clean on every revalidation.
+  assert.notEqual(licenseKey(licence), usageKey(licence, AUG, "free"));
 });
 
 test("month and day keys are UTC, so a limit never resets at an unpredictable hour", () => {
@@ -93,6 +111,15 @@ test("audio seconds come from the body's length, never from its contents", () =>
   assert.equal(audioSeconds(0), 0);
   assert.equal(audioSeconds(null), 0);
   assert.equal(audioSeconds(-5), 0);
+});
+
+test("no single request may count as more than one oversized chunk", () => {
+  // The counter is incremented before it is judged, so without a clamp a
+  // handful of maximum-size junk bodies could spend the whole service's daily
+  // ceiling and lock out everybody paying. An honest chunk is 25s and never
+  // approaches this.
+  assert.equal(audioSeconds(BYTES_PER_SECOND * 10_000), MAX_SECONDS_PER_REQUEST);
+  assert.ok(MAX_SECONDS_PER_REQUEST > 25, "but an honest 25s chunk must count in full");
 });
 
 test("multipart overhead over-counts, which is the safe direction for a limit", () => {

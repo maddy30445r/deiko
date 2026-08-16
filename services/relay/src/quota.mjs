@@ -57,9 +57,17 @@ export const GLOBAL_DAILY_SECONDS =
 /// direction for a limit to be wrong in.
 export const BYTES_PER_SECOND = 32_000;
 
+/// No single request may count as more than this. The client's chunker splits
+/// at 25 seconds, so a request claiming more than 40 is not a chunk — and
+/// because the counter is incremented before it is judged (see `relay.mjs`),
+/// an unclamped one let a handful of oversized junk bodies spend the whole
+/// service's daily ceiling and lock out everybody paying. Clamping is the
+/// right direction to be wrong in: an honest chunk is never near it.
+export const MAX_SECONDS_PER_REQUEST = 40;
+
 export function audioSeconds(byteLength) {
   if (!byteLength || byteLength < 0) return 0;
-  return byteLength / BYTES_PER_SECOND;
+  return Math.min(byteLength / BYTES_PER_SECOND, MAX_SECONDS_PER_REQUEST);
 }
 
 /// Which kind of caller a bearer token is.
@@ -88,15 +96,28 @@ export function subjectFrom(token) {
 
 /// The row a subject's usage accumulates in.
 ///
-/// A device's trial is LIFETIME, so its key carries no month and the row is
-/// never expired — a trial that quietly renewed itself every forty days because
-/// of a TTL would be a monthly free tier wearing a different name.
+/// A TRIAL IS LIFETIME; A SUBSCRIPTION RENEWS. That is the whole rule, and the
+/// tier is what decides which one you are — not the shape of your token.
 ///
-/// A licence is metered per calendar month, so the month is in the key and the
-/// row expires on its own. There is no reset job to write, and therefore no
-/// reset job to get wrong or to forget to run.
-export function usageKey(subject, now) {
+/// A lifetime row carries no month and never expires: a trial that quietly
+/// renewed itself every forty days because of a TTL would be a monthly free
+/// tier wearing a different name. A monthly row carries the month and expires
+/// on its own, so there is no reset job to write and none to forget to run.
+///
+/// The tier argument is not decoration. Keying on `subject.kind` alone meant a
+/// licence that Lemon Squeezy had never heard of — any string at all typed
+/// into Settings' licence field — still got the MONTHLY row, while its cap was
+/// the free trial's thirty minutes. Thirty free minutes every calendar month,
+/// forever, self-resetting, for anybody who typed junk; thirty minutes once,
+/// ever, for anybody honest. The forgery was strictly better than the truth.
+/// The `#trial` suffix is load-bearing rather than decorative: `licenseKey`
+/// returns a bare `lic:<id>` for the cached Lemon Squeezy verdict, and
+/// `tierFor` writes that row with PutItem, which REPLACES the whole item. A
+/// trial counter sharing that key would be wiped clean every time the verdict
+/// was revalidated — the same forgery back again, wearing a subtler disguise.
+export function usageKey(subject, now, tier) {
   if (subject.kind === "device") return `dev:${subject.id}`;
+  if (tier !== "pro") return `lic:${subject.id}#trial`;
   return `lic:${subject.id}#${monthKey(now)}`;
 }
 

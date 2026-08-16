@@ -70,7 +70,7 @@ Knobs, all overridable in the environment:
 | `FOVEA_REVOKED_TOKENS` | comma-separated tokens to refuse |
 | `FOVEA_USAGE_TABLE` | `fovea-usage` — the DynamoDB table holding every counter |
 | `FOVEA_GLOBAL_DAILY_SECONDS` | `14400` (4 hours) — the ceiling on the whole service's daily audio |
-| `FOVEA_PRO_VARIANT_IDS` | Lemon Squeezy variant ids that mean Pro. Unset = any live licence is Pro. |
+| `FOVEA_PRO_VARIANT_IDS` | Lemon Squeezy variant ids that mean Pro. Unset = any live licence is Pro — correct while Pro is the only SKU; the day there is a second one this MUST be set, or the cheaper SKU buys Pro's allowance. |
 | `LEMONSQUEEZY_API_KEY` | only if the validate endpoint starts demanding one |
 
 Then verify — and check `transcription`, not just `ok`:
@@ -90,10 +90,13 @@ A relay with no key answers `ok` happily and then 503s every real request.
 
 ## Deploying — anywhere else
 
-`Dockerfile` and `fly.toml` are still here and still work:
-`docker build . && docker run -e SARVAM_API_KEY=… -p 8787:8787`, or
-`fly launch --no-deploy && fly secrets set … && fly deploy`. Both run
-`server.mjs`, which is the same `relay.mjs` behind a port.
+`server.mjs` is the same `relay.mjs` behind a port, so any host that runs Node
+and can reach DynamoDB will serve it. There is no container recipe in the tree
+any more: a `Dockerfile` and a `fly.toml` lived here for a long time and
+**neither had ever worked** — the image copied `relay.mjs` and `server.mjs`
+without `quota.mjs`, `usage.mjs` or the AWS SDK they import, so it died on its
+first request. A second deploy path that nobody exercises is a trap rather than
+an option, and Lambda is the one that is actually deployed.
 
 | Variable | |
 |---|---|
@@ -103,7 +106,7 @@ A relay with no key answers `ok` happily and then 503s every real request.
 | `FOVEA_REVOKED_TOKENS` | comma-separated tokens to refuse |
 | `FOVEA_USAGE_TABLE` | `fovea-usage` — the DynamoDB table holding every counter |
 | `FOVEA_GLOBAL_DAILY_SECONDS` | `14400` (4 hours) — the ceiling on the whole service's daily audio |
-| `FOVEA_PRO_VARIANT_IDS` | Lemon Squeezy variant ids that mean Pro. Unset = any live licence is Pro. |
+| `FOVEA_PRO_VARIANT_IDS` | Lemon Squeezy variant ids that mean Pro. Unset = any live licence is Pro — correct while Pro is the only SKU; the day there is a second one this MUST be set, or the cheaper SKU buys Pro's allowance. |
 | `LEMONSQUEEZY_API_KEY` | only if the validate endpoint starts demanding one |
 
 Then point a build at it — **not by editing Swift.** The origin is deployment
@@ -217,6 +220,32 @@ many containers happen to be warm is not.
 whole point — not knowing what somebody has spent is a reason to stop buying,
 not to buy an unbounded amount and find out at the end of the month. The app
 keeps working on Apple's on-device words.
+
+## STOP THE BILL
+
+The one command, for when the alarm fires at three in the morning and you want
+the spending to stop before you understand why:
+
+```sh
+aws lambda update-function-configuration \
+  --function-name fovea-relay --region ap-south-1 \
+  --environment "Variables={FOVEA_GLOBAL_DAILY_SECONDS=0,SARVAM_API_KEY=…,GROQ_API_KEY=…}"
+```
+
+`FOVEA_GLOBAL_DAILY_SECONDS=0` means the day's ceiling is already exceeded by
+the first request, so **every** transcription is refused with a 429 — yours
+included. Nothing breaks: the app falls back to Apple's on-device words, which
+is the documented third path and costs nothing. Undo it by setting the value
+back to `14400`, or by re-running `make relay-deploy`.
+
+**The environment is replaced wholesale, not merged** — send the provider keys
+in the same call or the relay comes back up with none and 503s everything.
+`make relay-deploy` is the safer form of the same thing if you have the keys to
+hand.
+
+To stop **one** abuser rather than everybody, take the `tok:` fingerprint from
+the CloudWatch line and put it in `FOVEA_REVOKED_TOKENS` — that is the same
+string in both places, by design.
 
 ## The privacy promise changes when you turn this on
 

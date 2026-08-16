@@ -218,6 +218,15 @@ else
   aws lambda wait function-active --function-name "$FUNCTION" --region "$REGION"
 fi
 
+# Log retention. Lambda creates the group on first invocation and leaves it on
+# "Never expire", so without this every status line the relay has ever written
+# is kept and billed forever. Thirty days outlives any support conversation.
+# `|| true` because the group does not exist until the function has run once —
+# the next deploy sets it, and nothing depends on it having worked today.
+aws logs put-retention-policy --region "$REGION" \
+  --log-group-name "/aws/lambda/$FUNCTION" --retention-in-days 30 >/dev/null 2>&1 \
+  && say "log retention 30 days" || true
+
 # BEST-EFFORT, deliberately. Reserving concurrency requires the account to
 # keep 10 slots unreserved, and a fresh AWS account's TOTAL limit is often
 # exactly 10 — so any reservation at all is arithmetically impossible there.
