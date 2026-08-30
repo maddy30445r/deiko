@@ -32,6 +32,8 @@ import {
   peek,
   record,
   recordGlobal,
+  refund,
+  refundGlobal,
   tierFor,
 } from "./usage.mjs";
 
@@ -71,6 +73,10 @@ const SUMMARY_MAX_COMPLETION_TOKENS = 200;
 /// The joined length of everything we will hand the model. A narration long
 /// enough to exceed this is already past the point where three lines help.
 const SUMMARY_MAX_CONTENT_CHARS = 8_000;
+
+/// How many message envelopes may reach the model. The client sends two — a
+/// system line and the narration — so this is sixteen times the honest need.
+const MAX_SUMMARY_MESSAGES = 32;
 
 /// What one summary counts as, for the GLOBAL ceiling only. Not measured in
 /// audio because it is not audio — it is a nominal price so that a flood of
@@ -226,10 +232,10 @@ export async function handle({ method, path, token, contentType, body }) {
     // so two chunks arriving together cannot both see room that only one of
     // them has. Being over by one chunk costs a few paise; a race that lets a
     // cap be exceeded by however many containers are warm does not.
-    let verdict;
+    let verdict, seconds, tier;
     try {
-      const tier = await tierFor(subject);
-      const seconds = audioSeconds(body?.length ?? 0);
+      tier = await tierFor(subject);
+      seconds = audioSeconds(body?.length ?? 0);
       const { usedSeconds, globalUsedSeconds } = await record({ subject, seconds, tier });
       verdict = decide({ tier, usedSeconds, globalUsedSeconds });
     } catch (err) {
@@ -242,14 +248,29 @@ export async function handle({ method, path, token, contentType, body }) {
       });
     }
 
-    if (!verdict.allowed) return json(verdict.status, { error: verdict.error });
+    if (!verdict.allowed) {
+      // A REFUSED REQUEST GIVES ITS SECONDS BACK. Without this, refusals were
+      // the weapon: a spent trial token looping through one warm container
+      // added 30 × 40 = 1,200 metered seconds a minute to the GLOBAL row —
+      // requests that would never be transcribed walked the whole service to
+      // its daily ceiling in twelve minutes and 429'd every paying customer.
+      // Best-effort: a failed refund just restores the old over-counting.
+      await refund({ subject, seconds, tier }).catch(() => {});
+      return json(verdict.status, { error: verdict.error });
+    }
 
-    return await proxy(SARVAM_STT_URL, {
+    const out = await proxy(SARVAM_STT_URL, {
       // The client's own multipart body and boundary, forwarded verbatim.
       // Parsing and re-encoding it would mean touching the audio for no reason.
       "api-subscription-key": sarvamKey,
       "content-type": contentType || "multipart/form-data",
     }, body);
+    // A provider outage is not the caller's spend. A trial is LIFETIME, so an
+    // hour of Sarvam 5xx would otherwise eat it for nothing. 4xx stays billed:
+    // that is the caller's own malformed audio, and refunding it would let
+    // junk bodies probe Sarvam off the meter.
+    if (out.status >= 500) await refund({ subject, seconds, tier }).catch(() => {});
+    return out;
   }
 
   if (path === "/v1/summarize") {
@@ -275,8 +296,12 @@ export async function handle({ method, path, token, contentType, body }) {
     }
     if (!messages?.length) return json(400, { error: "expected { messages: [...] }" });
 
+    // The COUNT is pinned like everything else that costs money. The char
+    // budget caps the content but not the number of envelopes: a 60KB body of
+    // empty `{}`s became twenty thousand chat messages, each billing Groq its
+    // per-message token overhead for no content at all. The client sends two.
     let budget = SUMMARY_MAX_CONTENT_CHARS;
-    const trimmed = messages.map((m) => {
+    const trimmed = messages.slice(0, MAX_SUMMARY_MESSAGES).map((m) => {
       const content = String(m?.content ?? "").slice(0, Math.max(0, budget));
       budget -= content.length;
       return { role: m?.role === "system" ? "system" : "user", content };
@@ -293,14 +318,20 @@ export async function handle({ method, path, token, contentType, body }) {
         seconds: SUMMARY_NOMINAL_SECONDS,
       });
       const verdict = decide({ tier: "pro", usedSeconds: 0, globalUsedSeconds });
-      if (!verdict.allowed) return json(verdict.status, { error: verdict.error });
+      if (!verdict.allowed) {
+        // Same rule as transcription: a refused request gives its nominal
+        // seconds back, or refused summaries would keep climbing the very
+        // ceiling that is refusing them.
+        await refundGlobal({ seconds: SUMMARY_NOMINAL_SECONDS }).catch(() => {});
+        return json(verdict.status, { error: verdict.error });
+      }
     } catch (err) {
       return json(503, {
         error: `usage service unavailable: ${String(err?.message ?? err).slice(0, 120)}`,
       });
     }
 
-    return await proxy(GROQ_URL, {
+    const out = await proxy(GROQ_URL, {
       authorization: `Bearer ${groqKey}`,
       "content-type": "application/json",
     }, JSON.stringify({
@@ -309,6 +340,10 @@ export async function handle({ method, path, token, contentType, body }) {
       temperature: SUMMARY_TEMPERATURE,
       max_completion_tokens: SUMMARY_MAX_COMPLETION_TOKENS,
     }));
+    if (out.status >= 500) {
+      await refundGlobal({ seconds: SUMMARY_NOMINAL_SECONDS }).catch(() => {});
+    }
+    return out;
   }
 
   return json(404, { error: "no such endpoint" });

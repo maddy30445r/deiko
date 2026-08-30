@@ -288,6 +288,13 @@ endif
 release: guard-clean
 	@test -n "$(SITE_URL)" \
 		|| (echo "✗ SITE_URL is empty — a build nobody can reach is not a release"; exit 1)
+	@# The same guard for the relay, because this failure is SILENT: PlistBuddy
+	@# happily stamps an empty DeikoRelayURL, every install of that release
+	@# falls back to on-device words forever, and a shipped plist can never be
+	@# corrected remotely. `make dmg RELAY_URL=` stays possible on purpose —
+	@# hand-delivered relay-less builds are a thing — but a RELEASE is not one.
+	@test -n "$(RELAY_URL)" \
+		|| (echo "✗ RELAY_URL is empty — a release with no relay meters nothing and updates nobody"; exit 1)
 	@# BOTH SPELLINGS. Releases up to 0.3.0 were tagged `vX.Y.Z`, but `0.4.1`
 	@# was cut by hand without the prefix — and a guard that only knew about
 	@# `v0.4.1` waved that through and would have put a second tag on the same

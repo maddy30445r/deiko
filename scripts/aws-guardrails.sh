@@ -19,6 +19,15 @@
 set -euo pipefail
 
 EMAIL="${1:?usage: aws-guardrails.sh <alert-email>}"
+# The address is pasted into the budget's JSON unescaped below. A `"` in it —
+# a display-name paste like `"Ops" <ops@x>` — would break that JSON and leave
+# the account with NO spend guardrail, which is the failure this script exists
+# to prevent. A plain address only.
+case "$EMAIL" in
+  *[!A-Za-z0-9._+@-]*|*@*@*) echo "✗ '$EMAIL' — a plain email address only"; exit 1 ;;
+  *?@?*) ;;
+  *) echo "✗ '$EMAIL' — a plain email address only"; exit 1 ;;
+esac
 REGION="${AWS_REGION:-ap-south-1}"           # where deiko-relay lives
 # The `deiko-*` names replaced `fovea-*` at the rename — see the note in
 # services/relay/deploy-aws.sh. `deiko-alerts` is therefore a NEW SNS topic

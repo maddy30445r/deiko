@@ -33,6 +33,14 @@ function ddb(target, body) {
     const add = Number(body.ExpressionAttributeValues[":n"].N);
     const row = rows.get(key) ?? {};
     row.audioSeconds = (row.audioSeconds ?? 0) + add;
+    // The `SET expiresAt = if_not_exists(...)` half of the expression. The
+    // fake used to ignore it, which made "a lifetime row must carry no TTL"
+    // pass no matter what record() actually wrote — the regression it guards
+    // (the trial renewing itself every forty days) was invisible to the suite.
+    const ttl = body.ExpressionAttributeValues[":ttl"]?.N;
+    if (body.UpdateExpression?.includes("expiresAt") && ttl != null) {
+      row.expiresAt ??= Number(ttl);
+    }
     rows.set(key, row);
     return { Attributes: { audioSeconds: { N: String(row.audioSeconds) } } };
   }
@@ -49,8 +57,11 @@ function ddb(target, body) {
     return { Item };
   }
   if (target.endsWith("PutItem")) {
+    // REPLACES the whole item, exactly as the real PutItem does. The fake
+    // used to merge into the existing row, which hid the one bug class the
+    // `#trial` usage-key suffix exists to prevent: a verdict PutItem wiping
+    // a usage counter that shared its key.
     rows.set(key, {
-      ...(rows.get(key) ?? {}),
       tier: body.Item.tier.S,
       checkedAt: Number(body.Item.checkedAt.N),
     });
@@ -369,4 +380,98 @@ test("when the usage table is unreachable the relay fails CLOSED", async () => {
     "not knowing what somebody has spent must stop the buying, not start it",
   );
   await new Promise((r) => saved.listen(port, r));
+});
+
+// ── Refunds: a refusal or an outage must not spend anybody's seconds ────────
+
+test("a refused request gives its seconds back — refusals cannot drain the day", async () => {
+  seed("dev:spent", FREE_TRIAL_SECONDS);        // trial exactly used up
+  const first = await post("dev_spent", 25);
+  const second = await post("dev_spent", 25);
+  assert.equal(first.status, 402);
+  assert.equal(second.status, 402);
+  // The counter is incremented before it is judged, so without the refund
+  // these two refusals would have left 50 phantom seconds on BOTH rows —
+  // and 30 refusals a minute walk the global ceiling shut in twelve minutes.
+  assert.equal(rows.get("dev:spent").audioSeconds, FREE_TRIAL_SECONDS);
+  const global = [...rows.keys()].find((k) => k.startsWith("global#"));
+  assert.equal(rows.get(global)?.audioSeconds ?? 0, 0);
+});
+
+test("a Sarvam outage does not eat the lifetime trial", async () => {
+  globalThis.fetch = async (url) => {
+    upstream.push(String(url));
+    if (String(url).includes("sarvam")) return new Response("upstream down", { status: 503 });
+    throw new Error(`unexpected upstream: ${url}`);
+  };
+  const r = await post("dev_unlucky", 20);
+  assert.equal(r.status, 503, "the provider's failure is passed through");
+  assert.equal(rows.get("dev:unlucky")?.audioSeconds ?? 0, 0,
+    "audio that was never transcribed must not stay billed — the trial is once, ever");
+});
+
+test("a refused summary gives its nominal seconds back", async () => {
+  const { GLOBAL_DAILY_SECONDS } = await import("../quota.mjs");
+  const day = `global#${new Date().toISOString().slice(0, 10)}`;
+  seed(day, GLOBAL_DAILY_SECONDS + 1);          // the day is already over
+  const r = await handle({
+    method: "POST",
+    path: "/v1/summarize",
+    token: "dev_orb",
+    contentType: "application/json",
+    body: Buffer.from(JSON.stringify({ messages: [{ role: "user", content: "hi" }] })),
+  });
+  assert.equal(r.status, 429);
+  assert.equal(rows.get(day).audioSeconds, GLOBAL_DAILY_SECONDS + 1,
+    "refused summaries must not keep climbing the ceiling that is refusing them");
+});
+
+// ── The Lemon Squeezy verdict: an error is not an answer ────────────────────
+
+test("one Lemon Squeezy failure does not demote a paying customer for a day", async () => {
+  // A real "pro" verdict exists but is stale, so revalidation is due.
+  rows.set("lic:steady", { tier: "pro", checkedAt: Date.now() - 25 * 60 * 60 * 1000 });
+  globalThis.fetch = async (url) => {
+    upstream.push(String(url));
+    if (String(url).includes("lemonsqueezy")) throw new Error("timeout");
+    if (String(url).includes("sarvam")) return new Response(JSON.stringify({ transcript: "ok" }), { status: 200 });
+    throw new Error(`unexpected upstream: ${url}`);
+  };
+  const r = await post("lic_steady", 20);
+  assert.equal(r.status, 200, "the last real verdict stands through an outage");
+  assert.equal(rows.get(monthRow("steady"))?.audioSeconds, 20,
+    "still metered as Pro — on the monthly row, not the lifetime trial row");
+  assert.equal(rows.get("lic:steady").tier, "pro", "the error must not overwrite the verdict");
+});
+
+test("an error-derived free verdict is rechecked in minutes, not tomorrow", async () => {
+  globalThis.fetch = async (url) => {
+    upstream.push(String(url));
+    if (String(url).includes("lemonsqueezy")) return new Response("oops", { status: 500 });
+    if (String(url).includes("sarvam")) return new Response(JSON.stringify({ transcript: "ok" }), { status: 200 });
+    throw new Error(`unexpected upstream: ${url}`);
+  };
+  const r = await post("lic_newkey", 20);
+  assert.equal(r.status, 200, "an unknown key still transcribes — as free, never promoted");
+  const verdict = rows.get("lic:newkey");
+  assert.equal(verdict.tier, "free");
+  assert.ok(Date.now() - verdict.checkedAt > 20 * 60 * 60 * 1000,
+    "written already-stale, so the recheck happens when Lemon Squeezy is back, not in 24h");
+});
+
+// ── The summarize envelope count is pinned like everything else ─────────────
+
+test("twenty thousand empty messages do not reach the model", async () => {
+  const flood = Array.from({ length: 20_000 }, () => ({}));
+  const r = await handle({
+    method: "POST",
+    path: "/v1/summarize",
+    token: "dev_flood",
+    contentType: "application/json",
+    body: Buffer.from(JSON.stringify({ messages: flood })),
+  });
+  assert.equal(r.status, 200);
+  const sent = JSON.parse(upstreamBodies.find((b) => b.includes('"model"')));
+  assert.ok(sent.messages.length <= 32,
+    `the caller chose 20,000 envelopes; the relay must choose the count (sent ${sent.messages.length})`);
 });

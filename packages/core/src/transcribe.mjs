@@ -162,6 +162,8 @@ function chunkedTranscriber(name, uploadOne) {
       return {
         text: parts.map((p) => p.text).filter(Boolean).join(" "),
         failedChunks: failures.length,
+        // Carried up so the cache can tell a refused stretch from silence.
+        refused: parts.some((p) => p.refused),
       };
     },
   };
@@ -223,7 +225,15 @@ function sarvamTranscriber(apiKey) {
  */
 function relayTranscriber(endpoint, token) {
   const url = `${endpoint.replace(/\/+$/, "")}/v1/transcribe`;
+  // ONE 402 ANSWERS FOR THE WHOLE SESSION. It says the free trial is spent —
+  // a fact about the account, not about this chunk — so every later chunk
+  // would hear the same thing, and uploading them anyway spends bandwidth and
+  // relay requests to be told what is already known. A refused stretch rides
+  // on Apple's on-device words, exactly the fallback quota.mjs documents, and
+  // is not counted as a failure: the session is degraded, not broken.
+  let trialExhausted = false;
   return chunkedTranscriber("deiko", async (pcm, language) => {
+    if (trialExhausted) return { text: "", refused: true };
     const response = await fetch(url, {
       method: "POST",
       headers: token ? { authorization: `Bearer ${token}` } : {},
@@ -232,6 +242,11 @@ function relayTranscriber(endpoint, token) {
     });
 
     const bodyText = await response.text();
+    if (response.status === 402) {
+      trialExhausted = true;
+      process.stderr.write(`· free trial used up — continuing on on-device words `);
+      return { text: "", refused: true };
+    }
     if (!response.ok) {
       throw new Error(`Deiko relay ${response.status}: ${bodyText.slice(0, 400)}`);
     }
@@ -863,11 +878,23 @@ async function main() {
     // Cached before the shift, for the same reason the shift is applied after:
     // these are offsets into this hold's audio, which is the only form that
     // stays true if the session is re-rendered later.
-    cache[hold] = {
-      bytes,
-      words: holdWords,
-      text: holdTexts.find((h) => h.hold === hold)?.text ?? "",
-    };
+    //
+    // A PARTIAL RESULT IS NOT CACHED. The cache short-circuits every later
+    // re-render, so writing it after a failed or refused chunk would pin the
+    // degraded words forever — a 402 mid-session would still be costing words
+    // months after an upgrade to Pro, and a network blip would never heal. A
+    // complete result is cached even when empty: silence is a fact, a refusal
+    // is a circumstance.
+    const partial = textOutcome.status === "rejected"
+      || (textOutcome.value?.failedChunks ?? 0) > 0
+      || textOutcome.value?.refused === true;
+    if (!partial) {
+      cache[hold] = {
+        bytes,
+        words: holdWords,
+        text: holdTexts.find((h) => h.hold === hold)?.text ?? "",
+      };
+    }
 
     // THE SHIFT. Offsets into the wav become session-clock times, so words and
     // cursor events share one timeline.

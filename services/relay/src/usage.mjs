@@ -7,8 +7,8 @@
 //   dev:<token>              lifetime free-trial seconds. No TTL — the trial is
 //                            once, and a row that expired would silently renew it.
 //   lic:<key>#2026-08        a licence's audio seconds this month. 40-day TTL.
-//   lic:<key>                the cached Lemon Squeezy verdict. No TTL; refreshed
-//                            when it is older than a day.
+//   lic:<key>                the cached Lemon Squeezy verdict. Expires at four
+//                            cache lifetimes; refreshed when older than a day.
 //   global#2026-08-10        every subject's audio today. 7-day TTL.
 //
 // COUNTERS ARE INCREMENTED, NOT READ-THEN-WRITTEN. `UpdateItem` with `ADD`
@@ -51,6 +51,11 @@ const LEMONSQUEEZY_VALIDATE = "https://api.lemonsqueezy.com/v1/licenses/validate
 /// changes at most once a month. A cancellation therefore takes up to a day to
 /// bite, which is the right trade for a $4 product.
 const LICENSE_CACHE_MS = 24 * 60 * 60 * 1000;
+
+/// How soon an ERROR-derived verdict is rechecked. Minutes, not a day: an
+/// error is not a fact about the licence, only about the network between two
+/// clouds, and it heals on Lemon Squeezy's schedule, not ours.
+const ERROR_RETRY_MS = 5 * 60 * 1000;
 
 /// Created once per container, not per request, so the connection and its TLS
 /// handshake are reused across a warm Lambda's invocations.
@@ -141,6 +146,32 @@ export async function record({ subject, seconds, tier, now = Date.now() }) {
   return { usedSeconds, globalUsedSeconds };
 }
 
+/// Give a request's seconds back, because it bought nothing.
+///
+/// The counter is incremented before it is judged (see `record`'s caller), so
+/// a REFUSED request has already added its seconds to both rows — and without
+/// this, refusals themselves became the weapon: a spent free token retrying in
+/// a loop added up to 40 metered seconds per attempt to the GLOBAL row, enough
+/// to walk the whole service to its daily ceiling in minutes and 429 every
+/// paying customer with requests that were never going to be transcribed.
+/// Same shape when the upstream provider 5xxs: the audio was billed and never
+/// bought, and a trial is lifetime — an outage must not eat it.
+///
+/// Best-effort by design: the caller swallows a refund that fails, because the
+/// fallback is only the old over-counting behaviour. `ADD` of a negative is
+/// atomic like any other, so concurrent refunds cannot corrupt the row.
+export async function refund({ subject, seconds, tier, now = Date.now() }) {
+  await Promise.all([
+    addSeconds(usageKey(subject, now, tier), -seconds, null),
+    addSeconds(globalKey(now), -seconds, null),
+  ]);
+}
+
+/// The global-only refund, for `recordGlobal`'s spends.
+export async function refundGlobal({ seconds, now = Date.now() }) {
+  await addSeconds(globalKey(now), -seconds, null);
+}
+
 /// Count something against the DAY only, and report the day's new total.
 ///
 /// For work that costs the service money but is not the user's audio — the
@@ -168,11 +199,29 @@ export async function tierFor(subject, now = Date.now()) {
   }));
 
   const checkedAt = Number(cached.Item?.checkedAt?.N ?? 0);
+  const cachedTier = cached.Item?.tier?.S;
   if (checkedAt && now - checkedAt < LICENSE_CACHE_MS) {
-    return cached.Item?.tier?.S ?? "free";
+    return cachedTier ?? "free";
   }
 
   const tier = await validateWithLemonSqueezy(subject.id);
+
+  // A VERDICT AND AN ERROR ARE DIFFERENT FACTS, and only the verdict may be
+  // cached for a day. Caching an error-derived "free" was the bug: one Lemon
+  // Squeezy timeout on one cold container wrote `tier: "free"`, and a PAYING
+  // customer spent the next 24 hours metering against the lifetime `#trial`
+  // row — 402'd for a day by a network blip, and again for a day on every
+  // future blip once those thirty minutes were gone. On an error the last
+  // real verdict stands, re-checked after five minutes rather than a day —
+  // stale-Pro during an outage is the accepted cancellation lag, not a leak.
+  //
+  // A key with NO history still meters as free during an outage (an error
+  // must never promote), and that too is written with the short window, so
+  // the recheck happens when Lemon Squeezy is back rather than tomorrow.
+  const verdict = tier ?? cachedTier ?? "free";
+  const freshAsOf = tier !== null
+    ? now
+    : now - LICENSE_CACHE_MS + ERROR_RETRY_MS;
 
   // Written even when the answer is "not valid", so a garbage key cannot be
   // used to generate a Lemon Squeezy call per chunk.
@@ -185,23 +234,28 @@ export async function tierFor(subject, now = Date.now()) {
     TableName: TABLE,
     Item: {
       subject: { S: key },
-      tier: { S: tier },
-      checkedAt: { N: String(now) },
+      tier: { S: verdict },
+      checkedAt: { N: String(freshAsOf) },
       expiresAt: {
         N: String(Math.floor((now + LICENSE_CACHE_MS * 4) / 1000)),
       },
     },
   }));
 
-  return tier;
+  return verdict;
 }
 
-/// Ask Lemon Squeezy whether a key is live.
+/// Ask Lemon Squeezy whether a key is live: "pro", "free", or null.
 ///
-/// A NETWORK FAILURE MUST NOT PROMOTE ANYBODY. Returning "free" on an error
-/// means a paying customer briefly drops to on-device transcription if Lemon
-/// Squeezy is down, which is recoverable and honest; the other direction would
-/// make an outage into a way to get Pro for nothing.
+/// NULL MEANS "COULD NOT ASK", AND IT IS A THIRD ANSWER, not a synonym for
+/// "free". A timeout, a 5xx, or Lemon Squeezy rate-limiting us says nothing
+/// about the licence; only an answer Lemon Squeezy actually gave does. The
+/// caller decides what null costs — the last real verdict stands.
+///
+/// A NETWORK FAILURE STILL MUST NOT PROMOTE ANYBODY: null never becomes "pro"
+/// unless a cached "pro" verdict — a real answer from a real validation —
+/// already existed. The other direction would make an outage into a way to
+/// get Pro for nothing.
 ///
 /// The validate endpoint is unauthenticated, but an API key is sent when one is
 /// configured — the docs have moved on this before, and two lines here is
@@ -221,7 +275,10 @@ async function validateWithLemonSqueezy(key) {
       signal: AbortSignal.timeout(5000),
     });
 
-    if (!response.ok) return "free";
+    // 4xx is an answer ("that is not a key"); 5xx and 429 are its absence.
+    if (!response.ok) {
+      return response.status >= 500 || response.status === 429 ? null : "free";
+    }
     const json = await response.json();
     if (!json?.valid) return "free";
 
@@ -236,6 +293,6 @@ async function validateWithLemonSqueezy(key) {
     if (proVariants.length === 0) return "pro";
     return proVariants.includes(String(json?.meta?.variant_id)) ? "pro" : "free";
   } catch {
-    return "free";
+    return null;
   }
 }

@@ -28,6 +28,17 @@ say() { printf '  %s\n' "$*"; }
 [ -f "$DMG" ] || { echo "✗ $DMG does not exist — run 'make dmg' first"; exit 1; }
 command -v aws >/dev/null || { echo "✗ aws CLI not found"; exit 1; }
 
+# Shape checks, because both strings are pasted between quotes in version.json
+# below — the one file every installed app and every `curl | sh` install reads.
+# A stray `"` in either (a mistyped tag, a CI variable) would publish malformed
+# JSON and break the update check for everyone until the next publish.
+case "$VERSION" in
+  *[!0-9.]*|"") echo "✗ version '$VERSION' — digits and dots only"; exit 1 ;;
+esac
+case "$(basename "$DMG")" in
+  *[!A-Za-z0-9._-]*) echo "✗ DMG name '$(basename "$DMG")' — letters, digits, . _ - only"; exit 1 ;;
+esac
+
 if ! ACCOUNT=$(aws sts get-caller-identity --query Account --output text 2>/dev/null); then
   echo "✗ no AWS credentials. Run 'aws configure' first."
   exit 1
@@ -52,6 +63,16 @@ CF_DOMAIN=$(aws cloudfront get-distribution --id "$DIST_ID" --query Distribution
 # outlive this script by a release cycle.
 SITE_ORIGIN="${SITE_URL:-https://$CF_DOMAIN}"
 SITE_ORIGIN="${SITE_ORIGIN%/}"
+# An origin, not a URL: this string lands inside version.json AND in the
+# replacement half of the sed below, where `&`, `\` and the delimiter are all
+# live. Pinning the shape here is cheaper than escaping it in two places.
+case "$SITE_ORIGIN" in
+  https://[A-Za-z0-9]*) ;;
+  *) echo "✗ SITE_URL '$SITE_ORIGIN' — expected https://<host>"; exit 1 ;;
+esac
+case "$SITE_ORIGIN" in
+  *[!A-Za-z0-9:/.-]*) echo "✗ SITE_URL '$SITE_ORIGIN' carries characters that would corrupt version.json or the installer"; exit 1 ;;
+esac
 NAME=$(basename "$DMG")
 
 say "account $ACCOUNT · bucket $BUCKET"
@@ -91,6 +112,28 @@ say "published install.sh → $SITE_ORIGIN/install.sh"
 aws cloudfront create-invalidation --distribution-id "$DIST_ID" \
   --paths "/download/version.json" "/install.sh" --query Invalidation.Id --output text >/dev/null
 say "invalidated version.json and install.sh"
+
+# PROVE THE STAMPED HOST SERVES WHAT WAS JUST UPLOADED. The uploads went to
+# the CloudFront bucket, but every URL baked into the app, version.json and
+# the installer says $SITE_ORIGIN — and nothing above checks the two are the
+# same place. Pass SITE_URL=https://some-other-host and everything uploads
+# green while every install's update check 404s, silently, forever (the check
+# is baked into the shipped plist and can never be corrected remotely). One
+# HEAD request closes the only silent-after-ship failure this script can make.
+# Retried briefly because CloudFront invalidations take a moment to settle.
+say "verifying $SITE_ORIGIN/download/version.json"
+for attempt in 1 2 3 4 5; do
+  if curl -fsI --max-time 10 "$SITE_ORIGIN/download/version.json" >/dev/null 2>&1; then
+    verified=1; break
+  fi
+  sleep 5
+done
+[ "${verified:-}" = 1 ] || {
+  echo "✗ $SITE_ORIGIN does not serve /download/version.json."
+  echo "  The files are uploaded, but the host every install will ask is wrong —"
+  echo "  SITE_URL must be a domain that fronts this CloudFront distribution."
+  exit 1
+}
 
 echo
 echo "✓ $SITE_ORIGIN/download/$NAME"

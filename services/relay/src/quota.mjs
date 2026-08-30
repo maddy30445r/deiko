@@ -55,6 +55,13 @@ export const GLOBAL_DAILY_SECONDS =
 /// reason to break that: the multipart wrapper adds a few hundred bytes, which
 /// overestimates by well under a percent, and over-counting is the correct
 /// direction for a limit to be wrong in.
+///
+/// The under-count direction is accepted, and bounded: a body that is not
+/// 16-bit 16 kHz PCM — compressed audio, a lower rate — meters as fewer
+/// seconds than Sarvam hears, up to roughly 10× if Sarvam accepts it at all.
+/// Fixing it means parsing the audio, which the promise above forbids. What
+/// bounds it instead: Sarvam rejects clips over ~30 s regardless of size, the
+/// per-request clamp below, the global daily ceiling, and the budget alarm.
 export const BYTES_PER_SECOND = 32_000;
 
 /// No single request may count as more than this. The client's chunker splits
