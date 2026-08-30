@@ -312,21 +312,25 @@ guard-clean:
 
 ## relay-deploy — the transcription relay onto AWS Lambda
 ##
+##   make relay-deploy                              # keys from .env
 ##   SARVAM_API_KEY=… GROQ_API_KEY=… make relay-deploy
 ##
 ## Lambda because the service is idle most of the day by design — nobody is
 ## recording — and it is the only option that costs nothing while idle. See
 ## services/relay/deploy-aws.sh; it is idempotent, so this is also how you ship
 ## a code change.
+## The keys come from .env, which .env.example tells you to create and which
+## nothing else loads. Running the script directly still takes them from the
+## environment only, so that stays the way to deploy with a different key.
 relay-deploy:
-	@./services/relay/deploy-aws.sh
+	@set -a; [ -f .env ] && . ./.env; set +a; ./services/relay/deploy-aws.sh
 
 ## relay-dev — run the relay locally, for testing the app against it
 ##
 ##   make relay-dev
 ##   DEIKO_RELAY_URL=http://localhost:8787 open build/Deiko.app
 relay-dev:
-	@node services/relay/server.mjs
+	@set -a; [ -f .env ] && . ./.env; set +a; node services/relay/server.mjs
 
 ## site-deploy — the landing site onto S3 + CloudFront
 ##
