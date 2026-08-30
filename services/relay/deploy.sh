@@ -19,20 +19,26 @@
 set -euo pipefail
 
 REGION="${AWS_REGION:-ap-south-1}"        # Mumbai: closest to Sarvam
-# THE `fovea-*` NAMES BELOW ARE HISTORICAL AND DELIBERATE. The product was
-# renamed to Deiko, but these name AWS resources that already exist and hold
-# live state: the function whose URL gets stamped into builds, the table with
-# every quota and trial row in it, and the env vars baked into the deployed
-# Lambda's configuration. Renaming them means recreating the resources and
-# migrating the data. A PARTIAL rename is worse than either: the relay would
-# read undefined and fall back to defaults, silently reopening the daily
-# spend ceiling that FOVEA_GLOBAL_DAILY_SECONDS exists to hold shut.
-FUNCTION="${FOVEA_LAMBDA_NAME:-fovea-relay}"
+# These names changed with the rename from Fovea to Deiko. A `fovea-relay`
+# function and a `fovea-usage` table are still in the account, orphaned: this
+# script creates the `deiko-*` pair on its first run rather than migrating,
+# because the table held nothing but trial counters and there were no paying
+# users. Delete the old pair once a deploy has succeeded.
+#
+# What a rename does NOT carry over is the Lambda's function URL — a new
+# function gets a new one, and the old URL is stamped into every build already
+# handed out. Restamp with `make bundle RELAY_URL=…` after deploying.
+#
+# Change the names here and in relay.mjs/quota.mjs/usage.mjs together or not
+# at all. A PARTIAL rename is worse than either: the relay would read
+# undefined and fall back to defaults, silently reopening the daily spend
+# ceiling that DEIKO_GLOBAL_DAILY_SECONDS exists to hold shut.
+FUNCTION="${DEIKO_LAMBDA_NAME:-deiko-relay}"
 ROLE_NAME="${FUNCTION}-role"
 # Caps how many transcriptions can run at once. Not a quota — a blast radius.
 # The in-process rate limiter is per warm container and cannot bound spend on
 # its own, so this is the lever that actually can.
-CONCURRENCY="${FOVEA_LAMBDA_CONCURRENCY:-5}"
+CONCURRENCY="${DEIKO_LAMBDA_CONCURRENCY:-5}"
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 say() { printf '  %s\n' "$*"; }
@@ -77,7 +83,7 @@ say "account $ACCOUNT · region $REGION"
 # and vanish on their own, so the billing period rolls over with no reset job to
 # write, to schedule, or to discover has not run since March.
 
-TABLE="${FOVEA_USAGE_TABLE:-fovea-usage}"
+TABLE="${DEIKO_USAGE_TABLE:-deiko-usage}"
 
 if ! aws dynamodb describe-table --table-name "$TABLE" --region "$REGION" >/dev/null 2>&1; then
   say "creating table $TABLE (provisioned 25/25 — inside the always-free tier)"
@@ -183,20 +189,20 @@ JSON
 ENV_FILE="$(mktemp)"
 trap 'rm -f "$ENV_FILE"' EXIT
 chmod 600 "$ENV_FILE"
-FOVEA_USAGE_TABLE="$TABLE" node -e '
+DEIKO_USAGE_TABLE="$TABLE" node -e '
   const vars = {
     SARVAM_API_KEY: process.env.SARVAM_API_KEY,
     GROQ_API_KEY: process.env.GROQ_API_KEY,
-    FOVEA_USAGE_TABLE: process.env.FOVEA_USAGE_TABLE,
+    DEIKO_USAGE_TABLE: process.env.DEIKO_USAGE_TABLE,
   };
   // Omitted entirely when empty rather than sent as "" — Lambda would store a
   // variable that exists and means nothing.
   for (const name of [
-    "FOVEA_REVOKED_TOKENS",
+    "DEIKO_REVOKED_TOKENS",
     // The daily ceiling and the Lemon Squeezy wiring all have working defaults
     // in code, so each is passed only when it has been chosen deliberately.
-    "FOVEA_GLOBAL_DAILY_SECONDS",
-    "FOVEA_PRO_VARIANT_IDS",
+    "DEIKO_GLOBAL_DAILY_SECONDS",
+    "DEIKO_PRO_VARIANT_IDS",
     "LEMONSQUEEZY_API_KEY",
   ]) {
     if (process.env[name]) vars[name] = process.env[name];

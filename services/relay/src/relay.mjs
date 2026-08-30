@@ -131,9 +131,9 @@ export function tokenFingerprint(token) {
 /// Matches EITHER the raw token or its fingerprint, and that is the whole
 /// point: the logs only ever carry the fingerprint, so before this the string
 /// you could find was never the string you could revoke. Now what you read in
-/// CloudWatch is what you paste into FOVEA_REVOKED_TOKENS.
+/// CloudWatch is what you paste into DEIKO_REVOKED_TOKENS.
 function revoked(token) {
-  const list = new Set((process.env.FOVEA_REVOKED_TOKENS ?? "").split(",").filter(Boolean));
+  const list = new Set((process.env.DEIKO_REVOKED_TOKENS ?? "").split(",").filter(Boolean));
   return list.has(token) || list.has(tokenFingerprint(token));
 }
 
@@ -336,7 +336,7 @@ async function proxy(url, headers, body) {
 /// It used to log the token's own first eight characters, which for `dev_xxxx`
 /// left four usable hex digits — too few to identify anybody, and the wrong
 /// string anyway, because revocation needs the value in full. The fingerprint
-/// is both safe to write down AND the exact string `FOVEA_REVOKED_TOKENS`
+/// is both safe to write down AND the exact string `DEIKO_REVOKED_TOKENS`
 /// accepts, so finding an abusive install in the logs and stopping it are now
 /// the same two minutes.
 export function logLine({ method, path, status, ms, token }) {

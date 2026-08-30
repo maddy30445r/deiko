@@ -45,7 +45,7 @@ export const PRO_MONTHLY_SECONDS = 5 * 60 * 60;
 /// before the ceiling does, because the ceiling is the thing that stops a
 /// disaster and the alarm is the thing that tells you one is starting.
 export const GLOBAL_DAILY_SECONDS =
-  Number(process.env.FOVEA_GLOBAL_DAILY_SECONDS ?? 4 * 60 * 60);
+  Number(process.env.DEIKO_GLOBAL_DAILY_SECONDS ?? 4 * 60 * 60);
 
 /// 16 kHz, mono, 16-bit — so two bytes a sample, 32,000 bytes a second. The
 /// client's chunker uses exactly these constants.

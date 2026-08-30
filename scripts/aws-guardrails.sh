@@ -19,18 +19,18 @@
 set -euo pipefail
 
 EMAIL="${1:?usage: aws-guardrails.sh <alert-email>}"
-REGION="${AWS_REGION:-ap-south-1}"           # where fovea-relay lives
-# `fovea-*` here is historical - see the note in services/relay/deploy-aws.sh.
-# These name live AWS resources. The SNS topic in particular carries a
-# confirmed email subscription, and a rename would silently discard it and
-# leave the alarms firing into nothing.
-FUNCTION="${FOVEA_LAMBDA_NAME:-fovea-relay}"
+REGION="${AWS_REGION:-ap-south-1}"           # where deiko-relay lives
+# The `deiko-*` names replaced `fovea-*` at the rename — see the note in
+# services/relay/deploy-aws.sh. `deiko-alerts` is therefore a NEW SNS topic
+# whose email subscription starts UNCONFIRMED: click the link or the alarms
+# fire into nothing. The old `fovea-alerts` topic and budget can be deleted.
+FUNCTION="${DEIKO_LAMBDA_NAME:-deiko-relay}"
 # ₹500/month is the cap the owner chose. The budget is denominated in USD
 # anyway because THIS ACCOUNT BILLS IN USD (checked via Cost Explorer) — an
 # INR budget on a USD-billed account would compare rupees against dollars
 # and alert at 88× the intended spend. $6 ≈ ₹500; adjust here if the rate
 # drifts far enough to matter.
-BUDGET_USD="${FOVEA_BUDGET_USD:-6}"
+BUDGET_USD="${DEIKO_BUDGET_USD:-6}"
 say() { printf '  %s\n' "$*"; }
 
 command -v aws >/dev/null || { echo "✗ aws CLI not found"; exit 1; }
@@ -47,14 +47,14 @@ say "account $ACCOUNT · alerts to $EMAIL"
 # thought to budget. 80% actual = act now; 100% forecasted = act this week.
 # Budgets carry their own email subscribers, so no SNS is needed here.
 
-if aws budgets describe-budget --account-id "$ACCOUNT" --budget-name fovea \
+if aws budgets describe-budget --account-id "$ACCOUNT" --budget-name deiko \
      >/dev/null 2>&1; then
-  say "budget 'fovea' already exists — leaving it alone"
+  say "budget 'deiko' already exists — leaving it alone"
 else
-  say "creating budget 'fovea' (\$$BUDGET_USD/month)"
+  say "creating budget 'deiko' (\$$BUDGET_USD/month)"
   aws budgets create-budget --account-id "$ACCOUNT" \
     --budget "{
-      \"BudgetName\": \"fovea\",
+      \"BudgetName\": \"deiko\",
       \"BudgetLimit\": {\"Amount\": \"$BUDGET_USD\", \"Unit\": \"USD\"},
       \"TimeUnit\": \"MONTHLY\",
       \"BudgetType\": \"COST\"
@@ -80,7 +80,7 @@ fi
 # an expired provider key, or someone probing. SNS topic + email because
 # CloudWatch alarms cannot email directly.
 
-TOPIC_ARN=$(aws sns create-topic --name fovea-alerts --region "$REGION" \
+TOPIC_ARN=$(aws sns create-topic --name deiko-alerts --region "$REGION" \
   --query TopicArn --output text)   # returns the existing ARN if already there
 
 # Re-running with an already-confirmed email is a no-op; with an unconfirmed
@@ -88,7 +88,7 @@ TOPIC_ARN=$(aws sns create-topic --name fovea-alerts --region "$REGION" \
 aws sns subscribe --topic-arn "$TOPIC_ARN" --protocol email \
   --notification-endpoint "$EMAIL" --region "$REGION" \
   --query SubscriptionArn --output text >/dev/null
-say "SNS topic fovea-alerts (confirm the subscription email if you have not)"
+say "SNS topic deiko-alerts (confirm the subscription email if you have not)"
 
 # put-metric-alarm is create-or-update by name, so this is naturally idempotent.
 aws cloudwatch put-metric-alarm --region "$REGION" \

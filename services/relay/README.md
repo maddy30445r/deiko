@@ -66,18 +66,18 @@ Knobs, all overridable in the environment:
 | | |
 |---|---|
 | `AWS_REGION` | `ap-south-1` — closest to Sarvam |
-| `FOVEA_LAMBDA_CONCURRENCY` | `5` reserved — a blast radius, not a quota. Past ~12, raise the table's write units with it. |
-| `FOVEA_REVOKED_TOKENS` | comma-separated tokens to refuse |
-| `FOVEA_USAGE_TABLE` | `fovea-usage` — the DynamoDB table holding every counter |
-| `FOVEA_GLOBAL_DAILY_SECONDS` | `14400` (4 hours) — the ceiling on the whole service's daily audio |
-| `FOVEA_PRO_VARIANT_IDS` | Lemon Squeezy variant ids that mean Pro. Unset = any live licence is Pro — correct while Pro is the only SKU; the day there is a second one this MUST be set, or the cheaper SKU buys Pro's allowance. |
+| `DEIKO_LAMBDA_CONCURRENCY` | `5` reserved — a blast radius, not a quota. Past ~12, raise the table's write units with it. |
+| `DEIKO_REVOKED_TOKENS` | comma-separated tokens to refuse |
+| `DEIKO_USAGE_TABLE` | `deiko-usage` — the DynamoDB table holding every counter |
+| `DEIKO_GLOBAL_DAILY_SECONDS` | `14400` (4 hours) — the ceiling on the whole service's daily audio |
+| `DEIKO_PRO_VARIANT_IDS` | Lemon Squeezy variant ids that mean Pro. Unset = any live licence is Pro — correct while Pro is the only SKU; the day there is a second one this MUST be set, or the cheaper SKU buys Pro's allowance. |
 | `LEMONSQUEEZY_API_KEY` | only if the validate endpoint starts demanding one |
 
 Then verify — and check `transcription`, not just `ok`:
 
 ```sh
 curl -s https://<id>.lambda-url.<region>.on.aws/health
-# {"ok":true,"transcription":true,"summary":true,"metering":true,"table":"fovea-usage"}
+# {"ok":true,"transcription":true,"summary":true,"metering":true,"table":"deiko-usage"}
 ```
 
 `metering` is a real `DescribeTable`, not a check on whether the table's name is
@@ -103,10 +103,10 @@ an option, and Lambda is the one that is actually deployed.
 | `SARVAM_API_KEY` | required for `/v1/transcribe` |
 | `GROQ_API_KEY` | required for `/v1/summarize` |
 | `PORT` | default 8787 |
-| `FOVEA_REVOKED_TOKENS` | comma-separated tokens to refuse |
-| `FOVEA_USAGE_TABLE` | `fovea-usage` — the DynamoDB table holding every counter |
-| `FOVEA_GLOBAL_DAILY_SECONDS` | `14400` (4 hours) — the ceiling on the whole service's daily audio |
-| `FOVEA_PRO_VARIANT_IDS` | Lemon Squeezy variant ids that mean Pro. Unset = any live licence is Pro — correct while Pro is the only SKU; the day there is a second one this MUST be set, or the cheaper SKU buys Pro's allowance. |
+| `DEIKO_REVOKED_TOKENS` | comma-separated tokens to refuse |
+| `DEIKO_USAGE_TABLE` | `deiko-usage` — the DynamoDB table holding every counter |
+| `DEIKO_GLOBAL_DAILY_SECONDS` | `14400` (4 hours) — the ceiling on the whole service's daily audio |
+| `DEIKO_PRO_VARIANT_IDS` | Lemon Squeezy variant ids that mean Pro. Unset = any live licence is Pro — correct while Pro is the only SKU; the day there is a second one this MUST be set, or the cheaper SKU buys Pro's allowance. |
 | `LEMONSQUEEZY_API_KEY` | only if the validate endpoint starts demanding one |
 
 Then point a build at it — **not by editing Swift.** The origin is deployment
@@ -228,11 +228,11 @@ the spending to stop before you understand why:
 
 ```sh
 aws lambda update-function-configuration \
-  --function-name fovea-relay --region ap-south-1 \
-  --environment "Variables={FOVEA_GLOBAL_DAILY_SECONDS=0,SARVAM_API_KEY=…,GROQ_API_KEY=…}"
+  --function-name deiko-relay --region ap-south-1 \
+  --environment "Variables={DEIKO_GLOBAL_DAILY_SECONDS=0,SARVAM_API_KEY=…,GROQ_API_KEY=…}"
 ```
 
-`FOVEA_GLOBAL_DAILY_SECONDS=0` means the day's ceiling is already exceeded by
+`DEIKO_GLOBAL_DAILY_SECONDS=0` means the day's ceiling is already exceeded by
 the first request, so **every** transcription is refused with a 429 — yours
 included. Nothing breaks: the app falls back to Apple's on-device words, which
 is the documented third path and costs nothing. Undo it by setting the value
@@ -244,7 +244,7 @@ in the same call or the relay comes back up with none and 503s everything.
 hand.
 
 To stop **one** abuser rather than everybody, take the `tok:` fingerprint from
-the CloudWatch line and put it in `FOVEA_REVOKED_TOKENS` — that is the same
+the CloudWatch line and put it in `DEIKO_REVOKED_TOKENS` — that is the same
 string in both places, by design.
 
 ## The privacy promise changes when you turn this on

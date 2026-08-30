@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // THE NUMBERS, AND WHERE THEY LIVE
 //
-// One DynamoDB table, `fovea-usage`, on-demand billing, partition key `subject`.
+// One DynamoDB table, `deiko-usage`, on-demand billing, partition key `subject`.
 // Everything stateful the relay needs is a row in it:
 //
 //   dev:<token>              lifetime free-trial seconds. No TTL — the trial is
@@ -40,7 +40,7 @@ import {
   usageKey,
 } from "./quota.mjs";
 
-const TABLE = process.env.FOVEA_USAGE_TABLE ?? "fovea-usage";
+const TABLE = process.env.DEIKO_USAGE_TABLE ?? "deiko-usage";
 const LEMONSQUEEZY_VALIDATE = "https://api.lemonsqueezy.com/v1/licenses/validate";
 
 /// How long a Lemon Squeezy verdict is trusted before it is checked again.
@@ -231,7 +231,7 @@ async function validateWithLemonSqueezy(key) {
     // Until the store exists there are no variant ids to match, and the only
     // paid SKU is Pro — so any live licence is Pro. When a second paid tier
     // appears, this is the line that learns to tell them apart.
-    const proVariants = (process.env.FOVEA_PRO_VARIANT_IDS ?? "")
+    const proVariants = (process.env.DEIKO_PRO_VARIANT_IDS ?? "")
       .split(",").filter(Boolean);
     if (proVariants.length === 0) return "pro";
     return proVariants.includes(String(json?.meta?.variant_id)) ? "pro" : "free";

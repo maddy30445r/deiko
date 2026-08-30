@@ -13,7 +13,7 @@ dist/
 
 # The assembled app bundle. Rebuilt by `make bundle` from sources that ARE
 # tracked, so committing it only churns a 1MB binary on every build — and a
-# stale committed copy is worse than none, since it is what `open build/Fovea.app`
+# stale committed copy is worse than none, since it is what `open build/Deiko.app`
 # would launch.
 build/
 

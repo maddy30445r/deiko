@@ -331,19 +331,19 @@ test("an oversized summary body is refused before it is parsed", async () => {
 test("a token can be revoked by the fingerprint that appears in the logs", async () => {
   // Before, the log carried the token's own first eight characters — for
   // `dev_xxxx` that is four usable hex digits, and the wrong string anyway,
-  // because FOVEA_REVOKED_TOKENS needs the value in full. You could see an
+  // because DEIKO_REVOKED_TOKENS needs the value in full. You could see an
   // abusive install and still have no way to stop it.
   const line = logLine({ method: "POST", path: "/v1/transcribe", status: 200, ms: 5, token: "dev_abuser" });
   const printed = line.split("tok:")[1];
   assert.ok(printed && printed.length === 12, "the log carries a fingerprint, not a token");
   assert.ok(!line.includes("dev_abuser"), "and never the bearer itself");
 
-  process.env.FOVEA_REVOKED_TOKENS = printed;
+  process.env.DEIKO_REVOKED_TOKENS = printed;
   try {
     const r = await post("dev_abuser", 10);
     assert.equal(r.status, 403, "the string you can read must be the string you can revoke");
   } finally {
-    delete process.env.FOVEA_REVOKED_TOKENS;
+    delete process.env.DEIKO_REVOKED_TOKENS;
   }
 });
 
