@@ -327,7 +327,7 @@ test("the caller does not get to choose the model or the token budget", async ()
     messages: [{ role: "user", content: "hi" }],
   });
   const sent = JSON.parse(upstreamBodies.at(-1));
-  assert.equal(sent.model, "llama-3.3-70b-versatile", "the model is ours to pick");
+  assert.equal(sent.model, "openai/gpt-oss-20b", "the model is ours to pick");
   assert.equal(sent.max_completion_tokens, 200, "and so is the completion budget");
 });
 

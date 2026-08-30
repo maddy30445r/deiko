@@ -66,7 +66,10 @@ export const MAX_SUMMARY_BYTES = 64 * 1024;
 // otherwise name an expensive model and a large completion and bill it to us.
 // The caller's `messages` still travel (the system prompt lives on the client,
 // where the product's voice belongs); nothing else the caller sends does.
-const SUMMARY_MODEL = "llama-3.3-70b-versatile";
+// `llama-3.3-70b-versatile` until Groq retired it — a pinned model can
+// disappear out from under a deployed relay, and the failure is a 404 the
+// client silently degrades over. Mirrors MODEL in scripts/summarize.mjs.
+const SUMMARY_MODEL = "openai/gpt-oss-20b";
 const SUMMARY_TEMPERATURE = 0.2;
 const SUMMARY_MAX_COMPLETION_TOKENS = 200;
 

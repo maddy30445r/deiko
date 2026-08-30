@@ -28,9 +28,14 @@ const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 // Hinglish is the hard part, not the length. The narration is Latin-script Hindi
 // braided through English technical terms ("isko humko class one se class two
-// mein convert karna hai") — a smaller model reads the English and loses the
-// verbs. The output is ~60 tokens, so a faster model buys nothing worth having.
-const MODEL = "llama-3.3-70b-versatile";
+// mein convert karna hai") — a weak model reads the English and loses the verbs.
+//
+// `llama-3.3-70b-versatile` was the pick until Groq retired it (discovered
+// live on 2026-08-30: every relay summary was 404ing on model_not_found).
+// gpt-oss-20b was verified against a Hinglish narration before being pinned —
+// verbs survive — and MIRRORS `SUMMARY_MODEL` in services/relay/relay.mjs;
+// change both or the relay path and the BYO-key path drift apart.
+const MODEL = "openai/gpt-oss-20b";
 
 const SYSTEM = [
   "You summarise a developer's spoken description of a coding task.",
