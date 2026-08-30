@@ -19,6 +19,14 @@
 set -euo pipefail
 
 REGION="${AWS_REGION:-ap-south-1}"        # Mumbai: closest to Sarvam
+# THE `fovea-*` NAMES BELOW ARE HISTORICAL AND DELIBERATE. The product was
+# renamed to Deiko, but these name AWS resources that already exist and hold
+# live state: the function whose URL gets stamped into builds, the table with
+# every quota and trial row in it, and the env vars baked into the deployed
+# Lambda's configuration. Renaming them means recreating the resources and
+# migrating the data. A PARTIAL rename is worse than either: the relay would
+# read undefined and fall back to defaults, silently reopening the daily
+# spend ceiling that FOVEA_GLOBAL_DAILY_SECONDS exists to hold shut.
 FUNCTION="${FOVEA_LAMBDA_NAME:-fovea-relay}"
 ROLE_NAME="${FUNCTION}-role"
 # Caps how many transcriptions can run at once. Not a quota — a blast radius.

@@ -2,7 +2,7 @@
 /**
  * Render a recorded session into the message the developer hands over.
  *
- *   node scripts/render-brief.mjs ~/Documents/Fovea/<id>
+ *   node scripts/render-brief.mjs ~/Documents/Deiko/<id>
  *
  * Two outputs. `prompt.txt` is what gets pasted into a chat — the developer's
  * own words, the screenshots they drew, and the exact strings under what they
@@ -215,7 +215,7 @@ const { text, evidence } = buildPrompt({ narration, referents: released });
 const attached = buildPrompt({ narration, referents: released, attached: true });
 
 // Fail closed on the captured content, not on the assembled prompt. `text`
-// includes crop paths Fovea minted itself — an absolute POSIX path is a
+// includes crop paths Deiko minted itself — an absolute POSIX path is a
 // 40-character run of `[A-Za-z0-9/_]` and trips the long-opaque-string rule
 // on sight, so running the guard over `text` rejected every real prompt.
 // `evidence` is narration and screen text only, which is the only place a
@@ -223,7 +223,7 @@ const attached = buildPrompt({ narration, referents: released, attached: true })
 assertNoSecrets(evidence);
 writeFileSync(outPath, text);
 // One assertion covers both: the two variants differ only in how the SCREENSHOT
-// SECTION is written — Fovea's own words either way — and are built from the
+// SECTION is written — Deiko's own words either way — and are built from the
 // same narration and the same referents, so their evidence is identical. Guard
 // it anyway rather than assume: the cost is microseconds and the assumption is
 // exactly the kind that quietly stops being true.

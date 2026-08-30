@@ -6,7 +6,7 @@
  * so what actually reaches Claude Code was never the thing that got checked.
  * A guard that covers a draft rather than the delivered payload is decoration.
  *
- * This is not defensive tidiness — it is a hard requirement. Fovea reads the
+ * This is not defensive tidiness — it is a hard requirement. Deiko reads the
  * screen, and screens have secrets on them. Session 20260728-112323 captured a
  * live Azure Storage account key into `events.jsonl` (via BOTH accessibility and
  * OCR) and burned it into its crops, purely because the developer pointed at a
@@ -18,7 +18,7 @@
 /**
  * Strip credentials before anything leaves the machine.
  *
- * This is not defensive tidiness — it is a hard requirement. Fovea reads the
+ * This is not defensive tidiness — it is a hard requirement. Deiko reads the
  * screen, and screens have secrets on them. Session 20260728-112323 captured a
  * live Azure Storage account key into `events.jsonl` (via BOTH accessibility and
  * OCR) and burned it into all twelve crops, purely because the developer pointed
@@ -149,7 +149,7 @@ export function carriesSecret(r) {
   // A MARKER ALONE IS NOT A SECRET, and treating it as one was costing this
   // product its own audience. The union above is every scrap of text in a
   // referent, so a single occurrence of "token" ANYWHERE in it withheld the
-  // whole screenshot — and the people Fovea is for spend their day looking at
+  // whole screenshot — and the people Deiko is for spend their day looking at
   // `auth.ts`, `getAccessToken`, `Bearer` in a header pane and a `password`
   // field label. Three VS Code crops in session 20260730-004641 were withheld
   // because `userAuth.ts` contains the word "token". Length is not opacity

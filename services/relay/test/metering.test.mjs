@@ -289,7 +289,7 @@ test("a used-up trial still gets its reading, and is not charged for it", async 
   seed("dev:spent", FREE_TRIAL_SECONDS + 60);
   const before = rows.get("dev:spent").audioSeconds;
   const r = await summarize("dev_spent");
-  assert.equal(r.status, 200, "the sentence that says what Fovea heard is not the paid part");
+  assert.equal(r.status, 200, "the sentence that says what Deiko heard is not the paid part");
   assert.equal(
     rows.get("dev:spent").audioSeconds, before,
     "a text summary must not spend an audio allowance",
@@ -307,7 +307,7 @@ test("a summary IS charged against the day, so a flood cannot stay invisible", a
 });
 
 test("the caller does not get to choose the model or the token budget", async () => {
-  // This route spends Fovea's Groq key and accepts any bearer string. Before
+  // This route spends Deiko's Groq key and accepts any bearer string. Before
   // the body was rebuilt server-side, that made it an open LLM proxy: name an
   // expensive model and a large completion, and bill it here.
   await summarize("dev_greedy", {

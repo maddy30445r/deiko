@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const binary = resolve(root, "apps/capture/.build/debug/fovea-capture");
+const binary = resolve(root, "apps/capture/.build/debug/deiko-capture");
 
 const child = spawn(binary, ["hello"], { stdio: ["ignore", "pipe", "pipe"] });
 

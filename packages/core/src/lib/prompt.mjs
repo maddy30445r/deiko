@@ -29,7 +29,7 @@
  * on `text`. The guard's subject is captured screen content — narration and
  * what a referent's accessibility/OCR text says — because that is the only
  * place a secret can appear that this code did not put there itself. The
- * screenshot paths in `text` are strings Fovea minted, not content it
+ * screenshot paths in `text` are strings Deiko minted, not content it
  * captured, and an absolute POSIX path is a 40-character run of
  * `[A-Za-z0-9/_]`, which trips the long-opaque-string rule on sight. Widening
  * that rule to admit paths would blunt it for the content it exists to
@@ -156,7 +156,7 @@ export function buildPrompt({ narration, referents, attached = false }) {
 
   // Each path carries the sentence it was drawn during. Without it the agent is
   // handed two screenshots and a paragraph and has to guess which is which —
-  // and Fovea already KNOWS, from word timings, having bound `r8` to "what does
+  // and Deiko already KNOWS, from word timings, having bound `r8` to "what does
   // this code do" and `r13` to "learn about route 53 here" in the session that
   // exposed this. Computing that and then dropping it threw away the one thing
   // pointing-while-talking produces that a screenshot alone does not.

@@ -15,19 +15,19 @@
 # considers valid, which for a self-signed one means added to your trust store —
 # an authorisation prompt and a root certificate, bought for nothing, since
 # codesign signs perfectly well with an untrusted local identity.
-SIGN_NAME  ?= Fovea Local
+SIGN_NAME  ?= Deiko Local
 SIGN_FOUND := $(shell security find-identity -p codesigning 2>/dev/null | grep -c '"$(SIGN_NAME)"')
 
 CAPTURE_DIR := apps/capture
-DEBUG_BIN   := $(CAPTURE_DIR)/.build/debug/fovea-capture
-RELEASE_BIN := $(CAPTURE_DIR)/.build/release/fovea-capture
+DEBUG_BIN   := $(CAPTURE_DIR)/.build/debug/deiko-capture
+RELEASE_BIN := $(CAPTURE_DIR)/.build/release/deiko-capture
 
 ## dev — build the capture binary and verify the Swift→Node stdio contract
 dev: $(DEBUG_BIN)
 	@node scripts/hello.mjs
 
-# Every Sources subtree, not just FoveaCapture — the pure targets (FoveaGesture,
-# FoveaVoice, FoveaGrounding) are where the testable logic lives, and a rule that
+# Every Sources subtree, not just DeikoCapture — the pure targets (DeikoGesture,
+# DeikoVoice, DeikoGrounding) are where the testable logic lives, and a rule that
 # does not watch them silently runs the old binary against the new tests.
 $(DEBUG_BIN): $(wildcard $(CAPTURE_DIR)/Sources/*/*.swift) $(CAPTURE_DIR)/Package.swift
 	@swift build --package-path $(CAPTURE_DIR)
@@ -58,7 +58,7 @@ watch: $(DEBUG_BIN)
 region: $(DEBUG_BIN)
 	@$(DEBUG_BIN) ax-probe --watch --region 90 --verbose
 
-## bundle — assemble Fovea.app around the binary
+## bundle — assemble Deiko.app around the binary
 ##
 ## Needed because TCC will not honour usage descriptions from a bare SwiftPM
 ## executable: requesting Speech Recognition from one is killed with SIGABRT,
@@ -66,13 +66,13 @@ region: $(DEBUG_BIN)
 ## a __TEXT,__info_plist section satisfies codesign but not TCC.
 ##
 ## It is also where the product is going regardless — a menu-bar app (PRD §7) —
-## and it fixes the permission model: permissions attach to Fovea.app instead of
+## and it fixes the permission model: permissions attach to Deiko.app instead of
 ## to whichever terminal happened to launch the binary.
-APP := build/Fovea.app
+APP := build/Deiko.app
 RES := $(APP)/Contents/Resources
 
 # ONE version in the product. `VERSION` is the source; it is stamped into the
-# bundle below, and `FoveaVersion` reads it back out at runtime. There used to
+# bundle below, and `DeikoVersion` reads it back out at runtime. There used to
 # be two hardcoded literals with nothing keeping them in sync.
 VERSION := $(shell cat VERSION 2>/dev/null || echo 0.0.0)
 # The build number distinguishes two shipped copies of one version. A commit
@@ -115,19 +115,19 @@ SITE_URL ?=
 bundle: bundle-unsigned sign
 
 bundle-unsigned: $(DEBUG_BIN) resources
-	@cp $(CAPTURE_DIR)/Sources/FoveaCapture/Info.plist $(APP)/Contents/Info.plist
-	@cp $(DEBUG_BIN) $(APP)/Contents/MacOS/fovea-capture
-	@cp $(CAPTURE_DIR)/Sources/FoveaCapture/Fovea.icns $(RES)/Fovea.icns
+	@cp $(CAPTURE_DIR)/Sources/DeikoCapture/Info.plist $(APP)/Contents/Info.plist
+	@cp $(DEBUG_BIN) $(APP)/Contents/MacOS/deiko-capture
+	@cp $(CAPTURE_DIR)/Sources/DeikoCapture/Deiko.icns $(RES)/Deiko.icns
 	@/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $(VERSION)" $(APP)/Contents/Info.plist
 	@/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(BUILD)" $(APP)/Contents/Info.plist
-	@/usr/libexec/PlistBuddy -c "Set :FoveaRelayURL $(RELAY_URL)" $(APP)/Contents/Info.plist
-	@/usr/libexec/PlistBuddy -c "Set :FoveaSiteURL $(SITE_URL)" $(APP)/Contents/Info.plist
+	@/usr/libexec/PlistBuddy -c "Set :DeikoRelayURL $(RELAY_URL)" $(APP)/Contents/Info.plist
+	@/usr/libexec/PlistBuddy -c "Set :DeikoSiteURL $(SITE_URL)" $(APP)/Contents/Info.plist
 ifneq ($(RELAY_URL),)
 	@echo "  relay: $(RELAY_URL)"
 else
 	@echo "  relay: none — sessions fall back to on-device words"
 endif
-	@/usr/libexec/PlistBuddy -c "Add :CFBundleExecutable string fovea-capture" $(APP)/Contents/Info.plist >/dev/null 2>&1 || true
+	@/usr/libexec/PlistBuddy -c "Add :CFBundleExecutable string deiko-capture" $(APP)/Contents/Info.plist >/dev/null 2>&1 || true
 	@/usr/libexec/PlistBuddy -c "Add :CFBundlePackageType string APPL" $(APP)/Contents/Info.plist >/dev/null 2>&1 || true
 	@/usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" $(APP)/Contents/Info.plist >/dev/null 2>&1 || true
 	@echo "assembled $(APP)  (unsigned)"
@@ -156,12 +156,12 @@ endif
 	@codesign --verify --strict --deep $(APP) \
 	  || (echo "✗ the seal does not match the bundle — something was added after signing"; exit 1)
 	@echo "  seal verified"
-	@echo "launch it:  open $(APP)      (menu-bar app; permissions attach to Fovea)"
-	@echo "subcommand: $(APP)/Contents/MacOS/fovea-capture <cmd>"
+	@echo "launch it:  open $(APP)      (menu-bar app; permissions attach to Deiko)"
+	@echo "subcommand: $(APP)/Contents/MacOS/deiko-capture <cmd>"
 
 ## install — put this build in /Applications and restart it
 ##
-## `cp -R build/Fovea.app /Applications/` is the obvious command and it is
+## `cp -R build/Deiko.app /Applications/` is the obvious command and it is
 ## wrong twice over. It MERGES into the existing bundle rather than replacing
 ## it, so files the old build had and the new one does not simply survive; and
 ## it rewrites the app underneath Finder, which caches the icon it sees
@@ -178,20 +178,20 @@ endif
 ## LaunchServices was told to. Restarting them is what actually clears it.
 ## They both relaunch immediately; the cost is a Finder window blinking.
 install: bundle
-	@osascript -e 'quit app "Fovea"' 2>/dev/null || true
+	@osascript -e 'quit app "Deiko"' 2>/dev/null || true
 	@sleep 1
-	@rm -rf /Applications/Fovea.app
+	@rm -rf /Applications/Deiko.app
 	@cp -R $(APP) /Applications/
-	@/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f -R /Applications/Fovea.app
-	@touch /Applications/Fovea.app /Applications/Fovea.app/Contents/Info.plist
+	@/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f -R /Applications/Deiko.app
+	@touch /Applications/Deiko.app /Applications/Deiko.app/Contents/Info.plist
 	@find "$$(getconf DARWIN_USER_CACHE_DIR)" -name com.apple.dock.iconcache -delete 2>/dev/null || true
 	@find "$$(getconf DARWIN_USER_CACHE_DIR)" -maxdepth 2 -name com.apple.iconservices -type d -exec rm -rf {} + 2>/dev/null || true
 	@killall Dock 2>/dev/null || true
 	@killall Finder 2>/dev/null || true
 	@sleep 2
-	@open /Applications/Fovea.app
-	@echo "installed and running: /Applications/Fovea.app  (Dock + Finder restarted)"
-	@echo "verify: /Applications/Fovea.app/Contents/MacOS/fovea-capture diagnostics | grep relay"
+	@open /Applications/Deiko.app
+	@echo "installed and running: /Applications/Deiko.app  (Dock + Finder restarted)"
+	@echo "verify: /Applications/Deiko.app/Contents/MacOS/deiko-capture diagnostics | grep relay"
 
 ## dmg — the thing you actually hand to somebody
 ##
@@ -206,7 +206,7 @@ install: bundle
 ## self-signed certificate, so the first thing that happens after the drag is
 ## macOS refusing to open it. Somebody who does not find the bypass concludes
 ## the app is broken, and they are not wrong to.
-DMG := build/Fovea-$(VERSION).dmg
+DMG := build/Deiko-$(VERSION).dmg
 
 dmg: dist
 	@rm -rf build/dmg $(DMG)
@@ -219,7 +219,7 @@ dmg: dist
 	@# which is exactly what the 0.4.1 DMG on disk still offers, and it cannot
 	@# work. `make release` requires SITE_URL, so a real release always carries
 	@# the offer; a hand-built DMG gets the by-hand steps and no broken promise.
-	@printf '%s\n' 'Fovea $(VERSION)' '' > 'build/dmg/Read me first.txt'
+	@printf '%s\n' 'Deiko $(VERSION)' '' > 'build/dmg/Read me first.txt'
 ifneq ($(SITE_URL),)
 	@printf '%s\n' \
 		'EASIEST: skip this disk image entirely. Paste this into Terminal and' \
@@ -233,16 +233,16 @@ endif
 	@printf '%s\n' \
 		'BY HAND:' \
 		'' \
-		'1. Drag Fovea onto the Applications folder.' \
+		'1. Drag Deiko onto the Applications folder.' \
 		'' \
 		'2. BEFORE LAUNCHING, run this once in Terminal:' \
 		'' \
-		'     xattr -dr com.apple.quarantine /Applications/Fovea.app' \
+		'     xattr -dr com.apple.quarantine /Applications/Deiko.app' \
 		'' \
-		'   Fovea is signed with a self-signed certificate rather than an' \
+		'   Deiko is signed with a self-signed certificate rather than an' \
 		'   Apple Developer ID, so macOS quarantines everything you just' \
 		'   downloaded. This clears the whole bundle -- including the Node' \
-		'   runtime inside it that Fovea spawns to transcribe your sessions.' \
+		'   runtime inside it that Deiko spawns to transcribe your sessions.' \
 		'' \
 		'   The GUI route (System Settings -> Privacy & Security -> "Open' \
 		'   Anyway") lets the app start, but may leave that nested runtime' \
@@ -251,7 +251,7 @@ endif
 		'' \
 		'   Right-click -> Open is NOT enough on current macOS.' \
 		'' \
-		'3. Launch it. Fovea lives in the menu bar, and a first-run window' \
+		'3. Launch it. Deiko lives in the menu bar, and a first-run window' \
 		'   explains the four permissions it needs and why.' \
 		'' \
 		'4. Double-tap Right Option, point at something and talk, tap Right' \
@@ -262,7 +262,7 @@ endif
 		'' \
 		'Full documentation: README.md, beside this file.' \
 		>> 'build/dmg/Read me first.txt'
-	@hdiutil create -volname "Fovea $(VERSION)" -srcfolder build/dmg \
+	@hdiutil create -volname "Deiko $(VERSION)" -srcfolder build/dmg \
 		-ov -format UDZO -quiet $(DMG)
 	@echo "built $(DMG)  ($$(du -h $(DMG) | cut -f1))"
 	@echo "  the app inside is SELF-SIGNED — the receiver must bypass Gatekeeper."
@@ -324,7 +324,7 @@ relay-deploy:
 ## relay-dev — run the relay locally, for testing the app against it
 ##
 ##   make relay-dev
-##   FOVEA_RELAY_URL=http://localhost:8787 open build/Fovea.app
+##   DEIKO_RELAY_URL=http://localhost:8787 open build/Deiko.app
 relay-dev:
 	@node services/relay/server.mjs
 
@@ -334,18 +334,18 @@ relay-dev:
 site-deploy:
 	@./scripts/deploy-site.sh $(SITE_DIR)
 
-## icon — regenerate Fovea.icns from the fovea mark
+## icon — regenerate Deiko.icns from the Deiko mark
 ##
 ## The .icns is COMMITTED, so `make bundle` needs nothing but a copy. Run this
-## only after changing the geometry in Sources/FoveaCapture/Iconset.swift.
+## only after changing the geometry in Sources/DeikoCapture/Iconset.swift.
 ##
 ## Drawn by the binary rather than by a script: the coin, the menu bar and the
 ## icon are one shape, and keeping the third renderer in the same target as the
 ## other two is what stops it drifting.
 icon: $(DEBUG_BIN)
-	@$(DEBUG_BIN) icon --out build/Fovea.iconset
-	@iconutil -c icns build/Fovea.iconset -o $(CAPTURE_DIR)/Sources/FoveaCapture/Fovea.icns
-	@echo "✓ $(CAPTURE_DIR)/Sources/FoveaCapture/Fovea.icns"
+	@$(DEBUG_BIN) icon --out build/Deiko.iconset
+	@iconutil -c icns build/Deiko.iconset -o $(CAPTURE_DIR)/Sources/DeikoCapture/Deiko.icns
+	@echo "✓ $(CAPTURE_DIR)/Sources/DeikoCapture/Deiko.icns"
 
 ## resources — the pipeline, inside the bundle
 ##
@@ -397,7 +397,7 @@ dist: build bundle-unsigned
 	  || (echo "✗ bundled node is $$($(NODE_BIN) -v), the scripts need >= 22"; exit 1)
 	@file "$(NODE_BIN)" | grep -q arm64 \
 	  || (echo "✗ bundled node is not arm64: $$(file '$(NODE_BIN)')"; exit 1)
-	@cp $(RELEASE_BIN) $(APP)/Contents/MacOS/fovea-capture
+	@cp $(RELEASE_BIN) $(APP)/Contents/MacOS/deiko-capture
 	@cp "$(NODE_BIN)" $(RES)/node
 	@echo "  binary: release"
 	@echo "  node: $(NODE_BIN) ($$($(NODE_BIN) -v), arm64) → $(RES)/node  ($$(du -h "$(NODE_BIN)" | cut -f1))"
@@ -413,14 +413,14 @@ signing-setup:
 	@bash scripts/create-signing-cert.sh "$(SIGN_NAME)"
 	@echo "  next:  make reset-permissions && make bundle"
 
-## reset-permissions — clear Fovea's TCC grants
+## reset-permissions — clear Deiko's TCC grants
 ##
 ## Needed ONCE when moving off ad-hoc signing: the old grants are pinned to a
 ## cdhash that no longer exists, so they linger as entries that look granted and
 ## behave as denied. Also the way out if the permission state ever gets stuck.
 reset-permissions:
 	@for svc in Accessibility ScreenCapture Microphone SpeechRecognition; do \
-		tccutil reset $$svc com.fovea.capture >/dev/null 2>&1 \
+		tccutil reset $$svc com.deiko.capture >/dev/null 2>&1 \
 			&& echo "  reset $$svc" || echo "  reset $$svc (nothing to reset)"; \
 	done
 	@echo "now: open $(APP)  →  Grant permissions…"
@@ -440,15 +440,15 @@ record: $(DEBUG_BIN)
 ## Builds alignment first: the script imports the deictic normaliser from its
 ## dist/, and a fresh clone (or a `make clean`) has no dist at all.
 transcribe:
-	@npm run build -w @fovea/alignment --silent
+	@npm run build -w @deiko/alignment --silent
 	@node scripts/transcribe.mjs $(SESSION)
 
 ## brief — render a transcribed session into the brief a coding agent consumes
 ##
 ## Credentials are stripped and the renderer refuses to write if any survive —
-## Fovea reads the screen, and screens have secrets on them.
+## Deiko reads the screen, and screens have secrets on them.
 brief:
-	@npm run build -w @fovea/alignment --silent
+	@npm run build -w @deiko/alignment --silent
 	@node scripts/render-brief.mjs $(SESSION)
 
 ## summarize — three lines about the session, FOR YOUR SCREEN ONLY
@@ -469,8 +469,8 @@ ground:
 	@node scripts/ground-report.mjs $(SESSION)
 
 ## align — run the T0.2 gate harness over a transcribed session
-## Needs @fovea/alignment built: the script imports both the aligner and the
+## Needs @deiko/alignment built: the script imports both the aligner and the
 ## session loader from its dist/.
 align:
-	@npm run build -w @fovea/alignment --silent
+	@npm run build -w @deiko/alignment --silent
 	@node scripts/align-session.mjs $(SESSION)

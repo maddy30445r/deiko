@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Create the local code-signing certificate Fovea.app is signed with.
+# Create the local code-signing certificate Deiko.app is signed with.
 #
 # WHY THIS EXISTS
 #
@@ -15,7 +15,7 @@
 #
 # Signed with a stable certificate the requirement becomes:
 #
-#     designated => identifier "com.fovea.capture" and certificate leaf = H"c5d9…"
+#     designated => identifier "com.deiko.capture" and certificate leaf = H"c5d9…"
 #
 # — which does NOT change when the binary does. Verified by signing two
 # different binaries and diffing the requirement.
@@ -33,11 +33,11 @@
 # the Makefile matching on `find-identity` without `-v`.
 #
 # To undo everything this does:
-#     security delete-identity -c "Fovea Local" ~/Library/Keychains/login.keychain-db
+#     security delete-identity -c "Deiko Local" ~/Library/Keychains/login.keychain-db
 
 set -euo pipefail
 
-NAME="${1:-Fovea Local}"
+NAME="${1:-Deiko Local}"
 KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
 
 if security find-identity -p codesigning | grep -q "\"$NAME\""; then
@@ -83,14 +83,14 @@ if openssl pkcs12 -help 2>&1 | grep -q -- -legacy; then
 fi
 openssl pkcs12 -export $LEGACY \
     -inkey "$work/key.pem" -in "$work/cert.pem" \
-    -out "$work/bundle.p12" -passout pass:fovea -name "$NAME"
+    -out "$work/bundle.p12" -passout pass:deiko -name "$NAME"
 
 # -A lets any app use the key without a per-use authorisation dialog. The
 # alternative (-T /usr/bin/codesign) needs `set-key-partition-list`, which wants
 # your login password — friction, for a key whose only power is signing a local
 # debug build of this app.
 echo "  importing into the login keychain…"
-security import "$work/bundle.p12" -k "$KEYCHAIN" -P fovea -A >/dev/null
+security import "$work/bundle.p12" -k "$KEYCHAIN" -P deiko -A >/dev/null
 
 if security find-identity -p codesigning | grep -q "\"$NAME\""; then
     echo "✓ '$NAME' created"

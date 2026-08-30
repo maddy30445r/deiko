@@ -27,7 +27,7 @@ import { fileURLToPath } from "node:url";
 const root = join(fileURLToPath(new URL(".", import.meta.url)), "..", "..");
 const read = (p) => readFileSync(join(root, p), "utf8");
 
-const swift = read("apps/capture/Sources/FoveaHandoff/PipelineFailure.swift");
+const swift = read("apps/capture/Sources/DeikoHandoff/PipelineFailure.swift");
 const scripts = [
   "scripts/transcribe.mjs",
   "scripts/render-brief.mjs",
@@ -106,8 +106,8 @@ test("the Sarvam status prefix the taxonomy relies on is still constructed", () 
 
 test("the watchdog's timeout marker is what the Swift side looks for", () => {
   // Both halves are Swift, but they live in different targets and only meet
-  // through this string: BriefPipeline writes it, FoveaHandoff classifies it.
-  const pipeline = read("apps/capture/Sources/FoveaCapture/BriefPipeline.swift");
+  // through this string: BriefPipeline writes it, DeikoHandoff classifies it.
+  const pipeline = read("apps/capture/Sources/DeikoCapture/BriefPipeline.swift");
   assert.ok(
     pipeline.includes("timed out after"),
     "BriefPipeline must write the marker PipelineFailure matches on",
@@ -120,7 +120,7 @@ test("the two withhold reasons are the ones the review window branches on", () =
   // and "couldn't read them to check" by looking for these words. Reword the
   // renderer and a first-run user gets told a credential was on their screen.
   const renderer = read("scripts/render-brief.mjs");
-  const review = read("apps/capture/Sources/FoveaCapture/ReviewWindow.swift");
+  const review = read("apps/capture/Sources/DeikoCapture/ReviewWindow.swift");
 
   assert.match(renderer, /credential visible in this capture/);
   assert.match(renderer, /never OCR'd/);
@@ -137,7 +137,7 @@ test("the two withhold reasons are the ones the review window branches on", () =
 
 test("the degraded flag the review window reads is the one the renderer writes", () => {
   const renderer = read("scripts/render-brief.mjs");
-  const pipeline = read("apps/capture/Sources/FoveaCapture/BriefPipeline.swift");
+  const pipeline = read("apps/capture/Sources/DeikoCapture/BriefPipeline.swift");
 
   assert.match(renderer, /^\s*degraded,$/m, "render-brief must put `degraded` in the summary");
   assert.match(pipeline, /var degraded: Bool\?/, "BriefSummary must decode it, and optionally");

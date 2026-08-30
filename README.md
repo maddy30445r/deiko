@@ -1,6 +1,6 @@
-# Fovea
+# Deiko
 
-**Point at things on your screen and talk. Fovea turns that into a brief your
+**Point at things on your screen and talk. Deiko turns that into a brief your
 coding agent can act on** — with the screenshots and the exact text you pointed
 at, and your own words as the task.
 
@@ -12,7 +12,7 @@ double-tap Right Option        start
 hold Left Option + drag        lasso a region
 tap Right Option               stop
 
-                               → a small orb appears with what Fovea heard
+                               → a small orb appears with what Deiko heard
 drag the coin onto your        → your prompt is pasted into that live session
 Claude Code window               and submitted for you
 ```
@@ -36,23 +36,23 @@ builds are handed over as a DMG directly and installed by hand:
 
 ### By hand
 
-1. Open the DMG and drag **Fovea** to Applications.
+1. Open the DMG and drag **Deiko** to Applications.
 2. **Before launching**, clear the quarantine:
    ```sh
-   xattr -dr com.apple.quarantine /Applications/Fovea.app
+   xattr -dr com.apple.quarantine /Applications/Deiko.app
    ```
 3. Launch it. A first-run window walks you through four permissions, and
    you're done — the gesture above is all it takes from there.
 
 ### Why step 2, and why that way round
 
-Fovea is signed with a **self-signed certificate**, not an Apple Developer ID.
-Anything downloaded without one is quarantined, and macOS says *"Fovea can't be
+Deiko is signed with a **self-signed certificate**, not an Apple Developer ID.
+Anything downloaded without one is quarantined, and macOS says *"Deiko can't be
 opened because the developer cannot be verified."*
 
 The GUI route — **System Settings → Privacy & Security → Open Anyway** — does
 let the app start, and it is fine if you prefer clicking. But quarantine is set
-on **every file** in the download, and Fovea ships its own Node runtime inside
+on **every file** in the download, and Deiko ships its own Node runtime inside
 the bundle to transcribe your sessions. Clearing the app you launched does not
 obviously clear a nested binary the app later spawns, and the failure shows up
 much later as a session stuck at *"Transcribing…"*. `xattr -dr` clears the whole
@@ -76,7 +76,7 @@ session.
 | **Microphone** | records your narration while you point |
 | **Speech Recognition** | turns your words into text, on this Mac |
 
-**Screen Recording needs a relaunch** before it takes effect. Fovea offers you
+**Screen Recording needs a relaunch** before it takes effect. Deiko offers you
 the button when that moment arrives.
 
 If a permission is missing, the menu-bar mark wears an orange `!` — the hotkey
@@ -98,9 +98,9 @@ setting that makes them.
 
 Transcription picks the first of these that is available:
 
-1. **your own Sarvam API key** — your key, your bill, and Fovea's servers never
+1. **your own Sarvam API key** — your key, your bill, and Deiko's servers never
    see the audio. Part of Pro; a checkout using a `.env` is never gated.
-2. **Fovea's service**, which forwards the audio to a transcription provider and
+2. **Deiko's service**, which forwards the audio to a transcription provider and
    keeps nothing. Free installs get **30 minutes of it, once**; Pro gets five
    hours a month.
 3. **this Mac alone** — no upload at all, using Apple's on-device recogniser.
@@ -114,7 +114,7 @@ and nothing stops; the accuracy is just the accuracy Apple gives you.
 
 | | |
 |---|---|
-| **Free** | The whole app. 30 minutes of Fovea's transcription, once, then on-device forever. |
+| **Free** | The whole app. 30 minutes of Deiko's transcription, once, then on-device forever. |
 | **Pro — $4/mo or $40/yr** | Five hours of transcription a month, or bring your own Sarvam key and use none of ours. |
 
 A licence key is pasted into Settings. **There is no account** — no email, no
@@ -128,7 +128,7 @@ be dishonest to say otherwise.
 
 ## Using it
 
-**Talk while you point.** The narration *is* the task — Fovea deliberately
+**Talk while you point.** The narration *is* the task — Deiko deliberately
 does not write a summary of it for the agent, because you already said what you
 wanted out loud.
 
@@ -136,7 +136,7 @@ Pointing only counts while you are speaking. A cursor that comes to rest while
 you are silent is not recorded, which is what keeps a session from filling up
 with everything you happened to scroll past.
 
-When you stop, the orb appears with Fovea's reading of what it heard. Then:
+When you stop, the orb appears with Deiko's reading of what it heard. Then:
 
 - **drag the coin** onto the window running your agent — the app is brought
   forward, and your prompt is pasted in and submitted;
@@ -151,13 +151,13 @@ When you stop, the orb appears with Fovea's reading of what it heard. Then:
 
 ```sh
 make setup      # node deps
-make bundle     # build/Fovea.app
+make bundle     # build/Deiko.app
 make install    # …and put it in /Applications, restarted
-make dmg        # build/Fovea-<version>.dmg
+make dmg        # build/Deiko-<version>.dmg
 make test
 ```
 
-Use `make install` rather than copying by hand. `cp -R build/Fovea.app
+Use `make install` rather than copying by hand. `cp -R build/Deiko.app
 /Applications/` merges into the existing bundle instead of replacing it, and
 rewrites the app underneath Finder, which then caches whatever half-state it
 saw — a prohibited-sign or blank icon on an app that is running fine and
@@ -198,7 +198,7 @@ made without it silently falls back to on-device words, which is a quieter
 failure than a relay that is down. Confirm it landed before sharing the link:
 
 ```sh
-/Applications/Fovea.app/Contents/MacOS/fovea-capture diagnostics | grep relay
+/Applications/Deiko.app/Contents/MacOS/deiko-capture diagnostics | grep relay
 ```
 
 That must print the URL, not `none — this build has no relay`.
@@ -225,7 +225,7 @@ because the app keeps the same signing identity. Anyone who pasted their own
 Sarvam key gets one login-password prompt on their first session after updating
 — see below.
 
-Fovea checks for a newer release once at launch and, if there is one, grows an
+Deiko checks for a newer release once at launch and, if there is one, grows an
 **"Update to …"** item in its menu. It never installs anything by itself.
 
 ### The one rough edge in updates
@@ -234,7 +234,7 @@ macOS guards a keychain item with an ACL pinned to one exact binary, and every
 update is a new binary, so the first read after an update asks for the login
 password. "Always Allow" quiets it until the next update.
 
-Fovea keeps this as small as it can: everything that only needs to know
+Deiko keeps this as small as it can: everything that only needs to know
 *whether* a key is set uses an attributes-only query that never prompts, and
 the relay device token was moved out of the keychain entirely because it is an
 identifier rather than a secret. What remains is the API keys themselves, so

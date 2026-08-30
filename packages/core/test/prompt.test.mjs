@@ -180,7 +180,7 @@ test("secrets are redacted before they can reach the prompt", () => {
   assert.doesNotMatch(text, /wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY/);
 });
 
-test("nothing in the prompt names Fovea or its internals", () => {
+test("nothing in the prompt names Deiko or its internals", () => {
   const { text } = buildPrompt({
     narration: "fix this",
     referents: [
@@ -188,7 +188,7 @@ test("nothing in the prompt names Fovea or its internals", () => {
       { ...heard, text: { ax: ["Submit"], ocr: [] } },
     ],
   });
-  assert.doesNotMatch(text, /fovea|referent|aligner|brief/i);
+  assert.doesNotMatch(text, /deiko|referent|aligner|brief/i);
 });
 
 // ── evidence: the guard's actual subject ────────────────────────────────────
@@ -218,10 +218,10 @@ test("evidence carries a screenshot's bound quote, which the narration may not c
 test("evidence carries no crop path, even though the prompt does", () => {
   const { text, evidence } = buildPrompt({
     narration: "fix this",
-    referents: [{ ...bare, cropPath: "/Users/developer/Documents/Fovea/20260805-141122/crops/h01-r002.png" }],
+    referents: [{ ...bare, cropPath: "/Users/developer/Documents/Deiko/20260805-141122/crops/h01-r002.png" }],
   });
   assert.match(text, /h01-r002\.png/);
-  assert.doesNotMatch(evidence, /crops|h01-r002|Documents\/Fovea/);
+  assert.doesNotMatch(evidence, /crops|h01-r002|Documents\/Deiko/);
 });
 
 // Regression: a real-shaped absolute path used to trip assertNoSecrets's
@@ -234,7 +234,7 @@ test("assertNoSecrets does not throw on a prompt carrying a real-shaped absolute
   const { evidence } = buildPrompt({
     narration: "fix this",
     referents: [
-      { ...bare, cropPath: "/Users/developer/Documents/Fovea/20260805-141122/crops/h01-r002.png" },
+      { ...bare, cropPath: "/Users/developer/Documents/Deiko/20260805-141122/crops/h01-r002.png" },
       { ...heard, text: { ax: ["Submit"], ocr: [] } },
     ],
   });
@@ -307,7 +307,7 @@ test("attached mode carries no crop paths at all", () => {
     narration: "fix this",
     attached: true,
     referents: [
-      { ...bare, cropPath: "/Users/dev/Documents/Fovea/s/crops/h01-r002.png", said: "fix this" },
+      { ...bare, cropPath: "/Users/dev/Documents/Deiko/s/crops/h01-r002.png", said: "fix this" },
     ],
   });
   assert.doesNotMatch(text, /h01-r002|\/Users\/|crops/);
@@ -343,7 +343,7 @@ test("attached mode still numbers a screenshot with no bound speech", () => {
   assert.match(text, /2\. while I said "the sidebar"/);
 });
 
-// The two variants differ only in how Fovea words its own screenshot section,
+// The two variants differ only in how Deiko words its own screenshot section,
 // so the captured content the guard inspects must be identical. If this ever
 // fails, one variant is carrying screen content the other is not, and the
 // single-assertion assumption in render-brief.mjs no longer holds.

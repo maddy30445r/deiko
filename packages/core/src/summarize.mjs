@@ -2,13 +2,13 @@
 /**
  * Three lines saying what a session was about — FOR THE DEVELOPER'S SCREEN ONLY.
  *
- *   node scripts/summarize.mjs ~/Documents/Fovea/<id>
+ *   node scripts/summarize.mjs ~/Documents/Deiko/<id>
  *
  * The review window shows this above the narration so you can tell at a glance
  * whether the thing you are about to send is the thing you meant to record. It
  * is a confidence check, not a plan.
  *
- * IT MUST NEVER REACH THE CODING AGENT. Fovea's whole posture is that the
+ * IT MUST NEVER REACH THE CODING AGENT. Deiko's whole posture is that the
  * renderer emits evidence and the agent states its own reading back — the one
  * hand-written brief that phrased a task as imperatives presumed work that
  * already existed. So this is written to `review-summary.txt`, a file
@@ -57,11 +57,11 @@ async function main() {
     process.exit(2);
   }
 
-  // Same order as `transcribe.mjs`: the developer's own key wins, Fovea's
+  // Same order as `transcribe.mjs`: the developer's own key wins, Deiko's
   // relay is the default, and neither is an error — a session without a
   // summary is a session that works.
   const apiKey = process.env.GROQ_API_KEY;
-  const relay = process.env.FOVEA_RELAY_URL;
+  const relay = process.env.DEIKO_RELAY_URL;
   if (!apiKey && !relay) {
     console.error("· no summary service configured — skipping the summary");
     return;
@@ -72,8 +72,8 @@ async function main() {
   const headers = apiKey
     ? { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }
     : {
-        ...(process.env.FOVEA_RELAY_TOKEN
-          ? { Authorization: `Bearer ${process.env.FOVEA_RELAY_TOKEN}` }
+        ...(process.env.DEIKO_RELAY_TOKEN
+          ? { Authorization: `Bearer ${process.env.DEIKO_RELAY_TOKEN}` }
           : {}),
         "Content-Type": "application/json",
       };
@@ -129,7 +129,7 @@ async function main() {
       signal: AbortSignal.timeout(15_000),
     });
     if (!response.ok) {
-      console.error(`· ${apiKey ? "groq" : "fovea relay"} ${response.status} — skipping the summary`);
+      console.error(`· ${apiKey ? "groq" : "deiko relay"} ${response.status} — skipping the summary`);
       return;
     }
     text = (await response.json())?.choices?.[0]?.message?.content?.trim();

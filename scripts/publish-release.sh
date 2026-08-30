@@ -2,7 +2,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Put a build on the site, under /download.
 #
-#   ./scripts/publish-release.sh build/Fovea-0.3.1.dmg 0.3.1
+#   ./scripts/publish-release.sh build/Deiko-0.3.1.dmg 0.3.1
 #
 # Uploads the DMG and writes the `version.json` beside it that the app reads at
 # launch to find out whether it is out of date.
@@ -34,14 +34,14 @@ if ! ACCOUNT=$(aws sts get-caller-identity --query Account --output text 2>/dev/
 fi
 
 # Same derivation as deploy-site.sh — one bucket, one site.
-BUCKET="${FOVEA_SITE_BUCKET:-fovea-site-$ACCOUNT}"
+BUCKET="${DEIKO_SITE_BUCKET:-deiko-site-$ACCOUNT}"
 aws s3api head-bucket --bucket "$BUCKET" >/dev/null 2>&1 || {
   echo "✗ bucket $BUCKET does not exist — run scripts/deploy-site.sh first"; exit 1; }
 
 DIST_ID=$(aws cloudfront list-distributions \
-  --query "DistributionList.Items[?Comment=='fovea-site'].Id | [0]" --output text 2>/dev/null || echo "None")
+  --query "DistributionList.Items[?Comment=='deiko-site'].Id | [0]" --output text 2>/dev/null || echo "None")
 [ "$DIST_ID" != "None" ] && [ -n "$DIST_ID" ] || {
-  echo "✗ no 'fovea-site' CloudFront distribution — run scripts/deploy-site.sh first"; exit 1; }
+  echo "✗ no 'deiko-site' CloudFront distribution — run scripts/deploy-site.sh first"; exit 1; }
 
 CF_DOMAIN=$(aws cloudfront get-distribution --id "$DIST_ID" --query Distribution.DomainName --output text)
 
@@ -81,7 +81,7 @@ aws s3 cp "$TMP" "s3://$BUCKET/download/version.json" \
 # that did get served looked its release up on a domain that does not exist.
 # Publishing it here, from the script that already knows the domain and the
 # version it is publishing, is what keeps the two in step.
-sed "s|https://fovea.example|$SITE_ORIGIN|g" scripts/install.sh > "$TMP.sh"
+sed "s|https://deiko.example|$SITE_ORIGIN|g" scripts/install.sh > "$TMP.sh"
 aws s3 cp "$TMP.sh" "s3://$BUCKET/install.sh" \
   --content-type "text/x-shellscript" \
   --cache-control "public,max-age=300" >/dev/null

@@ -72,7 +72,7 @@ export function audioSeconds(byteLength) {
 
 /// Which kind of caller a bearer token is.
 ///
-/// THE PREFIX IS LOAD-BEARING, because a Lemon Squeezy licence key and a Fovea
+/// THE PREFIX IS LOAD-BEARING, because a Lemon Squeezy licence key and a Deiko
 /// device token are both v4-shaped UUIDs and cannot be told apart by looking.
 /// An earlier design said "the relay tells them apart by shape"; it would have
 /// sent every free user's token to Lemon Squeezy for validation, and every

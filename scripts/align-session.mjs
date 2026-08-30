@@ -18,7 +18,7 @@ import { loadEvents, loadFile as load } from "./lib/session-io.mjs";
 
 // Pairing candidate+probe events, recovering a lasso's drag span, ordering them
 // chronologically, and adapting the result for the aligner all live in
-// `@fovea/alignment`'s `referents/` — the adaptation used to be a second copy
+// `@deiko/alignment`'s `referents/` — the adaptation used to be a second copy
 // here, and the brief renderer would have made it a third.
 
 // ── Main ────────────────────────────────────────────────────────────────────

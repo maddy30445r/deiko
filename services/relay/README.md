@@ -1,4 +1,4 @@
-# The Fovea relay
+# The Deiko relay
 
 So that a new user transcribes without holding an account anywhere. The app
 posts narration audio here; this forwards it to Sarvam with **your** key and
@@ -11,14 +11,14 @@ are live infrastructure and yours to run.
 
 ```sh
 SARVAM_API_KEY=… GROQ_API_KEY=… node services/relay/server.mjs
-# → fovea relay on :8787
+# → deiko relay on :8787
 ```
 
 Point the app at it — this overrides the built-in default, so nothing needs
 rebuilding:
 
 ```sh
-FOVEA_RELAY_URL=http://localhost:8787 open build/Fovea.app
+DEIKO_RELAY_URL=http://localhost:8787 open build/Deiko.app
 ```
 
 Then record a session **with no Sarvam key in Settings** and confirm it
@@ -116,7 +116,7 @@ configuration, stamped into the bundle's `Info.plist`:
 make install RELAY_URL=https://<id>.lambda-url.<region>.on.aws
 ```
 
-`Credentials.relayURL` reads the `FoveaRelayURL` key back out, and it is empty
+`Credentials.relayURL` reads the `DeikoRelayURL` key back out, and it is empty
 until a build stamps it — deliberately, because a relay that fails on every
 session is worse than no relay: the on-device fallback is silent and the failure
 is not. This used to say "set `defaultRelayURL` in `Credentials.swift`", which
@@ -251,7 +251,7 @@ string in both places, by design.
 
 Without a relay: narration audio goes to Sarvam, and to nobody else.
 
-With one: narration audio goes to **Fovea's server**, which forwards it and
+With one: narration audio goes to **Deiko's server**, which forwards it and
 keeps nothing. That is a materially different claim, and the app must say so
 where people read it before they start — Settings says it next to the Sarvam
 field that opts out of it, and a user with their own key never touches this

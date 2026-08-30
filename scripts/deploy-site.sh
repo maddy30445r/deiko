@@ -17,7 +17,7 @@
 set -euo pipefail
 
 SITE_DIR="${1:-site}"
-BUCKET="${FOVEA_SITE_BUCKET:-}"
+BUCKET="${DEIKO_SITE_BUCKET:-}"
 say() { printf '  %s\n' "$*"; }
 
 command -v aws >/dev/null || { echo "✗ aws CLI not found"; exit 1; }
@@ -30,8 +30,8 @@ if ! ACCOUNT=$(aws sts get-caller-identity --query Account --output text 2>/dev/
 fi
 
 # S3 bucket names are globally unique across every AWS customer, so the account
-# id is appended rather than hoping "fovea-site" is free.
-BUCKET="${BUCKET:-fovea-site-$ACCOUNT}"
+# id is appended rather than hoping "deiko-site" is free.
+BUCKET="${BUCKET:-deiko-site-$ACCOUNT}"
 say "account $ACCOUNT · bucket $BUCKET"
 
 # ── The bucket ──────────────────────────────────────────────────────────────
@@ -56,12 +56,12 @@ fi
 # ── The distribution ────────────────────────────────────────────────────────
 
 DIST_ID=$(aws cloudfront list-distributions \
-  --query "DistributionList.Items[?Comment=='fovea-site'].Id | [0]" --output text 2>/dev/null || echo "None")
+  --query "DistributionList.Items[?Comment=='deiko-site'].Id | [0]" --output text 2>/dev/null || echo "None")
 
 if [ "$DIST_ID" = "None" ] || [ -z "$DIST_ID" ]; then
   say "creating origin access control"
   OAC_ID=$(aws cloudfront create-origin-access-control --origin-access-control-config \
-    "Name=fovea-site-oac,Description=Fovea landing site,SigningProtocol=sigv4,SigningBehavior=always,OriginAccessControlOriginType=s3" \
+    "Name=deiko-site-oac,Description=Deiko landing site,SigningProtocol=sigv4,SigningBehavior=always,OriginAccessControlOriginType=s3" \
     --query OriginAccessControl.Id --output text)
 
   say "creating distribution (this takes a few minutes to propagate)"
@@ -69,8 +69,8 @@ if [ "$DIST_ID" = "None" ] || [ -z "$DIST_ID" ]; then
   # number we chose.
   DIST_JSON=$(cat <<JSON
 {
-  "CallerReference": "fovea-site-$(date +%s)",
-  "Comment": "fovea-site",
+  "CallerReference": "deiko-site-$(date +%s)",
+  "Comment": "deiko-site",
   "Enabled": true,
   "DefaultRootObject": "index.html",
   "Origins": {"Quantity": 1, "Items": [{

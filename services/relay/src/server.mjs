@@ -7,7 +7,7 @@
 // `relay.mjs`, so what you test here is what runs there.
 //
 //   SARVAM_API_KEY=… GROQ_API_KEY=… node services/relay/server.mjs
-//   FOVEA_RELAY_URL=http://localhost:8787 open build/Fovea.app
+//   DEIKO_RELAY_URL=http://localhost:8787 open build/Deiko.app
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { createServer } from "node:http";
@@ -72,7 +72,7 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`fovea relay on :${PORT}`);
+  console.log(`deiko relay on :${PORT}`);
   if (!process.env.SARVAM_API_KEY) console.log("  ⚠ SARVAM_API_KEY unset — /v1/transcribe will 503");
   if (!process.env.GROQ_API_KEY) console.log("  ⚠ GROQ_API_KEY unset — /v1/summarize will 503");
 });

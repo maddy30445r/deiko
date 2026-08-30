@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# Spend and error guardrails for the Fovea AWS account.
+# Spend and error guardrails for the Deiko AWS account.
 #
 #   ./scripts/aws-guardrails.sh you@example.com
 #
@@ -20,6 +20,10 @@ set -euo pipefail
 
 EMAIL="${1:?usage: aws-guardrails.sh <alert-email>}"
 REGION="${AWS_REGION:-ap-south-1}"           # where fovea-relay lives
+# `fovea-*` here is historical - see the note in services/relay/deploy-aws.sh.
+# These name live AWS resources. The SNS topic in particular carries a
+# confirmed email subscription, and a rename would silently discard it and
+# leave the alarms firing into nothing.
 FUNCTION="${FOVEA_LAMBDA_NAME:-fovea-relay}"
 # ₹500/month is the cap the owner chose. The budget is denominated in USD
 # anyway because THIS ACCOUNT BILLS IN USD (checked via Cost Explorer) — an
@@ -89,7 +93,7 @@ say "SNS topic fovea-alerts (confirm the subscription email if you have not)"
 # put-metric-alarm is create-or-update by name, so this is naturally idempotent.
 aws cloudwatch put-metric-alarm --region "$REGION" \
   --alarm-name "$FUNCTION-errors" \
-  --alarm-description "The Fovea relay is failing requests" \
+  --alarm-description "The Deiko relay is failing requests" \
   --namespace AWS/Lambda --metric-name Errors \
   --dimensions "Name=FunctionName,Value=$FUNCTION" \
   --statistic Sum --period 300 --evaluation-periods 1 \

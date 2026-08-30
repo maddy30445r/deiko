@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>com.deiko.capture</string>
+	<key>CFBundleName</key>
+	<string>Deiko Capture</string>
+	<!--
+	  Version and build are STAMPED BY `make bundle` from the `VERSION` file at
+	  the repo root. The placeholders below are what a raw SwiftPM build sees;
+	  anything shipped carries the real thing, and `DeikoVersion` reads it back
+	  out of the bundle so there is exactly one version in the product.
+	-->
+	<key>CFBundleShortVersionString</key>
+	<string>0.0.0-dev</string>
+	<key>CFBundleVersion</key>
+	<string>0</string>
+
+	<!--
+	  Where Deiko's transcription relay lives, so a user needs no API key.
+	  DEPLOYMENT CONFIG, NOT SOURCE: stamped by `make bundle RELAY_URL=…`.
+	  Empty means there is no relay and sessions fall back to on-device words —
+	  which is correct for a local build and for any release made before the
+	  service is deployed.
+	-->
+	<key>DeikoRelayURL</key>
+	<string></string>
+
+	<!--
+	  Where the site is, stamped by `make bundle SITE_URL=…` for the same reason
+	  as the relay above. The app asks it once at launch whether there is a newer
+	  release. Empty means no site yet, and therefore no update check — the local
+	  build's normal state.
+	-->
+	<key>DeikoSiteURL</key>
+	<string></string>
+
+	<key>CFBundleIconFile</key>
+	<string>Deiko</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>© 2026 Deiko</string>
+
+	<!--
+	  TCC usage descriptions. A SwiftPM executable has no bundle, so this plist
+	  is linked into the binary as a __TEXT,__info_plist section (see
+	  Package.swift). Without it, requesting Speech Recognition does not fail
+	  gracefully — the process is killed with SIGABRT.
+
+	  These strings are shown in the permission prompts, so they say exactly
+	  what the capability is used for. PRD §10 makes that a product commitment,
+	  not just good manners.
+	-->
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Deiko transcribes your narration on-device to work out which moment you were pointing at. Audio never leaves your Mac for this step.</string>
+
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Deiko records your narration from when you start a session until you stop it. A red bar stays on screen the whole time. The recording is deleted as soon as your brief is made.</string>
+</dict>
+</plist>

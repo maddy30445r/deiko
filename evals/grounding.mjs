@@ -2,7 +2,7 @@
 /**
  * Score how well a session GROUNDED — and check M1's done-when.
  *
- *   node scripts/ground-report.mjs ~/Documents/Fovea/<id>
+ *   node scripts/ground-report.mjs ~/Documents/Deiko/<id>
  *
  * `align-session.mjs` scores the other half: which utterance bound to which
  * referent. This scores the half underneath it — whether the referent knows
@@ -22,7 +22,7 @@ import { loadEvents } from "./lib/session-io.mjs";
 
 /**
  * Mirrors `groundsContent` in
- * apps/capture/Sources/FoveaGrounding/Grounding.swift — deliberately, and it is
+ * apps/capture/Sources/DeikoGrounding/Grounding.swift — deliberately, and it is
  * the one duplicated rule in this repo. Keeping it here means the report can
  * grade sessions recorded BEFORE the Swift fix, which is the whole point of
  * having a before-and-after number. If you change the Swift, change this.

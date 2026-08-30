@@ -103,7 +103,7 @@ const UPLOAD_TIMEOUT_MS = 60_000;
  *
  * Splitting long audio at silence and uploading the pieces concurrently is the
  * same problem whoever is on the other end, so `uploadOne` is the only thing
- * that differs between talking to Sarvam directly and talking to Fovea's relay.
+ * that differs between talking to Sarvam directly and talking to Deiko's relay.
  *
  * @returns {Transcriber}
  */
@@ -213,17 +213,17 @@ function sarvamTranscriber(apiKey) {
 }
 
 /**
- * Fovea's relay: the default, so a new user transcribes without holding an
+ * Deiko's relay: the default, so a new user transcribes without holding an
  * account anywhere.
  *
- * The audio goes to Fovea's server, which forwards it and keeps nothing. That
+ * The audio goes to Deiko's server, which forwards it and keeps nothing. That
  * is a materially different promise from "only to Sarvam", and the app says so
  * where people can read it before they start. Anyone who would rather not is
  * one Settings field away from their own key, which skips this entirely.
  */
 function relayTranscriber(endpoint, token) {
   const url = `${endpoint.replace(/\/+$/, "")}/v1/transcribe`;
-  return chunkedTranscriber("fovea", async (pcm, language) => {
+  return chunkedTranscriber("deiko", async (pcm, language) => {
     const response = await fetch(url, {
       method: "POST",
       headers: token ? { authorization: `Bearer ${token}` } : {},
@@ -233,12 +233,12 @@ function relayTranscriber(endpoint, token) {
 
     const bodyText = await response.text();
     if (!response.ok) {
-      throw new Error(`Fovea relay ${response.status}: ${bodyText.slice(0, 400)}`);
+      throw new Error(`Deiko relay ${response.status}: ${bodyText.slice(0, 400)}`);
     }
     try {
       return { text: extractText(JSON.parse(bodyText)) };
     } catch {
-      throw new Error(`Fovea relay returned non-JSON: ${bodyText.slice(0, 400)}`);
+      throw new Error(`Deiko relay returned non-JSON: ${bodyText.slice(0, 400)}`);
     }
   });
 }
@@ -259,13 +259,13 @@ function onDeviceOnlyTranscriber() {
  * Who transcribes, most specific first.
  *
  * 1. the developer's own Sarvam key — an explicit choice, so it wins;
- * 2. Fovea's relay — the default, and the reason a new install needs no key;
+ * 2. Deiko's relay — the default, and the reason a new install needs no key;
  * 3. on-device only — offline, or nothing configured. Degraded, not broken.
  */
 function selectTranscriber() {
   if (process.env.SARVAM_API_KEY) return sarvamTranscriber(process.env.SARVAM_API_KEY);
-  if (process.env.FOVEA_RELAY_URL) {
-    return relayTranscriber(process.env.FOVEA_RELAY_URL, process.env.FOVEA_RELAY_TOKEN);
+  if (process.env.DEIKO_RELAY_URL) {
+    return relayTranscriber(process.env.DEIKO_RELAY_URL, process.env.DEIKO_RELAY_TOKEN);
   }
   return onDeviceOnlyTranscriber();
 }
@@ -491,17 +491,17 @@ function spreadEvenly(text, audioDurationMs) {
  */
 async function appleTimings(wavPath, { locale = "en-IN", timeoutMs } = {}) {
   // TOLD, not derived. A shipped app runs this script from
-  // `Fovea.app/Contents/Resources/scripts/`, where `REPO_ROOT` is `Resources`
-  // and `Resources/build/Fovea.app` does not exist — so the guess below threw
+  // `Deiko.app/Contents/Resources/scripts/`, where `REPO_ROOT` is `Resources`
+  // and `Resources/build/Deiko.app` does not exist — so the guess below threw
   // on every session of every install that was not a developer's checkout, and
   // the whole product came apart at the first stage. The app knows exactly
   // where it is; it passes that in.
-  const app = process.env.FOVEA_APP_PATH || resolve(REPO_ROOT, "build/Fovea.app");
+  const app = process.env.DEIKO_APP_PATH || resolve(REPO_ROOT, "build/Deiko.app");
   if (!existsSync(app)) {
     throw new Error(
-      process.env.FOVEA_APP_PATH
-        ? `FOVEA_APP_PATH points at ${app}, which is not there`
-        : "build/Fovea.app is missing — run `make bundle`",
+      process.env.DEIKO_APP_PATH
+        ? `DEIKO_APP_PATH points at ${app}, which is not there`
+        : "build/Deiko.app is missing — run `make bundle`",
     );
   }
 
@@ -525,7 +525,7 @@ async function appleTimings(wavPath, { locale = "en-IN", timeoutMs } = {}) {
   // Note the ORDER: this has to come before the `rmSync` that follows, which
   // exists to clear a stale file from a previous run and would cheerfully
   // delete a freshly precomputed one.
-  if (process.env.FOVEA_TIMINGS_READY === "1" && existsSync(out)) {
+  if (process.env.DEIKO_TIMINGS_READY === "1" && existsSync(out)) {
     return await timed("apple:precomputed", async () => {
       const result = JSON.parse(readFileSync(out, "utf8"));
       rmSync(out);
@@ -764,7 +764,7 @@ async function main() {
     // including a Sarvam transcript that had arrived perfectly. Measured on
     // session 20260801-183429: 9.8s of quiet speech (RMS -39 dBFS, recorded
     // with the system input at 27%). Apple's en-IN recogniser returned "No
-    // speech detected"; Sarvam returned the full Hinglish sentence. Fovea threw
+    // speech detected"; Sarvam returned the full Hinglish sentence. Deiko threw
     // it away and reported "no words transcribed".
     //
     // That made a recogniser STATE.md already documents as hearing ~25% of

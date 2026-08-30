@@ -2,7 +2,7 @@
 // THE RELAY, WITHOUT A TRANSPORT
 //
 // So that a new user transcribes without holding an account anywhere. The app
-// posts narration audio; this forwards it to Sarvam with Fovea's key and
+// posts narration audio; this forwards it to Sarvam with Deiko's key and
 // returns the text. Same for the orb's summary, via Groq.
 //
 // Deliberately knows nothing about `node:http` or Lambda. One function in
@@ -60,7 +60,7 @@ export const MAX_SUMMARY_BYTES = 64 * 1024;
 // These MIRROR `scripts/summarize.mjs` — the same model, the same temperature,
 // the same 200-token answer. They are pinned HERE as well because the client
 // choosing them is the client choosing our bill: this route forwards to Groq
-// with Fovea's key, so an arbitrary caller with any bearer string could
+// with Deiko's key, so an arbitrary caller with any bearer string could
 // otherwise name an expensive model and a large completion and bill it to us.
 // The caller's `messages` still travel (the system prompt lives on the client,
 // where the product's voice belongs); nothing else the caller sends does.
@@ -260,7 +260,7 @@ export async function handle({ method, path, token, contentType, body }) {
 
     // THE BODY IS REBUILT, NEVER FORWARDED.
     //
-    // This route spends Fovea's Groq key, and it will accept any bearer string
+    // This route spends Deiko's Groq key, and it will accept any bearer string
     // — that is what makes it usable by somebody whose trial has run out, and
     // it is also what made forwarding the caller's JSON verbatim a mistake: it
     // let anyone who found the URL name their own model and completion budget
@@ -284,7 +284,7 @@ export async function handle({ method, path, token, contentType, body }) {
 
     // METERED AGAINST THE DAY ONLY. The promise this route was written for
     // still holds — somebody who has used up their trial gets the sentence
-    // that tells them what Fovea heard — and their own counter is untouched,
+    // that tells them what Deiko heard — and their own counter is untouched,
     // so a summary never spends the audio allowance it is not made of. What a
     // flood cannot do any more is stay invisible to the one number that bounds
     // the whole service's day.
