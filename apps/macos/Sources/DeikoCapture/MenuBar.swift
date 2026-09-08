@@ -406,11 +406,26 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
             blocked
             ? "Deiko — needs permission" : (recording ? "Deiko — capturing" : "Deiko — ready")
         button.image = image
-        // The template above is black; the tint is applied here, where AppKit
-        // resolves it against the menu bar's own appearance. Nil = follow the
-        // bar, which is what "ready" should do.
-        button.contentTintColor =
-            recording ? DeikoStyle.recordRedNS : (blocked ? DeikoStyle.needsYouNS : nil)
+        // NIL FOR EVERYTHING EXCEPT RECORDING, and the comment this replaces was
+        // wrong about why.
+        //
+        // It said AppKit resolves the tint "against the menu bar's own
+        // appearance". It does not — it resolves against the BUTTON's
+        // effectiveAppearance, which follows the system Light/Dark setting,
+        // while how dark the menu bar actually renders follows the desktop
+        // content behind it. In Light Mode with a dark window under the bar the
+        // two disagree, and `needsYouNS` resolved to its light variant:
+        // rgb(201,52,0), a brick red at 4.0:1 against a dark bar. Reported as
+        // "it looks blackish, and I only see it on the desktop".
+        //
+        // A template image with no tint has no such gap — AppKit draws it black
+        // on a light bar and white on a dark one, always legible. The blocked
+        // state loses nothing by dropping the orange, because the `!` hanging
+        // off the ring is the signal; this file already says so two paragraphs
+        // up ("Each state is a SHAPE change, not a tint … Colour is never the
+        // only signal"). Recording keeps its red, because red MEANS recording
+        // here — but a fixed bright one that reads on any bar.
+        button.contentTintColor = recording ? DeikoStyle.menuBarRecordingNS : nil
         // Read aloud by VoiceOver, and shown on hover — the only place the
         // reason is available without opening the menu.
         button.toolTip = blocked ? "Deiko needs permission to work — click to grant" : nil

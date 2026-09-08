@@ -82,6 +82,20 @@ enum DeikoStyle {
         dark: NSColor(srgbRed: 255 / 255, green: 69 / 255, blue: 58 / 255, alpha: 1)
     )
 
+    /// The menu bar's recording tint — deliberately NOT dynamic, for the same
+    /// class of reason as `inkNS` and the pill below.
+    ///
+    /// THE MENU BAR IS NOT THE APP'S APPEARANCE. How dark it renders follows
+    /// the desktop content behind it, while a dynamic NSColor resolves against
+    /// the app's own effectiveAppearance — i.e. the system Light/Dark setting.
+    /// In Light Mode with a dark window behind the bar, the two disagree: the
+    /// bar is dark and the colour resolves to its LIGHT variant. Measured on
+    /// `needsYouNS`, that is rgb(201,52,0) at 4.0:1 against a dark bar, versus
+    /// 10.2:1 for the dark variant — which is exactly the "it looks blackish
+    /// and disappears when another app is open" that was reported. A fixed
+    /// bright value cannot fall into that gap.
+    static let menuBarRecordingNS = NSColor(srgbRed: 255 / 255, green: 59 / 255, blue: 48 / 255, alpha: 1)
+
     /// The capturing pill's body — deliberately NOT dynamic and NOT
     /// translucent: the one opaque surface Deiko draws, identical over any
     /// wallpaper, unchanged by Reduce Transparency because it was never
