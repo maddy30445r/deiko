@@ -3,6 +3,7 @@ import AVFoundation
 import Foundation
 import Speech
 import DeikoGesture
+import DeikoHandoff
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE MENU-BAR SHELL
@@ -106,26 +107,61 @@ enum Permission: String, CaseIterable {
         }
     }
 
-    /// Ask first, then send them to Settings if asking wasn't enough.
+    /// Has this install ever requested this permission?
     ///
-    /// Asking is what makes the app appear in the privacy pane at all, so this
-    /// must happen even when we expect the prompt to be suppressed — otherwise
-    /// the Settings link lands the user on a list Deiko isn't in, with nothing
-    /// to switch on. That was the reported bug: Deiko was absent from the
-    /// Microphone pane entirely because nothing had ever requested it.
+    /// Microphone and Speech carry it natively — `.notDetermined` means the
+    /// dialog has never been shown, and anything else means it has. The other
+    /// two have no such state (they are a bare true/false), so it is
+    /// remembered here. Written at the moment of the request, not after the
+    /// answer, because what it records is that the DIALOG has been seen — the
+    /// answer is `isGranted`'s job.
+    var hasBeenAsked: Bool {
+        switch self {
+        case .microphone:
+            return AVCaptureDevice.authorizationStatus(for: .audio) != .notDetermined
+        case .speech:
+            return SFSpeechRecognizer.authorizationStatus() != .notDetermined
+        case .accessibility, .screenRecording:
+            return UserDefaults.standard.bool(forKey: "DEIKO_ASKED_\(rawValue)")
+        }
+    }
+
+    private func rememberAsked() {
+        switch self {
+        case .microphone, .speech:
+            break  // the system remembers for these
+        case .accessibility, .screenRecording:
+            UserDefaults.standard.set(true, forKey: "DEIKO_ASKED_\(rawValue)")
+        }
+    }
+
+    /// ONE ACTION PER CLICK — see `PermissionStep` for the whole reasoning.
     ///
-    /// On `Permission` rather than on `MenuBar` because the welcome window asks
-    /// the same question, and two implementations of "how do we request this"
-    /// is two places for that hard-won detail to be forgotten.
+    /// This used to request AND open Settings on every call, which for
+    /// Accessibility and Screen Recording meant a system alert with a Settings
+    /// window opening behind it, before the user had answered either. The alert
+    /// is the system's and does not close when the permission is granted
+    /// elsewhere, so it outlived the grant and only quitting Deiko cleared it.
+    ///
+    /// Asking is still what makes the app appear in the privacy pane at all —
+    /// Deiko was once absent from the Microphone list because nothing had ever
+    /// requested it — so the first click always requests. It is the SECOND
+    /// click, on a permission whose dialog has been seen and will not return,
+    /// that goes to Settings.
     @MainActor
     func ask() async {
-        let granted = await withCheckedContinuation { continuation in
-            request { continuation.resume(returning: $0) }
+        switch PermissionStep.next(granted: isGranted, asked: hasBeenAsked) {
+        case .nothing:
+            return
+        case .request:
+            rememberAsked()
+            _ = await withCheckedContinuation { continuation in
+                request { continuation.resume(returning: $0) }
+            }
+        case .openSettings:
+            guard let url = settingsURL else { return }
+            NSWorkspace.shared.open(url)
         }
-        guard !granted, let url = settingsURL else { return }
-        // Either already denied, or granting needs Settings anyway
-        // (Accessibility and Screen Recording always do).
-        NSWorkspace.shared.open(url)
     }
 }
 
@@ -181,6 +217,10 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Notices a permission granted or revoked in System Settings while Deiko
     /// is running. Lives for the life of the app, unlike `menuClock`.
     private var permissionPoll: Timer?
+    /// The interval `permissionPoll` is currently running at, so `refresh()`
+    /// can rebuild the timer only when the answer actually changes rather than
+    /// on every tick.
+    private var pollInterval: TimeInterval = 0
 
     init(recorder: Recorder) {
         self.recorder = recorder
@@ -249,15 +289,8 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Without a poll the only things that re-read TCC are a recorder state
         // change and opening the menu, so revoking Accessibility left the icon
         // reading "ready" indefinitely, and re-granting it did nothing until
-        // the app was quit. Thirty seconds is far cheaper than it sounds —
-        // `AXIsProcessTrusted` and friends are local checks — and `refresh()`
-        // is idempotent, so this is the same work the menu already does on
-        // every open, just no longer waiting to be asked.
-        let poll = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refresh() }
-        }
-        RunLoop.main.add(poll, forMode: .common)
-        permissionPoll = poll
+        // the app was quit.
+        schedulePermissionPoll()
 
         // If the last run died, say so once — with the button that turns it
         // into a bug report. A menu-bar app with no window and no Dock icon
@@ -301,6 +334,36 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Task { try? await License.refresh() }
     }
 
+    /// How often TCC is re-read, and it is not one number.
+    ///
+    /// THIRTY SECONDS IS THE WRONG ANSWER WHILE SOMETHING IS MISSING. That is
+    /// exactly the moment the user is in System Settings flipping a switch and
+    /// then looking back at Deiko to see whether it noticed — and half a minute
+    /// of no change reads as "it didn't work, I'll restart it", which is what
+    /// was reported. Two seconds while blocked makes the grant land visibly.
+    ///
+    /// It stays thirty once everything is in, because then the poll is only
+    /// watching for a REVOCATION, which nobody does by accident and nobody is
+    /// standing there waiting to see acknowledged. The checks are local — see
+    /// `isGranted` — so the fast rate costs little, and it only runs while the
+    /// app is not working anyway.
+    private func schedulePermissionPoll() {
+        let blocked = !Permission.allCases.allSatisfy(\.isGranted)
+        let interval: TimeInterval = blocked ? 2 : 30
+        guard pollInterval != interval else { return }
+        pollInterval = interval
+
+        permissionPoll?.invalidate()
+        let poll = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refresh() }
+        }
+        // `.common` so it keeps firing while a menu is open or a modal alert is
+        // up — the two states the user is most likely to be in when the grant
+        // finally lands.
+        RunLoop.main.add(poll, forMode: .common)
+        permissionPoll = poll
+    }
+
     private func refresh() {
         // A REVOKED PERMISSION HAS TO TEAR THE TAP DOWN, or granting it again
         // can never bring it back. `isListening` was set true once and never
@@ -314,6 +377,8 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         startListeningIfPermitted()
         setIcon()
         rebuildMenu()
+        // The last thing, so the rate follows the state that was just read.
+        schedulePermissionPoll()
     }
 
     private func setIcon() {
@@ -580,12 +645,19 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
-        // One click for the whole set. Four rows to work through one at a time
-        // was the friction being reported — this asks for each in turn and only
-        // falls back to Settings for the ones a prompt cannot grant.
+        // OPENS THE GUIDED WINDOW; it does not fire four requests.
+        //
+        // It used to loop `ask()` over every missing permission. Accessibility
+        // and Screen Recording return without waiting for an answer, so one
+        // click could stack two system alerts and send System Settings jumping
+        // between two panes before the microphone dialog had even appeared.
+        //
+        // The first-run window is already the surface for this — a row per
+        // permission, each with the data it takes and its own button — so this
+        // opens that instead of racing it. One click, one dialog, still true.
         menu.addItem(NSMenuItem(
             title: "Grant permissions…",
-            action: #selector(grantAll),
+            action: #selector(openWelcome),
             keyEquivalent: ""
         ))
     }
@@ -659,17 +731,6 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func openUpdatePage() {
         Update.openReleasePage()
-    }
-
-    /// Ask for every missing permission in turn.
-    @objc private func grantAll() {
-        Task { @MainActor in
-            for permission in Permission.allCases where !permission.isGranted {
-                await ask(permission)
-            }
-            startListeningIfPermitted()
-            refresh()
-        }
     }
 
     @objc private func requestPermission(_ sender: NSMenuItem) {

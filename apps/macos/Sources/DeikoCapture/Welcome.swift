@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import DeikoGesture
+import DeikoHandoff
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FIRST RUN — the one screen where reading is the point
@@ -97,6 +98,10 @@ final class WelcomeModel: ObservableObject {
         let symbol: String
         let purpose: String
         let granted: Bool
+        /// What clicking this row's button will actually do — so the label can
+        /// say it. A button reading "Grant" that silently opens System Settings
+        /// instead of prompting is the same lie the old flow told by doing both.
+        let step: PermissionStep
     }
 
     @Published var rows: [Row] = []
@@ -114,12 +119,17 @@ final class WelcomeModel: ObservableObject {
     var readyToPoint: Bool { rows.allSatisfy(\.granted) }
 
     private var screenRecordingWasMissing = false
+    private var watcher: Timer?
 
     init() { refresh() }
 
     func refresh() {
         rows = Permission.allCases.map {
-            Row(id: $0.rawValue, symbol: $0.symbol, purpose: $0.purpose, granted: $0.isGranted)
+            Row(
+                id: $0.rawValue, symbol: $0.symbol, purpose: $0.purpose,
+                granted: $0.isGranted,
+                step: PermissionStep.next(granted: $0.isGranted, asked: $0.hasBeenAsked)
+            )
         }
         // `exists`, not `value` — first run must not demand the login password
         // just to draw a checkmark.
@@ -139,23 +149,34 @@ final class WelcomeModel: ObservableObject {
             screenRecordingWasMissing = true
         }
 
-        Task {
-            // `ask()` is the shared path: request first — which is what puts
-            // Deiko in the privacy pane at all — then open Settings if that was
-            // not enough.
-            await permission.ask()
+        // ONE action — a dialog, or Settings, never both. See `Permission.ask`.
+        Task { await permission.ask() }
+    }
 
-            // The grant lands asynchronously: the user is in a system dialog or
-            // a Settings pane, and nothing tells us when they answer. Poll for
-            // ten seconds rather than reporting the state from before they did.
-            for _ in 0..<20 {
-                try? await Task.sleep(for: .milliseconds(500))
-                refresh()
-                if screenRecordingWasMissing, Permission.screenRecording.isGranted {
-                    needsRelaunch = true
+    /// Watch for as long as this window is on screen.
+    ///
+    /// It used to poll for ten seconds after a click and then stop, which is
+    /// shorter than granting Accessibility actually takes: find the pane,
+    /// unlock it, find Deiko, tick it. Anybody slower than ten seconds came
+    /// back to a row still reading "Grant" for a permission they had just
+    /// given, and the obvious next move is to restart the app. Now the window
+    /// keeps looking while it is open, and stops when it closes.
+    func startWatching() {
+        guard watcher == nil else { return }
+        watcher = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.refresh()
+                if self.screenRecordingWasMissing, Permission.screenRecording.isGranted {
+                    self.needsRelaunch = true
                 }
             }
         }
+    }
+
+    func stopWatching() {
+        watcher?.invalidate()
+        watcher = nil
     }
 
     func relaunch() { Relauncher.relaunch() }
@@ -180,7 +201,11 @@ private struct WelcomeView: View {
             .padding(.horizontal, 32)
             .padding(.vertical, 20)
         }
-        .onAppear { model.refresh() }
+        .onAppear {
+            model.refresh()
+            model.startWatching()
+        }
+        .onDisappear { model.stopWatching() }
     }
 
     private var header: some View {
@@ -221,7 +246,12 @@ private struct WelcomeView: View {
                     if row.granted {
                         grantedTag("Granted")
                     } else {
-                        Button("Grant") { model.request(row.id) }
+                        // "Open Settings" once the dialog has been seen: it
+                        // will not come back, and a second "Grant" that only
+                        // opened a window would be the old confusion again.
+                        Button(row.step == .openSettings ? "Open Settings" : "Grant") {
+                            model.request(row.id)
+                        }
                     }
                 }
                 .padding(.horizontal, 14)
