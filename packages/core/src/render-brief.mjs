@@ -27,7 +27,8 @@ import { loadSession } from "../packages/alignment/dist/src/referents/session.js
 import { toCandidates } from "../packages/alignment/dist/src/referents/candidates.js";
 import { loadEvents } from "./lib/session-io.mjs";
 import { carriesSecret, assertNoSecrets } from "./lib/redact.mjs";
-import { buildPrompt } from "./lib/prompt.mjs";
+import { buildPrompt, quoteSurvives } from "./lib/prompt.mjs";
+import { degradedReason as cloudDegradedReason } from "./lib/cloud.mjs";
 
 // ── Repo identity ───────────────────────────────────────────────────────────
 
@@ -106,22 +107,28 @@ if (!existsSync(transcriptPath)) {
 
 const events = loadEvents(dir);
 
-const { words, source, degradedHolds } = JSON.parse(readFileSync(transcriptPath, "utf8"));
+const { words, cloud, degradedHolds } = JSON.parse(readFileSync(transcriptPath, "utf8"));
 if (!words?.length) {
   console.error("✗ transcript.json has no words");
   process.exit(1);
 }
 
-/// Did any of this transcript come from the on-device recogniser rather than
-/// the cloud?
+/// WHY this transcript is what it is.
 ///
-/// `transcribe.mjs` falls back silently and by design — a spent trial, an
-/// unreachable relay, or a failed chunk all keep the session working on
-/// Apple's words rather than failing it. What was missing is anybody being
-/// TOLD: the brief just read worse, and "the transcription is bad" is what
-/// arrived in the inbox instead of "the relay was down". The flag travels so
-/// the review window can say so in one quiet line.
-const degraded = source === "text-only" || Boolean(degradedHolds?.length);
+/// `transcribe.mjs` falls back silently and by design — a spent trial, a spent
+/// month, the service's daily ceiling, an unreachable relay or a failed chunk
+/// all keep the session working on Apple's words rather than failing it. What
+/// was missing is anybody being TOLD: the brief just read worse, and "the
+/// transcription is bad" is what arrived in the inbox instead of "the relay
+/// was down".
+///
+/// This used to read `source === "text-only"`, a field `transcribe.mjs` has
+/// never written at the top level — so `degraded` was true only for
+/// `degradedHolds`, which is a different failure entirely (the on-device CLOCK
+/// was lost and the cloud text survived). Both now travel, told apart, so the
+/// review window can name the one that happened.
+const degradedReason = cloudDegradedReason({ cloud, degradedHolds });
+const degraded = degradedReason != null;
 
 const referents = loadSession(events).all();
 const { bindings, unbound } = align(toCandidates(referents), words);
@@ -136,6 +143,27 @@ const overridePath = join(dir, "narration.override.txt");
 const narrationOverride = existsSync(overridePath)
   ? readFileSync(overridePath, "utf8").trim() || null
   : null;
+
+// Screenshots the developer took out by hand in the review window, by basename.
+//
+// THE WHOLE REFERENT GOES, not just its `cropPath`. `lib/prompt.mjs` ships a
+// referent's accessibility and OCR lines exactly when it has NO screenshot and
+// speech was bound to it — so nulling the path the way a withheld crop does
+// would send the text of the image the developer just removed, under a heading
+// saying they pointed at it. Dropping the referent is the only form of "leave
+// this out" that means what the × on the thumbnail says.
+const excludedPath = join(dir, "crops.excluded.json");
+let excludedCrops = new Set();
+if (existsSync(excludedPath)) {
+  try {
+    excludedCrops = new Set(JSON.parse(readFileSync(excludedPath, "utf8")));
+  } catch {
+    // An unreadable exclusion list must not fail the render — but it must not
+    // silently ship what it was meant to hold back either, so say so and let
+    // the developer see every crop in the review window before they throw.
+    console.error(`  ⚠ ${basename(excludedPath)} is unreadable — no screenshots excluded`);
+  }
+}
 
 // The sidecar exists for ONE reason the markdown cannot serve: absolute crop
 // paths. The brief names crops by basename so it stays readable and portable,
@@ -174,7 +202,7 @@ function cropRelease(r) {
 // agent handed two screenshots had to guess which sentence went with which.
 // The alignment is right here, one line away; not passing it on was the
 // omission, not the alignment.
-// A CORRECTED NARRATION SILENCES THE QUOTES.
+// A QUOTE SHIPS ONLY IF ITS WORDS ARE STILL IN WHAT THE DEVELOPER APPROVED.
 //
 // `said` is sliced from the raw transcript. The review window shows the
 // narration "verbatim and editable" and promises that only the narration
@@ -183,18 +211,58 @@ function cropRelease(r) {
 // screenshot, with no way to see it going. The correction UI is a promise about
 // what leaves the Mac; a quote it cannot reach breaks that promise silently.
 //
-// So an edited narration drops every quote. The screenshots still travel, just
-// unlabelled — which is a real loss (the label is what ties an image to a
-// sentence) and the right trade: the alternative is shipping words the
-// developer believes they deleted.
-const quotesAreStale = narrationOverride != null;
-const released = referents.map((r) => {
+// The first fix for that dropped EVERY quote the moment the narration was
+// edited — which honoured the promise and cost the product the thing that makes
+// a screenshot mean anything, on the one action the review window actively
+// invites ("fix anything it misheard"). Fixing one misheard identifier
+// unlabelled every image in the brief, under a footer reading "everything else
+// goes as captured".
+//
+// So the test is per quote, and it is the same promise stated exactly: a label
+// travels iff its words survive in the approved text. Correct a typo elsewhere
+// and every other label lives; delete a sentence and the label built from it
+// goes with it. `labelsDropped` is counted so the window can say how many did.
+let labelsDropped = 0;
+const kept = referents.filter((r) => !(r.cropPath && excludedCrops.has(basename(r.cropPath))));
+const cropsRemoved = referents.length - kept.length;
+const keptIds = new Set(kept.map((r) => r.id));
+const keptBindings = bindings.filter((b) => keptIds.has(b.candidateId));
+const released = kept.map((r) => {
   const { path, reason } = cropRelease(r);
+  const utterance = bindingById.get(r.id)?.utterance ?? null;
+  const survives = utterance != null
+    && (narrationOverride == null || quoteSurvives(utterance, narrationOverride));
+  // Counted only where a quote would have been a screenshot's CAPTION, because
+  // that is what the review window reports. A referent with no released crop
+  // loses its quote too — which drops its screen text from the prompt, since
+  // `lib/prompt.mjs` gates that on `said` — but calling those "screenshots"
+  // would be a count the user could not reconcile with what they can see.
+  if (path != null && utterance != null && !survives) labelsDropped++;
+
+  // TWO CONSEQUENCES HANG OFF `said`, AND THEY DESERVE DIFFERENT RULES.
+  //
+  // On a referent WITH a screenshot it is a caption, and per-quote survival is
+  // the right test: correct a typo elsewhere and the other captions live.
+  //
+  // On a referent WITHOUT one it is the gate on that referent's screen text
+  // reaching the prompt at all (`lib/prompt.mjs`: "a referent contributes text
+  // only if it has no screenshot AND the aligner bound speech to it"). Per-quote
+  // survival is too weak there. Overlap bindings are routinely one to three
+  // words — "this one", "here", "the key" — which almost always still occur
+  // somewhere in a corrected narration, so a developer who deletes the sentence
+  // naming a customer would keep the referent's accessibility text: the very
+  // contents of the window they were editing themselves out of. The old blanket
+  // rule suppressed that, and losing it would be a privacy regression bought
+  // with a captions feature.
+  //
+  // So: captions get the improvement, screen text keeps the old strictness.
+  const keepQuote = path != null ? survives : (narrationOverride == null && utterance != null);
+
   return {
     ...r,
     cropPath: path,
     cropWithheld: reason,
-    said: quotesAreStale ? null : (bindingById.get(r.id)?.utterance ?? null),
+    said: keepQuote ? utterance : null,
   };
 });
 
@@ -252,18 +320,40 @@ const manifest = {
     // whatever line breaks they typed: those are a choice, not an artefact.
     narration: narrationOverride ?? utteranceText(words).replace(/\s*\n\s*/g, " "),
     narrationEdited: narrationOverride != null,
-    apps: [...new Set(referents.map((r) => r.app?.name).filter(Boolean))],
-    repoHints: repoHints(referents.map((r) => r.window).filter(Boolean)),
-    referentCount: referents.length,
+    // `kept`, not `referents`: what the headline counts must be what actually
+    // ships, or removing a screenshot leaves the window saying "6 things
+    // pointed at" over five of them.
+    apps: [...new Set(kept.map((r) => r.app?.name).filter(Boolean))],
+    repoHints: repoHints(kept.map((r) => r.window).filter(Boolean)),
+    referentCount: kept.length,
     wordCount: words.length,
-    boundCount: bindings.length,
-    unboundCount: unbound.length,
-    deicticCount: bindings.filter((b) => b.reason === "deictic").length,
-    overlapCount: bindings.filter((b) => b.reason === "overlap").length,
-    needsReviewCount: bindings.filter((b) => b.needsReview).length,
+    // COUNTED OVER `kept`, like `referentCount`. `align` runs over every
+    // referent so the bindings do not shift when one is excluded — but the
+    // counts shown beside each other must describe the same set, or excluding
+    // one bound screenshot from a six-referent session left the panel reading
+    // "6 of 5 bound to what you said".
+    boundCount: keptBindings.length,
+    unboundCount: unbound.filter((u) => keptIds.has(u.candidateId ?? u.id)).length,
+    deicticCount: keptBindings.filter((b) => b.reason === "deictic").length,
+    overlapCount: keptBindings.filter((b) => b.reason === "overlap").length,
+    needsReviewCount: keptBindings.filter((b) => b.needsReview).length,
     durationMs:
       words.length ? Math.max(...words.map((w) => w.end)) - Math.min(...words.map((w) => w.start)) : 0,
     degraded,
+    // Which degradation, so the window can name it instead of hedging. Null on
+    // a clean session; see scripts/lib/cloud.mjs for the five it can be.
+    degradedReason,
+    // Who produced the words, and whether any of the audio actually reached
+    // them — the line that says what left this Mac needs both, because a relay
+    // that was never reached and one that refused what it received are
+    // different facts about somebody's data.
+    transcriber: cloud?.transcriber ?? null,
+    uploadedChunks: cloud?.uploaded ?? null,
+    // Quotes that did not survive the developer's own correction, and
+    // screenshots they took out by hand. Both are things the window has to be
+    // able to account for out loud rather than leaving as a silent shortfall.
+    labelsDropped,
+    cropsRemoved,
   },
   referents: released.map((r) => ({
     id: r.id,

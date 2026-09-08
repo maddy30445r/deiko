@@ -2,6 +2,7 @@ import AppKit
 import AVFoundation
 import Foundation
 import Speech
+import DeikoGesture
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE MENU-BAR SHELL
@@ -217,9 +218,29 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.review.extendPresentedSession() ?? false
         }
         review.onOpenSettings = { [weak self] in self?.settings.present() }
+        // "Delete all past sessions" must never remove the one being recorded.
+        // Settings has no recorder of its own and should not grow one.
+        settings.openSessionDir = { [weak self] in self?.recorder.sessionDir }
+        settings.sessionRoot = recorder.sessionRoot
         // Remove the MCP entry earlier versions wrote. Nothing registers
         // anything any more; this is only clearing up after what did.
         LegacyMCP.cleanUpOnce()
+
+        // OLD SESSIONS GO. Nothing ever removed one before, and a session is a
+        // folder of full-resolution screenshots — the folder grew for as long
+        // as the app was used and nobody was told it existed. Off the main
+        // thread because it walks a directory, and at launch because that is
+        // the one moment no session is open.
+        let root = recorder.sessionRoot
+        let days = Sessions.retentionDays
+        // `keeping:` is passed even though nothing is open at launch: a
+        // reopened session carries a stamp from an earlier launch, so the guard
+        // is not hypothetical, and an argument that is never supplied is a
+        // guard that can never fire.
+        let open = recorder.sessionDir
+        Task.detached(priority: .utility) {
+            Sessions.sweep(root: root, olderThanDays: days, keeping: open)
+        }
 
         startListeningIfPermitted()
         refresh()
@@ -272,6 +293,12 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
             await Update.check()
             if Update.available != nil { rebuildMenu() }
         }
+
+        // What is left of the plan, so the menu's line is right the first time
+        // it is opened rather than after the first session. Detached for the
+        // same reason, and failure is silence — `planLine` simply says nothing
+        // when there is no cached answer.
+        Task { try? await License.refresh() }
     }
 
     private func refresh() {
@@ -352,6 +379,33 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
+
+        // BACK TO A BRIEF YOU ALREADY DISMISSED.
+        //
+        // The orb was the only way to reach one, and `×` put it away for good:
+        // a mis-clicked close meant the session was reachable only as a folder
+        // of JSON in Finder. Re-presenting is cheap — the transcript cache
+        // means the pipeline does not re-recognise anything.
+        let recent = Sessions.list(root: recorder.sessionRoot).prefix(5)
+        if !recent.isEmpty {
+            let item = NSMenuItem(title: "Recent sessions", action: nil, keyEquivalent: "")
+            let submenu = NSMenu()
+            let formatter = DateFormatter()
+            formatter.dateStyle = .medium
+            formatter.timeStyle = .short
+            for name in recent {
+                let title = Sessions.stamp(name).map(formatter.string(from:)) ?? name
+                let child = NSMenuItem(
+                    title: title, action: #selector(openRecentSession(_:)), keyEquivalent: ""
+                )
+                child.representedObject = "\(recorder.sessionRoot)/\(name)"
+                child.target = self
+                submenu.addItem(child)
+            }
+            item.submenu = submenu
+            menu.addItem(item)
+        }
+
         menu.addItem(NSMenuItem(
             title: "Open sessions folder",
             action: #selector(openSessionRoot),
@@ -373,6 +427,17 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(NSMenuItem(
                 title: "Update to \(update.version)…",
                 action: #selector(openUpdatePage),
+                keyEquivalent: ""
+            ))
+        }
+        // Only when this build was stamped with somewhere to send it. The crash
+        // alert has always offered to copy diagnostics and never said where
+        // they should go; an item that opened an empty compose window would be
+        // the same dead end wearing a button.
+        if Credentials.supportEmail != nil {
+            menu.addItem(NSMenuItem(
+                title: "Send feedback…",
+                action: #selector(sendFeedback),
                 keyEquivalent: ""
             ))
         }
@@ -409,15 +474,28 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 "\(referents) thing\(referents == 1 ? "" : "s") pointed at so far"
             ))
 
+            // The way out that does not produce a brief. A session started by
+            // accident, or one where the wrong thing got said, used to have to
+            // be carried all the way to an orb and dismissed — which left the
+            // recording and its screenshots on disk regardless.
+            let discard = NSMenuItem(
+                title: "Stop and discard…",
+                action: #selector(discardSession),
+                keyEquivalent: ""
+            )
+            menu.addItem(discard)
+
+            let key = SessionKey.selected
+            let stopTitle = "Stop capturing — tap \(key.symbol)"
             let stop = NSMenuItem(
-                title: "Stop capturing — tap right ⌥",
+                title: stopTitle,
                 action: #selector(stopSession),
                 keyEquivalent: ""
             )
             // The one action that matters mid-session, bold so it reads as the
             // default even though NSMenu has no real notion of one.
             stop.attributedTitle = NSAttributedString(
-                string: "Stop capturing — tap right ⌥",
+                string: stopTitle,
                 attributes: [.font: NSFont.menuFont(ofSize: 0).withWeight(.semibold)]
             )
             menu.addItem(stop)
@@ -425,13 +503,38 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
             capturingItem = nil
             menu.addItem(disabled(
                 isListening
-                    ? "Ready — ⌥⌥ to start"
+                    ? "Ready — \(SessionKey.selected.symbol)\(SessionKey.selected.symbol) to start"
                     : "Not listening — could not create the event tap"
             ))
             if isListening {
-                menu.addItem(disabled("double-tap right Option, then talk and point"))
+                menu.addItem(disabled(
+                    "double-tap \(SessionKey.selected.name), then talk and point"))
             }
+            if let line = planLine() { menu.addItem(disabled(line)) }
         }
+    }
+
+    /// How much transcription is left, where somebody already looks when they
+    /// wonder what Deiko is doing.
+    ///
+    /// Read from the CACHE, never from the network. This runs on every menu
+    /// open, and a menu that waited on a round trip would hang on a bad
+    /// connection. Nil rather than a placeholder when there is nothing to say:
+    /// a line reading "checking…" forever is worse than no line at all.
+    private func planLine() -> String? {
+        // Their key, their bill — nothing here is metered, so any quota would
+        // be a number about an account Deiko does not hold.
+        if Credentials.willUse("SARVAM_API_KEY") { return "Your own Sarvam key — nothing metered" }
+        guard Credentials.relayURL != nil, let quota = License.cachedQuota else { return nil }
+
+        if quota.isPro {
+            return quota.isSpent
+                ? "Pro · this month's hours are used up — transcribing on this Mac"
+                : "Pro · \(quota.remainingSentence) this month"
+        }
+        return quota.isSpent
+            ? "Free trial used up — transcribing on this Mac"
+            : "Free trial · \(quota.remainingSentence)"
     }
 
     /// `● Capturing · 0:43` — the dot in record red, the timer in mono.
@@ -504,6 +607,54 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Task { @MainActor in
             _ = await recorder.stopSession()
         }
+    }
+
+    /// Stop, and keep nothing. Confirmed, because the thing being thrown away
+    /// is minutes of somebody's narration and the click is next to Stop.
+    @objc private func discardSession() {
+        // Captured BEFORE the alert. `runModal` spins a nested runloop and the
+        // hotkey tap is installed in `.commonModes`, so the user can tap the
+        // session key — or click the capture pill — while the sheet is up, and
+        // the session closes underneath it. Re-reading `recorder.sessionDir`
+        // after the click then found nil and returned: a confirmed, destructive
+        // action that silently did nothing, leaving on disk the recording the
+        // user had just agreed to throw away.
+        guard let dir = recorder.sessionDir else { return }
+
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "Discard this session?"
+        alert.informativeText =
+            "The recording and any screenshots are deleted, and no brief is made. "
+            + "This cannot be undone."
+        alert.addButton(withTitle: "Discard")
+        alert.addButton(withTitle: "Keep recording")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        Task { @MainActor in
+            if recorder.sessionDir == dir {
+                await recorder.discardSession()
+            } else {
+                // It stopped while the sheet was open. Honour what was agreed:
+                // remove that session, and put away the orb if it is the one
+                // now showing it.
+                try? FileManager.default.removeItem(atPath: dir)
+                Emit.log("✕ session \((dir as NSString).lastPathComponent) discarded after it had stopped")
+                review.dismissIfShowing(dir)
+            }
+        }
+    }
+
+    /// Re-open a finished session's brief in the orb.
+    @objc private func openRecentSession(_ sender: NSMenuItem) {
+        guard let dir = sender.representedObject as? String else { return }
+        review.present(sessionDir: dir)
+    }
+
+    /// A bug report with the answers already in it.
+    @objc private func sendFeedback() {
+        guard let url = Diagnostics.feedbackURL() else { return }
+        NSWorkspace.shared.open(url)
     }
 
     @objc private func openUpdatePage() {
@@ -609,7 +760,7 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // hotkey dead. Nothing on screen said so until this was shown.
             Emit.problem(
                 "could not create the event tap",
-                hint: "Accessibility is granted but macOS refused Deiko's keyboard listener, so the Right Option shortcut won't work. Quit and relaunch Deiko. If it persists, remove Deiko from System Settings → Privacy & Security → Accessibility and add it again."
+                hint: "Accessibility is granted but macOS refused Deiko's keyboard listener, so the \(SessionKey.selected.name) shortcut won't work. Quit and relaunch Deiko. If it persists, remove Deiko from System Settings → Privacy & Security → Accessibility and add it again."
             )
         }
     }

@@ -102,6 +102,22 @@ SITE_DIR ?= site
 # CloudFront has no such limit.
 SITE_URL ?=
 
+# WHERE SOMEBODY BUYS PRO, and where a bug report goes.
+#
+# Separate from SITE_URL on purpose, and the reason is not tidiness: as this is
+# written the published site answers 404 on every path, including the
+# `download/version.json` the update check reads. A checkout link derived from
+# the site would therefore appear in builds where it cannot work — and a Get Pro
+# button that 404s fails at the exact moment somebody decided to pay, which is
+# the worst moment a product can look unfinished.
+#
+# Empty is a supported state for both: the app hides every buy affordance
+# without a BUY_URL, and hides "Send feedback…" without a SUPPORT_EMAIL. Same
+# discipline as RELAY_URL — a stamped constant beats a source literal that is
+# wrong in somebody's local build, and absent beats broken.
+BUY_URL ?=
+SUPPORT_EMAIL ?=
+
 ## bundle — the dev loop's app: assemble, then sign.
 ##
 ## SIGNING IS ITS OWN TARGET AND IT RUNS LAST. It used to be the tail of this
@@ -122,6 +138,8 @@ bundle-unsigned: $(DEBUG_BIN) resources
 	@/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(BUILD)" $(APP)/Contents/Info.plist
 	@/usr/libexec/PlistBuddy -c "Set :DeikoRelayURL $(RELAY_URL)" $(APP)/Contents/Info.plist
 	@/usr/libexec/PlistBuddy -c "Set :DeikoSiteURL $(SITE_URL)" $(APP)/Contents/Info.plist
+	@/usr/libexec/PlistBuddy -c "Set :DeikoBuyURL $(BUY_URL)" $(APP)/Contents/Info.plist
+	@/usr/libexec/PlistBuddy -c "Set :DeikoSupportEmail $(SUPPORT_EMAIL)" $(APP)/Contents/Info.plist
 ifneq ($(RELAY_URL),)
 	@echo "  relay: $(RELAY_URL)"
 else
@@ -301,7 +319,17 @@ release: guard-clean
 	@# commit. Whatever shape a version was tagged in, it counts as released.
 	@test -z "$$(git tag -l 'v$(VERSION)' -l '$(VERSION)')" \
 		|| (echo "✗ $(VERSION) is already tagged — bump VERSION first"; exit 1)
-	@$(MAKE) --no-print-directory dmg RELAY_URL=$(RELAY_URL) SITE_URL=$(SITE_URL)
+	@# WARNED, not refused, unlike RELAY_URL and SITE_URL above. A release with
+	@# no relay meters nothing and a release nobody can download is not a
+	@# release; a release with no checkout link is merely one where the buy
+	@# buttons stay hidden, which is the correct behaviour when there is nothing
+	@# behind them. Same for feedback. Worth saying out loud all the same,
+	@# because both are easy to forget once they DO exist.
+	@test -n "$(BUY_URL)" \
+		|| echo "  ! BUY_URL is empty — this build shows no way to buy Pro"
+	@test -n "$(SUPPORT_EMAIL)" \
+		|| echo "  ! SUPPORT_EMAIL is empty — this build shows no way to send feedback"
+	@$(MAKE) --no-print-directory dmg RELAY_URL=$(RELAY_URL) SITE_URL=$(SITE_URL) BUY_URL=$(BUY_URL) SUPPORT_EMAIL=$(SUPPORT_EMAIL)
 	@# SITE_URL travels in the environment: publish-release.sh stamps it into
 	@# install.sh and into version.json, and without it both fall back to the
 	@# CloudFront hostname rather than the domain people actually type.

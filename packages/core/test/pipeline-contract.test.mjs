@@ -68,16 +68,25 @@ test("the Swift failure taxonomy matches on strings that still exist", () => {
     "etimedout",
     "node: command not found",  // the shell
 
-    // 3. ALREADY UNREACHABLE. Nothing prints these any more: a missing Sarvam
-    //    key is no longer an error at all, because `selectTranscriber` falls
-    //    through to the relay and then to on-device words. The `.noAPIKey`
-    //    branch they feed — "the commonest first-run failure", per its own
-    //    comment — cannot fire. Listed rather than deleted because the fix is
-    //    a judgement call about the taxonomy, not about this test; if the
-    //    three-tier fallback is here to stay, so is the deletion.
-    "sarvam_api_key is not set",
-    "sarvam_api_key is missing",
+    //    The relay's own refusals. `transcribe.mjs` throws
+    //    `Deiko relay ${status}: ${body}`, and the body is written by
+    //    services/relay/{quota,relay}.mjs — a different deployable, which is
+    //    why nothing under scripts/ contains them. The status-and-body →
+    //    reason mapping lives in scripts/lib/cloud.mjs and is tested in
+    //    cloud.test.mjs; these are what the Swift taxonomy matches on when one
+    //    of them fails a stage outright rather than merely degrading it.
+    "fair-use limit",            // quota.mjs:200 — a Pro month is spent
+    "daily ceiling",             // quota.mjs:190 — the SERVICE is spent, not the user
+    "usage service unavailable", // relay.mjs:223/249 — metering down, failing closed
   ]);
+
+  // Category 3 held "sarvam_api_key is not set" / "is missing", marked ALREADY
+  // UNREACHABLE: a keyless install transcribes via the relay and then
+  // on-device, so the `.noAPIKey` branch could not fire. This test said the fix
+  // was a judgement call about the taxonomy rather than about the test. That
+  // call has now been made — the branch and its enum case are deleted — so the
+  // exemption goes with them. If either string reappears in `classify`, this
+  // test fails again, which is right: nothing prints them.
 
   const haystack = scripts.toLowerCase();
   const missing = matched
@@ -141,4 +150,142 @@ test("the degraded flag the review window reads is the one the renderer writes",
 
   assert.match(renderer, /^\s*degraded,$/m, "render-brief must put `degraded` in the summary");
   assert.match(pipeline, /var degraded: Bool\?/, "BriefSummary must decode it, and optionally");
+});
+
+test("every summary key the review window reads is one the renderer writes", () => {
+  // Same contract as `degraded` above, for the keys added when the window
+  // learned to explain itself. Each pair is a JSON key crossing from a Node
+  // script into a Swift `Codable` with no shared type between them, so the
+  // only thing holding them together is this test.
+  const renderer = read("scripts/render-brief.mjs");
+  const pipeline = read("apps/capture/Sources/DeikoCapture/BriefPipeline.swift");
+
+  for (const [key, decl] of [
+    ["degradedReason", /var degradedReason: String\?/],
+    ["transcriber", /var transcriber: String\?/],
+    ["labelsDropped", /var labelsDropped: Int\?/],
+    ["cropsRemoved", /var cropsRemoved: Int\?/],
+  ]) {
+    // Either spelling of an object entry: the shorthand `key,` or an explicit
+    // `key: <expr>,`. Which one a key uses is a detail of the renderer; that
+    // the key reaches `brief.json` at all is the contract.
+    assert.match(
+      renderer,
+      new RegExp(`^\\s*${key}(,|:)`, "m"),
+      `render-brief must put \`${key}\` in the summary`,
+    );
+    assert.match(pipeline, decl, `BriefSummary must decode \`${key}\`, and optionally`);
+  }
+});
+
+test("the renderer reads the exclusion file the app writes", () => {
+  // The × on a thumbnail writes this; the renderer is the only reader. A
+  // rename on either side silently un-removes every screenshot somebody chose
+  // to hold back, which is the one failure this feature cannot have.
+  const renderer = read("scripts/render-brief.mjs");
+  const pipeline = read("apps/capture/Sources/DeikoCapture/BriefPipeline.swift");
+
+  assert.match(renderer, /crops\.excluded\.json/);
+  assert.match(pipeline, /crops\.excluded\.json/);
+});
+
+test("an excluded screenshot's referent is dropped, not just its path", () => {
+  // `lib/prompt.mjs` ships a referent's screen text exactly when it has NO
+  // crop and speech was bound to it. So nulling `cropPath` the way a withheld
+  // crop does would send the TEXT of the image the developer removed. The
+  // filter has to run before `released` is built.
+  const renderer = read("scripts/render-brief.mjs");
+  assert.match(
+    renderer,
+    /const kept = referents\.filter\(/,
+    "the exclusion must filter referents, not blank a field on them",
+  );
+  assert.match(
+    renderer,
+    /const released = kept\.map\(/,
+    "`released` must be built from the filtered list",
+  );
+});
+
+test("the transcript's `cloud` block is written from the transcriber's own state", () => {
+  // `transcribe.mjs` is a script with top-level `main()`, so it cannot be
+  // imported and this seam cannot be driven without real audio and a Speech
+  // grant. What can be checked is that the three pieces still line up:
+  // `relayTranscriber` records a reason, `chunkedTranscriber` carries the
+  // state object out, and `main` writes it. Break any one and the review
+  // window silently goes back to explaining nothing.
+  const transcribe = read("scripts/transcribe.mjs");
+
+  assert.match(
+    transcribe,
+    /function chunkedTranscriber\(name, uploadOne, state = \{\}\)/,
+    "the transcriber must accept and expose a state object",
+  );
+  assert.match(
+    transcribe,
+    /state\.refused \?\?= /,
+    "the FIRST reason must win — a later rate limit must not overwrite `trial`",
+  );
+  assert.match(
+    transcribe,
+    /refused: transcriber\.state\?\.refused \?\? null/,
+    "the reason must reach transcript.json",
+  );
+  // The on-device and Sarvam transcribers carry no state, so `?.` and `?? null`
+  // are what keep those paths writing a well-formed block rather than crashing.
+  assert.match(transcribe, /failedChunks,/, "the chunk count must reach transcript.json too");
+});
+
+test("only account-level refusals end the session's uploads", () => {
+  // The distinction `REFUSAL_IS_FINAL` encodes, asserted where it is USED: a
+  // transient 429 must fall through to the throw, so the next chunk retries.
+  // Short-circuiting it would drop every word after the first blip on a long
+  // recording, which is the failure this shape exists to avoid.
+  const transcribe = read("scripts/transcribe.mjs");
+  assert.match(
+    transcribe,
+    /if \(state\.refused && REFUSAL_IS_FINAL\.has\(state\.refused\)\)/,
+    "the short-circuit must be gated on REFUSAL_IS_FINAL, not on any refusal",
+  );
+});
+
+test("the trust line's upload count survives from transcriber to Swift", () => {
+  // `uploaded` is what stops the review panel claiming an upload that never
+  // happened — a relay that was never reached, or an old session reopened
+  // entirely from the transcript cache. Three files, no shared type.
+  const transcribe = read("scripts/transcribe.mjs");
+  const renderer = read("scripts/render-brief.mjs");
+  const pipeline = read("apps/capture/Sources/DeikoCapture/BriefPipeline.swift");
+
+  assert.match(transcribe, /state\.uploaded \+= 1;/, "requests that reach the network must be counted");
+  assert.match(renderer, /uploadedChunks: cloud\?\.uploaded \?\? null/);
+  assert.match(pipeline, /var uploadedChunks: Int\?/);
+});
+
+test("a re-render over a cached session cannot restamp what happened to it", () => {
+  // Reopening an old session re-runs transcribe.mjs with every hold served
+  // from the cache. Rewriting `cloud` from the CURRENT environment would make
+  // the panel announce an upload for a session recorded on a build that had no
+  // relay at all.
+  const transcribe = read("scripts/transcribe.mjs");
+  assert.match(
+    transcribe,
+    /if \(uploaded === 0 && priorCloud\) return priorCloud;/,
+    "the previous answer must stand when this run uploaded nothing",
+  );
+});
+
+test("an edited narration still suppresses screen text from crop-less referents", () => {
+  // `said` gates two different things, and only one of them is a caption. On a
+  // referent with no screenshot it decides whether that referent's ACCESSIBILITY
+  // TEXT reaches the prompt — and overlap bindings are often one to three words
+  // ("this one", "here"), which survive a correction by coincidence. Per-quote
+  // survival alone would therefore ship the contents of a window the developer
+  // had just edited themselves out of.
+  const renderer = read("scripts/render-brief.mjs");
+  assert.match(
+    renderer,
+    /const keepQuote = path != null \? survives : \(narrationOverride == null/,
+    "screen text must keep the strict rule; only captions get per-quote survival",
+  );
 });

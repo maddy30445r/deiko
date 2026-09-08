@@ -51,6 +51,7 @@ enum License {
     private static let keyName = "DEIKO_LICENSE_KEY"
     private static let tierName = "DEIKO_LICENSE_TIER"
     private static let checkedName = "DEIKO_LICENSE_CHECKED_AT"
+    private static let quotaName = "DEIKO_QUOTA_CACHE"
 
     /// The key the user pasted, or nil.
     static var key: String? {
@@ -68,6 +69,7 @@ enum License {
             defaults.removeObject(forKey: keyName)
             defaults.removeObject(forKey: tierName)
             defaults.removeObject(forKey: checkedName)
+            defaults.removeObject(forKey: quotaName)
             return
         }
         defaults.set(trimmed, forKey: keyName)
@@ -75,6 +77,31 @@ enum License {
         // the relay's answer, and `refresh()` is what asks.
         defaults.removeObject(forKey: tierName)
         defaults.removeObject(forKey: checkedName)
+        // The old subject's numbers belong to the old subject. Leaving them
+        // would show the device token's spent trial on a licence that has just
+        // been pasted, until the refresh lands a moment later.
+        defaults.removeObject(forKey: quotaName)
+    }
+
+    /// The last answer the relay gave, for surfaces that must not make a
+    /// network call to draw themselves — the menu bar rebuilds on every open.
+    ///
+    /// Cached for FREE installs too, unlike the tier: this is a readout, not an
+    /// entitlement. Nothing is gated on it, so a stale copy costs a slightly
+    /// old number on a menu line and never a wrong decision about what somebody
+    /// is allowed to do.
+    static var cachedQuota: Quota? {
+        get {
+            guard let data = UserDefaults.standard.data(forKey: quotaName) else { return nil }
+            return try? JSONDecoder().decode(Quota.self, from: data)
+        }
+        set {
+            guard let newValue, let data = try? JSONEncoder().encode(newValue) else {
+                UserDefaults.standard.removeObject(forKey: quotaName)
+                return
+            }
+            UserDefaults.standard.set(data, forKey: quotaName)
+        }
     }
 
     // ── What the relay is told ──────────────────────────────────────────────
@@ -120,7 +147,7 @@ enum License {
 
     // ── Asking ──────────────────────────────────────────────────────────────
 
-    struct Quota: Sendable {
+    struct Quota: Sendable, Codable {
         let tier: String
         let usedSeconds: Int
         let capSeconds: Int
@@ -128,18 +155,64 @@ enum License {
 
         var isPro: Bool { tier == "pro" }
 
-        /// "4 hours 12 minutes left this month" — the sentence Settings shows.
-        var remainingSentence: String {
-            let minutes = remainingSeconds / 60
+        /// Whether there is any allowance left to spend.
+        var isSpent: Bool { remainingSeconds < 60 }
+
+        /// How full the bar is. CLAMPED, because the relay increments a
+        /// counter before it judges it — a session can legitimately end a few
+        /// seconds past the cap, and a progress bar past 1.0 draws as a glitch.
+        var usedFraction: Double {
+            guard capSeconds > 0 else { return 0 }
+            return min(1, Double(usedSeconds) / Double(capSeconds))
+        }
+
+        /// "12 min", "3h 40m", "5 hours". The ONE place a span of seconds
+        /// becomes words, so the bar's caption and the menu's line cannot
+        /// disagree about the same number.
+        static func clock(_ seconds: Int) -> String {
+            let minutes = max(0, seconds) / 60
             if minutes >= 60 {
                 let hours = minutes / 60
                 let rest = minutes % 60
                 return rest == 0
-                    ? "\(hours) hour\(hours == 1 ? "" : "s") left"
-                    : "\(hours)h \(rest)m left"
+                    ? "\(hours) hour\(hours == 1 ? "" : "s")"
+                    : "\(hours)h \(rest)m"
             }
-            if minutes > 0 { return "\(minutes) minute\(minutes == 1 ? "" : "s") left" }
-            return "nothing left"
+            if minutes > 0 { return "\(minutes) min" }
+            return "none"
+        }
+
+        /// "3h 40m left" — what Settings and the menu line show.
+        var remainingSentence: String {
+            isSpent ? "nothing left" : "\(Self.clock(remainingSeconds)) left"
+        }
+
+        /// "12 min of 30 min used" — the caption under the bar.
+        var usedSentence: String {
+            "\(Self.clock(usedSeconds)) of \(Self.clock(capSeconds)) used"
+        }
+
+        /// "resets 1 October (UTC)".
+        ///
+        /// Computed here rather than asked of the relay: a Pro month's row key
+        /// is the UTC month (`monthKey` in `services/relay/quota.mjs`), so the
+        /// client can say the same thing without a round trip and can say it
+        /// while offline. UTC is named out loud because that reset lands
+        /// mid-afternoon for most of the world, and a limit that comes back at
+        /// an hour nobody can predict reads as a bug.
+        static var proResetSentence: String {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(identifier: "UTC") ?? .gmt
+            guard let startOfMonth = calendar.date(
+                    from: calendar.dateComponents([.year, .month], from: Date())),
+                  let next = calendar.date(byAdding: .month, value: 1, to: startOfMonth)
+            else { return "Resets at the start of next month (UTC)" }
+
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = calendar.timeZone
+            formatter.dateFormat = "d MMMM"
+            return "Resets \(formatter.string(from: next)) (UTC)"
         }
     }
 
@@ -161,10 +234,23 @@ enum License {
             throw Failure.noRelay
         }
 
+        // WHOSE ANSWER THIS IS, captured with the request.
+        //
+        // `bearerToken()` is read when the request goes out, but the caching
+        // below used to re-read `key` when the reply came back — a 10-second
+        // window in which the user can paste a licence. Settings opens, asks as
+        // the device token, the network is slow; the user pastes a valid Pro key
+        // and Applies; that second call returns "pro" and caches it; then the
+        // FIRST reply lands, sees a key is now present, and writes the device
+        // trial's "free" verdict against the licence. The result is a paid key
+        // reading "that key is not active", with the BYO fields disabled, until
+        // something asks again.
+        let sentBearer = bearerToken()
+
         var request = URLRequest(url: base.appendingPathComponent("v1/quota"))
         request.timeoutInterval = 10
         request.cachePolicy = .reloadIgnoringLocalCacheData
-        request.setValue("Bearer \(bearerToken())", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(sentBearer)", forHTTPHeaderField: "Authorization")
 
         let data: Data
         let response: URLResponse
@@ -185,13 +271,22 @@ enum License {
             remainingSeconds: decoded.remainingSeconds,
         )
 
-        // Cached only when there is a key to cache it against. A free install
-        // re-asks every time, which costs one request and keeps `isPro` from
-        // ever being true for a reason nobody can explain.
+        // A REPLY THAT NO LONGER DESCRIBES THIS INSTALL IS NOT CACHED. The
+        // subject can have changed while this was in flight — see `sentBearer`
+        // — and an answer about the previous one is worse than no answer.
+        guard sentBearer == bearerToken() else { return quota }
+
+        // The TIER is cached only when there is a key to cache it against. A
+        // free install re-asks every time, which costs one request and keeps
+        // `isPro` from ever being true for a reason nobody can explain.
         if key != nil {
             UserDefaults.standard.set(quota.tier, forKey: tierName)
             UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: checkedName)
         }
+        // The NUMBERS are cached either way — see `cachedQuota`. A free
+        // install's remaining trial is exactly what the menu line exists to
+        // show, and it gates nothing.
+        cachedQuota = quota
         return quota
     }
 

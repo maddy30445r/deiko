@@ -27,6 +27,7 @@ import { fileURLToPath } from "node:url";
 // will match on.
 import { normalizeWord } from "../packages/alignment/dist/src/deictic.js";
 import { loadEvents } from "./lib/session-io.mjs";
+import { refusalReason, REFUSAL_IS_FINAL } from "./lib/cloud.mjs";
 
 const SARVAM_STT_URL = "https://api.sarvam.ai/speech-to-text";
 
@@ -105,11 +106,16 @@ const UPLOAD_TIMEOUT_MS = 60_000;
  * same problem whoever is on the other end, so `uploadOne` is the only thing
  * that differs between talking to Sarvam directly and talking to Deiko's relay.
  *
+ * `state` is the transcriber's own scratchpad, shared with `uploadOne` and read
+ * back by the caller once every hold is done — today it carries WHY the relay
+ * refused, which is a fact about the session rather than about any one chunk.
+ *
  * @returns {Transcriber}
  */
-function chunkedTranscriber(name, uploadOne) {
+function chunkedTranscriber(name, uploadOne, state = {}) {
   return {
     name,
+    state,
     async transcribe(wavPath, { language = "unknown" } = {}) {
       const file = readFileSync(wavPath);
       const pcm = file.subarray(44);
@@ -225,38 +231,80 @@ function sarvamTranscriber(apiKey) {
  */
 function relayTranscriber(endpoint, token) {
   const url = `${endpoint.replace(/\/+$/, "")}/v1/transcribe`;
-  // ONE 402 ANSWERS FOR THE WHOLE SESSION. It says the free trial is spent —
-  // a fact about the account, not about this chunk — so every later chunk
-  // would hear the same thing, and uploading them anyway spends bandwidth and
-  // relay requests to be told what is already known. A refused stretch rides
-  // on Apple's on-device words, exactly the fallback quota.mjs documents, and
-  // is not counted as a failure: the session is degraded, not broken.
-  let trialExhausted = false;
-  return chunkedTranscriber("deiko", async (pcm, language) => {
-    if (trialExhausted) return { text: "", refused: true };
-    const response = await fetch(url, {
-      method: "POST",
-      headers: token ? { authorization: `Bearer ${token}` } : {},
-      body: sttForm(pcm, language),
-      signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
-    });
 
-    const bodyText = await response.text();
-    if (response.status === 402) {
-      trialExhausted = true;
-      process.stderr.write(`· free trial used up — continuing on on-device words `);
+  // SOME REFUSALS ANSWER FOR THE WHOLE SESSION, AND SOME ARE WORTH RETRYING.
+  //
+  // A spent trial, a spent month and the service's daily ceiling are facts
+  // about the account or the day — every later chunk would hear the same
+  // thing, and uploading them anyway spends bandwidth and relay requests to be
+  // told what is already known. A refused stretch rides on Apple's on-device
+  // words, exactly the fallback quota.mjs documents, and is not counted as a
+  // failure: the session is degraded, not broken.
+  //
+  // A rate limit or a 503 is NOT such a fact. The relay's in-memory limiter
+  // allows 30 requests a minute per token (services/relay/relay.mjs:104) and a
+  // twelve-minute session is ~29 chunks plus quota calls, so a burst 429 on
+  // chunk 7 of a long recording is both plausible and temporary. It throws
+  // like any other chunk failure — costing its own stretch of sentence and
+  // nothing else — and the next chunk tries again. `REFUSAL_IS_FINAL` is where
+  // that distinction lives.
+  //
+  // `state.refused` is remembered either way, and the FIRST reason wins: it is
+  // what the review window shows, and "your trial is used up" outranks the
+  // rate limit that followed it.
+  const state = { refused: null, uploaded: 0 };
+  return chunkedTranscriber("deiko", async (pcm, language) => {
+    if (state.refused && REFUSAL_IS_FINAL.has(state.refused)) {
       return { text: "", refused: true };
     }
-    if (!response.ok) {
+
+    let response;
+    let bodyText;
+    try {
+      // Counted BEFORE the await, because the bytes are on the wire either
+      // way: what the review window has to be able to say is whether audio
+      // left this Mac, and a request that was sent and then refused still
+      // left it. A DNS failure that never opened a socket does not reach
+      // here, which is exactly the distinction the trust line needs.
+      state.uploaded += 1;
+      response = await fetch(url, {
+        method: "POST",
+        headers: token ? { authorization: `Bearer ${token}` } : {},
+        body: sttForm(pcm, language),
+        signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
+      });
+      bodyText = await response.text();
+    } catch (err) {
+      // The request never landed — a timeout, DNS, no route. Status 0 is how
+      // `refusalReason` spells that, and it is `unavailable` like any 503.
+      state.refused ??= refusalReason(0);
+      throw err;
+    }
+
+    const reason = refusalReason(response.status, bodyText);
+    if (reason) {
+      state.refused ??= reason;
+      if (REFUSAL_IS_FINAL.has(reason)) {
+        process.stderr.write(`· ${REFUSAL_NOTE[reason]} — continuing on on-device words `);
+        return { text: "", refused: true };
+      }
       throw new Error(`Deiko relay ${response.status}: ${bodyText.slice(0, 400)}`);
     }
+
     try {
       return { text: extractText(JSON.parse(bodyText)) };
     } catch {
       throw new Error(`Deiko relay returned non-JSON: ${bodyText.slice(0, 400)}`);
     }
-  });
+  }, state);
 }
+
+/** What stderr says when a refusal ends the session's cloud transcription. */
+const REFUSAL_NOTE = {
+  trial: "free trial used up",
+  monthly: "this month's Pro hours used up",
+  ceiling: "the service is at its daily ceiling",
+};
 
 /**
  * Nobody on the other end — and that is a supported way to run.
@@ -688,6 +736,10 @@ async function main() {
   /// Holds that lost their on-device timings and are running on text alone.
   /// Reported at the end so a degraded session cannot pass for a normal one.
   const degradedHolds = [];
+  /// Chunks the cloud never returned, across every hold. A stretch of sentence
+  /// is missing for each one, so the brief must be able to say the transcript
+  /// reads short rather than leaving it to look like bad recognition.
+  let failedChunks = 0;
 
   // Per-hold cache, so extending a session costs only the new audio.
   //
@@ -696,6 +748,15 @@ async function main() {
   // paying its full recognition time again for an identical answer, and paying
   // Sarvam for it too. Keyed on the file's byte length, which is what changes
   // when audio does.
+  // Read before this run can overwrite it — see `cloudBlock`.
+  let priorCloud = null;
+  try {
+    priorCloud = JSON.parse(readFileSync(join(dir, "transcript.json"), "utf8")).cloud ?? null;
+  } catch {
+    // No previous transcript, or an unreadable one. Either way there is no
+    // earlier answer to preserve and this run's own is the truth.
+  }
+
   const cachePath = join(dir, "transcript.cache.json");
   let cache = {};
   try {
@@ -772,6 +833,14 @@ async function main() {
       appleTimings(wav, { locale: args.locale }),
       transcriber.transcribe(wav, { language }),
     ]);
+
+    // A rejected hold is one lost stretch of audio, same as a rejected chunk
+    // inside a long one — the short-audio path returns `uploadOne`'s object
+    // directly, so a single-chunk hold that threw shows up here and nowhere
+    // else. Counted before anything below can `continue` past it.
+    failedChunks += textOutcome.status === "rejected"
+      ? 1
+      : (textOutcome.value?.failedChunks ?? 0);
 
     // ON-DEVICE TIMINGS FAILING IS NOT THE END OF THE HOLD.
     //
@@ -919,6 +988,34 @@ async function main() {
     process.exit(1);
   }
 
+  /// WHAT HAPPENED TO THIS SESSION'S AUDIO — not what would happen if it ran now.
+  ///
+  /// STICKY, and that is the whole point. Re-running this script over a
+  /// finished session is routine — "Recent sessions" reopens one, and every
+  /// hold is then served from `transcript.cache.json` because the WAVs were
+  /// deleted when the brief was first made. Not one byte is uploaded on that
+  /// pass. Restamping `transcriber` from the CURRENT environment would then
+  /// rewrite history: open a session recorded on a keyless build from a
+  /// relay-stamped one and the review panel would announce "Left this Mac:
+  /// ~62s of audio to Deiko's transcription" about a session that never left
+  /// the machine — a false claim, produced by the feature that exists to
+  /// answer that exact question.
+  ///
+  /// So: if nothing was uploaded this run and a previous answer is on disk,
+  /// that answer stands. `uploaded` is what tells the two apart, and it also
+  /// keeps the trust line honest about a relay that was never reached at all
+  /// (a DNS failure never opens a socket, so it never increments).
+  function cloudBlock() {
+    const uploaded = transcriber.state?.uploaded ?? 0;
+    if (uploaded === 0 && priorCloud) return priorCloud;
+    return {
+      transcriber: transcriber.name,
+      uploaded,
+      refused: transcriber.state?.refused ?? null,
+      failedChunks,
+    };
+  }
+
   const out = join(dir, "transcript.json");
   await timed("write", async () =>
     writeFileSync(
@@ -936,6 +1033,13 @@ async function main() {
           // which one the agent is reading — the same reason `degradedHolds`
           // travels rather than staying in stderr nobody reads.
           transcriber: transcriber.name,
+          // WHY the transcript is what it is, for the one screen that has to
+          // explain it. `refused` is the relay's own answer mapped to something
+          // a user can act on (scripts/lib/cloud.mjs); `failedChunks` says the
+          // words read short. The renderer turns this into one sentence — see
+          // `degradedReason` — and without it a spent trial and a dead relay
+          // were indistinguishable from bad recognition.
+          cloud: cloudBlock(),
           ...(degradedHolds.length ? { degradedHolds } : {}),
         },
         null,

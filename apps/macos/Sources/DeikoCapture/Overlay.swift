@@ -522,7 +522,7 @@ final class CapturePill {
         // shortcut already printed in the log when it started.
         text.append(NSAttributedString(
             string: hearingVoice
-                ? "  ·  tap right ⌥ to stop"
+                ? "  ·  tap \(SessionKey.selected.symbol) to stop"
                 : "  ·  not hearing you — check Sound input",
             attributes: [
                 .font: NSFont.systemFont(

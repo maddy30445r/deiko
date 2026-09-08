@@ -228,6 +228,23 @@ Sarvam key gets one login-password prompt on their first session after updating
 Deiko checks for a newer release once at launch and, if there is one, grows an
 **"Update to …"** item in its menu. It never installs anything by itself.
 
+**Check that the site actually serves the file, every release.** The update
+check fails *silently* by design — no site, no network, a 404 or a malformed
+file all mean "carry on", because an app that interrupts a developer to report
+it could not check for updates has made their day worse for nothing. The cost of
+that design is that a broken publish is invisible from the app, and it has been
+broken: 0.4.2 shipped stamped with a `DeikoSiteURL` whose
+`download/version.json` returns 404, so every install of it checks and silently
+learns nothing. One command says whether the release landed:
+
+```sh
+curl -fsS "$SITE_URL/download/version.json" && curl -fsSI "$SITE_URL/install.sh" >/dev/null \
+  && echo "✓ the site is serving this release"
+```
+
+`make release` cannot do this for you — the upload finishes before the CDN has
+the file — so it belongs in the announcement step, before the link is shared.
+
 ### The one rough edge in updates
 
 macOS guards a keychain item with an ACL pinned to one exact binary, and every
@@ -243,6 +260,37 @@ Anyone on the default relay path never does.
 
 Removing it completely needs an Apple Developer ID ($99/yr), which changes the
 ACL from "this exact binary" to "this team" and therefore survives updates.
+
+## Uninstall
+
+Dragging the app to the Trash leaves five things behind, because macOS keeps
+them outside the bundle. In rough order of how much space they take:
+
+```sh
+# 1. Your sessions — briefs and screenshots. The recordings were already
+#    deleted, one per brief, as each was made.
+rm -rf ~/Documents/Deiko
+
+# 2. Logs.
+rm -rf ~/Library/Logs/Deiko
+
+# 3. Preferences: licence key, cached plan, session key, first-run flag.
+defaults delete com.deiko.capture
+
+# 4. Any API keys you pasted in Settings.
+security delete-generic-password -s com.deiko.capture -a SARVAM_API_KEY
+security delete-generic-password -s com.deiko.capture -a GROQ_API_KEY
+
+# 5. The four permission grants.
+tccutil reset All com.deiko.capture
+```
+
+Turn off **Open Deiko at login** in Settings before you delete the app, or the
+login item outlives it and macOS reports a missing application at every boot.
+
+Reinstalling does **not** restore your free trial. It is counted against a
+one-way hash of the Mac's hardware id, which is the same after a reinstall —
+see [Plans](#plans) above, where that trade-off is stated in full.
 
 ## Licence
 

@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import DeikoGesture
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FIRST RUN — the one screen where reading is the point
@@ -274,10 +275,14 @@ private struct WelcomeView: View {
     /// The gesture, as three keycaps — the menu repeats this later, but the
     /// first run is where the muscle memory starts.
     private var gestureStrip: some View {
-        HStack(spacing: 16) {
-            keycap("⌥ ⌥", "double-tap right Option — start")
+        // Reads the CURRENT key rather than the default, so the first-run
+        // window teaches the gesture that actually works on this Mac. Left
+        // Option is fixed — it is the drawing key, not the session key.
+        let key = SessionKey.selected
+        return HStack(spacing: 16) {
+            keycap("\(key.symbol) \(key.symbol)", "double-tap \(key.name) — start")
             keycap("⌥ + drag", "left Option — lasso a region")
-            keycap("⌥", "tap — stop")
+            keycap(key.symbol, "tap — stop")
         }
         .frame(maxWidth: .infinity)
         .padding(12)

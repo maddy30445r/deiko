@@ -104,10 +104,44 @@ enum Diagnostics {
     }
 
     /// How many sessions exist. A number, never a name.
+    ///
+    /// `Sessions.list` rather than a directory count of its own: that version
+    /// counted every non-dot entry, so anything a person had dropped in the
+    /// folder inflated the one number in this report that says whether the app
+    /// has ever successfully recorded anything.
+    ///
+    /// Still the DEFAULT root, which is what a shipped app always uses. A run
+    /// started with `--out` reports 0 here — a development path, and not worth
+    /// threading a root through a type that has no other reason to know one.
     private static func sessionCount() -> Int {
-        let root = "\(NSHomeDirectory())/Documents/Deiko"
-        let entries = (try? FileManager.default.contentsOfDirectory(atPath: root)) ?? []
-        return entries.filter { !$0.hasPrefix(".") }.count
+        Sessions.list().count
+    }
+
+    /// A bug report with the answers already in it.
+    ///
+    /// Nil when this build carries no address; callers hide their buttons then.
+    /// The crash alert has always offered to copy diagnostics without ever
+    /// saying where they should go, and an item that opened an empty compose
+    /// window would be that same dead end wearing a button.
+    ///
+    /// The body is `report()`, which by construction carries nothing from
+    /// inside a session — no narration, no window titles, no OCR, no session
+    /// ids. See this file's header for why that is a property of how the code
+    /// is arranged rather than a rule somebody has to remember.
+    static func feedbackURL() -> URL? {
+        guard let address = Credentials.supportEmail else { return nil }
+        var components = URLComponents()
+        components.scheme = "mailto"
+        components.path = address
+        components.queryItems = [
+            URLQueryItem(name: "subject", value: "Deiko \(DeikoVersion.current) — feedback"),
+            URLQueryItem(
+                name: "body",
+                value: "\n\n— what happened —\n\n\n"
+                    + "— diagnostics, so this can be answered —\n\n" + report()
+            ),
+        ]
+        return components.url
     }
 
     /// Copy, and reveal the log — a report and the file that backs it up.

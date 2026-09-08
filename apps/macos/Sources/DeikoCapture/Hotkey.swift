@@ -27,18 +27,31 @@ import DeikoGesture
 // Deiko has no business touching input it was not invited to.
 // ───────────────────────────────────────────────────────────────────────────────
 
-/// Right Option. Not `fn`/Globe, which macOS intercepts for dictation, the
-/// emoji picker and input-source switching.
-private let kRightOptionKeyCode: Int64 = 61
+/// WHICH KEY STARTS A SESSION — the user's choice, read live.
+///
+/// It was Right Option, hardcoded, and on most non-US layouts that key is
+/// AltGr: the modifier that types `@ # [ ] { } |`. A double tap inside 350ms
+/// starts a recording, so typing an array literal could open a session, and
+/// nothing named the key or let anybody change it. `SessionKey` (in
+/// `DeikoGesture`, so its table is unit-tested) holds the four right-hand
+/// modifiers and their per-key device bits; Left Option stays the drawing key
+/// and is never a candidate.
+///
+/// Read on every modifier event rather than cached: `UserDefaults` is backed by
+/// CFPreferences, which caches in-process, so this costs nothing measurable and
+/// buys a setting that takes effect the moment it is changed — no relaunch, no
+/// observer, no second copy of the value to fall out of step.
+extension SessionKey {
+    static let defaultsKey = "DEIKO_SESSION_KEY"
 
-/// NX_DEVICERALTKEYMASK — the device-specific flag bit for the RIGHT Option
-/// key. `.maskAlternate` is set while EITHER Option key is down, so testing it
-/// alone meant that releasing Right Option while Left Option happened to be
-/// held produced no `.released`: the release event carries keycode 61, but the
-/// combined mask was still set, so the state machine saw no change — and the
-/// left key's own release is keycode 58, rejected by the keycode guard. Result:
-/// a hold that never ended. The device bit tracks the right key alone.
-private let kRightOptionFlagMask: UInt64 = 0x40
+    static var selected: SessionKey {
+        get {
+            SessionKey(rawValue: UserDefaults.standard.string(forKey: defaultsKey) ?? "")
+                ?? .fallback
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: defaultsKey) }
+    }
+}
 
 /// Left Option — the drawing key. Keycode and device bit, same reasoning as
 /// above: `.maskAlternate` cannot tell the two Option keys apart.
@@ -168,11 +181,12 @@ final class Hotkey {
         case .flagsChanged:
             let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
 
-            if keyCode == kRightOptionKeyCode {
-                // The DEVICE bit, not `.maskAlternate` — see the constants.
+            let sessionKey = SessionKey.selected
+            if keyCode == sessionKey.keyCode {
+                // The DEVICE bit, not the combined mask — see `SessionKey`.
                 // Only the press means anything; a release carries no meaning
                 // now that there is no held mode.
-                if event.flags.rawValue & kRightOptionFlagMask != 0 {
+                if event.flags.rawValue & sessionKey.deviceMask != 0 {
                     apply(gesture.press(at: Clock.nowMs()))
                 }
             } else if keyCode == kLeftOptionKeyCode {

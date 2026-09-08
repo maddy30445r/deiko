@@ -6,21 +6,74 @@ import Testing
 // A taxonomy tested against invented strings would pass while classifying
 // nothing a user will ever see.
 
-@Test("a missing key sends the user to Settings, not to a shell")
-func noKey() {
-    let real = """
-        ✗ SARVAM_API_KEY is not set. Copy .env.example to .env and fill it in,
-          then run:  export $(grep -v '^#' .env | xargs)
-        """
-    let failure = PipelineFailure.classify(stage: "Transcribing", output: real)
+// THE MISSING-KEY CASE IS GONE, and its deletion is the finding.
+//
+// `pipeline-contract.test.mjs` had listed "sarvam_api_key is not set" for
+// releases as a branch no script can reach any more: `selectTranscriber` falls
+// through to the relay and then to on-device words, so a keyless install
+// transcribes rather than failing. The branch stayed, telling anybody unlucky
+// enough to reach it that Deiko needs a key it does not need. Classifying a
+// failure that cannot happen is not free — it was the first thing `classify`
+// checked, and it was the wrong sentence.
 
-    #expect(failure.kind == .noAPIKey)
-    #expect(failure.opensSettings)
-    // The whole point: the shipped app has no .env and the user is not in a
-    // shell, so neither may appear in what they are told to do.
-    #expect(!failure.message.contains(".env"))
-    #expect(!failure.message.contains("export"))
-    #expect(failure.raw == real, "the original survives for a bug report")
+@Test("this month's Pro hours are not a bug report")
+func monthlyCapSpent() {
+    // services/relay/quota.mjs:200, wrapped by transcribe.mjs's relay error.
+    let failure = PipelineFailure.classify(
+        stage: "Transcribing",
+        output: #"Deiko relay 429: {"error":"this month's fair-use limit is used up"}"#
+    )
+
+    #expect(failure.kind == .quotaExhausted)
+    #expect(failure.message.contains("Pro hours"))
+    #expect(failure.message.contains("resets"))
+    // A paying customer who has spent their month has no key to fix and
+    // nothing to report; both would send them somewhere useless.
+    #expect(!failure.opensSettings)
+    #expect(!failure.message.contains("bug report"))
+    // They have no relationship with Sarvam.
+    #expect(!failure.message.lowercased().contains("sarvam"))
+}
+
+@Test("the service's own ceiling says the plan is fine")
+func serviceCeiling() {
+    // quota.mjs:190 — checked before any per-subject cap, precisely so a paying
+    // customer is never told THEY are out when the service is.
+    let failure = PipelineFailure.classify(
+        stage: "Transcribing",
+        output: #"Deiko relay 429: {"error":"the service is at its daily ceiling — try again tomorrow"}"#
+    )
+
+    #expect(failure.kind == .quotaExhausted)
+    #expect(failure.message.lowercased().contains("nothing is wrong with your plan"))
+    #expect(!failure.message.contains("bug report"))
+}
+
+@Test("a metering outage reads as temporary, not as a fault of theirs")
+func meteringUnavailable() {
+    // relay.mjs:223/249 — the relay fails closed when DynamoDB is unreachable.
+    let failure = PipelineFailure.classify(
+        stage: "Transcribing",
+        output: #"Deiko relay 503: {"error":"usage service unavailable: timeout"}"#
+    )
+
+    #expect(failure.kind == .offline)
+    #expect(failure.message.contains("saved"))
+    #expect(!failure.message.contains("bug report"))
+    #expect(!failure.opensSettings)
+}
+
+@Test("the relay's own rate limiter does not blame a vendor the user never chose")
+func relayRateLimitNamesNoVendor() {
+    // relay.mjs:203. This lands in the `rate limit` branch, which used to say
+    // "Sarvam is rate-limiting" about Deiko's own per-container limiter.
+    let failure = PipelineFailure.classify(
+        stage: "Transcribing",
+        output: #"Deiko relay 429: {"error":"rate limit exceeded"}"#
+    )
+
+    #expect(failure.kind == .quotaExhausted)
+    #expect(!failure.message.lowercased().contains("sarvam"))
 }
 
 @Test("a rejected key is not confused with a missing one")

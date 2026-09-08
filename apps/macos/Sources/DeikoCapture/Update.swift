@@ -44,14 +44,10 @@ enum Update {
     /// The same shape as `Credentials.relayURL`, for the same reason: a constant
     /// that has to be edited before every release is a constant that is wrong in
     /// somebody's local build.
-    private static var siteURL: URL? {
-        let override = ProcessInfo.processInfo.environment["DEIKO_SITE_URL"]
-        let configured = override?.isEmpty == false
-            ? override
-            : Bundle.main.object(forInfoDictionaryKey: "DeikoSiteURL") as? String
-        guard let configured, !configured.isEmpty else { return nil }
-        return URL(string: configured)
-    }
+    /// Moved to `Credentials.siteURL`, beside the relay URL it always mirrored:
+    /// three things ask now — this check, the licence card's links, and the
+    /// review panel's "Get Pro" — and one copy is what keeps them agreeing.
+    private static var siteURL: URL? { Credentials.siteURL }
 
     /// Ask once, at launch.
     ///

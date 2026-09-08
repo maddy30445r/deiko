@@ -1,6 +1,7 @@
 import AppKit
 import DeikoHandoff
 import SwiftUI
+import DeikoGesture
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE REVIEW — the brief in short, before it goes anywhere
@@ -141,6 +142,29 @@ final class ReviewModel: ObservableObject {
     /// Open Settings — set by whoever owns that window. A failure whose fix is
     /// "add your key" should be one click from the key, not an instruction.
     var onOpenSettings: (() -> Void)?
+
+    /// Leave one screenshot out of the brief.
+    ///
+    /// Writes the exclusion and re-renders, which is what makes it real: the
+    /// renderer drops the whole referent, so neither the image nor the text
+    /// read off it reaches `prompt.txt`. The thumbnails are shown to catch a
+    /// bad crop and until now there was nothing to DO about one — the only
+    /// remedy was abandoning the session.
+    func excludeCrop(_ path: String) {
+        guard let sessionDir, digest != nil else { return }
+        let name = (path as NSString).lastPathComponent
+        var names = BriefPipeline.cropExclusions(sessionDir: sessionDir)
+        guard !names.contains(name) else { return }
+        names.append(name)
+        try? BriefPipeline.writeCropExclusions(names, sessionDir: sessionDir)
+        rerenderPending = true
+        approve()
+    }
+
+    /// Something other than the narration changed and the brief has to be built
+    /// again. `approve()` re-rendered only for an edited narration, so without
+    /// this an excluded crop was written to disk and never acted on.
+    private var rerenderPending = false
 
     /// The recorder refused to reopen the session — the events file is gone, or
     /// another session is already live. Say so and leave the brief usable.
@@ -288,11 +312,29 @@ final class ReviewModel: ObservableObject {
         task?.cancel()
         task = Task {
             do {
-                if narrationEdited {
-                    phase = .working("Applying your correction…")
-                    try BriefPipeline.writeNarrationOverride(narration, sessionDir: sessionDir)
+                if narrationEdited || rerenderPending {
+                    phase = .working(narrationEdited
+                        ? "Applying your correction…"
+                        : "Leaving that screenshot out…")
+                    if narrationEdited {
+                        try BriefPipeline.writeNarrationOverride(narration, sessionDir: sessionDir)
+                    }
                     let rerendered = try await BriefPipeline.rerender(sessionDir: sessionDir)
                     guard stillCurrent(sessionDir) else { return }
+                    // CLEARED ONLY ONCE THE RE-RENDER HAS ACTUALLY LANDED.
+                    //
+                    // Clearing it before the `await` looked equivalent and was
+                    // not: `approve` cancels the task in flight, so a coin
+                    // thrown while this was still rendering started a second
+                    // pass that saw `rerenderPending == false` and
+                    // `narrationEdited == false`, skipped the re-render, and
+                    // handed over the PRE-EXCLUSION `prompt.txt` — the removed
+                    // screenshot's path, its caption, its screen text and its
+                    // image bytes, all delivered after the user had taken it
+                    // out. `narrationEdited` never had this bug because it is
+                    // derived state rather than a flag; clearing here makes
+                    // this one self-healing in the same way.
+                    rerenderPending = false
                     self.digest = rerendered
                     await self.loadCropThumbnails(rerendered, sessionDir: sessionDir)
                     guard stillCurrent(sessionDir) else { return }
@@ -346,7 +388,7 @@ final class ReviewModel: ObservableObject {
         // touched — a claim that reads as authority the words have not earned.
         carriedNarration = narrationEdited ? narration : nil
         holdsBeforeExtending = Set(BriefPipeline.holdTexts(sessionDir: sessionDir).keys)
-        phase = .working("Recording — tap Right Option to stop")
+        phase = .working("Recording — tap \(SessionKey.selected.name) to stop")
     }
 
     /// Re-run the pipeline over a session that just gained a hold, keeping
@@ -427,12 +469,17 @@ final class ReviewModel: ObservableObject {
 
 struct ReviewView: View {
     @ObservedObject var model: ReviewModel
+    /// Which thumbnail the cursor is over, so only that one shows its ×.
+    @State private var hoveredCrop: String?
     /// Reopening the session is the orb controller's job — it owns the window
     /// that has to get out of the way, and the recorder handoff.
     let onExtend: () -> Void
     /// "Good to go" returns to the collapsed orb — the panel corrects, the
     /// coin sends. Owned by the orb, which owns the window's shape.
     let onCollapse: () -> Void
+    /// Delete the session outright. Owned by the orb, which owns the window
+    /// that has to go away with it.
+    let onDelete: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -591,6 +638,7 @@ struct ReviewView: View {
                 bindingLine(d)
                 cropRow(d)
                 degradedRow(d)
+                trustRow(d)
                 repoRow(d)
             }
         }
@@ -641,15 +689,81 @@ struct ReviewView: View {
     /// transcript that read worse than usual, and the only thing that reached
     /// the inbox was "the transcription is bad". Secondary styling on purpose:
     /// this is an explanation, not a problem to solve.
+    /// The sentence for one degradation reason. The wording lives in
+    /// `SessionClaims` (DeikoHandoff) so it can be tested; the reset date is
+    /// supplied from here, where the calendar is.
+    ///
+    /// `static` so the collapsed orb card shows the same sentence as the
+    /// expanded panel — two spellings would drift the first time one was
+    /// reworded.
+    static func degradedSentence(_ reason: String?, degraded: Bool) -> String? {
+        SessionClaims.degradedSentence(
+            reason, degraded: degraded, resetSentence: License.Quota.proResetSentence
+        )
+    }
+
+    /// One quiet line when the transcript is not what a clean session produces.
+    ///
+    /// The fallback itself is correct and deliberate — a spent trial or an
+    /// unreachable relay keeps the session working instead of failing it. But
+    /// it was entirely silent, so the only thing the developer saw was a
+    /// transcript that read worse than usual, and the only thing that reached
+    /// the inbox was "the transcription is bad". Secondary styling on purpose:
+    /// this is an explanation, not a problem to solve — except for `trial`,
+    /// which is the one with something to do about it.
     @ViewBuilder private func degradedRow(_ d: BriefDigest) -> some View {
-        if d.summary.degraded == true {
-            Label(
-                "Some of this was transcribed on your Mac rather than in the cloud — accuracy may be lower.",
-                systemImage: "waveform.badge.exclamationmark"
-            )
-            .font(.system(size: 12))
-            .foregroundStyle(.secondary)
+        if let sentence = Self.degradedSentence(
+            d.summary.degradedReason, degraded: d.summary.degraded == true
+        ) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Label(sentence, systemImage: "waveform.badge.exclamationmark")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                // Only where there is somewhere to send them. A build with no
+                // checkout URL stamped must not grow a button that 404s.
+                if d.summary.degradedReason == "trial", let buy = Credentials.buyURL {
+                    Button("Get Pro") { NSWorkspace.shared.open(buy) }
+                        .font(.system(size: 12, weight: .semibold))
+                        .buttonStyle(.link)
+                }
+                // A rejected key is fixed in Settings, and nowhere else.
+                if d.summary.degradedReason == "rejected" {
+                    Button("Open Settings") { model.onOpenSettings?() }
+                        .font(.system(size: 12, weight: .semibold))
+                        .buttonStyle(.link)
+                }
+            }
         }
+    }
+
+    /// The one line that answers "did anything leave?" without reading source.
+    private func trustRow(_ d: BriefDigest) -> some View {
+        Label(
+            Self.trustLine(
+                d,
+                hasSummary: model.summary != nil,
+                ownGroqKey: Credentials.willUse("GROQ_API_KEY")
+            ),
+            systemImage: "arrow.up.forward.square"
+        )
+        .font(.system(size: 11))
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// What left this Mac, for this session. The claim itself lives in
+    /// `SessionClaims` (DeikoHandoff), which is testable; this only supplies
+    /// the digest's fields.
+    static func trustLine(_ d: BriefDigest, hasSummary: Bool, ownGroqKey: Bool) -> String {
+        SessionClaims.trustLine(
+            transcriber: d.summary.transcriber,
+            degradedReason: d.summary.degradedReason,
+            seconds: Int((d.summary.durationMs / 1000).rounded()),
+            uploadedChunks: d.summary.uploadedChunks,
+            hasSummary: hasSummary,
+            ownGroqKey: ownGroqKey
+        )
     }
 
     /// WHY the screenshots were held back, in their own words.
@@ -718,8 +832,37 @@ struct ReviewView: View {
                             thumbnail(path)
                         }
                     }
+                    // Room for the × to sit proud of the top-right corner
+                    // without the scroll view clipping it.
+                    .padding(.top, 6)
+                    .padding(.trailing, 6)
                 }
-                .frame(height: 72)
+                .frame(height: 78)
+            }
+
+            // What the developer took out themselves. Counted rather than
+            // silent: a brief that ships fewer screenshots than the session
+            // captured should say so, even when the removal was deliberate —
+            // it is the same courtesy the withheld line pays.
+            if let removed = d.summary.cropsRemoved, removed > 0 {
+                Text(removed == 1
+                    ? "1 screenshot left out by you"
+                    : "\(removed) screenshots left out by you")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+
+            // Labels lost to a correction. Placed HERE, beside the screenshots
+            // it is about, rather than in the footer: the footer tracks live
+            // edit state and this number comes from the last render, so the two
+            // would contradict each other while somebody is still typing.
+            if let dropped = d.summary.labelsDropped, dropped > 0 {
+                Text(dropped == 1
+                    ? "1 screenshot lost its caption — the sentence it quoted changed."
+                    : "\(dropped) screenshots lost their captions — the sentences they quoted changed.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(.top, 3)
@@ -743,6 +886,32 @@ struct ReviewView: View {
                     RoundedRectangle(cornerRadius: 6)
                         .strokeBorder(DeikoStyle.accent.opacity(0.25), lineWidth: 1)
                 )
+                // LEAVE THIS ONE OUT.
+                //
+                // These thumbnails exist to catch a crop that grabbed the wrong
+                // thing — and until now spotting one had no remedy short of
+                // abandoning the session. Redaction only knows credential
+                // SHAPES, so a customer's name, an open DM or an unrelated
+                // window all sail through it; this is the control for
+                // everything the automatic rule cannot be expected to judge.
+                //
+                // On hover rather than always: five permanent × badges over
+                // five thumbnails reads as a row of errors.
+                .overlay(alignment: .topTrailing) {
+                    if hoveredCrop == path {
+                        Button { model.excludeCrop(path) } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 15))
+                                .symbolRenderingMode(.palette)
+                                .foregroundStyle(.white, DeikoStyle.needsYou)
+                        }
+                        .buttonStyle(.plain)
+                        .offset(x: 5, y: -5)
+                        .help("Leave this screenshot out of the brief")
+                    }
+                }
+                .onHover { inside in hoveredCrop = inside ? path : nil }
+                .disabled(!isApprovable)
         } else {
             // The session directory belongs to the user, not to Deiko — it can
             // be moved or deleted between capture and reopening this card. A
@@ -858,19 +1027,32 @@ struct ReviewView: View {
             case .ready:
                 // The trust line, and now also the model: the panel corrects,
                 // the coin sends. There is no send button on this screen.
-                Text(model.narrationEdited
-                    ? "Everything else goes as captured."
-                    : "Nothing is sent until you throw the coin.")
+                //
+                // It used to read "Everything else goes as captured." the
+                // moment the narration was touched — which was false: an edit
+                // dropped every screenshot caption. The captions now survive
+                // unless their own sentence changed, and how many did not is
+                // reported beside the thumbnails, so this line can go back to
+                // saying the one thing that is always true here.
+                Text("Nothing is sent until you throw the coin.")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            // Furthest from the primary action, because it is the destructive
+            // one — and here at all because the review panel is where somebody
+            // discovers the session caught something it should not have. The
+            // `×` only hides the orb; this is the only way to remove the
+            // screenshots.
+            Button("Delete session…", role: .destructive) { onDelete() }
+                .disabled(!isApprovable)
+                .help("Remove this session's brief and screenshots from disk.")
             // Left of the primary action and unstyled, because it is the rarer
             // choice — but it must be reachable from the same place you decide
             // the brief is not complete.
             Button("Point at more") { onExtend() }
                 .disabled(!isApprovable)
-                .help("Reopen this session and record more — talk and point again, then tap Right Option to stop.")
+                .help("Reopen this session and record more — talk and point again, then tap \(SessionKey.selected.name) to stop.")
             Button("Good to go") {
                 model.approve()
                 onCollapse()

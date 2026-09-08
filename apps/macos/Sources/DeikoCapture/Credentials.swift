@@ -100,6 +100,51 @@ enum Credentials {
         return configured
     }
 
+    /// Where the site is, or nil when this build has none.
+    ///
+    /// Lives here rather than in `Update`, which owned it first, because three
+    /// things now ask: the update check, the licence card's links, and the
+    /// review panel's "Get Pro". Same shape and same reasoning as `relayURL` —
+    /// stamped by `make bundle SITE_URL=…`, overridable from the environment so
+    /// it can be pointed at a local file server.
+    static var siteURL: URL? {
+        configuredURL(env: "DEIKO_SITE_URL", plist: "DeikoSiteURL")
+    }
+
+    /// Where somebody buys Pro, or nil.
+    ///
+    /// ITS OWN KEY, not `siteURL` + "/buy", and the distinction is not
+    /// pedantry: as this ships, the stamped site answers 404 on every path
+    /// including the one the update check reads. A button derived from a site
+    /// URL would therefore appear in a build where it cannot work, and a
+    /// purchase link that 404s is worse than no purchase link — it reads as a
+    /// broken product at the exact moment somebody decided to pay. Nil hides
+    /// every buy affordance instead, so the button appears when there is
+    /// something behind it and not before.
+    static var buyURL: URL? {
+        configuredURL(env: "DEIKO_BUY_URL", plist: "DeikoBuyURL")
+    }
+
+    /// Where a bug report goes. Nil hides the menu item, for the same reason.
+    static var supportEmail: String? {
+        let override = ProcessInfo.processInfo.environment["DEIKO_SUPPORT_EMAIL"]
+        let configured = override?.isEmpty == false
+            ? override
+            : Bundle.main.object(forInfoDictionaryKey: "DeikoSupportEmail") as? String
+        guard let configured, !configured.isEmpty else { return nil }
+        return configured
+    }
+
+    /// Environment first, then the bundle — the pattern every stamped URL uses.
+    private static func configuredURL(env: String, plist: String) -> URL? {
+        let override = ProcessInfo.processInfo.environment[env]
+        let configured = override?.isEmpty == false
+            ? override
+            : Bundle.main.object(forInfoDictionaryKey: plist) as? String
+        guard let configured, !configured.isEmpty else { return nil }
+        return URL(string: configured)
+    }
+
     /// An opaque per-install identifier, so the service can rate-limit and
     /// revoke without knowing anything about who is calling.
     ///

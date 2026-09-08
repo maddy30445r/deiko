@@ -56,6 +56,37 @@ const MAX_TEXT_LINES = 40;
 /** One rendered line's ceiling — matches what the old renderer's fences used. */
 const MAX_LINE_LENGTH = 500;
 
+/** Whitespace and case folded away — the two differences between "what was
+ *  recognised" and "what the developer retyped" that carry no meaning. */
+const normalizeSpoken = (text) => String(text ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+
+/**
+ * May this screenshot's label still travel?
+ *
+ * A label is a sentence sliced out of the raw transcript, and the review window
+ * lets the developer rewrite that transcript. The promise the window makes is
+ * that only the narration they approved leaves the Mac — so a label may ship
+ * only if its words are still IN that approved text. Edit a typo somewhere else
+ * and this stays true for every other label; delete the sentence a label was
+ * built from and the label goes with it.
+ *
+ * Substring rather than equality because a label is one utterance out of a
+ * longer narration. Normalised because retyping a word changes spacing and case
+ * without changing what was said, and holding a label back over a double space
+ * would be the over-strict mirror of shipping words somebody deleted.
+ */
+export function quoteSurvives(utterance, narration) {
+  const quote = normalizeSpoken(utterance);
+  if (quote.length === 0) return false;
+  // ON WORD BOUNDARIES, not raw characters. A plain `includes` matched across
+  // them — `quoteSurvives("on the", "python theory")` was true, on
+  // `pyth[on the]ory` — which let a label ship on the strength of letters that
+  // are not the words anybody said. Padding both sides with a space turns
+  // "contains these characters" into "contains this run of whole words", which
+  // is what the promise actually claims.
+  return ` ${normalizeSpoken(narration)} `.includes(` ${quote} `);
+}
+
 /**
  * Why a screenshot didn't make it, in the words the developer would plausibly
  * have typed themselves — never a system-notice tone, and never wrong about

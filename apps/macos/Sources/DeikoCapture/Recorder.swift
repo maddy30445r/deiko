@@ -417,6 +417,30 @@ final class Recorder {
         return dir
     }
 
+    /// Set for the duration of one close-out: throw the session away instead of
+    /// handing it to the orb.
+    private var discardOnClose = false
+
+    /// Stop, and keep nothing.
+    ///
+    /// The only way out of a session used to be one that produced a brief —
+    /// so a session started by accident, or one where the wrong thing was said,
+    /// had to be carried all the way to an orb and then dismissed, leaving the
+    /// recording and its screenshots on disk anyway. This closes out through
+    /// exactly the same path (so a hold in flight is finalised and crops still
+    /// being written are awaited) and then deletes the folder.
+    func discardSession() async {
+        guard sessionDir != nil else { return }
+        discardOnClose = true
+        _ = await stopSession()
+        // CLEARED WHATEVER HAPPENED. `stopSession` returns the in-flight close
+        // when one is already running, and that close may have passed the
+        // discard check before this flag was set — leaving it true, and the
+        // NEXT session silently deleted at its own close. `closeSession` clears
+        // it when it observes it; this clears it when it did not.
+        discardOnClose = false
+    }
+
     private func closeSession() async -> String? {
         // A lasso still being drawn is a referent the user meant to capture.
         // Commit it before teardown, or it dies on the `isRecording` guard in
@@ -475,6 +499,25 @@ final class Recorder {
         // session is live means Option-drags stay swallowed afterwards.
         hotkey.noteSessionEnded()
         onStateChange?()
+
+        // THROWN AWAY, and only here at the very end.
+        //
+        // Everything above has already run: the hold is finalised, crops still
+        // being written were awaited, the event file was redirected back to the
+        // launch log and its handle closed. Deleting earlier would race a write
+        // still in flight; deleting here removes a directory nothing is holding
+        // open. No orb, because there is nothing to hand over.
+        if discardOnClose {
+            discardOnClose = false
+            do {
+                try FileManager.default.removeItem(atPath: dir)
+                Emit.log("✕ session \(id) discarded")
+            } catch {
+                Emit.log("✕ session \(id) — could not discard: \(error.localizedDescription)")
+            }
+            return dir
+        }
+
         // Fired HERE rather than from the menu's stop action, because that is
         // only one of four ways a session ends — the hotkey tap, the silence
         // watchdog and Quit all arrive through `stopSession` and would each have
@@ -582,7 +625,7 @@ final class Recorder {
 
         Emit.event(HoldEvent.start(id: sessionId, hold: holdIndex, audioPath: audioPath))
         Emit.log("● recording — point at things and talk. Hold LEFT Option and "
-            + "drag to circle an area. Tap Right Option to stop.")
+            + "drag to circle an area. Tap \(SessionKey.selected.name) to stop.")
         onStateChange?()
 
         trail.removeAll()

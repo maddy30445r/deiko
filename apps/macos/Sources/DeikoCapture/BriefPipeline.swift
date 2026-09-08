@@ -40,6 +40,26 @@ struct BriefSummary: Codable {
     /// false, which is the honest default: it means "nothing told us it was
     /// degraded", not "we checked and it was fine".
     var degraded: Bool?
+    /// WHICH degradation: "trial", "monthly", "ceiling", "unavailable" or
+    /// "timing". `degraded` on its own could only ever produce a hedge — the
+    /// five have five different answers and only two are about the user's plan
+    /// at all. Written by `scripts/lib/cloud.mjs`, rendered by
+    /// `ReviewView.degradedSentence`.
+    var degradedReason: String?
+    /// Who produced the words — "sarvam", "deiko", or "on-device". Feeds the
+    /// one line that says what left this Mac.
+    var transcriber: String?
+    /// How many requests actually reached the network. Zero with a `deiko`
+    /// transcriber means the relay was never reached (or every hold came from
+    /// the cache, as it does when an old session is reopened) — so no audio
+    /// left, whatever the configuration says.
+    var uploadedChunks: Int?
+    /// Screenshot labels dropped because the sentence they quoted is no longer
+    /// in the corrected narration. Surfaced because the alternative is a brief
+    /// that quietly means less than the developer thinks it does.
+    var labelsDropped: Int?
+    /// Screenshots the developer took out by hand in the review window.
+    var cropsRemoved: Int?
 }
 
 private struct BriefManifest: Codable {
@@ -221,6 +241,17 @@ enum BriefPipeline {
             extraEnvironment: precomputed ? ["DEIKO_TIMINGS_READY": "1"] : [:]
         )
         mark("transcribe")
+
+        // THE SPEND JUST HAPPENED — ask what is left of it.
+        //
+        // Here, and not when the session closed: `Recorder.closeSession` fires
+        // `onSessionClosed` BEFORE any of this runs, so a refresh there would
+        // report the balance as it stood before the audio this session just
+        // metered. Detached and unawaited, because the brief is what the
+        // developer is waiting for and a quota readout must never sit in front
+        // of it. Failure is silence; the menu keeps the previous answer.
+        Task { try? await License.refresh() }
+
         // The script's own per-stage breakdown, which says which half of the
         // transcribe leg was slow — the app's single number cannot.
         if let line = transcribeOutput
@@ -482,6 +513,30 @@ enum BriefPipeline {
         } else {
             try trimmed.write(to: path, atomically: true, encoding: .utf8)
         }
+    }
+
+    /// Screenshots the developer has taken out by hand, by basename.
+    ///
+    /// BASENAMES, not paths: the session directory belongs to the user and can
+    /// be moved between capture and review, and a list of absolute paths would
+    /// quietly stop excluding anything the moment it was. The renderer reads
+    /// this file and drops the whole referent — see the comment there for why
+    /// nulling its `cropPath` would ship the removed screenshot's text.
+    static func cropExclusions(sessionDir: String) -> [String] {
+        let path = URL(fileURLWithPath: sessionDir).appendingPathComponent("crops.excluded.json")
+        guard let data = try? Data(contentsOf: path),
+              let names = try? JSONDecoder().decode([String].self, from: data)
+        else { return [] }
+        return names
+    }
+
+    static func writeCropExclusions(_ names: [String], sessionDir: String) throws {
+        let path = URL(fileURLWithPath: sessionDir).appendingPathComponent("crops.excluded.json")
+        guard !names.isEmpty else {
+            try? FileManager.default.removeItem(at: path)
+            return
+        }
+        try JSONEncoder().encode(names).write(to: path, options: .atomic)
     }
 
     // ── Plumbing ────────────────────────────────────────────────────────────

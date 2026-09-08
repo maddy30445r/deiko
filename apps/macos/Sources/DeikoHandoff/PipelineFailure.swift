@@ -17,11 +17,9 @@ import Foundation
 public struct PipelineFailure: Equatable, Sendable {
 
     public enum Kind: Equatable, Sendable {
-        /// No Sarvam key anywhere — the commonest first-run failure.
-        case noAPIKey
         /// The key exists and the service rejected it.
         case authRejected
-        /// Rate limit or quota.
+        /// A cap is spent: the caller's own, or the service's for the day.
         case quotaExhausted
         /// DNS, no route, TLS — the machine could not reach the service.
         case offline
@@ -70,16 +68,46 @@ public struct PipelineFailure: Equatable, Sendable {
         // evaporated. It never does: the session is on disk before any of
         // these stages run.
 
-        if text.contains("sarvam_api_key is not set") || text.contains("sarvam_api_key is missing") {
+        // THE RELAY'S OWN REFUSALS COME FIRST, and they are the only ones here
+        // that are not a fault at all.
+        //
+        // Each of these means the session already fell back to Apple's
+        // on-device words and rendered — `transcribe.mjs` treats them as a
+        // degraded session rather than a failed one, and the review window says
+        // which happened in its own line. They reach this taxonomy only when
+        // something ELSE then failed the stage, so the sentence's job is to
+        // stop the user chasing a problem they do not have. None of them is a
+        // bug report, and none of them is Sarvam: the user has no relationship
+        // with Sarvam, and telling them a vendor they have never heard of is
+        // rate-limiting explains nothing they can act on.
+        //
+        // Strings from services/relay/quota.mjs and relay.mjs; the mapping they
+        // belong to lives in scripts/lib/cloud.mjs and is tested there.
+        if text.contains("fair-use limit") {
             return make(
-                .noAPIKey,
-                "No Sarvam key yet — Deiko needs one to turn your narration into text. "
-                    + "Add one in Settings and this brief finishes on its own.",
-                settings: true
+                .quotaExhausted,
+                "This month's Pro hours are used up, so this session was transcribed on "
+                    + "your Mac — accuracy may be lower. Your allowance resets on the 1st."
+            )
+        }
+        if text.contains("daily ceiling") {
+            return make(
+                .quotaExhausted,
+                "Deiko's transcription is at its daily limit — nothing is wrong with your "
+                    + "plan. This session was transcribed on your Mac and is saved."
+            )
+        }
+        if text.contains("usage service unavailable") {
+            return make(
+                .offline,
+                "Deiko's transcription service is briefly unavailable. The session was "
+                    + "transcribed on your Mac and is saved — try again in a few minutes."
             )
         }
 
-        // Sarvam's own errors arrive as `Sarvam <status>: <body>`.
+        // Sarvam's own errors arrive as `Sarvam <status>: <body>`, and reach a
+        // user only when they brought their OWN key — so naming Sarvam here is
+        // correct, and naming it above was not.
         if text.contains("sarvam 401") || text.contains("sarvam 403") {
             return make(
                 .authRejected,
@@ -91,7 +119,8 @@ public struct PipelineFailure: Equatable, Sendable {
         if text.contains("sarvam 429") || text.contains("quota") || text.contains("rate limit") {
             return make(
                 .quotaExhausted,
-                "Sarvam is rate-limiting. Nothing is lost — wait a moment and try again."
+                "The transcription service is rate-limiting. Nothing is lost — "
+                    + "wait a moment and try again."
             )
         }
 

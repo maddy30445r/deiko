@@ -203,6 +203,7 @@ final class OrbController: NSObject {
                         self?.applyMode()
                     },
                     onOpenSettings: { [weak self] in self?.onOpenSettings?() },
+                    onDelete: { [weak self] in self?.deleteSession() },
                     onHeightChange: { [weak self] height in self?.fit(cardHeight: height) }
                 )
             )
@@ -302,6 +303,61 @@ final class OrbController: NSObject {
         removeEscapeMonitor()
         model.cancelPendingWork()
         window?.orderOut(nil)
+    }
+
+    /// Delete the session on screen, folder and all.
+    ///
+    /// The `×` only puts the orb away — deliberately, because a dismissed
+    /// session is still on disk and still openable. That left no way at all to
+    /// say "this should not exist": a session recorded by mistake, or one that
+    /// caught something private, could be dismissed but not removed, and the
+    /// screenshots stayed. Confirmed, and refused while the pipeline is still
+    /// running, because deleting a directory being written to is the one
+    /// mistake worth making impossible rather than merely unlikely.
+    private func deleteSession() {
+        guard let dir = model.currentSessionDir, extending != dir else { return }
+        if case .working = model.phase, model.digest == nil { return }
+
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "Delete this session?"
+        alert.informativeText =
+            "The brief and its screenshots are removed from \(dir). This cannot be undone."
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        // THE ALERT SPINS A NESTED RUNLOOP, so the world can move while it is
+        // up: the hotkey tap stays live (`.commonModes`) and main-actor work
+        // keeps draining. By the time Delete is clicked, this orb may have been
+        // extended into a new hold, or be showing an entirely different
+        // session. So act on the directory captured BEFORE the alert — that is
+        // what the user was looking at and agreed to delete — and only touch
+        // the model if it is still pointing at it.
+        //
+        // The first version re-read the model here. It would have cancelled a
+        // newer session's pipeline and hidden its orb while deleting the old
+        // directory, and — because `extending` could be set during the alert —
+        // could also return early and do nothing at all, having just told the
+        // user it would.
+        do {
+            try FileManager.default.removeItem(atPath: dir)
+            Emit.log("✕ session \((dir as NSString).lastPathComponent) deleted from the review panel")
+        } catch {
+            Emit.log("✕ could not delete \(dir): \(error.localizedDescription)")
+        }
+        guard model.currentSessionDir == dir else { return }
+        model.cancelPendingWork()
+        dismiss()
+    }
+
+    /// Put the orb away if it is showing this session, and otherwise leave it
+    /// alone. For a session deleted from somewhere else — the menu's discard,
+    /// once the recording had already stopped.
+    func dismissIfShowing(_ dir: String) {
+        guard model.currentSessionDir == dir, window?.isVisible == true else { return }
+        model.cancelPendingWork()
+        dismiss()
     }
 
     private func fadeSoon() {
@@ -753,6 +809,9 @@ struct OrbActions {
     let onExtend: () -> Void
     let onSetMode: (OrbMode) -> Void
     let onOpenSettings: () -> Void
+    /// Delete this session's folder outright — the recourse for a session that
+    /// should not exist, which until now had none.
+    let onDelete: () -> Void
     /// How tall the collapsed card wants to be, so the panel can be exactly
     /// that and no more.
     let onHeightChange: (CGFloat) -> Void
@@ -1020,6 +1079,22 @@ struct OrbRootView: View {
                 ProgressView().controlSize(.small)
             }
         }
+        // WHY THIS ONE READS WORSE, on the card somebody actually looks at.
+        //
+        // The expanded panel carries this too, but most sessions never open it
+        // — the coin is thrown straight off this card. A degraded transcript
+        // with no explanation is precisely what turned "your free minutes ran
+        // out" into "the transcription is bad" in the inbox. Same sentence,
+        // from the same function, so the two surfaces cannot drift.
+        if let d = model.digest,
+           let sentence = ReviewView.degradedSentence(
+               d.summary.degradedReason, degraded: d.summary.degraded == true
+           ) {
+            Text(sentence)
+                .font(.system(size: 11))
+                .foregroundStyle(DeikoStyle.needsYou)
+                .fixedSize(horizontal: false, vertical: true)
+        }
         if let repo = model.digest?.summary.repoHints.first {
             HStack(spacing: 8) {
                 Text(repo)
@@ -1109,7 +1184,8 @@ struct OrbRootView: View {
             ReviewView(
                 model: model,
                 onExtend: actions.onExtend,
-                onCollapse: { actions.onSetMode(.collapsed) }
+                onCollapse: { actions.onSetMode(.collapsed) },
+                onDelete: actions.onDelete
             )
         }
         // The design's panel, exactly. Nothing inside may grow it: the content

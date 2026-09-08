@@ -36,6 +36,25 @@
 	<key>DeikoSiteURL</key>
 	<string></string>
 
+	<!--
+	  Where somebody buys Pro. ITS OWN KEY rather than SITE_URL + "/buy",
+	  because the two answer different questions: the site can exist while the
+	  checkout does not, which is exactly the state as this ships. Empty hides
+	  every buy affordance in the app — a purchase link that 404s is worse than
+	  no purchase link, since it fails at the moment somebody decided to pay.
+	-->
+	<key>DeikoBuyURL</key>
+	<string></string>
+
+	<!--
+	  Where a bug report goes, stamped by `make bundle SUPPORT_EMAIL=…`. Empty
+	  hides "Send feedback…" everywhere. The crash alert has always offered to
+	  copy diagnostics and never said where to send them; an item opening an
+	  empty compose window would be that same dead end with a button on it.
+	-->
+	<key>DeikoSupportEmail</key>
+	<string></string>
+
 	<key>CFBundleIconFile</key>
 	<string>Deiko</string>
 	<key>LSMinimumSystemVersion</key>

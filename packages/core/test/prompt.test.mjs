@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { buildPrompt } from "../lib/prompt.mjs";
+import { buildPrompt, quoteSurvives } from "../lib/prompt.mjs";
 import { assertNoSecrets, carriesSecret } from "../lib/redact.mjs";
 
 /** A referent nobody was talking through: no screenshot, no bound speech. */
@@ -521,4 +521,38 @@ test("a marker and its value on the SAME line withholds too", () => {
     }),
     true,
   );
+});
+
+// ── which labels survive a corrected narration ──────────────────────────────
+//
+// A label is a sentence sliced out of the raw transcript; the review window
+// lets the developer rewrite that transcript and promises only what they
+// approved leaves the Mac. `quoteSurvives` is that promise, stated per label —
+// it replaced a rule that dropped EVERY label the moment one word was edited.
+
+test("a label survives when its words are still in the approved narration", () => {
+  assert.equal(quoteSurvives("the padding is too big", "the padding is too big and the border is gone"), true);
+});
+
+test("a label whose sentence was deleted does not travel", () => {
+  assert.equal(quoteSurvives("call the Acme account manager", "the padding is too big"), false);
+});
+
+test("retyping changes spacing and case, not meaning", () => {
+  assert.equal(quoteSurvives("Fix   THIS one", "please fix this one now"), true);
+  assert.equal(quoteSurvives("fix this\none", "please fix this one now"), true);
+});
+
+test("an empty or missing utterance is never a label", () => {
+  assert.equal(quoteSurvives("", "anything at all"), false);
+  assert.equal(quoteSurvives("   ", "anything at all"), false);
+  assert.equal(quoteSurvives(null, "anything at all"), false);
+});
+
+test("editing one identifier drops only the label that named it", () => {
+  // The case this exists for: correcting `fetchUsr` → `fetchUser` in one
+  // sentence must not unlabel the screenshot bound to a different one.
+  const corrected = "the fetchUser call returns null. the padding is too big";
+  assert.equal(quoteSurvives("the padding is too big", corrected), true);
+  assert.equal(quoteSurvives("the fetchUsr call returns null", corrected), false);
 });
