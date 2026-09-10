@@ -37,6 +37,7 @@ import {
   DAILY_TTL_SECONDS,
   globalKey,
   licenseKey,
+  summaryKey,
   usageKey,
 } from "./quota.mjs";
 
@@ -71,6 +72,17 @@ const LICENSE_CACHE_MS = 24 * 60 * 60 * 1000;
 /// error is not a fact about the licence, only about the network between two
 /// clouds, and it heals on Polar's schedule, not ours.
 const ERROR_RETRY_MS = 5 * 60 * 1000;
+
+/// What a caller is told when the usage table cannot be reached.
+///
+/// FIXED TEXT. The real error is a DynamoDB message carrying the table name
+/// and an ARN-shaped resource string, and it was going straight into the HTTP
+/// body of a public endpoint. It goes to CloudWatch instead, where the person
+/// who needs it can read it and the person probing the service cannot.
+export function unavailable(err) {
+  console.error(`usage table unreachable: ${String(err?.message ?? err)}`);
+  return "usage service unavailable";
+}
 
 /// Created once per container, not per request, so the connection and its TLS
 /// handshake are reused across a warm Lambda's invocations.
@@ -182,22 +194,26 @@ export async function refund({ subject, seconds, tier, now = Date.now() }) {
   ]);
 }
 
-/// The global-only refund, for `recordGlobal`'s spends.
-export async function refundGlobal({ seconds, now = Date.now() }) {
-  await addSeconds(globalKey(now), -seconds, null);
+/// Count one summary against the day, and report the day's new total.
+///
+/// Its OWN row (`summaryKey`), not the audio ceiling's. Charging summaries to
+/// a user's own counter would spend a transcription allowance on a text call
+/// and make the trial run out faster than the thing the trial is for; charging
+/// them to the AUDIO ceiling — which is what this did — let a flood of cheap
+/// text calls close the expensive route for everybody, paying customers
+/// included. A budget each, so neither can shut the other.
+///
+/// The stored attribute is still `audioSeconds` because it is the counter
+/// `addSeconds` maintains; here it counts REQUESTS. The row key says which.
+export async function recordSummary({ now = Date.now() } = {}) {
+  const summariesToday = await addSeconds(summaryKey(now), 1, DAILY_TTL_SECONDS);
+  return { summariesToday };
 }
 
-/// Count something against the DAY only, and report the day's new total.
-///
-/// For work that costs the service money but is not the user's audio — the
-/// orb's three-line summary. Charging it to their own counter would spend a
-/// transcription allowance on a text call and make the trial run out faster
-/// than the thing the trial is for; leaving it uncounted entirely is how an
-/// unmetered route becomes an unbounded bill. The day's backstop is the right
-/// place: it bounds the service without touching what anybody was promised.
-export async function recordGlobal({ seconds, now = Date.now() }) {
-  const globalUsedSeconds = await addSeconds(globalKey(now), seconds, DAILY_TTL_SECONDS);
-  return { globalUsedSeconds };
+/// A refused summary gives its count back, or refusals would keep climbing the
+/// very ceiling that is refusing them.
+export async function refundSummary({ now = Date.now() } = {}) {
+  await addSeconds(summaryKey(now), -1, null);
 }
 
 /// Is this licence real, and what does it entitle its holder to?

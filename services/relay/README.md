@@ -70,6 +70,7 @@ Knobs, all overridable in the environment:
 | `DEIKO_REVOKED_TOKENS` | comma-separated tokens to refuse |
 | `DEIKO_USAGE_TABLE` | `deiko-usage` — the DynamoDB table holding every counter |
 | `DEIKO_GLOBAL_DAILY_SECONDS` | `43200` (12 hours) — the ceiling on the whole service's daily audio |
+| `DEIKO_SUMMARIES_PER_DAY` | `2000` — summaries served in a day, counted in their own row so a flood cannot close transcription |
 | `DEIKO_PRO_BENEFIT_IDS` | Polar benefit ids that mean Pro. Unset = any live licence is Pro — correct while Pro is the only paid benefit; the day there is a second one this MUST be set, or the cheaper SKU buys Pro's allowance. |
 | `POLAR_API_BASE` | `https://sandbox-api.polar.sh` to validate against Polar's sandbox. Unset = production. |
 
@@ -106,6 +107,7 @@ an option, and Lambda is the one that is actually deployed.
 | `DEIKO_REVOKED_TOKENS` | comma-separated tokens to refuse |
 | `DEIKO_USAGE_TABLE` | `deiko-usage` — the DynamoDB table holding every counter |
 | `DEIKO_GLOBAL_DAILY_SECONDS` | `43200` (12 hours) — the ceiling on the whole service's daily audio |
+| `DEIKO_SUMMARIES_PER_DAY` | `2000` — summaries served in a day, counted in their own row so a flood cannot close transcription |
 | `DEIKO_PRO_BENEFIT_IDS` | Polar benefit ids that mean Pro. Unset = any live licence is Pro — correct while Pro is the only paid benefit; the day there is a second one this MUST be set, or the cheaper SKU buys Pro's allowance. |
 | `POLAR_API_BASE` | `https://sandbox-api.polar.sh` to validate against Polar's sandbox. Unset = production. |
 
@@ -206,8 +208,14 @@ In order, cheapest first:
    borrowed Mac, or anyone willing to patch the client still can. The ceiling
    caps the whole service's audio for a day no matter how many subjects exist.
    Four hours is ₹120/day.
-4. **Reserved concurrency** — 5 by default. A blast radius, not a quota.
-5. **The revocation list, and the AWS budget alarm.** The alarm should fire long
+4. **A separate summary budget** — `DEIKO_SUMMARIES_PER_DAY`. `/v1/summarize`
+   accepts any bearer string, and the burst limiter is keyed by token, so a
+   caller rotating tokens is not limited by it. Its own row and its own budget
+   mean a flood of cheap text calls can no longer close the expensive route.
+5. **Reserved concurrency** — 5 by intent. **Not applied on a default account:**
+   AWS's per-account limit is 10 and it keeps 10 unreserved, so the deploy warns
+   and the account-wide cap applies instead. Ask AWS to raise the quota.
+6. **The revocation list, and the AWS budget alarm.** The alarm should fire long
    before the ceiling does: the ceiling stops a disaster, the alarm tells you
    one is starting.
 

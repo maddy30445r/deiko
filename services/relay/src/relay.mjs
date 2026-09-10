@@ -25,16 +25,17 @@
 
 import { createHash } from "node:crypto";
 
-import { audioSeconds, capFor, decide, subjectFrom } from "./quota.mjs";
+import { SUMMARIES_PER_DAY, audioSeconds, capFor, decide, subjectFrom } from "./quota.mjs";
 import {
   USAGE_TABLE,
   meteringHealthy,
   peek,
   record,
-  recordGlobal,
+  recordSummary,
   refund,
-  refundGlobal,
+  refundSummary,
   tierFor,
+  unavailable,
 } from "./usage.mjs";
 
 const SARVAM_STT_URL = "https://api.sarvam.ai/speech-to-text";
@@ -80,12 +81,6 @@ const SUMMARY_MAX_CONTENT_CHARS = 8_000;
 /// How many message envelopes may reach the model. The client sends two — a
 /// system line and the narration — so this is sixteen times the honest need.
 const MAX_SUMMARY_MESSAGES = 32;
-
-/// What one summary counts as, for the GLOBAL ceiling only. Not measured in
-/// audio because it is not audio — it is a nominal price so that a flood of
-/// summaries trips the same backstop a flood of transcription would, instead
-/// of being invisible to it.
-const SUMMARY_NOMINAL_SECONDS = 5;
 
 // ── Burst limiting ──────────────────────────────────────────────────────────
 //
@@ -220,9 +215,7 @@ export async function handle({ method, path, token, contentType, body }) {
         remainingSeconds: Math.max(0, Math.round(capSeconds - usedSeconds)),
       });
     } catch (err) {
-      return json(503, {
-        error: `usage service unavailable: ${String(err?.message ?? err).slice(0, 120)}`,
-      });
+      return json(503, { error: unavailable(err) });
     }
   }
 
@@ -246,9 +239,7 @@ export async function handle({ method, path, token, contentType, body }) {
       // do not know what anybody has spent, and the honest answer is to stop
       // buying audio rather than to buy an unbounded amount and find out
       // later. The client keeps working on Apple's on-device words.
-      return json(503, {
-        error: `usage service unavailable: ${String(err?.message ?? err).slice(0, 120)}`,
-      });
+      return json(503, { error: unavailable(err) });
     }
 
     if (!verdict.allowed) {
@@ -310,28 +301,29 @@ export async function handle({ method, path, token, contentType, body }) {
       return { role: m?.role === "system" ? "system" : "user", content };
     });
 
-    // METERED AGAINST THE DAY ONLY. The promise this route was written for
+    // METERED AGAINST ITS OWN DAY. The promise this route was written for
     // still holds — somebody who has used up their trial gets the sentence
     // that tells them what Deiko heard — and their own counter is untouched,
-    // so a summary never spends the audio allowance it is not made of. What a
-    // flood cannot do any more is stay invisible to the one number that bounds
-    // the whole service's day.
+    // so a summary never spends the audio allowance it is not made of.
+    //
+    // The budget it spends is the SUMMARY budget, not the audio ceiling. This
+    // route takes any bearer string, and the burst limiter is keyed by token,
+    // so a caller rotating tokens can send as many of these as it likes; when
+    // they were nominal seconds against the audio ceiling, eight thousand of
+    // them closed transcription for every paying customer for the rest of the
+    // day. Now a flood of summaries exhausts summaries.
     try {
-      const { globalUsedSeconds } = await recordGlobal({
-        seconds: SUMMARY_NOMINAL_SECONDS,
-      });
-      const verdict = decide({ tier: "pro", usedSeconds: 0, globalUsedSeconds });
-      if (!verdict.allowed) {
-        // Same rule as transcription: a refused request gives its nominal
-        // seconds back, or refused summaries would keep climbing the very
+      const { summariesToday } = await recordSummary();
+      if (summariesToday > SUMMARIES_PER_DAY) {
+        // Refused summaries give their count back, or they keep climbing the
         // ceiling that is refusing them.
-        await refundGlobal({ seconds: SUMMARY_NOMINAL_SECONDS }).catch(() => {});
-        return json(verdict.status, { error: verdict.error });
+        await refundSummary().catch(() => {});
+        return json(429, {
+          error: "the summary service is at its daily ceiling — try again tomorrow",
+        });
       }
     } catch (err) {
-      return json(503, {
-        error: `usage service unavailable: ${String(err?.message ?? err).slice(0, 120)}`,
-      });
+      return json(503, { error: unavailable(err) });
     }
 
     const out = await proxy(GROQ_URL, {
@@ -343,17 +335,27 @@ export async function handle({ method, path, token, contentType, body }) {
       temperature: SUMMARY_TEMPERATURE,
       max_completion_tokens: SUMMARY_MAX_COMPLETION_TOKENS,
     }));
-    if (out.status >= 500) {
-      await refundGlobal({ seconds: SUMMARY_NOMINAL_SECONDS }).catch(() => {});
-    }
+    if (out.status >= 500) await refundSummary().catch(() => {});
     return out;
   }
 
   return json(404, { error: "no such endpoint" });
 }
 
+/// A DEADLINE ON THE UPSTREAM CALL. Sarvam answers a 25-second chunk in one
+/// or two; Lambda's own timeout is 60. Without this, requests that stall on a
+/// provider hold a container each for the full minute, and concurrency here is
+/// single digits — a handful of them is the whole service. Twenty seconds is
+/// far past honest latency and far short of the platform's patience.
+const UPSTREAM_TIMEOUT_MS = 20_000;
+
 async function proxy(url, headers, body) {
-  const upstream = await fetch(url, { method: "POST", headers, body });
+  const upstream = await fetch(url, {
+    method: "POST",
+    headers,
+    body,
+    signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+  });
   const text = await upstream.text();
   if (!upstream.ok) {
     // The provider's message is passed through so the app's failure taxonomy

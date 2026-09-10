@@ -174,6 +174,21 @@ test("the global ceiling stops everybody, including pro", () => {
   assert.equal(v.status, 429);
 });
 
+test("forged free tokens cannot spend the half of the day reserved for Pro", () => {
+  // A device token is DERIVED FROM THE MACHINE and therefore forgeable — a VM
+  // or a patched client mints as many as it likes, each with a fresh trial. If
+  // free traffic could reach the whole ceiling, two dozen of them would 429
+  // every paying customer until UTC midnight. A licence cannot be forged, so
+  // the top half of the day belongs to licences.
+  const justOverTheFreeShare = Math.floor(GLOBAL_DAILY_SECONDS * 0.5) + 1;
+  assert.equal(
+    decide({ tier: "free", usedSeconds: 60, globalUsedSeconds: justOverTheFreeShare }).allowed,
+    false, "free is cut off at its share");
+  assert.equal(
+    decide({ tier: "pro", usedSeconds: 60, globalUsedSeconds: justOverTheFreeShare }).allowed,
+    true, "a paying customer keeps transcribing through it");
+});
+
 test("the global ceiling is reported as ours, not as the caller's fault", () => {
   const v = decide({
     tier: "pro",

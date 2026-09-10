@@ -71,6 +71,49 @@ export const PRO_MONTHLY_SECONDS = 10 * 60 * 60;
 export const GLOBAL_DAILY_SECONDS =
   Number(process.env.DEIKO_GLOBAL_DAILY_SECONDS ?? 12 * 60 * 60);
 
+/// HOW MUCH OF THE DAY FREE CALLERS MAY SPEND.
+///
+/// The ceiling above fails CLOSED FOR EVERYONE AT ONCE, which made it a lever:
+/// a device token is derived from the machine and is therefore FORGEABLE — a
+/// VM, a second Mac or a patched client mints as many as it likes, each with a
+/// fresh thirty-minute trial. Two dozen of them walk the whole service to its
+/// ceiling and 429 every paying customer until UTC midnight, for the price of
+/// some junk audio.
+///
+/// A LICENCE CANNOT BE FORGED — Polar validates it — so the unforgeable
+/// callers get the half of the day that the forgeable ones cannot reach.
+/// Refused requests are refunded, so free traffic cannot push the shared row
+/// past this share no matter how many tokens it mints.
+///
+/// The cost, stated: a genuine free user is cut off earlier on a busy day.
+/// They fall through to Apple's on-device words, which is the free tier
+/// working as designed — and it is the correct thing to sacrifice, because the
+/// alternative sacrifices somebody who paid.
+export const FREE_GLOBAL_SHARE = 0.5;
+
+/// The day's ceiling for one tier. Pro sees the whole thing.
+export function globalCapFor(tier) {
+  return tier === "pro"
+    ? GLOBAL_DAILY_SECONDS
+    : Math.floor(GLOBAL_DAILY_SECONDS * FREE_GLOBAL_SHARE);
+}
+
+/// SUMMARIES HAVE THEIR OWN DAY, AND THIS IS WHY.
+///
+/// `/v1/summarize` accepts any bearer string on purpose — somebody whose trial
+/// is spent still gets the sentence that says what Deiko heard. It used to be
+/// metered as five nominal seconds against the audio ceiling above, which made
+/// it the cheapest way to close that ceiling: no licence, no valid token, and
+/// the burst limiter is keyed by token so rotating tokens walks straight past
+/// it. Eight thousand cheap text calls locked out every paying customer.
+///
+/// Its own row and its own budget means a summary flood now exhausts only
+/// summaries. Counted in REQUESTS rather than seconds, because that is what a
+/// summary is — the seconds were always a fiction to make it share a counter
+/// it should never have shared.
+export const SUMMARIES_PER_DAY =
+  Number(process.env.DEIKO_SUMMARIES_PER_DAY ?? 2000);
+
 /// 16 kHz, mono, 16-bit — so two bytes a sample, 32,000 bytes a second. The
 /// client's chunker uses exactly these constants.
 ///
@@ -162,6 +205,13 @@ export function globalKey(now) {
   return `global#${dayKey(now)}`;
 }
 
+/// Where the day's summary count lives. A DIFFERENT ROW from the audio
+/// ceiling, which is the whole point — the two budgets bound two different
+/// vendors' bills and must not be able to close each other.
+export function summaryKey(now) {
+  return `global#${dayKey(now)}#summary`;
+}
+
 /// `2026-08` and `2026-08-10`, in UTC.
 ///
 /// UTC rather than any local zone because the service runs in one region and
@@ -207,7 +257,7 @@ export function capFor(tier) {
 export function decide({ tier, usedSeconds, globalUsedSeconds }) {
   const cap = capFor(tier);
 
-  if (globalUsedSeconds > GLOBAL_DAILY_SECONDS) {
+  if (globalUsedSeconds > globalCapFor(tier)) {
     return {
       allowed: false,
       status: 429,

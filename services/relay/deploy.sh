@@ -202,6 +202,7 @@ DEIKO_USAGE_TABLE="$TABLE" node -e '
     // The daily ceiling and the Polar wiring all have working defaults
     // in code, so each is passed only when it has been chosen deliberately.
     "DEIKO_GLOBAL_DAILY_SECONDS",
+    "DEIKO_SUMMARIES_PER_DAY",
     "DEIKO_PRO_BENEFIT_IDS",
     "POLAR_API_BASE",
   ]) {

@@ -307,14 +307,26 @@ test("a used-up trial still gets its reading, and is not charged for it", async 
   );
 });
 
-test("a summary IS charged against the day, so a flood cannot stay invisible", async () => {
-  const key = `global#${new Date().toISOString().slice(0, 10)}`;
+test("a summary IS counted, so a flood cannot stay invisible", async () => {
+  const key = `global#${new Date().toISOString().slice(0, 10)}#summary`;
   const before = rows.get(key)?.audioSeconds ?? 0;
   await summarize("dev_anyone");
-  assert.ok(
-    (rows.get(key)?.audioSeconds ?? 0) > before,
-    "the global backstop is the only thing that bounds an unmetered route",
-  );
+  assert.equal((rows.get(key)?.audioSeconds ?? 0), before + 1,
+    "an unmetered route is an unbounded bill");
+});
+
+test("a flood of summaries cannot close transcription for a paying customer", async () => {
+  // THE ATTACK THIS PINS. /v1/summarize takes any bearer string and the burst
+  // limiter is keyed by token, so a caller rotating tokens sends as many as it
+  // likes. While these were charged five nominal seconds against the AUDIO
+  // ceiling, ~8,600 cheap text calls closed transcription for everybody —
+  // paying customers included — until UTC midnight, for about a dollar.
+  const audioDay = `global#${new Date().toISOString().slice(0, 10)}`;
+  for (let i = 0; i < 50; i += 1) await summarize(`dev_flood${i}`);
+  assert.equal(rows.get(audioDay)?.audioSeconds ?? 0, 0,
+    "summaries must not touch the ceiling that bounds Sarvam");
+  const paid = await post("lic_real-key", 20);
+  assert.equal(paid.status, 200, "a paying customer transcribes through a summary flood");
 });
 
 test("the caller does not get to choose the model or the token budget", async () => {
@@ -410,10 +422,10 @@ test("a Sarvam outage does not eat the lifetime trial", async () => {
     "audio that was never transcribed must not stay billed — the trial is once, ever");
 });
 
-test("a refused summary gives its nominal seconds back", async () => {
-  const { GLOBAL_DAILY_SECONDS } = await import("../quota.mjs");
-  const day = `global#${new Date().toISOString().slice(0, 10)}`;
-  seed(day, GLOBAL_DAILY_SECONDS + 1);          // the day is already over
+test("a refused summary gives its count back", async () => {
+  const { SUMMARIES_PER_DAY } = await import("../quota.mjs");
+  const day = `global#${new Date().toISOString().slice(0, 10)}#summary`;
+  seed(day, SUMMARIES_PER_DAY + 1);             // the day's summaries are spent
   const r = await handle({
     method: "POST",
     path: "/v1/summarize",
@@ -422,7 +434,7 @@ test("a refused summary gives its nominal seconds back", async () => {
     body: Buffer.from(JSON.stringify({ messages: [{ role: "user", content: "hi" }] })),
   });
   assert.equal(r.status, 429);
-  assert.equal(rows.get(day).audioSeconds, GLOBAL_DAILY_SECONDS + 1,
+  assert.equal(rows.get(day).audioSeconds, SUMMARIES_PER_DAY + 1,
     "refused summaries must not keep climbing the ceiling that is refusing them");
 });
 
