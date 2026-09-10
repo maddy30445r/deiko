@@ -294,7 +294,7 @@ async function validateWithPolar(key) {
 
     // Both SKUs — monthly and annual — grant the SAME licence-key benefit, and
     // the validate response names the benefit rather than the product, so
-    // there is nothing here to tell $4/mo from $40/yr and nothing that needs
+    // there is nothing here to tell $4/mo from $30/yr and nothing that needs
     // to. Until the store exists there are no ids to match, and the only paid
     // benefit is Pro's — so any live licence is Pro. A SECOND PAID TIER WOULD
     // COME WITH ITS OWN BENEFIT, and this is the line that learns to tell them

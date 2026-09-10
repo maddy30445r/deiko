@@ -152,7 +152,7 @@ test("exactly at the cap is still allowed; past it is not", () => {
   assert.equal(decide({ ...under, usedSeconds: FREE_TRIAL_SECONDS + 0.1 }).allowed, false);
 });
 
-test("pro gets ten times the free allowance, per month", () => {
+test("pro gets twenty times the free allowance, per month", () => {
   assert.equal(capFor("pro"), PRO_MONTHLY_SECONDS);
   assert.equal(capFor("free"), FREE_TRIAL_SECONDS);
   assert.equal(capFor(undefined), FREE_TRIAL_SECONDS, "an unknown tier must not be generous");

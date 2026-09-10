@@ -204,7 +204,7 @@ export async function handle({ method, path, token, contentType, body }) {
 
   // WHAT AM I, AND WHAT IS LEFT. Read-only, and the only route the app itself
   // calls rather than the pipeline. Settings asks the instant a licence key is
-  // pasted, because "Pro · 5 hours a month" is the confirmation that the key
+  // pasted, because "Pro · 10 hours a month" is the confirmation that the key
   // worked — and the app must be able to say that before a session has ever
   // run. A quota that could only be learned by spending some would be useless
   // at exactly the moment somebody has just paid.

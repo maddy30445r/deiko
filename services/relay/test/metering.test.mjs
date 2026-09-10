@@ -243,7 +243,7 @@ test("a second install is not charged for the first one's trial", async () => {
 test("a valid licence is Pro, and carries on well past the free cap", async () => {
   seed(monthRow("real-key"), FREE_TRIAL_SECONDS + 15 * 60);  // 45 min in
   const r = await post("lic_real-key", 20);
-  assert.equal(r.status, 200, "45 minutes is over free's 30 and well under Pro's five hours");
+  assert.equal(r.status, 200, "45 minutes is over free's 30 and well under Pro's ten hours");
   assert.ok(upstream.some((u) => u.includes("polar")), "should have validated");
 });
 

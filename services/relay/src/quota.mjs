@@ -24,11 +24,25 @@
 /// argues for the paid one by being honest rather than by being crippled.
 export const FREE_TRIAL_SECONDS = 30 * 60;
 
-/// Pro's fair use. At Sarvam's ₹30/hour this is ₹150/month of audio against a
-/// $4 subscription — a ceiling for the pathological case, not a budget anybody
-/// normal will approach. Measured sessions on this machine run a median of 9
-/// seconds, so five hours is roughly two thousand of them.
-export const PRO_MONTHLY_SECONDS = 5 * 60 * 60;
+/// Pro's fair use. At Sarvam's ₹30/hour this is ₹300/month of audio against a
+/// $4/month or $30/year subscription — so it is a ceiling for the pathological
+/// case and NOT a budget. BE PRECISE ABOUT WHAT THAT MEANS NOW: after Polar's
+/// 5% + 50¢ a monthly subscription nets ~₹284 and an annual one ~₹201 a month,
+/// so a licence that actually pinned this cap would cost more than it pays.
+/// Five hours could not do that; ten can.
+///
+/// It is priced anyway because nobody reaches it. Measured sessions run a
+/// median of 9 seconds and a mean of 14 — audio is recorded per hold and the
+/// silence between holds is never captured — so ten hours is between two and a
+/// half and four thousand sessions, over eighty a day every day. That is a
+/// stuck client, which is what the burst limiter and the global ceiling below
+/// are for, and a genuine heavy user has a cheaper door: BYO key is a Pro
+/// feature, and a licence using its own Sarvam key costs us nothing at all.
+///
+/// Raised from five hours at the same price. The cap was never what bounded
+/// the bill — GLOBAL_DAILY_SECONDS is — and five hours was already three times
+/// what the heaviest real session log suggests anybody uses.
+export const PRO_MONTHLY_SECONDS = 10 * 60 * 60;
 
 /// THE BACKSTOP THAT DOES NOT DEPEND ON HONEST CLIENTS.
 ///
@@ -40,12 +54,22 @@ export const PRO_MONTHLY_SECONDS = 5 * 60 * 60;
 /// that actually bounds the bill — whatever anybody mints, the service will not
 /// buy more than this much audio in a day.
 ///
-/// Four hours is ₹120/day, so a maximally bad month is ~₹3,600 against an AWS
-/// budget alarm set at ₹500. That gap is deliberate: the alarm should fire long
-/// before the ceiling does, because the ceiling is the thing that stops a
-/// disaster and the alarm is the thing that tells you one is starting.
+/// Twelve hours is ₹360/day. It was four, and it had to move when Pro went
+/// from five hours a month to ten: at four hours a day the whole service buys
+/// 120 hours a month, so a dozen licences pinning a ten-hour cap would have
+/// made the limit people actually hit this one — and this one fails CLOSED FOR
+/// EVERYONE AT ONCE, paying customers included. Advertising a cap the service
+/// cannot honour is worse than advertising a smaller one. Twelve hours a day
+/// is 360 a month: three dozen Pro users all pinning their cap, or several
+/// hundred at the usage anybody actually has.
+///
+/// THE COST OF THAT, STATED: this is the only guard on Sarvam spend anywhere
+/// in this repo. The AWS budget alarm watches the AWS bill, and Sarvam is a
+/// different vendor — so a maximally bad month is now ~₹10,800 rather than
+/// ~₹3,600, and nothing but this number stops it. Set a cap in Sarvam's own
+/// dashboard as well; that is the guard this file cannot provide.
 export const GLOBAL_DAILY_SECONDS =
-  Number(process.env.DEIKO_GLOBAL_DAILY_SECONDS ?? 4 * 60 * 60);
+  Number(process.env.DEIKO_GLOBAL_DAILY_SECONDS ?? 12 * 60 * 60);
 
 /// 16 kHz, mono, 16-bit — so two bytes a sample, 32,000 bytes a second. The
 /// client's chunker uses exactly these constants.

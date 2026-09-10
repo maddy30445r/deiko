@@ -69,7 +69,7 @@ Knobs, all overridable in the environment:
 | `DEIKO_LAMBDA_CONCURRENCY` | `5` reserved — a blast radius, not a quota. Past ~12, raise the table's write units with it. |
 | `DEIKO_REVOKED_TOKENS` | comma-separated tokens to refuse |
 | `DEIKO_USAGE_TABLE` | `deiko-usage` — the DynamoDB table holding every counter |
-| `DEIKO_GLOBAL_DAILY_SECONDS` | `14400` (4 hours) — the ceiling on the whole service's daily audio |
+| `DEIKO_GLOBAL_DAILY_SECONDS` | `43200` (12 hours) — the ceiling on the whole service's daily audio |
 | `DEIKO_PRO_BENEFIT_IDS` | Polar benefit ids that mean Pro. Unset = any live licence is Pro — correct while Pro is the only paid benefit; the day there is a second one this MUST be set, or the cheaper SKU buys Pro's allowance. |
 | `POLAR_API_BASE` | `https://sandbox-api.polar.sh` to validate against Polar's sandbox. Unset = production. |
 
@@ -105,7 +105,7 @@ an option, and Lambda is the one that is actually deployed.
 | `PORT` | default 8787 |
 | `DEIKO_REVOKED_TOKENS` | comma-separated tokens to refuse |
 | `DEIKO_USAGE_TABLE` | `deiko-usage` — the DynamoDB table holding every counter |
-| `DEIKO_GLOBAL_DAILY_SECONDS` | `14400` (4 hours) — the ceiling on the whole service's daily audio |
+| `DEIKO_GLOBAL_DAILY_SECONDS` | `43200` (12 hours) — the ceiling on the whole service's daily audio |
 | `DEIKO_PRO_BENEFIT_IDS` | Polar benefit ids that mean Pro. Unset = any live licence is Pro — correct while Pro is the only paid benefit; the day there is a second one this MUST be set, or the cheaper SKU buys Pro's allowance. |
 | `POLAR_API_BASE` | `https://sandbox-api.polar.sh` to validate against Polar's sandbox. Unset = production. |
 
@@ -196,7 +196,7 @@ In order, cheapest first:
    a quota and does not pretend to be; on Lambda a determined caller gets a
    fresh container and a fresh counter.
 2. **Per-subject quota** — DynamoDB, counted in audio seconds. A free install
-   gets 30 minutes *once*; a Pro licence gets 5 hours a month. Incremented and
+   gets 30 minutes *once*; a Pro licence gets 10 hours a month. Incremented and
    then judged, in one round trip, so concurrent chunks cannot both claim room
    only one of them has.
 3. **The global daily ceiling** — the one that does not depend on honest
