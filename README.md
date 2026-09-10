@@ -115,7 +115,7 @@ and nothing stops; the accuracy is just the accuracy Apple gives you.
 | | |
 |---|---|
 | **Free** | The whole app. 30 minutes of Deiko's transcription, once, then on-device forever. |
-| **Pro — $4/mo or $30/yr** | Ten hours of transcription a month, or bring your own Sarvam key and use none of ours. |
+| **Pro — $3.99/mo or $29.99/yr** | Ten hours of transcription a month, or bring your own Sarvam key and use none of ours. |
 
 A licence key is pasted into Settings. **There is no account** — no email, no
 password, no profile, nothing to sign into and nothing of yours to breach. The
@@ -188,8 +188,8 @@ make release \
 it only *warns* about the other two — and a build missing them ships with the
 "Get Pro…" and "Send feedback…" affordances silently hidden, which looks like a
 finished app that simply cannot be paid or written to. The one Polar link above
-carries **both** SKUs, annual first, so the checkout opens on $30/yr with a
-switcher down to $4/mo.
+carries **both** SKUs, annual first, so the checkout opens on $29.99/yr with a
+switcher down to $3.99/mo.
 
 `make release` refuses a dirty tree or an existing tag — in either spelling,
 `v0.4.1` or `0.4.1` — because a release whose contents do not match a commit is

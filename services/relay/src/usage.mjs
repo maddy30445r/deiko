@@ -64,7 +64,7 @@ const POLAR_ORGANIZATION_ID =
 /// relay calls; validating each against Polar would add a second of
 /// latency per chunk and hammer somebody else's rate limit for an answer that
 /// changes at most once a month. A cancellation therefore takes up to a day to
-/// bite, which is the right trade for a $4 product.
+/// bite, which is the right trade for a $3.99 product.
 const LICENSE_CACHE_MS = 24 * 60 * 60 * 1000;
 
 /// How soon an ERROR-derived verdict is rechecked. Minutes, not a day: an
@@ -294,7 +294,7 @@ async function validateWithPolar(key) {
 
     // Both SKUs — monthly and annual — grant the SAME licence-key benefit, and
     // the validate response names the benefit rather than the product, so
-    // there is nothing here to tell $4/mo from $30/yr and nothing that needs
+    // there is nothing here to tell $3.99/mo from $29.99/yr and nothing that needs
     // to. Until the store exists there are no ids to match, and the only paid
     // benefit is Pro's — so any live licence is Pro. A SECOND PAID TIER WOULD
     // COME WITH ITS OWN BENEFIT, and this is the line that learns to tell them

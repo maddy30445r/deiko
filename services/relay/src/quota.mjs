@@ -25,9 +25,9 @@
 export const FREE_TRIAL_SECONDS = 30 * 60;
 
 /// Pro's fair use. At Sarvam's ₹30/hour this is ₹300/month of audio against a
-/// $4/month or $30/year subscription — so it is a ceiling for the pathological
+/// $3.99/month or $29.99/year subscription — so it is a ceiling for the pathological
 /// case and NOT a budget. BE PRECISE ABOUT WHAT THAT MEANS NOW: after Polar's
-/// 5% + 50¢ a monthly subscription nets ~₹284 and an annual one ~₹201 a month,
+/// 5% + 50¢ a monthly subscription nets ~₹283 and an annual one ~₹201 a month,
 /// so a licence that actually pinned this cap would cost more than it pays.
 /// Five hours could not do that; ten can.
 ///
