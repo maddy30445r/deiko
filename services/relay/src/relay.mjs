@@ -196,7 +196,7 @@ export async function handle({ method, path, token, contentType, body }) {
   if (!subject) return json(401, { error: "malformed token" });
 
   // BEFORE the quota branch, not after it. /v1/quota does a DynamoDB read, a
-  // conditional write and — for an unseen licence — an outbound Lemon Squeezy
+  // conditional write and — for an unseen licence — an outbound Polar
   // call, so leaving it above the limiter made it the cheapest way to amplify
   // writes against a 25-WCU table. Throttled writes there do not fail the
   // attacker's request, they fail /v1/transcribe for whoever is paying.

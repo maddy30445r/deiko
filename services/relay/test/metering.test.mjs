@@ -84,9 +84,9 @@ function stubFetch() {
     // supposed to REBUILD what it sends rather than forward what it was given,
     // and only the body can show that.
     upstreamBodies.push(typeof init?.body === "string" ? init.body : "");
-    if (href.includes("lemonsqueezy")) {
+    if (href.includes("polar")) {
       return new Response(
-        JSON.stringify({ valid: licenseValid, license_key: { status: licenseValid ? "active" : "expired" } }),
+        JSON.stringify({ status: licenseValid ? "granted" : "revoked" }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
     }
@@ -244,13 +244,13 @@ test("a valid licence is Pro, and carries on well past the free cap", async () =
   seed(monthRow("real-key"), FREE_TRIAL_SECONDS + 15 * 60);  // 45 min in
   const r = await post("lic_real-key", 20);
   assert.equal(r.status, 200, "45 minutes is over free's 30 and well under Pro's five hours");
-  assert.ok(upstream.some((u) => u.includes("lemonsqueezy")), "should have validated");
+  assert.ok(upstream.some((u) => u.includes("polar")), "should have validated");
 });
 
-test("the Lemon Squeezy verdict is cached — dozens of chunks, one validation", async () => {
+test("the Polar verdict is cached — dozens of chunks, one validation", async () => {
   for (let i = 0; i < 5; i++) await post("lic_real-key", 20);
   assert.equal(
-    upstream.filter((u) => u.includes("lemonsqueezy")).length, 1,
+    upstream.filter((u) => u.includes("polar")).length, 1,
     "a 20-minute session is ~48 chunks; it must not be 48 validations",
   );
 });
@@ -262,7 +262,7 @@ test("an invalid licence is metered as free, and its verdict is cached too", asy
   assert.equal(refused.status, 402, "a bad key must not buy Pro's allowance");
   await post("lic_garbage", 10);
   assert.equal(
-    upstream.filter((u) => u.includes("lemonsqueezy")).length, 1,
+    upstream.filter((u) => u.includes("polar")).length, 1,
     "a garbage key must not generate a validation per chunk",
   );
 });
@@ -360,7 +360,7 @@ test("a token can be revoked by the fingerprint that appears in the logs", async
 
 test("the quota route is rate limited too", async () => {
   // It reads DynamoDB, writes a verdict row, and for an unseen licence calls
-  // Lemon Squeezy — all of which sat ABOVE the limiter, making it the cheapest
+  // Polar — all of which sat ABOVE the limiter, making it the cheapest
   // way to amplify writes against a 25-WCU table. Throttling there does not
   // fail the attacker's request; it fails transcription for whoever is paying.
   let last = 0;
@@ -426,14 +426,14 @@ test("a refused summary gives its nominal seconds back", async () => {
     "refused summaries must not keep climbing the ceiling that is refusing them");
 });
 
-// ── The Lemon Squeezy verdict: an error is not an answer ────────────────────
+// ── The Polar verdict: an error is not an answer ────────────────────
 
-test("one Lemon Squeezy failure does not demote a paying customer for a day", async () => {
+test("one Polar failure does not demote a paying customer for a day", async () => {
   // A real "pro" verdict exists but is stale, so revalidation is due.
   rows.set("lic:steady", { tier: "pro", checkedAt: Date.now() - 25 * 60 * 60 * 1000 });
   globalThis.fetch = async (url) => {
     upstream.push(String(url));
-    if (String(url).includes("lemonsqueezy")) throw new Error("timeout");
+    if (String(url).includes("polar")) throw new Error("timeout");
     if (String(url).includes("sarvam")) return new Response(JSON.stringify({ transcript: "ok" }), { status: 200 });
     throw new Error(`unexpected upstream: ${url}`);
   };
@@ -447,7 +447,7 @@ test("one Lemon Squeezy failure does not demote a paying customer for a day", as
 test("an error-derived free verdict is rechecked in minutes, not tomorrow", async () => {
   globalThis.fetch = async (url) => {
     upstream.push(String(url));
-    if (String(url).includes("lemonsqueezy")) return new Response("oops", { status: 500 });
+    if (String(url).includes("polar")) return new Response("oops", { status: 500 });
     if (String(url).includes("sarvam")) return new Response(JSON.stringify({ transcript: "ok" }), { status: 200 });
     throw new Error(`unexpected upstream: ${url}`);
   };
@@ -456,7 +456,7 @@ test("an error-derived free verdict is rechecked in minutes, not tomorrow", asyn
   const verdict = rows.get("lic:newkey");
   assert.equal(verdict.tier, "free");
   assert.ok(Date.now() - verdict.checkedAt > 20 * 60 * 60 * 1000,
-    "written already-stale, so the recheck happens when Lemon Squeezy is back, not in 24h");
+    "written already-stale, so the recheck happens when Polar is back, not in 24h");
 });
 
 // ── The summarize envelope count is pinned like everything else ─────────────

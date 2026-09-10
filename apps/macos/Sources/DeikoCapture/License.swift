@@ -6,7 +6,7 @@ import Foundation
 // A key, pasted into Settings, sent to the relay as the bearer token. There is
 // no sign-in, no password, no email in our systems, no session to expire. The
 // only thing Deiko knows about a paying user is a string they gave it, and the
-// only thing the relay does with that string is ask Lemon Squeezy whether it is
+// only thing the relay does with that string is ask Polar whether it is
 // still paid for.
 //
 // NOT IN THE KEYCHAIN, for the reason already written out at length in
@@ -17,8 +17,8 @@ import Foundation
 // is no more secret than the device token; both are readable out of any shipped
 // client. Preferences, therefore, and no prompt.
 //
-// WHAT THIS FILE DELIBERATELY DOES NOT DO: activate/deactivate against Lemon
-// Squeezy's instance API, and therefore does not enforce a per-licence device
+// WHAT THIS FILE DELIBERATELY DOES NOT DO: activate/deactivate against Polar's
+// activation API, and therefore does not enforce a per-licence device
 // limit. That machinery exists to stop one key being shared across a team, and
 // here it would protect nothing — the monthly audio cap is PER LICENCE, so four
 // people sharing one key do not cost us four allowances, they exhaust one
@@ -108,9 +108,9 @@ enum License {
 
     /// The bearer the pipeline sends.
     ///
-    /// THE PREFIX IS LOAD-BEARING. A Lemon Squeezy key and a Deiko device token
+    /// THE PREFIX IS LOAD-BEARING. A Polar licence key and a Deiko device token
     /// are both v4-shaped UUIDs, so without it the relay cannot tell them
-    /// apart — it would send every free user's token to Lemon Squeezy for
+    /// apart — it would send every free user's token to Polar for
     /// validation and meter every paying customer as a free trial. The relay
     /// reads a bare, unprefixed value as a device token, which is what every
     /// build up to 0.3.0 sends.

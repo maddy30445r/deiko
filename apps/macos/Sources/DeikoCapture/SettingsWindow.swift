@@ -485,10 +485,10 @@ private struct SettingsView: View {
                             .buttonStyle(.link)
                     }
                     // There is no "manage subscription" BUTTON, and that is not
-                    // an omission: Lemon Squeezy's customer portal link is
-                    // per-customer and arrives by email, so there is no URL
-                    // this app could construct. Saying where it is beats
-                    // inventing an endpoint.
+                    // an omission: Polar's customer portal is authenticated by
+                    // an emailed code, and the link that arrives with the
+                    // purchase is the shortest path back to it. Saying where it
+                    // is beats sending somebody to a sign-in they did not want.
                     if model.isProNow {
                         Text("Manage or cancel from the link in your purchase email.")
                             .font(.system(size: 11))
@@ -503,7 +503,7 @@ private struct SettingsView: View {
                         .buttonStyle(.link)
                         .foregroundStyle(.secondary)
                         .help("Forgets the key and its cached plan. Nothing is cancelled — "
-                            + "your subscription is between you and Lemon Squeezy.")
+                            + "your subscription is between you and Polar.")
                     }
                 }
             }

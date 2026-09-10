@@ -61,7 +61,7 @@ say "account $ACCOUNT · region $REGION"
 # ── The usage table ─────────────────────────────────────────────────────────
 #
 # One table holds every stateful thing the relay knows: per-subject audio
-# seconds, the cached Lemon Squeezy verdict, and the global daily total. See
+# seconds, the cached Polar verdict, and the global daily total. See
 # services/relay/usage.mjs for the row shapes.
 #
 # PROVISIONED AT 25/25, WHICH IS EXACTLY THE ALWAYS-FREE TIER — 25 write units,
@@ -199,11 +199,11 @@ DEIKO_USAGE_TABLE="$TABLE" node -e '
   // variable that exists and means nothing.
   for (const name of [
     "DEIKO_REVOKED_TOKENS",
-    // The daily ceiling and the Lemon Squeezy wiring all have working defaults
+    // The daily ceiling and the Polar wiring all have working defaults
     // in code, so each is passed only when it has been chosen deliberately.
     "DEIKO_GLOBAL_DAILY_SECONDS",
-    "DEIKO_PRO_VARIANT_IDS",
-    "LEMONSQUEEZY_API_KEY",
+    "DEIKO_PRO_BENEFIT_IDS",
+    "POLAR_API_BASE",
   ]) {
     if (process.env[name]) vars[name] = process.env[name];
   }

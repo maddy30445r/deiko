@@ -34,7 +34,7 @@ decisions worth testing should not need a database to run:
 |---|---|
 | `relay.mjs` | routing, auth, proxying, and the order everything happens in. Knows nothing about a transport. |
 | `quota.mjs` | **pure.** Tiers, caps, storage keys, and the allow/refuse decision. No network, no database. |
-| `usage.mjs` | the numbers — DynamoDB counters and the cached Lemon Squeezy verdict |
+| `usage.mjs` | the numbers — DynamoDB counters and the cached Polar verdict |
 | `lambda.mjs` | the AWS entry point |
 | `server.mjs` | a `node:http` entry point, for local testing and containers |
 
@@ -70,8 +70,8 @@ Knobs, all overridable in the environment:
 | `DEIKO_REVOKED_TOKENS` | comma-separated tokens to refuse |
 | `DEIKO_USAGE_TABLE` | `deiko-usage` — the DynamoDB table holding every counter |
 | `DEIKO_GLOBAL_DAILY_SECONDS` | `14400` (4 hours) — the ceiling on the whole service's daily audio |
-| `DEIKO_PRO_VARIANT_IDS` | Lemon Squeezy variant ids that mean Pro. Unset = any live licence is Pro — correct while Pro is the only SKU; the day there is a second one this MUST be set, or the cheaper SKU buys Pro's allowance. |
-| `LEMONSQUEEZY_API_KEY` | only if the validate endpoint starts demanding one |
+| `DEIKO_PRO_BENEFIT_IDS` | Polar benefit ids that mean Pro. Unset = any live licence is Pro — correct while Pro is the only paid benefit; the day there is a second one this MUST be set, or the cheaper SKU buys Pro's allowance. |
+| `POLAR_API_BASE` | `https://sandbox-api.polar.sh` to validate against Polar's sandbox. Unset = production. |
 
 Then verify — and check `transcription`, not just `ok`:
 
@@ -106,8 +106,8 @@ an option, and Lambda is the one that is actually deployed.
 | `DEIKO_REVOKED_TOKENS` | comma-separated tokens to refuse |
 | `DEIKO_USAGE_TABLE` | `deiko-usage` — the DynamoDB table holding every counter |
 | `DEIKO_GLOBAL_DAILY_SECONDS` | `14400` (4 hours) — the ceiling on the whole service's daily audio |
-| `DEIKO_PRO_VARIANT_IDS` | Lemon Squeezy variant ids that mean Pro. Unset = any live licence is Pro — correct while Pro is the only SKU; the day there is a second one this MUST be set, or the cheaper SKU buys Pro's allowance. |
-| `LEMONSQUEEZY_API_KEY` | only if the validate endpoint starts demanding one |
+| `DEIKO_PRO_BENEFIT_IDS` | Polar benefit ids that mean Pro. Unset = any live licence is Pro — correct while Pro is the only paid benefit; the day there is a second one this MUST be set, or the cheaper SKU buys Pro's allowance. |
+| `POLAR_API_BASE` | `https://sandbox-api.polar.sh` to validate against Polar's sandbox. Unset = production. |
 
 Then point a build at it — **not by editing Swift.** The origin is deployment
 configuration, stamped into the bundle's `Info.plist`:
@@ -177,14 +177,14 @@ product decision, not a line of code.
 
 **A licence key is not authentication either**, and is not pretending to be.
 It is the same kind of bearer: something the client holds that says which tier
-to meter against. What makes it worth more than a device token is that Lemon
-Squeezy can say whether it is still paid for.
+to meter against. What makes it worth more than a device token is that Polar
+can say whether it is still paid for.
 
 **The prefix is what tells them apart.** `lic_…` is a licence, `dev_…` is a
 device token, and a bare value is a device token because that is what every
 build up to 0.3.0 sends. This matters more than it looks: both are v4-shaped
 UUIDs, so without the prefix the two are indistinguishable — every free user's
-token would be sent to Lemon Squeezy for validation and every licence would
+token would be sent to Polar for validation and every licence would
 meter as a free trial.
 
 ## What actually bounds the spend

@@ -79,10 +79,10 @@ export function audioSeconds(byteLength) {
 
 /// Which kind of caller a bearer token is.
 ///
-/// THE PREFIX IS LOAD-BEARING, because a Lemon Squeezy licence key and a Deiko
+/// THE PREFIX IS LOAD-BEARING, because a Polar licence key and a Deiko
 /// device token are both v4-shaped UUIDs and cannot be told apart by looking.
 /// An earlier design said "the relay tells them apart by shape"; it would have
-/// sent every free user's token to Lemon Squeezy for validation, and every
+/// sent every free user's token to Polar for validation, and every
 /// licence key would have metered as a free trial.
 ///
 /// A bare, unprefixed value is a DEVICE token, because that is what every build
@@ -112,13 +112,13 @@ export function subjectFrom(token) {
 /// on its own, so there is no reset job to write and none to forget to run.
 ///
 /// The tier argument is not decoration. Keying on `subject.kind` alone meant a
-/// licence that Lemon Squeezy had never heard of — any string at all typed
+/// licence that Polar had never heard of — any string at all typed
 /// into Settings' licence field — still got the MONTHLY row, while its cap was
 /// the free trial's thirty minutes. Thirty free minutes every calendar month,
 /// forever, self-resetting, for anybody who typed junk; thirty minutes once,
 /// ever, for anybody honest. The forgery was strictly better than the truth.
 /// The `#trial` suffix is load-bearing rather than decorative: `licenseKey`
-/// returns a bare `lic:<id>` for the cached Lemon Squeezy verdict, and
+/// returns a bare `lic:<id>` for the cached Polar verdict, and
 /// `tierFor` writes that row with PutItem, which REPLACES the whole item. A
 /// trial counter sharing that key would be wiped clean every time the verdict
 /// was revalidated — the same forgery back again, wearing a subtler disguise.
@@ -128,7 +128,7 @@ export function usageKey(subject, now, tier) {
   return `lic:${subject.id}#${monthKey(now)}`;
 }
 
-/// Where a licence's cached Lemon Squeezy verdict lives. Deliberately NOT the
+/// Where a licence's cached Polar verdict lives. Deliberately NOT the
 /// same row as its usage: the verdict outlives any one month.
 export function licenseKey(subject) {
   return `lic:${subject.id}`;

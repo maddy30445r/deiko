@@ -177,13 +177,25 @@ echo 0.2.0 > VERSION
 git commit -am "…"
 
 # 3. build, tag, and publish the DMG in one step
-make release RELAY_URL=https://<your-relay>.lambda-url.ap-south-1.on.aws
+make release \
+  RELAY_URL=https://<your-relay>.lambda-url.ap-south-1.on.aws \
+  SITE_URL=https://deiko.app \
+  BUY_URL=https://buy.polar.sh/polar_cl_zzHzJtHnGwaUZhsQMEQX5CJ6rvrHytww5AaUx4J6WjF \
+  SUPPORT_EMAIL=support@deiko.app
 ```
+
+**Pass all four.** `make release` refuses without `RELAY_URL` or `SITE_URL`, but
+it only *warns* about the other two — and a build missing them ships with the
+"Get Pro…" and "Send feedback…" affordances silently hidden, which looks like a
+finished app that simply cannot be paid or written to. The one Polar link above
+carries **both** SKUs, annual first, so the checkout opens on $40/yr with a
+switcher down to $4/mo.
 
 `make release` refuses a dirty tree or an existing tag — in either spelling,
 `v0.4.1` or `0.4.1` — because a release whose contents do not match a commit is
-worse than no release. It stamps the version, the relay URL and the site URL
-into the bundle, builds the DMG, and hands it to `scripts/publish-release.sh`,
+worse than no release. It stamps the version, the relay URL, the site URL, the
+checkout link and the support address into the bundle, builds the DMG, and
+hands it to `scripts/publish-release.sh`,
 which uploads the disk image to S3, writes the `version.json` the app's update
 check reads, and publishes `install.sh` stamped with the host serving it. Then
 it tags the commit here.

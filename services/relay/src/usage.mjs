@@ -7,7 +7,7 @@
 //   dev:<token>              lifetime free-trial seconds. No TTL — the trial is
 //                            once, and a row that expired would silently renew it.
 //   lic:<key>#2026-08        a licence's audio seconds this month. 40-day TTL.
-//   lic:<key>                the cached Lemon Squeezy verdict. Expires at four
+//   lic:<key>                the cached Polar verdict. Expires at four
 //                            cache lifetimes; refreshed when older than a day.
 //   global#2026-08-10        every subject's audio today. 7-day TTL.
 //
@@ -41,12 +41,27 @@ import {
 } from "./quota.mjs";
 
 const TABLE = process.env.DEIKO_USAGE_TABLE ?? "deiko-usage";
-const LEMONSQUEEZY_VALIDATE = "https://api.lemonsqueezy.com/v1/licenses/validate";
+/// Polar's PUBLIC validate endpoint — the one its docs say is safe to call from
+/// a desktop app — so the relay stores no Polar credential at all. The
+/// authenticated `/v1/license-keys/validate` would buy nothing here except a
+/// token to leak and to rotate.
+///
+/// `POLAR_API_BASE` points this at `https://sandbox-api.polar.sh` for a test
+/// purchase against Polar's sandbox organisation.
+const POLAR_API = process.env.POLAR_API_BASE ?? "https://api.polar.sh";
+const POLAR_VALIDATE = `${POLAR_API}/v1/customer-portal/license-keys/validate`;
 
-/// How long a Lemon Squeezy verdict is trusted before it is checked again.
+/// NOT A SECRET — it is in every checkout URL, and the validate endpoint is
+/// unauthenticated by design. A constant rather than an environment variable
+/// because a missing one would fail every validation, and a failed validation
+/// demotes a paying customer.
+const POLAR_ORGANIZATION_ID =
+  process.env.POLAR_ORGANIZATION_ID ?? "a5147c76-3225-423b-ab8c-bdee6d06353a";
+
+/// How long a Polar verdict is trusted before it is checked again.
 ///
 /// `transcribe.mjs` splits audio at 25 seconds, so one long session is dozens of
-/// relay calls; validating each against Lemon Squeezy would add a second of
+/// relay calls; validating each against Polar would add a second of
 /// latency per chunk and hammer somebody else's rate limit for an answer that
 /// changes at most once a month. A cancellation therefore takes up to a day to
 /// bite, which is the right trade for a $4 product.
@@ -54,7 +69,7 @@ const LICENSE_CACHE_MS = 24 * 60 * 60 * 1000;
 
 /// How soon an ERROR-derived verdict is rechecked. Minutes, not a day: an
 /// error is not a fact about the licence, only about the network between two
-/// clouds, and it heals on Lemon Squeezy's schedule, not ours.
+/// clouds, and it heals on Polar's schedule, not ours.
 const ERROR_RETRY_MS = 5 * 60 * 1000;
 
 /// Created once per container, not per request, so the connection and its TLS
@@ -204,11 +219,11 @@ export async function tierFor(subject, now = Date.now()) {
     return cachedTier ?? "free";
   }
 
-  const tier = await validateWithLemonSqueezy(subject.id);
+  const tier = await validateWithPolar(subject.id);
 
   // A VERDICT AND AN ERROR ARE DIFFERENT FACTS, and only the verdict may be
-  // cached for a day. Caching an error-derived "free" was the bug: one Lemon
-  // Squeezy timeout on one cold container wrote `tier: "free"`, and a PAYING
+  // cached for a day. Caching an error-derived "free" was the bug: one Polar
+  // timeout on one cold container wrote `tier: "free"`, and a PAYING
   // customer spent the next 24 hours metering against the lifetime `#trial`
   // row — 402'd for a day by a network blip, and again for a day on every
   // future blip once those thirty minutes were gone. On an error the last
@@ -217,14 +232,14 @@ export async function tierFor(subject, now = Date.now()) {
   //
   // A key with NO history still meters as free during an outage (an error
   // must never promote), and that too is written with the short window, so
-  // the recheck happens when Lemon Squeezy is back rather than tomorrow.
+  // the recheck happens when Polar is back rather than tomorrow.
   const verdict = tier ?? cachedTier ?? "free";
   const freshAsOf = tier !== null
     ? now
     : now - LICENSE_CACHE_MS + ERROR_RETRY_MS;
 
   // Written even when the answer is "not valid", so a garbage key cannot be
-  // used to generate a Lemon Squeezy call per chunk.
+  // used to generate a Polar call per chunk.
   //
   // It expires, though — at four cache lifetimes, long after it stops being
   // consulted. Without a TTL every distinct string anybody ever typed into the
@@ -245,53 +260,50 @@ export async function tierFor(subject, now = Date.now()) {
   return verdict;
 }
 
-/// Ask Lemon Squeezy whether a key is live: "pro", "free", or null.
+/// Ask Polar whether a key is live: "pro", "free", or null.
 ///
 /// NULL MEANS "COULD NOT ASK", AND IT IS A THIRD ANSWER, not a synonym for
-/// "free". A timeout, a 5xx, or Lemon Squeezy rate-limiting us says nothing
-/// about the licence; only an answer Lemon Squeezy actually gave does. The
-/// caller decides what null costs — the last real verdict stands.
+/// "free". A timeout, a 5xx, or Polar rate-limiting us says nothing about the
+/// licence; only an answer Polar actually gave does. The caller decides what
+/// null costs — the last real verdict stands.
 ///
 /// A NETWORK FAILURE STILL MUST NOT PROMOTE ANYBODY: null never becomes "pro"
 /// unless a cached "pro" verdict — a real answer from a real validation —
 /// already existed. The other direction would make an outage into a way to
 /// get Pro for nothing.
-///
-/// The validate endpoint is unauthenticated, but an API key is sent when one is
-/// configured — the docs have moved on this before, and two lines here is
-/// cheaper than a deploy that 401s.
-async function validateWithLemonSqueezy(key) {
+async function validateWithPolar(key) {
   try {
-    const headers = { accept: "application/json" };
-    if (process.env.LEMONSQUEEZY_API_KEY) {
-      headers.authorization = `Bearer ${process.env.LEMONSQUEEZY_API_KEY}`;
-    }
-
-    const body = new URLSearchParams({ license_key: key });
-    const response = await fetch(LEMONSQUEEZY_VALIDATE, {
+    const response = await fetch(POLAR_VALIDATE, {
       method: "POST",
-      headers,
-      body,
+      headers: { accept: "application/json", "content-type": "application/json" },
+      body: JSON.stringify({ key, organization_id: POLAR_ORGANIZATION_ID }),
       signal: AbortSignal.timeout(5000),
     });
 
-    // 4xx is an answer ("that is not a key"); 5xx and 429 are its absence.
+    // 4xx is an answer — Polar 404s a key it has never issued, which is
+    // "that is not a key" and not an outage. 5xx and 429 are its absence.
     if (!response.ok) {
       return response.status >= 500 || response.status === 429 ? null : "free";
     }
     const json = await response.json();
-    if (!json?.valid) return "free";
 
-    const status = json?.license_key?.status;
-    if (status !== "active") return "free";
+    // Polar has exactly three statuses. `granted` is live; `revoked` is what a
+    // cancelled subscription becomes, and `disabled` is one we turned off by
+    // hand. Only the first has paid.
+    if (json?.status !== "granted") return "free";
 
-    // Until the store exists there are no variant ids to match, and the only
-    // paid SKU is Pro — so any live licence is Pro. When a second paid tier
-    // appears, this is the line that learns to tell them apart.
-    const proVariants = (process.env.DEIKO_PRO_VARIANT_IDS ?? "")
+    // Both SKUs — monthly and annual — grant the SAME licence-key benefit, and
+    // the validate response names the benefit rather than the product, so
+    // there is nothing here to tell $4/mo from $40/yr and nothing that needs
+    // to. Until the store exists there are no ids to match, and the only paid
+    // benefit is Pro's — so any live licence is Pro. A SECOND PAID TIER WOULD
+    // COME WITH ITS OWN BENEFIT, and this is the line that learns to tell them
+    // apart; leaving it unset then would sell Pro's allowance at the cheaper
+    // tier's price.
+    const proBenefits = (process.env.DEIKO_PRO_BENEFIT_IDS ?? "")
       .split(",").filter(Boolean);
-    if (proVariants.length === 0) return "pro";
-    return proVariants.includes(String(json?.meta?.variant_id)) ? "pro" : "free";
+    if (proBenefits.length === 0) return "pro";
+    return proBenefits.includes(String(json?.benefit_id)) ? "pro" : "free";
   } catch {
     return null;
   }
