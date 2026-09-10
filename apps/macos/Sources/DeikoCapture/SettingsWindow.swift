@@ -463,6 +463,22 @@ private struct SettingsView: View {
                     TextField("paste the key from your email…", text: $model.licenseKey)
                         .font(.system(size: 12, design: .monospaced))
                         .textFieldStyle(.roundedBorder)
+                    // A licence is meant to live on more than one Mac — the
+                    // hours are per licence — and it gets to the next one by
+                    // being copied off this one. The STORED key, not the
+                    // field's draft: what goes on the clipboard is what the
+                    // relay is actually being sent.
+                    if let key = License.key {
+                        Button {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(key, forType: .string)
+                        } label: {
+                            Image(systemName: "doc.on.doc")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .help("Copy the key — to put it on another Mac")
+                    }
                 }
 
                 HStack {
