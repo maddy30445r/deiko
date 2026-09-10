@@ -424,6 +424,16 @@ private struct SettingsView: View {
                         .font(.system(size: 11))
                         .foregroundStyle(model.planIsProblem ? DeikoStyle.needsYou : .secondary)
                     Spacer()
+                    // The card only asked on open and on Apply, so a bar
+                    // somebody was watching never moved. Same fetch, on demand;
+                    // "checking…" above is the feedback, so no spinner.
+                    Button { Task { await model.refreshPlan() } } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .disabled(model.checking)
+                    .help("Ask Deiko again how much is left")
                 }
 
                 // HOW MUCH IS LEFT, as a quantity rather than a sentence.
