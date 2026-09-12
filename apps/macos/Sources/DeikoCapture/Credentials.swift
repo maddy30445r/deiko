@@ -55,18 +55,27 @@ enum Credentials {
         // the guess.
         env["DEIKO_APP_PATH"] = Bundle.main.bundleURL.path
 
-        // THE DEFAULT PATH FOR SOMEBODY WHO HAS NO KEYS.
+        // THE DEFAULT PATH FOR SOMEBODY WHO HAS NO KEYS — AND ONLY THEM.
         //
-        // Passed unconditionally: the scripts prefer a real key when one is
-        // set, so a developer with their own Sarvam key never touches the
-        // relay, and everybody else transcribes without holding an account
-        // anywhere. Absent both, they still get a brief from on-device words.
+        // This used to be passed unconditionally, on the reasoning that the
+        // scripts prefer a real key when one is set. True for the audio:
+        // `transcribe.mjs` never touched the relay with a Sarvam key present.
+        // False for the summary: `summarize.mjs` falls back to the relay
+        // whenever there is no GROQ key, and most people who bring a key bring
+        // ONE — the transcription one. So a Pro user who paid precisely to
+        // keep Deiko out of the loop, and was told in Settings "Deiko's servers
+        // never see it", sent every session's narration as text to our Lambda
+        // under their licence key. The sentence is now true because the URL is
+        // simply not there: bring your own key and the pipeline has no way to
+        // reach us. The summary then runs on their own Groq key or not at all,
+        // and `summarize.mjs` already treats "no service configured" as a
+        // session that works.
         //
         // The token is `License.bearerToken()` rather than the device token
         // directly, so a paying install sends `lic_…` and everybody else sends
         // `dev_…`. The relay cannot tell the two apart by shape — both are
         // v4-shaped UUIDs — and gets it wrong in both directions if it tries.
-        if let relay = relayURL {
+        if let relay = relayURL, !willUse("SARVAM_API_KEY") {
             env["DEIKO_RELAY_URL"] = relay
             env["DEIKO_RELAY_TOKEN"] = License.bearerToken()
         }

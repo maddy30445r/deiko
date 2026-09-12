@@ -792,7 +792,14 @@ async function main() {
     const present = existsSync(wav);
     const bytes = present ? statSync(wav).size : 0;
     const cached = cache[hold];
-    if (cached?.words?.length && (!present || cached.bytes === bytes)) {
+    // A `partial` entry is a hit only once the audio is gone — while the WAV
+    // is still on disk (DEIKO_KEEP_AUDIO, or a re-render before the app's
+    // sweep) it is worth another attempt at the words a refusal withheld.
+    // Without the WAV the cached on-device words are the only record there
+    // will ever be, and skipping the hold would throw them away.
+    const usable = cached?.words?.length
+      && (!present || (cached.bytes === bytes && !cached.partial));
+    if (usable) {
       // Cached words are stored on the AUDIO clock, before the shift, so the
       // shift below applies identically whether they were just recognised or
       // read back. Storing them shifted would bake in an `audioT0` that a
@@ -948,22 +955,27 @@ async function main() {
     // these are offsets into this hold's audio, which is the only form that
     // stays true if the session is re-rendered later.
     //
-    // A PARTIAL RESULT IS NOT CACHED. The cache short-circuits every later
-    // re-render, so writing it after a failed or refused chunk would pin the
-    // degraded words forever — a 402 mid-session would still be costing words
-    // months after an upgrade to Pro, and a network blip would never heal. A
-    // complete result is cached even when empty: silence is a fact, a refusal
-    // is a circumstance.
+    // A PARTIAL RESULT IS CACHED, AND MARKED. This used to skip the cache
+    // after a failed or refused chunk, so that a 402 mid-session would not pin
+    // degraded words forever and a network blip could heal on re-render. The
+    // reasoning was sound and the outcome was data loss: the app deletes every
+    // WAV the moment the brief renders, on the stated invariant that "a
+    // missing WAV with cached words is a hit" — and a refused hold had no
+    // cached words. Re-render after the free trial ran out mid-session and
+    // that hold's on-device words were gone from the brief, at exactly the
+    // moment a new user meets the trial's end. The words that exist are kept;
+    // `partial` tells the read side below to try again ONLY while the audio
+    // is still there to try with. A complete result is cached even when empty:
+    // silence is a fact, a refusal is a circumstance.
     const partial = textOutcome.status === "rejected"
       || (textOutcome.value?.failedChunks ?? 0) > 0
       || textOutcome.value?.refused === true;
-    if (!partial) {
-      cache[hold] = {
-        bytes,
-        words: holdWords,
-        text: holdTexts.find((h) => h.hold === hold)?.text ?? "",
-      };
-    }
+    cache[hold] = {
+      bytes,
+      words: holdWords,
+      text: holdTexts.find((h) => h.hold === hold)?.text ?? "",
+      ...(partial ? { partial: true } : {}),
+    };
 
     // THE SHIFT. Offsets into the wav become session-clock times, so words and
     // cursor events share one timeline.

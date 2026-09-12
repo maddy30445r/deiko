@@ -254,7 +254,15 @@ final class SettingsModel: ObservableObject {
     /// recorded rather than after.
     var whereAudioGoes: String {
         if usingOwnKey {
-            return "Your narration goes straight to Sarvam with your key. Deiko's servers never see it."
+            // TRUE NOW, AND IT WAS NOT. The relay URL used to be passed to the
+            // pipeline regardless, and the summary step fell back to it when
+            // there was no Groq key — so this sentence was shown to exactly the
+            // people it was false for. `Credentials.childEnvironment` withholds
+            // the relay when a personal Sarvam key is in use; the consequence
+            // is spelled out here rather than discovered.
+            return Credentials.willUse("GROQ_API_KEY")
+                ? "Your narration goes straight to Sarvam with your key, and the summary to Groq with yours. Deiko's servers never see it."
+                : "Your narration goes straight to Sarvam with your key. Deiko's servers never see it — and without a Groq key of your own, the three-line summary is skipped rather than sent to Deiko."
         }
         if Credentials.relayURL != nil {
             return isPro

@@ -423,7 +423,25 @@ enum Handoff {
         // two screenshots, and here is what I was saying" rather than the
         // reverse — and `attachedText` numbers the images in exactly this
         // order, so the order is load-bearing, not cosmetic.
+        // THE TARGET IS RE-CHECKED BEFORE EVERY KEYSTROKE, not once at the
+        // top. Three images is nine seconds of sleeps, and the keystrokes go
+        // to the HID tap — they land in whatever has focus, exactly as if the
+        // user had typed them. Cmd-Tab to answer a ping during that window and
+        // a screenshot of the screen went into Slack, then the prompt, then a
+        // Return that sent it. The 3s delay below is a mitigation for a paste
+        // landing; this is the guard against it landing somewhere else.
+        // Refusing mid-sequence is a partial send, which the header says is
+        // never reported as success — so it is thrown, not noted.
+        func stillFocused(_ step: String) throws {
+            guard app.isActive else {
+                throw HandoffError(
+                    "\(target.appName) lost focus before \(step) — stopped so nothing went to the wrong app."
+                )
+            }
+        }
+
         for (index, payload) in payloads.enumerated() {
+            try stillFocused("image \(index + 1) was pasted")
             note("pasting image \(index + 1)/\(payloads.count): \(payload.name)")
             try pasteImage(payload.data)
             // `pasteboardRestoreDelay`, not a smaller number, and the reason is
@@ -441,6 +459,7 @@ enum Handoff {
             try await Task.sleep(for: .seconds(pasteboardRestoreDelay))
         }
 
+        try stillFocused("the prompt was pasted")
         note("pasting \(text.count) characters into \(target.appName)")
         try paste(text)
 
@@ -463,6 +482,10 @@ enum Handoff {
         // measurement: the live check against real hosts is a field
         // verification step, not something this file can run on its own. If
         // the fragmenting happens, this is where to look first.
+        // The Return is the one keystroke that cannot be taken back: a paste
+        // into the wrong app is a mess, a Return in the wrong app is a message
+        // SENT. Checked last of all, after the 250ms the paste needed to land.
+        try stillFocused("Return was pressed")
         tap(keyCode: kReturn)
         note("done")
     }
