@@ -12,8 +12,9 @@
  * sits a quarter-second early, uniformly, and alignment fails in a way that
  * looks like the mechanic not working rather than a clock bug.
  *
- * Sarvam is behind a one-method interface because PRD §14 lists the dependency
- * as a real risk; Whisper or Apple Speech drop in without the aligner noticing.
+ * The cloud recogniser is behind a one-method interface because PRD §14 lists
+ * the dependency as a real risk. That earned itself: it was Sarvam, it is now
+ * Whisper, and the aligner never noticed the swap.
  */
 
 import { readFileSync, writeFileSync, existsSync, rmSync, statSync } from "node:fs";
@@ -29,7 +30,6 @@ import { normalizeWord } from "../packages/alignment/dist/src/deictic.js";
 import { loadEvents } from "./lib/session-io.mjs";
 import { refusalReason, REFUSAL_IS_FINAL } from "./lib/cloud.mjs";
 
-const SARVAM_STT_URL = "https://api.sarvam.ai/speech-to-text";
 
 // ── Stage timing ────────────────────────────────────────────────────────────
 //
@@ -68,11 +68,12 @@ function timingReport(totalMs) {
  */
 
 /**
- * Sarvam's REST endpoint rejects anything over 30 seconds ("please use the
- * batch API"), and the batch API returns chunk-level timestamps only — useless
- * for binding individual words to pointing events. So split long holds here.
+ * Long holds are split here. Sarvam's REST endpoint refused anything over 30
+ * seconds outright; Groq's limit is generous by comparison, but the chunking
+ * stays because it is what makes the uploads concurrent — and because a failed
+ * chunk then costs its own stretch of sentence rather than the whole hold.
  *
- * These chunks upload CONCURRENTLY, and the whole Sarvam call now runs alongside
+ * These chunks upload CONCURRENTLY, and the whole cloud call runs alongside
  * on-device recognition rather than after it, so it costs nothing on the clock —
  * about 2s hidden inside recognition's 12s on a 77s session.
  *
@@ -175,61 +176,47 @@ function chunkedTranscriber(name, uploadOne, state = {}) {
   };
 }
 
-/** The multipart body both Sarvam and the relay accept. */
-function sttForm(pcm, language) {
+/// The multipart body both Groq and the relay accept.
+///
+/// TRANSLATION, NOT TRANSCRIPTION, and the endpoint is the decision rather than
+/// a detail. `/audio/translations` always answers in English; `/transcriptions`
+/// answers in whatever it heard. Measured over two real Hinglish sessions
+/// (`mddocs/spikes/2026-09-12-transcription-bakeoff.md`), transcription with a
+/// `hi` hint returned Devanagari and anchored **0/31 and 8/57** words against
+/// the on-device timeline — Devanagari tokens cannot match Latin ones, so the
+/// merge had nothing to bind screenshots with. Translation anchored **16/31 and
+/// 21/42**, matching and then beating Sarvam's 16/31 and 25/59, at a third of
+/// its price and twice its speed.
+///
+/// So English out, for everybody. A user who speaks English gets plain
+/// transcription — there is nothing to translate — and a user who code-switches
+/// gets clean English rather than the garbage on-device recognition makes of
+/// them. The review window says so where the narration is shown, because that
+/// is where somebody checks their words before sending them.
+///
+/// `language` is deliberately unused: the translation endpoint takes no
+/// language hint, which is the property being bought. The parameter stays in
+/// the signature because `chunkedTranscriber` passes it to every uploader.
+function sttForm(pcm, _language) {
   const form = new FormData();
   form.append("file", new Blob([wrapWav(pcm)], { type: "audio/wav" }), "audio.wav");
-  form.append("model", "saaras:v3");
-  // `translit` returns Latin script — "Yeh jo data hai ismein taxonomy ke
-  // andar board ka naam" — matching the on-device timings and the Latin
-  // half of the deictic lexicon. `codemix` returns Devanagari for the same
-  // audio, which the lexicon also handles but which reads worse in a plan.
-  form.append("mode", "translit");
-  form.append("language_code", language);
+  // large-v3, not turbo: turbo is $0.04/hr against $0.111 but CANNOT translate,
+  // and translation is the whole point of the endpoint below.
+  form.append("model", "whisper-large-v3");
+  form.append("response_format", "json");
   return form;
 }
 
-/** The developer's own Sarvam key: their key, their bill, nothing in between. */
-function sarvamTranscriber(apiKey) {
-  return chunkedTranscriber("sarvam", async (pcm, language) => {
-    const response = await fetch(SARVAM_STT_URL, {
-      method: "POST",
-      headers: { "api-subscription-key": apiKey },
-      body: sttForm(pcm, language),
-      signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
-    });
-
-    const bodyText = await response.text();
-    if (!response.ok) {
-      throw new Error(`Sarvam ${response.status}: ${bodyText.slice(0, 400)}`);
-    }
-
-    let raw;
-    try {
-      raw = JSON.parse(bodyText);
-    } catch {
-      throw new Error(`Sarvam returned non-JSON: ${bodyText.slice(0, 400)}`);
-    }
-
-    // TEXT only. Sarvam returns no word-level timings on any model or
-    // parameter combination we tried — one span for the whole clip — so the
-    // timeline comes from on-device Apple Speech and Sarvam supplies the
-    // words. There used to be a 60-line tolerant extractor here for timings
-    // that never arrived, feeding a field nothing read.
-    return { text: extractText(raw) };
-  });
-}
-
-/// Whisper on Groq. NOT WIRED INTO `selectTranscriber` — it exists for
-/// `bakeoff.mjs` to measure against Sarvam and Apple before anything routes to
-/// it, because the question it answers is unmeasured: `saaras` is an Indic
-/// model, and nobody has checked whether it beats on-device Apple for a US
-/// developer saying "TanStack Query".
+/// The developer's own Groq key: their key, their bill, nothing in between.
 ///
-/// Same chunker as Sarvam, so the comparison is of the models and not of how
-/// the audio was cut. Whisper takes a plain `file` field rather than Sarvam's
-/// model/mode pair, and returns `{ text }`.
-function groqTranscriber(apiKey, model = "whisper-large-v3", { translate = false } = {}) {
+/// ONE KEY NOW, and that is what makes the promise in Settings true. It used to
+/// take two — Sarvam for the audio, Groq for the summary — and "Deiko's servers
+/// never see it" was false for anybody who brought only the first. The same key
+/// now covers both, so bringing it really does take us out of the path.
+///
+/// `translate` is the shipped behaviour and `false` exists for `bakeoff.mjs`,
+/// which measures the alternative rather than assuming it.
+function groqTranscriber(apiKey, model = "whisper-large-v3", { translate = true } = {}) {
   return chunkedTranscriber(`groq:${model}${translate ? ":translate" : ""}`, async (pcm, language) => {
     const form = new FormData();
     form.append("file", new Blob([wrapWav(pcm)], { type: "audio/wav" }), "audio.wav");
@@ -269,7 +256,7 @@ function groqTranscriber(apiKey, model = "whisper-large-v3", { translate = false
  * account anywhere.
  *
  * The audio goes to Deiko's server, which forwards it and keeps nothing. That
- * is a materially different promise from "only to Sarvam", and the app says so
+ * is a materially different promise from "only to Groq", and the app says so
  * where people can read it before they start. Anyone who would rather not is
  * one Settings field away from their own key, which skips this entirely.
  */
@@ -365,12 +352,13 @@ function onDeviceOnlyTranscriber() {
 /**
  * Who transcribes, most specific first.
  *
- * 1. the developer's own Sarvam key — an explicit choice, so it wins;
+ * 1. the developer's own Groq key — an explicit choice, so it wins, and one
+ *    key now covers both the words and the summary;
  * 2. Deiko's relay — the default, and the reason a new install needs no key;
  * 3. on-device only — offline, or nothing configured. Degraded, not broken.
  */
 function selectTranscriber() {
-  if (process.env.SARVAM_API_KEY) return sarvamTranscriber(process.env.SARVAM_API_KEY);
+  if (process.env.GROQ_API_KEY) return groqTranscriber(process.env.GROQ_API_KEY);
   if (process.env.DEIKO_RELAY_URL) {
     return relayTranscriber(process.env.DEIKO_RELAY_URL, process.env.DEIKO_RELAY_TOKEN);
   }
@@ -443,33 +431,38 @@ function wrapWav(pcm) {
 }
 
 function extractText(raw) {
-  return String(raw?.transcript ?? raw?.text ?? raw?.output?.transcript ?? "").trim();
+  return String(raw?.text ?? "").trim();
 }
 
 // ── The anchor merge ────────────────────────────────────────────────────────
 
 /**
- * Put Sarvam's words (right text, no times) onto Apple's timeline (wrong text,
- * real times).
+ * Put the cloud's words (right text, no times) onto Apple's timeline (wrong
+ * text, real times).
  *
  * Why this works: both recognisers heard the SAME audio, so their token
  * sequences are two noisy views of one utterance, monotonic in time. The
  * tokens they agree on — in this session: taxonomy, CBSE, Telangana, tenant,
  * Yeh, Yahan — become anchors via longest-common-subsequence (monotonic by
- * construction, so anchors can never cross). Sarvam tokens between two anchors
+ * construction, so anchors can never cross). Cloud tokens between two anchors
  * are spread evenly across the gap.
+ *
+ * THE ANCHOR COUNT IS HOW THIS IS JUDGED, and `make bakeoff` reports it per
+ * engine. Whisper asked to transcribe Hinglish returns Devanagari and anchors
+ * almost nothing — Devanagari tokens cannot match Latin ones — which is why the
+ * shipped path translates instead.
  *
  * The binding window is ±1.5s, so evenly-spread is genuinely good enough: a
  * word only needs to land within a second or so of when it was said, not on
  * the exact syllable.
  */
-function mergeWords(sarvamText, appleWords, audioDurationMs) {
+function mergeWords(cloudText, appleWords, audioDurationMs) {
   // Apple's own segments are measurements, so they are anchored by definition.
   // Labelling them keeps `anchored` meaning the same thing on every path — an
   // absent field would be indistinguishable from "not anchored".
   const asAnchored = (ws) => ws.map((w) => ({ ...w, anchored: true }));
 
-  const sTokens = sarvamText.split(/\s+/).filter((t) => normalizeWord(t).length > 0);
+  const sTokens = cloudText.split(/\s+/).filter((t) => normalizeWord(t).length > 0);
   if (sTokens.length === 0 || appleWords.length === 0) {
     return { words: asAnchored(appleWords), anchors: 0, total: sTokens.length };
   }
@@ -583,10 +576,10 @@ function spreadEvenly(text, audioDurationMs) {
 /**
  * Apple's Speech framework, via the app bundle, for WORD TIMINGS.
  *
- * Sarvam gives far better Hinglish text but no usable timings — its REST API
- * returns one timestamp spanning the whole clip on every model and parameter
- * combination. So the two split the work: Sarvam says WHAT was said, Apple says
- * WHEN, and the aligner runs on Apple's clock.
+ * The cloud gives far better text but no usable word timings. So the two split
+ * the work: the cloud says WHAT was said, Apple says WHEN, and the aligner runs
+ * on Apple's clock. (Whisper can return segment timestamps; they are spans, not
+ * words, and the merge below needs words.)
  *
  * Launched with `open -n` rather than executed directly, because TCC blames the
  * RESPONSIBLE process: a binary exec'd from a terminal inherits that terminal's
@@ -730,7 +723,7 @@ async function main() {
   // NO KEY IS NOT AN ERROR. It used to exit(1) here, which meant a new install
   // produced nothing at all — while the machinery for a keyless session was
   // already present and working three hundred lines below, in the path that
-  // keeps Apple's words when Sarvam fails. `selectTranscriber` decides who
+  // keeps Apple's words when the cloud fails. `selectTranscriber` decides who
   // transcribes; every outcome, including nobody, renders a brief.
 
   // Accepts both `--language hi-IN` and `--language=hi-IN`. The indexOf form
@@ -1144,4 +1137,4 @@ if (invokedDirectly) {
   });
 }
 
-export { appleTimings, groqTranscriber, mergeWords, sarvamTranscriber, wavDurationMs };
+export { appleTimings, groqTranscriber, mergeWords, wavDurationMs };

@@ -4,7 +4,7 @@ import Foundation
 ///
 /// The orb used to show raw stdout+stderr in a monospace box. What that
 /// actually put in front of people: shell instructions for a `.env` they do not
-/// have, four hundred characters of Sarvam's JSON, or a Node stack trace ending
+/// have, four hundred characters of the provider's JSON, or a Node stack trace ending
 /// in "Fix looksOpaque / SECRET_MARKER in scripts/render-brief.mjs" — an
 /// instruction to edit source code, naming a file that is inside the app bundle.
 ///
@@ -77,8 +77,8 @@ public struct PipelineFailure: Equatable, Sendable {
         // which happened in its own line. They reach this taxonomy only when
         // something ELSE then failed the stage, so the sentence's job is to
         // stop the user chasing a problem they do not have. None of them is a
-        // bug report, and none of them is Sarvam: the user has no relationship
-        // with Sarvam, and telling them a vendor they have never heard of is
+        // bug report, and none of them is the provider: the user has no
+        // relationship with it, and naming a vendor they have never heard of is
         // rate-limiting explains nothing they can act on.
         //
         // Strings from services/relay/quota.mjs and relay.mjs; the mapping they
@@ -105,18 +105,22 @@ public struct PipelineFailure: Equatable, Sendable {
             )
         }
 
-        // Sarvam's own errors arrive as `Sarvam <status>: <body>`, and reach a
-        // user only when they brought their OWN key — so naming Sarvam here is
-        // correct, and naming it above was not.
-        if text.contains("sarvam 401") || text.contains("sarvam 403") {
+        // The provider's own errors arrive as `Groq <status>: <body>`, and
+        // reach a user only when they brought their OWN key — so naming the
+        // vendor here is correct, and naming it above was not. `sarvam` is
+        // still matched because a session recorded before the switch can be
+        // re-rendered afterwards, and its cached failure text says Sarvam.
+        if text.contains("groq 401") || text.contains("groq 403")
+            || text.contains("sarvam 401") || text.contains("sarvam 403") {
             return make(
                 .authRejected,
-                "Sarvam rejected the key — it may have expired or been copied incompletely. "
-                    + "Paste a fresh one in Settings; the session is saved.",
+                "The transcription service rejected your key — it may have expired or been "
+                    + "copied incompletely. Paste a fresh one in Settings; the session is saved.",
                 settings: true
             )
         }
-        if text.contains("sarvam 429") || text.contains("quota") || text.contains("rate limit") {
+        if text.contains("groq 429") || text.contains("sarvam 429")
+            || text.contains("quota") || text.contains("rate limit") {
             return make(
                 .quotaExhausted,
                 "The transcription service is rate-limiting. Nothing is lost — "

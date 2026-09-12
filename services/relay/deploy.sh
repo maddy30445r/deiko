@@ -2,7 +2,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Deploy the relay to AWS Lambda behind a Function URL.
 #
-#   SARVAM_API_KEY=… GROQ_API_KEY=… ./services/relay/deploy-aws.sh
+#   GROQ_API_KEY=… ./services/relay/deploy-aws.sh
 #
 # Plain AWS CLI, no SAM/CDK/Terraform — the CLI is already installed, and a
 # deploy step that first needs another toolchain is a deploy step that fails on
@@ -55,8 +55,7 @@ say "account $ACCOUNT · region $REGION"
 
 # Refuse rather than deploy a relay that answers /health and 503s every real
 # request — the failure that looks healthy and is not.
-: "${SARVAM_API_KEY:?set SARVAM_API_KEY (transcription will 503 without it)}"
-: "${GROQ_API_KEY:?set GROQ_API_KEY (summaries will 503 without it)}"
+: "${GROQ_API_KEY:?set GROQ_API_KEY (transcription AND summaries 503 without it)}"
 
 # ── The usage table ─────────────────────────────────────────────────────────
 #
@@ -191,7 +190,6 @@ trap 'rm -f "$ENV_FILE"' EXIT
 chmod 600 "$ENV_FILE"
 DEIKO_USAGE_TABLE="$TABLE" node -e '
   const vars = {
-    SARVAM_API_KEY: process.env.SARVAM_API_KEY,
     GROQ_API_KEY: process.env.GROQ_API_KEY,
     DEIKO_USAGE_TABLE: process.env.DEIKO_USAGE_TABLE,
   };
@@ -328,7 +326,7 @@ if ! healthy "$HEALTH"; then
   echo "  got: ${HEALTH:-no response}"
   case "$HEALTH" in
     *'"transcription":false'*)
-      echo "  transcription:false — the function has no SARVAM_API_KEY." ;;
+      echo "  transcription:false — the function has no GROQ_API_KEY." ;;
     *'"metering":false'*)
       echo "  metering:false — the function cannot reach table '$TABLE'."
       echo "  Check the ${FUNCTION}-usage policy on role $ROLE_NAME, and that the"

@@ -2,7 +2,7 @@
 // THE RELAY, WITHOUT A TRANSPORT
 //
 // So that a new user transcribes without holding an account anywhere. The app
-// posts narration audio; this forwards it to Sarvam with Deiko's key and
+// posts narration audio; this forwards it to Groq with Deiko's key and
 // returns the text. Same for the orb's summary, via Groq.
 //
 // Deliberately knows nothing about `node:http` or Lambda. One function in
@@ -45,7 +45,14 @@ import {
   unavailable,
 } from "./usage.mjs";
 
-const SARVAM_STT_URL = "https://api.sarvam.ai/speech-to-text";
+/// TRANSLATIONS, NOT TRANSCRIPTIONS, and the choice is measured rather than
+/// assumed. Asked to transcribe Hinglish, Whisper answers in Devanagari, whose
+/// tokens cannot match the Latin ones the on-device timeline is made of — 0/31
+/// and 8/57 words anchored across two real sessions, so nothing bound a
+/// screenshot to a sentence. Translating anchors 16/31 and 21/42, matching then
+/// beating the Sarvam it replaces, at a third of the price.
+/// See mddocs/spikes/2026-09-12-transcription-bakeoff.md.
+const GROQ_STT_URL = "https://api.groq.com/openai/v1/audio/translations";
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 /// Bigger than any chunk the client sends — `transcribe.mjs` splits at 25s of
@@ -160,7 +167,6 @@ function revoked(token) {
  * @returns {Promise<{status:number, body:string, contentType:string}>}
  */
 export async function handle({ method, path, token, contentType, body }) {
-  const sarvamKey = process.env.SARVAM_API_KEY;
   const groqKey = process.env.GROQ_API_KEY;
 
   const json = (status, obj) => ({
@@ -181,7 +187,7 @@ export async function handle({ method, path, token, contentType, body }) {
     // role has no policy.
     return json(200, {
       ok: true,
-      transcription: Boolean(sarvamKey),
+      transcription: Boolean(groqKey),
       summary: Boolean(groqKey),
       metering: await meteringHealthy(),
       table: USAGE_TABLE,
@@ -229,7 +235,7 @@ export async function handle({ method, path, token, contentType, body }) {
   if (body && body.length > MAX_BODY_BYTES) return json(413, { error: "body too large" });
 
   if (path === "/v1/transcribe") {
-    if (!sarvamKey) return json(503, { error: "relay has no transcription key configured" });
+    if (!groqKey) return json(503, { error: "relay has no transcription key configured" });
 
     // METERED BEFORE IT IS SPENT. The counter is incremented and then judged,
     // so two chunks arriving together cannot both see room that only one of
@@ -239,7 +245,7 @@ export async function handle({ method, path, token, contentType, body }) {
     try {
       tier = await tierFor(subject);
       // FLOORED, because the body's length is only honest about PCM. A caller
-      // choosing a compressed format buys thirty seconds of Sarvam for one
+      // choosing a compressed format buys thirty seconds of Groq for one
       // second of quota; the floor bounds how many times a day that trade can
       // be made. See `MIN_SECONDS_PER_REQUEST`.
       seconds = Math.max(audioSeconds(body?.length ?? 0), MIN_SECONDS_PER_REQUEST);
@@ -264,16 +270,21 @@ export async function handle({ method, path, token, contentType, body }) {
       return json(verdict.status, { error: verdict.error });
     }
 
-    const out = await proxy(SARVAM_STT_URL, {
+    // ONE VENDOR NOW. Transcription and the summary both spend the Groq key,
+    // which is why the client's BYO field is a single key and the promise it
+    // makes — bring one and Deiko's servers see nothing at all — is finally
+    // true rather than true-if-you-brought-both.
+    const out = await proxy(GROQ_STT_URL, {
       // The client's own multipart body and boundary, forwarded verbatim.
-      // Parsing and re-encoding it would mean touching the audio for no reason.
-      "api-subscription-key": sarvamKey,
+      // Parsing and re-encoding it would mean touching the audio for no reason,
+      // so the CLIENT picks the model and this only adds the key.
+      authorization: `Bearer ${groqKey}`,
       "content-type": contentType || "multipart/form-data",
     }, body);
     // A provider outage is not the caller's spend. A trial is LIFETIME, so an
-    // hour of Sarvam 5xx would otherwise eat it for nothing. 4xx stays billed:
+    // hour of Groq 5xx would otherwise eat it for nothing. 4xx stays billed:
     // that is the caller's own malformed audio, and refunding it would let
-    // junk bodies probe Sarvam off the meter.
+    // junk bodies probe Groq off the meter.
     if (out.status >= 500) await refund({ subject, seconds, tier }).catch(() => {});
     return out;
   }
@@ -353,7 +364,7 @@ export async function handle({ method, path, token, contentType, body }) {
   return json(404, { error: "no such endpoint" });
 }
 
-/// A DEADLINE ON THE UPSTREAM CALL. Sarvam answers a 25-second chunk in one
+/// A DEADLINE ON THE UPSTREAM CALL. Groq answers a 25-second chunk in well
 /// or two; Lambda's own timeout is 60. Without this, requests that stall on a
 /// provider hold a container each for the full minute, and concurrency here is
 /// single digits — a handful of them is the whole service. Twenty seconds is
@@ -363,7 +374,7 @@ const UPSTREAM_TIMEOUT_MS = 20_000;
 /// A THROW IS A 502, NOT AN EXCEPTION. The timeout above rejects, and so do
 /// DNS failures and dropped connections — and an uncaught rejection here left
 /// `handle()` entirely, which meant BOTH of the callers' `status >= 500`
-/// refunds never ran. A trial is lifetime, so a Sarvam stall permanently ate
+/// refunds never ran. A trial is lifetime, so a provider stall permanently ate
 /// thirty minutes somebody never got a word of. It also carried `err.message`
 /// into a public body by way of the Lambda adapter's catch-all.
 ///

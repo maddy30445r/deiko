@@ -54,13 +54,18 @@ test("the Swift failure taxonomy matches on strings that still exist", () => {
     "could not find node",      // BriefPipelineError.nodeNotFound's description
 
     // 2. Arrives from somewhere else at runtime, so no source contains it.
-    //    `transcribe.mjs` throws `Sarvam ${status}: …`, and the provider's own
-    //    body supplies the rest.
+    //    `transcribe.mjs` throws `Groq ${status}: …`, and the provider's own
+    //    body supplies the rest. The `sarvam` spellings stay matched because a
+    //    session recorded before the switch can be re-rendered after it, and
+    //    its cached failure text still names the old vendor.
+    "groq 401",
+    "groq 403",
+    "groq 429",
     "sarvam 401",
     "sarvam 403",
     "sarvam 429",
-    "quota",                    // Sarvam's response body
-    "rate limit",               // Sarvam's response body
+    "quota",                    // the provider's response body
+    "rate limit",               // the provider's response body
     "fetch failed",             // undici
     "enotfound",                // node:net
     "econnrefused",
@@ -101,15 +106,15 @@ test("the Swift failure taxonomy matches on strings that still exist", () => {
   );
 });
 
-test("the Sarvam status prefix the taxonomy relies on is still constructed", () => {
-  // `classify` matches "sarvam 401" and friends, which no source contains —
+test("the provider status prefix the taxonomy relies on is still constructed", () => {
+  // `classify` matches "groq 401" and friends, which no source contains —
   // `transcribe.mjs` builds them from the status at runtime. So the thing to
   // pin is the template, because rewording THAT is what would break them all
   // at once, silently.
   assert.match(
     read("scripts/transcribe.mjs"),
-    /`Sarvam \$\{response\.status\}/,
-    "the taxonomy matches `sarvam <status>` — this template is where that shape comes from",
+    /`Groq \$\{response\.status\}/,
+    "the taxonomy matches `groq <status>` — this template is where that shape comes from",
   );
 });
 

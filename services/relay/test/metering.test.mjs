@@ -3,7 +3,7 @@
 // `quota.test.mjs` checks the arithmetic. This checks the thing that arithmetic
 // is wired into: that a real `handle()` call counts the right number of seconds
 // against the right row, refuses at the right threshold, and never reaches
-// Sarvam when it has refused.
+// the upstream when it has refused.
 //
 // DynamoDB is a fake HTTP server rather than DynamoDB Local, which would need
 // Java or Docker — a test that needs a container is a test that stops being run.
@@ -95,10 +95,10 @@ function stubFetch() {
         { status: 200, headers: { "content-type": "application/json" } },
       );
     }
-    if (href.includes("sarvam")) {
+    if (href.includes("/audio/translations")) {
       return new Response(JSON.stringify({ transcript: "ok" }), { status: 200 });
     }
-    if (href.includes("groq")) {
+    if (href.includes("/chat/completions")) {
       return new Response(JSON.stringify({ choices: [] }), { status: 200 });
     }
     throw new Error(`unexpected upstream: ${href}`);
@@ -190,7 +190,7 @@ test("health reports metering by actually describing the table", async () => {
 test("a free install transcribes with no configuration at all", async () => {
   const r = await post("dev_new-mac", 20);
   assert.equal(r.status, 200);
-  assert.ok(upstream.some((u) => u.includes("sarvam")), "should have reached Sarvam");
+  assert.ok(upstream.some((u) => u.includes("/audio/translations")), "should have reached the transcription upstream");
 });
 
 test("seconds land on the device's lifetime row, and on today's global row", async () => {
@@ -200,7 +200,7 @@ test("seconds land on the device's lifetime row, and on today's global row", asy
   assert.equal(rows.get(global).audioSeconds, 25);
 });
 
-test("the free trial runs out, and the refusal is 402 with Sarvam untouched", async () => {
+test("the free trial runs out, and the refusal is 402 with the upstream untouched", async () => {
   seed("dev:heavy", FREE_TRIAL_SECONDS - 20);   // 20 seconds of trial left
   const ok = await post("dev_heavy", 15);
   assert.equal(ok.status, 200, "still inside the trial");
@@ -209,7 +209,7 @@ test("the free trial runs out, and the refusal is 402 with Sarvam untouched", as
   const refused = await post("dev_heavy", 25);  // tips it over
   assert.equal(refused.status, 402);
   assert.equal(
-    upstream.filter((u) => u.includes("sarvam")).length, 0,
+    upstream.filter((u) => u.includes("/audio/translations")).length, 0,
     "a refusal must not buy the audio it refused",
   );
 });
@@ -330,7 +330,7 @@ test("a flood of summaries cannot close transcription for a paying customer", as
   const audioDay = `global#${new Date().toISOString().slice(0, 10)}`;
   for (let i = 0; i < 50; i += 1) await summarize(`dev_flood${i}`);
   assert.equal(rows.get(audioDay)?.audioSeconds ?? 0, 0,
-    "summaries must not touch the ceiling that bounds Sarvam");
+    "summaries must not touch the ceiling that bounds transcription");
   const paid = await post("lic_real-key", 20);
   assert.equal(paid.status, 200, "a paying customer transcribes through a summary flood");
 });
@@ -394,7 +394,7 @@ test("when the usage table is unreachable the relay fails CLOSED", async () => {
   const r = await post("dev_abc", 10);
   assert.equal(r.status, 503);
   assert.equal(
-    upstream.filter((u) => u.includes("sarvam")).length, 0,
+    upstream.filter((u) => u.includes("/audio/translations")).length, 0,
     "not knowing what somebody has spent must stop the buying, not start it",
   );
   await new Promise((r) => saved.listen(port, r));
@@ -416,10 +416,10 @@ test("a refused request gives its seconds back — refusals cannot drain the day
   assert.equal(rows.get(global)?.audioSeconds ?? 0, 0);
 });
 
-test("a Sarvam outage does not eat the lifetime trial", async () => {
+test("a transcription outage does not eat the lifetime trial", async () => {
   globalThis.fetch = async (url) => {
     upstream.push(String(url));
-    if (String(url).includes("sarvam")) return new Response("upstream down", { status: 503 });
+    if (String(url).includes("/audio/translations")) return new Response("upstream down", { status: 503 });
     throw new Error(`unexpected upstream: ${url}`);
   };
   const r = await post("dev_unlucky", 20);
@@ -452,7 +452,7 @@ test("one Polar failure does not demote a paying customer for a day", async () =
   globalThis.fetch = async (url) => {
     upstream.push(String(url));
     if (String(url).includes("polar")) throw new Error("timeout");
-    if (String(url).includes("sarvam")) return new Response(JSON.stringify({ transcript: "ok" }), { status: 200 });
+    if (String(url).includes("/audio/translations")) return new Response(JSON.stringify({ transcript: "ok" }), { status: 200 });
     throw new Error(`unexpected upstream: ${url}`);
   };
   const r = await post("lic_steady", 20);
@@ -466,7 +466,7 @@ test("an error-derived free verdict is rechecked in minutes, not tomorrow", asyn
   globalThis.fetch = async (url) => {
     upstream.push(String(url));
     if (String(url).includes("polar")) return new Response("oops", { status: 500 });
-    if (String(url).includes("sarvam")) return new Response(JSON.stringify({ transcript: "ok" }), { status: 200 });
+    if (String(url).includes("/audio/translations")) return new Response(JSON.stringify({ transcript: "ok" }), { status: 200 });
     throw new Error(`unexpected upstream: ${url}`);
   };
   const r = await post("lic_newkey", 20);
@@ -523,16 +523,16 @@ test("a partial write banks nothing — the global row is taken back when the su
   assert.equal(r.status, 503, "fail closed, as before");
   assert.equal(rows.get(globalKey(Date.now()))?.audioSeconds ?? 0, 0,
     "the global write landed and was compensated — no phantom seconds");
-  assert.equal(upstream.filter((u) => u.includes("sarvam")).length, 0, "nothing was bought");
+  assert.equal(upstream.filter((u) => u.includes("/audio/translations")).length, 0, "nothing was bought");
 });
 
 test("an upstream that throws is a 502 that refunds, and says nothing about why", async () => {
   // A timeout or a DNS failure rejects the fetch. Uncaught, that left handle()
-  // before either `status >= 500` refund — a Sarvam stall ate a lifetime
+  // before either `status >= 500` refund — a provider stall ate a lifetime
   // trial — and carried the message into a public body via the adapter.
   globalThis.fetch = async (url) => {
     upstream.push(String(url));
-    if (String(url).includes("sarvam")) throw new Error("getaddrinfo ENOTFOUND api.sarvam.ai");
+    if (String(url).includes("/audio/translations")) throw new Error("getaddrinfo ENOTFOUND api.groq.com");
     throw new Error(`unexpected upstream: ${url}`);
   };
   const r = await post("dev_dns", 20);
@@ -546,7 +546,7 @@ test("an upstream that throws is a 502 that refunds, and says nothing about why"
 
 test("a tiny body still costs the floor — compressed audio cannot buy thirty seconds for one", async () => {
   // 16 KB: the byte rule says half a second. A caller sending 8 kbps MP3
-  // would get ~15 s of Sarvam for it; the floor is what bounds how many times
+  // would get ~15 s of Groq for it; the floor is what bounds how many times
   // a day that trade can be made.
   const r = await post("dev_tiny", 0.5);
   assert.equal(r.status, 200);

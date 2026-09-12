@@ -24,7 +24,7 @@ import { resolve, join } from "node:path";
 import { homedir } from "node:os";
 
 import {
-  appleTimings, groqTranscriber, mergeWords, sarvamTranscriber, wavDurationMs,
+  appleTimings, groqTranscriber, mergeWords, wavDurationMs,
 } from "./transcribe.mjs";
 import { loadEvents } from "./lib/session-io.mjs";
 import { loadSession } from "../packages/alignment/dist/src/referents/session.js";
@@ -39,7 +39,6 @@ const ENGINES = [
   { id: "apple-en-IN", label: "Apple on-device · en-IN", kind: "apple", locale: "en-IN" },
   { id: "apple-en-US", label: "Apple on-device · en-US", kind: "apple", locale: "en-US" },
   { id: "apple-ctx", label: "Apple on-device · en-IN + screen vocabulary", kind: "apple", locale: "en-IN", context: true },
-  { id: "sarvam", label: "Sarvam saaras:v3 · translit", kind: "sarvam", cost: "$0.35/hr" },
   { id: "whisper", label: "Groq whisper-large-v3", kind: "groq", model: "whisper-large-v3", cost: "$0.111/hr" },
   { id: "whisper-turbo", label: "Groq whisper-large-v3-turbo", kind: "groq", model: "whisper-large-v3-turbo", cost: "$0.04/hr" },
   // THE ONE THE PRODUCT IS ABOUT TO SHIP. `/audio/transcriptions` with an
@@ -110,6 +109,9 @@ function screenVocabulary(sessionDir) {
   return [...seen];
 }
 
+// Sarvam was the incumbent and is retired — its numbers live in
+// mddocs/spikes/2026-09-12-transcription-bakeoff.md rather than being re-bought
+// on every run. Re-add an engine here if another vendor ever needs measuring.
 const normalise = (s) => String(s ?? "").toLowerCase().replace(/[^\p{L}\p{N}\p{M}\s]/gu, "").split(/\s+/).filter(Boolean);
 
 /// Levenshtein over words. Only ever reported when a reference exists.
@@ -159,11 +161,9 @@ async function runEngine(engine, wavs, contextFile, appleWordsByWav) {
       anchorTotal += words.length;
       parts.push(result.transcript ?? words.map((w) => w.text).join(" "));
     } else {
-      const key = engine.kind === "sarvam" ? process.env.SARVAM_API_KEY : process.env.GROQ_API_KEY;
+      const key = process.env.GROQ_API_KEY;
       if (!key) throw new Error(`${engine.kind.toUpperCase()}_API_KEY is not set`);
-      const t = engine.kind === "sarvam"
-        ? sarvamTranscriber(key)
-        : groqTranscriber(key, engine.model, { translate: engine.translate === true });
+      const t = groqTranscriber(key, engine.model, { translate: engine.translate === true });
       const { text } = await t.transcribe(wav, { language });
       // THE NUMBER THE PRODUCT RESTS ON. A screenshot binds to the sentence it
       // was taken during through words that carry a measured time, and a cloud
