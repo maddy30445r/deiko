@@ -79,14 +79,16 @@ final class SettingsModel: ObservableObject {
     /// macOS demand the login password every single time this window appeared.
     /// It also pulled two live credentials into view state for no reason —
     /// nothing here ever needed to read a key back, only to replace one.
-    @Published var sarvamKey: String = ""
+    /// ONE KEY, and that is what makes the promise beside it true. There were
+    /// two — Sarvam for the words, Groq for the summary — and "Deiko's servers
+    /// never see it" was false for anybody who brought only the first, which is
+    /// what most people did. Whisper does both, so bringing one key really does
+    /// take us out of the path.
     @Published var groqKey: String = ""
-    /// Whether the developer has actually typed in each box. An untouched box
+    /// Whether the developer has actually typed in the box. An untouched box
     /// means "leave this alone"; a touched-and-emptied one means "remove it".
-    @Published var sarvamTouched = false
     @Published var groqTouched = false
 
-    @Published private(set) var sarvamStored = Credentials.exists("SARVAM_API_KEY")
     @Published private(set) var groqStored = Credentials.exists("GROQ_API_KEY")
 
     // ── Licence ─────────────────────────────────────────────────────────────
@@ -222,10 +224,10 @@ final class SettingsModel: ObservableObject {
         sessionKey = key
     }
 
-    /// "Sarvam: from your login keychain · Groq: not set" — per key, because
+    /// "Groq: from your login keychain" — named, because
     /// the two can genuinely come from different places.
     var keySources: String {
-        "Sarvam: \(Credentials.source(of: "SARVAM_API_KEY")) · Groq: \(Credentials.source(of: "GROQ_API_KEY"))"
+        "Groq: \(Credentials.source(of: "GROQ_API_KEY"))"
     }
 
     /// Whether a key will actually be USED — not merely whether one is stored.
@@ -235,8 +237,8 @@ final class SettingsModel: ObservableObject {
     /// is the same question the pipeline asks, which is the point — this used
     /// to be its own rule and told a developer their live key was not in play.
     var usingOwnKey: Bool {
-        if sarvamTouched { return !sarvamKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        return Credentials.willUse("SARVAM_API_KEY")
+        if groqTouched { return !groqKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        return Credentials.willUse("GROQ_API_KEY")
     }
 
     /// The little grey word beside a key's label.
@@ -258,16 +260,15 @@ final class SettingsModel: ObservableObject {
             // pipeline regardless, and the summary step fell back to it when
             // there was no Groq key — so this sentence was shown to exactly the
             // people it was false for. `Credentials.childEnvironment` withholds
-            // the relay when a personal Sarvam key is in use; the consequence
-            // is spelled out here rather than discovered.
-            return Credentials.willUse("GROQ_API_KEY")
-                ? "Your narration goes straight to Sarvam with your key, and the summary to Groq with yours. Deiko's servers never see it."
-                : "Your narration goes straight to Sarvam with your key. Deiko's servers never see it — and without a Groq key of your own, the three-line summary is skipped rather than sent to Deiko."
+            // the relay when a personal key is in use. One key covers the words
+            // and the summary now, so there is no half-configured state left in
+            // which this sentence could be false.
+            return "Your narration goes straight to Groq with your key, and comes back as English. Deiko's servers never see it."
         }
         if Credentials.relayURL != nil {
             return isPro
-                ? "Your narration goes to Deiko, which passes it to a transcription service and keeps nothing. Add your own key below to skip Deiko entirely."
-                : "Your narration goes to Deiko, which passes it to a transcription service and keeps nothing. When your trial runs out, transcription continues on this Mac."
+                ? "Your narration goes to Deiko, which passes it to a transcription service and keeps nothing. It comes back as English, whatever you spoke. Add your own key below to skip Deiko entirely."
+                : "Your narration goes to Deiko, which passes it to a transcription service and keeps nothing. It comes back as English, whatever you spoke. When your trial runs out, transcription continues on this Mac — in English only."
         }
         return "Transcription runs on this Mac. Nothing is uploaded — accuracy is lower, especially for mixed-language speech."
     }
@@ -284,15 +285,10 @@ final class SettingsModel: ObservableObject {
     /// touched-and-empty and the next Save would delete the key that was just
     /// stored.
     func saveKeys() {
-        if sarvamTouched {
-            Credentials.store(sarvamKey, for: "SARVAM_API_KEY")
-            sarvamTouched = false
-        }
         if groqTouched {
             Credentials.store(groqKey, for: "GROQ_API_KEY")
             groqTouched = false
         }
-        sarvamStored = Credentials.exists("SARVAM_API_KEY")
         groqStored = Credentials.exists("GROQ_API_KEY")
     }
 }
@@ -554,18 +550,13 @@ private struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.bottom, 2)
 
-                keyRow(label: "Sarvam", tag: model.tag(for: "SARVAM_API_KEY"),
-                       text: $model.sarvamKey,
-                       touched: $model.sarvamTouched,
-                       prompt: model.placeholder(stored: model.sarvamStored),
-                       enabled: model.isPro)
                 keyRow(label: "Groq", tag: model.tag(for: "GROQ_API_KEY"),
                        text: $model.groqKey,
                        touched: $model.groqTouched,
                        prompt: model.groqStored ? model.placeholder(stored: true) : "gsk_…",
                        enabled: model.isPro)
                 if !model.isPro && !model.usingOwnKey {
-                    Text("Using your own keys is part of Pro — then your narration never touches Deiko's servers at all.")
+                    Text("Using your own key is part of Pro — then your narration never touches Deiko's servers at all.")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

@@ -35,8 +35,9 @@ public enum SessionClaims {
     /// is no endpoint that accepts them.
     ///
     /// - Parameters:
-    ///   - transcriber: `"sarvam"`, `"deiko"`, `"on-device"`, or nil for a
-    ///     session rendered before this was recorded.
+    ///   - transcriber: `"deiko"`, `"on-device"`, a `"groq:…"` variant when the
+    ///     user brought their own key, `"sarvam"` for a session recorded before
+    ///     the switch, or nil for one rendered before this was recorded.
     ///   - degradedReason: why the cloud path fell back, if it did.
     ///   - seconds: the span of the recognised words. Reported with a `~`
     ///     because it is a shade shorter than the recording itself.
@@ -79,7 +80,11 @@ public enum SessionClaims {
         switch transcriber {
         case _ where !reachedTheNetwork:
             break
+        case let name where name?.hasPrefix("groq") == true:
+            parts.append("~\(seconds)s of audio to Groq, with your key")
         case "sarvam":
+            // Sessions recorded before Whisper replaced Sarvam. Re-rendering one
+            // must still describe what actually left at the time.
             parts.append("~\(seconds)s of audio to Sarvam, with your key")
         case "deiko" where refusedOutright:
             parts.append("part of your audio to Deiko's transcription, which refused it")

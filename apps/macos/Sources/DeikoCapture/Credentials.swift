@@ -6,10 +6,9 @@ import Security
 // ─────────────────────────────────────────────────────────────────────────────
 // THE KEYS THE PIPELINE NEEDS
 //
-// `SARVAM_API_KEY` is required to transcribe; `GROQ_API_KEY` is optional and
-// only powers the orb's three-line reading. In a checkout both come from the
-// repo's `.env`, which the login shell sources — a shipped app has no checkout
-// and no `.env`.
+// `GROQ_API_KEY` is the only one: Whisper transcribes and the same key powers
+// the orb's three-line reading. In a checkout it comes from the repo's `.env`,
+// which the login shell sources — a shipped app has no checkout and no `.env`.
 //
 // This is the ONE place that answers "what environment does the Node child
 // get", so moving the answer to the Keychain later changes this file and
@@ -18,10 +17,15 @@ import Security
 
 enum Credentials {
 
-    /// The keys Deiko passes through. Named explicitly rather than forwarding
-    /// the whole environment: a child process that needs two API keys should
-    /// receive two API keys, not everything this app happens to be holding.
-    static let names = ["SARVAM_API_KEY", "GROQ_API_KEY"]
+    /// The key Deiko passes through. Named explicitly rather than forwarding
+    /// the whole environment: a child process that needs one API key should
+    /// receive one API key, not everything this app happens to be holding.
+    ///
+    /// ONE KEY. It was two — Sarvam for the words, Groq for the summary — until
+    /// Whisper replaced Sarvam and took over both. A single name is what makes
+    /// "bring your own key and Deiko's servers see nothing" a statement with no
+    /// half-configured state hiding inside it.
+    static let names = ["GROQ_API_KEY"]
 
     /// The environment for a spawned pipeline script.
     ///
@@ -58,24 +62,19 @@ enum Credentials {
         // THE DEFAULT PATH FOR SOMEBODY WHO HAS NO KEYS — AND ONLY THEM.
         //
         // This used to be passed unconditionally, on the reasoning that the
-        // scripts prefer a real key when one is set. True for the audio:
-        // `transcribe.mjs` never touched the relay with a Sarvam key present.
-        // False for the summary: `summarize.mjs` falls back to the relay
-        // whenever there is no GROQ key, and most people who bring a key bring
-        // ONE — the transcription one. So a Pro user who paid precisely to
-        // keep Deiko out of the loop, and was told in Settings "Deiko's servers
-        // never see it", sent every session's narration as text to our Lambda
-        // under their licence key. The sentence is now true because the URL is
-        // simply not there: bring your own key and the pipeline has no way to
-        // reach us. The summary then runs on their own Groq key or not at all,
-        // and `summarize.mjs` already treats "no service configured" as a
-        // session that works.
+        // scripts prefer a real key when one is set. That was true of the audio
+        // and false of the summary: back when transcription was Sarvam and the
+        // summary was Groq, somebody who brought only the transcription key
+        // still sent every session's narration as text to our Lambda — while
+        // Settings told them "Deiko's servers never see it". One key covers
+        // both now, and the URL is simply withheld when it is in use, so the
+        // sentence is true with no half-configured state left to be wrong in.
         //
         // The token is `License.bearerToken()` rather than the device token
         // directly, so a paying install sends `lic_…` and everybody else sends
         // `dev_…`. The relay cannot tell the two apart by shape — both are
         // v4-shaped UUIDs — and gets it wrong in both directions if it tries.
-        if let relay = relayURL, !willUse("SARVAM_API_KEY") {
+        if let relay = relayURL, !willUse("GROQ_API_KEY") {
             env["DEIKO_RELAY_URL"] = relay
             env["DEIKO_RELAY_TOKEN"] = License.bearerToken()
         }
@@ -377,7 +376,7 @@ enum Credentials {
     private static let cache = Cache()
 
     /// Where ONE key comes from, for the Settings window's per-key line —
-    /// "Sarvam: from your login keychain · Groq: not set". A developer whose
+    /// "Groq: from your login keychain". A developer whose
     /// `.env` already works should not be told to type a key they have.
     /// Asks `exists`-style questions only — opening Settings must never
     /// trigger a keychain password prompt.
