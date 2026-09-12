@@ -1,7 +1,7 @@
 # The Deiko relay
 
 So that a new user transcribes without holding an account anywhere. The app
-posts narration audio here; this forwards it to Sarvam with **your** key and
+posts narration audio here; this forwards it to Groq with **your** key and
 returns the text. Same for the orb's summary, via Groq.
 
 **This is not deployed by the repo.** Hosting, the domain and the provider keys
@@ -10,7 +10,7 @@ are live infrastructure and yours to run.
 ## Run it locally
 
 ```sh
-SARVAM_API_KEY=… GROQ_API_KEY=… node services/relay/server.mjs
+GROQ_API_KEY=… node services/relay/server.mjs
 # → deiko relay on :8787
 ```
 
@@ -21,7 +21,7 @@ rebuilding:
 DEIKO_RELAY_URL=http://localhost:8787 open build/Deiko.app
 ```
 
-Then record a session **with no Sarvam key in Settings** and confirm it
+Then record a session **with no Groq key in Settings** and confirm it
 transcribes. Kill the relay mid-session and confirm you still get a brief, from
 on-device words.
 
@@ -48,7 +48,7 @@ production, which is the point: a bug found locally is a bug fixed everywhere.
 ## Deploying — AWS Lambda
 
 ```sh
-SARVAM_API_KEY=… GROQ_API_KEY=… make relay-deploy
+GROQ_API_KEY=… make relay-deploy
 ```
 
 `deploy-aws.sh` creates or updates the function, its role, its URL and its
@@ -65,7 +65,7 @@ Knobs, all overridable in the environment:
 
 | | |
 |---|---|
-| `AWS_REGION` | `ap-south-1` — closest to Sarvam |
+| `AWS_REGION` | `ap-south-1` — closest to the people using it |
 | `DEIKO_LAMBDA_CONCURRENCY` | `5` reserved — a blast radius, not a quota. Past ~12, raise the table's write units with it. |
 | `DEIKO_REVOKED_TOKENS` | comma-separated tokens to refuse |
 | `DEIKO_USAGE_TABLE` | `deiko-usage` — the DynamoDB table holding every counter |
@@ -101,7 +101,7 @@ an option, and Lambda is the one that is actually deployed.
 
 | Variable | |
 |---|---|
-| `SARVAM_API_KEY` | required for `/v1/transcribe` |
+| `GROQ_API_KEY` | required — it spends BOTH `/v1/transcribe` and `/v1/summarize` |
 | `GROQ_API_KEY` | required for `/v1/summarize` |
 | `PORT` | default 8787 |
 | `DEIKO_REVOKED_TOKENS` | comma-separated tokens to refuse |
@@ -205,7 +205,7 @@ In order, cheapest first:
    fails while the global one lands is compensated before the error surfaces.
    **No request meters below 5 seconds** (`MIN_SECONDS_PER_REQUEST`): the body
    is forwarded verbatim, so its length is only honest about PCM, and a caller
-   sending 8 kbps MP3 would otherwise buy thirty seconds of Sarvam for one.
+   sending 8 kbps MP3 would otherwise buy thirty seconds of Groq for one.
    **The id after the prefix is `[A-Za-z0-9_-]{1,128}`** — it is interpolated
    into row keys, and `lic_<key>#2026-09` used to spell a paying customer's
    monthly usage row as a verdict row that `PutItem` then replaced.
@@ -229,7 +229,7 @@ In order, cheapest first:
 
 **Being over by one chunk is fine and deliberate.** The counter is incremented
 before the audio is bought, so an upstream failure still counts. Twenty-five
-seconds of Sarvam is about ₹0.2; a race that lets a cap be exceeded by however
+seconds of Whisper is about ₹0.06; a race that lets a cap be exceeded by however
 many containers happen to be warm is not.
 
 **If the table cannot be reached, transcription 503s.** Failing closed is the
@@ -245,7 +245,7 @@ the spending to stop before you understand why:
 ```sh
 aws lambda update-function-configuration \
   --function-name deiko-relay --region ap-south-1 \
-  --environment "Variables={DEIKO_GLOBAL_DAILY_SECONDS=0,SARVAM_API_KEY=…,GROQ_API_KEY=…}"
+  --environment "Variables={DEIKO_GLOBAL_DAILY_SECONDS=0,GROQ_API_KEY=…}"
 ```
 
 `DEIKO_GLOBAL_DAILY_SECONDS=0` means the day's ceiling is already exceeded by
@@ -265,10 +265,10 @@ string in both places, by design.
 
 ## The privacy promise changes when you turn this on
 
-Without a relay: narration audio goes to Sarvam, and to nobody else.
+Without a relay: narration audio goes to Groq, and to nobody else.
 
 With one: narration audio goes to **Deiko's server**, which forwards it and
 keeps nothing. That is a materially different claim, and the app must say so
-where people read it before they start — Settings says it next to the Sarvam
+where people read it before they start — Settings says it next to the Groq
 field that opts out of it, and a user with their own key never touches this
 service at all.

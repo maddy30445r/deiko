@@ -98,7 +98,7 @@ setting that makes them.
 
 Transcription picks the first of these that is available:
 
-1. **your own Sarvam API key** — your key, your bill, and Deiko's servers never
+1. **your own Groq API key** — your key, your bill, and Deiko's servers never
    see the audio. Part of Pro; a checkout using a `.env` is never gated.
 2. **Deiko's service**, which forwards the audio to a transcription provider and
    keeps nothing. Free installs get **30 minutes of it, once**; Pro gets five
@@ -115,7 +115,7 @@ and nothing stops; the accuracy is just the accuracy Apple gives you.
 | | |
 |---|---|
 | **Free** | The whole app. 30 minutes of Deiko's transcription, once, then on-device forever. |
-| **Pro — $3.99/mo or $29.99/yr** | Ten hours of transcription a month, or bring your own Sarvam key and use none of ours. |
+| **Pro — $3.99/mo or $29.99/yr** | Ten hours of transcription a month, or bring your own Groq key and use none of ours. |
 
 A licence key is pasted into Settings. **There is no account** — no email, no
 password, no profile, nothing to sign into and nothing of yours to breach. The
@@ -216,8 +216,8 @@ failure than a relay that is down. Confirm it landed before sharing the link:
 That must print the URL, not `none — this build has no relay`.
 
 Check `relay configured:`, **not** `transcription:`. The second line says which
-transcriber would run, and your own Sarvam key outranks the relay — so on your
-machine it reads "your own Sarvam key" whether the URL was stamped or not. It
+transcriber would run, and your own Groq key outranks the relay — so on your
+machine it reads "your own Groq key" whether the URL was stamped or not. It
 cannot fail, which makes it the worse kind of check: the trusted kind.
 
 **Builds go to the site, not to this repo.** `make release SITE_URL=…` puts the
@@ -234,7 +234,7 @@ not a release.
 **What somebody does to update:** re-run the install command — it replaces the
 existing install and clears quarantine again. The four permissions survive,
 because the app keeps the same signing identity. Anyone who pasted their own
-Sarvam key gets one login-password prompt on their first session after updating
+Groq key gets one login-password prompt on their first session after updating
 — see below.
 
 Deiko checks for a newer release once at launch and, if there is one, grows an
@@ -267,7 +267,7 @@ Deiko keeps this as small as it can: everything that only needs to know
 *whether* a key is set uses an attributes-only query that never prompts, and
 the relay device token was moved out of the keychain entirely because it is an
 identifier rather than a secret. What remains is the API keys themselves, so
-**only teammates using their own Sarvam or Groq key ever see the prompt.**
+**only teammates using their own Groq key ever see the prompt.**
 Anyone on the default relay path never does.
 
 Removing it completely needs an Apple Developer ID ($99/yr), which changes the
@@ -290,7 +290,7 @@ rm -rf ~/Library/Logs/Deiko
 defaults delete com.deiko.capture
 
 # 4. Any API keys you pasted in Settings.
-security delete-generic-password -s com.deiko.capture -a SARVAM_API_KEY
+security delete-generic-password -s com.deiko.capture -a GROQ_API_KEY
 security delete-generic-password -s com.deiko.capture -a GROQ_API_KEY
 
 # 5. The four permission grants.
