@@ -311,9 +311,19 @@ func runTiming(_ args: Args) async {
             path: path, locale: args.string("locale") ?? "hi-IN"
         )
     } else {
+        // `--context <file>`: newline-separated vocabulary hints, so the
+        // bakeoff can measure on-device recognition WITH the identifiers that
+        // were on screen against the same audio without them. A file rather
+        // than a flag because the list runs to dozens of symbols.
+        let context = args.string("context")
+            .flatMap { try? String(contentsOfFile: $0, encoding: .utf8) }?
+            .split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty } ?? []
         result = await SpeechTiming.transcribe(
             url: URL(fileURLWithPath: path),
-            localeIdentifier: args.string("locale") ?? "hi-IN"
+            localeIdentifier: args.string("locale") ?? "hi-IN",
+            contextualStrings: context
         )
     }
 

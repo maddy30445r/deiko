@@ -220,6 +220,45 @@ function sarvamTranscriber(apiKey) {
   });
 }
 
+/// Whisper on Groq. NOT WIRED INTO `selectTranscriber` — it exists for
+/// `bakeoff.mjs` to measure against Sarvam and Apple before anything routes to
+/// it, because the question it answers is unmeasured: `saaras` is an Indic
+/// model, and nobody has checked whether it beats on-device Apple for a US
+/// developer saying "TanStack Query".
+///
+/// Same chunker as Sarvam, so the comparison is of the models and not of how
+/// the audio was cut. Whisper takes a plain `file` field rather than Sarvam's
+/// model/mode pair, and returns `{ text }`.
+function groqTranscriber(apiKey, model = "whisper-large-v3") {
+  return chunkedTranscriber(`groq:${model}`, async (pcm, language) => {
+    const form = new FormData();
+    form.append("file", new Blob([wrapWav(pcm)], { type: "audio/wav" }), "audio.wav");
+    form.append("model", model);
+    form.append("response_format", "json");
+    // The language hint costs nothing and stops Whisper guessing on a short
+    // clip. `unknown` means "decide for yourself", which is what a mixed
+    // session wants.
+    if (language && language !== "unknown") form.append("language", language.split("-")[0]);
+
+    const response = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+      method: "POST",
+      headers: { authorization: `Bearer ${apiKey}` },
+      body: form,
+      signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
+    });
+
+    const bodyText = await response.text();
+    if (!response.ok) {
+      throw new Error(`Groq ${response.status}: ${bodyText.slice(0, 400)}`);
+    }
+    try {
+      return { text: String(JSON.parse(bodyText)?.text ?? "").trim() };
+    } catch {
+      throw new Error(`Groq returned non-JSON: ${bodyText.slice(0, 400)}`);
+    }
+  });
+}
+
 /**
  * Deiko's relay: the default, so a new user transcribes without holding an
  * account anywhere.
@@ -552,7 +591,7 @@ function spreadEvenly(text, audioDurationMs) {
  * itself. `-n` forces a new instance; without it `open` silently hands the
  * request to an already-running process.
  */
-async function appleTimings(wavPath, { locale = "en-IN", timeoutMs } = {}) {
+async function appleTimings(wavPath, { locale = "en-IN", timeoutMs, contextFile } = {}) {
   // TOLD, not derived. A shipped app runs this script from
   // `Deiko.app/Contents/Resources/scripts/`, where `REPO_ROOT` is `Resources`
   // and `Resources/build/Deiko.app` does not exist — so the guess below threw
@@ -607,6 +646,11 @@ async function appleTimings(wavPath, { locale = "en-IN", timeoutMs } = {}) {
     execFileSync("open", [
       "-n", "-a", app, "--args",
       "timing", "--wav", wavPath, "--locale", locale, "--out", out,
+      // Vocabulary hints, only when the caller has some. `bakeoff.mjs` uses it
+      // to measure the same audio with and without the identifiers that were
+      // on screen; the pipeline passes nothing until that measurement says it
+      // is worth the wiring.
+      ...(contextFile ? ["--context", contextFile] : []),
     ]));
 
   return await timed("apple:recognise", () => awaitTimingFile(out, { timeoutMs, audioMs }));
@@ -1079,7 +1123,20 @@ async function main() {
   console.error(timingReport(performance.now() - startedAt));
 }
 
-main().catch((err) => {
-  console.error(`✗ ${err.message}`);
-  process.exit(1);
-});
+/// RUN ONLY WHEN RUN, so this file can also be imported.
+///
+/// `bakeoff.mjs` needs the three recognisers — Apple at a given locale, Sarvam,
+/// Whisper — over identical audio, and rebuilding the chunker beside them would
+/// compare how the audio was cut as much as the models. A bare `main()` call
+/// made importing it transcribe a session as a side effect.
+const invokedDirectly = process.argv[1]
+  && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (invokedDirectly) {
+  main().catch((err) => {
+    console.error(`✗ ${err.message}`);
+    process.exit(1);
+  });
+}
+
+export { appleTimings, groqTranscriber, sarvamTranscriber };

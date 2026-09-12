@@ -507,6 +507,25 @@ summarize:
 ground:
 	@node scripts/ground-report.mjs $(SESSION)
 
+## bakeoff — run every recogniser over one session's audio and compare
+##
+##   DEIKO_KEEP_AUDIO=1 open /Applications/Deiko.app   # …record…
+##   make bakeoff SESSION=~/Documents/Deiko/<id> LANGUAGE=hi-IN
+##
+## Apple on-device at two locales and with the session's own screen vocabulary,
+## Sarvam, and both Whisper sizes — over the SAME audio, through the same
+## chunker, so the comparison is of the models. Needs the WAVs, which the app
+## deletes the moment a brief renders: record with DEIKO_KEEP_AUDIO=1.
+##
+## Optional `reference.txt` (what was actually said) and `terms.txt` (the
+## identifiers in it, one per line) in the session dir turn the transcripts into
+## scores. Without them it prints transcripts, which for code-mixed speech is
+## the evidence anyway. Keys come from .env.
+bakeoff:
+	@npm run build -w @deiko/alignment --silent
+	@set -a; [ -f .env ] && . ./.env; set +a; \
+		node scripts/bakeoff.mjs $(SESSION) --language $(or $(LANGUAGE),hi-IN)
+
 ## align — run the T0.2 gate harness over a transcribed session
 ## Needs @deiko/alignment built: the script imports both the aligner and the
 ## session loader from its dist/.

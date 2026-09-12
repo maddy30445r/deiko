@@ -78,10 +78,20 @@ enum SpeechTiming {
     /// Hinglish half of the deictic lexicon matches. A Hindi-locale recogniser
     /// would return Devanagari, which the lexicon also handles, but it mangles
     /// the English technical terms that make up most of a developer's speech.
+    ///
+    /// `contextualStrings` is the recogniser's vocabulary hint list, and it is
+    /// the one lever that makes on-device recognition competitive on the words
+    /// a developer actually says. `useEffect` comes back as "use effect" and
+    /// `nginx` as "engine x" because neither is in a dictation model's
+    /// vocabulary — but both are usually ON THE SCREEN the user is pointing at,
+    /// and Deiko has already read them through AX and OCR. Passing them costs
+    /// nothing, sends nothing anywhere, and is measured by `make bakeoff`
+    /// before anything in the product depends on it.
     static func transcribe(
         url: URL,
         localeIdentifier: String = "en-IN",
-        forceOnDevice: Bool = true
+        forceOnDevice: Bool = true,
+        contextualStrings: [String] = []
     ) async -> TimingResult {
         let locale = Locale(identifier: localeIdentifier)
         guard let recognizer = SFSpeechRecognizer(locale: locale) else {
@@ -102,6 +112,12 @@ enum SpeechTiming {
         request.shouldReportPartialResults = true
         request.requiresOnDeviceRecognition = forceOnDevice
         request.taskHint = .dictation
+        // Capped and de-duplicated. The API takes a hint list, not a corpus;
+        // handing it every OCR line on screen dilutes the bias it is supposed
+        // to apply, and the identifiers worth biasing toward are few.
+        if !contextualStrings.isEmpty {
+            request.contextualStrings = Array(Set(contextualStrings)).prefix(100).map { $0 }
+        }
 
         let onDevice = recognizer.supportsOnDeviceRecognition && forceOnDevice
         if forceOnDevice && !recognizer.supportsOnDeviceRecognition {
