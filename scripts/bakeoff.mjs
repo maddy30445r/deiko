@@ -23,7 +23,9 @@ import { readFileSync, existsSync, readdirSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { homedir } from "node:os";
 
-import { appleTimings, groqTranscriber, sarvamTranscriber } from "./transcribe.mjs";
+import {
+  appleTimings, groqTranscriber, mergeWords, sarvamTranscriber, wavDurationMs,
+} from "./transcribe.mjs";
 import { loadEvents } from "./lib/session-io.mjs";
 import { loadSession } from "../packages/alignment/dist/src/referents/session.js";
 
@@ -40,6 +42,12 @@ const ENGINES = [
   { id: "sarvam", label: "Sarvam saaras:v3 · translit", kind: "sarvam", cost: "$0.35/hr" },
   { id: "whisper", label: "Groq whisper-large-v3", kind: "groq", model: "whisper-large-v3", cost: "$0.111/hr" },
   { id: "whisper-turbo", label: "Groq whisper-large-v3-turbo", kind: "groq", model: "whisper-large-v3-turbo", cost: "$0.04/hr" },
+  // THE ONE THE PRODUCT IS ABOUT TO SHIP. `/audio/transcriptions` with an
+  // English hint usually yields English for Hindi input; `/audio/translations`
+  // is the endpoint that means it, and English output for everybody is the
+  // decision taken. Measured here, on audio already recorded, before anything
+  // depends on it. Translation is large-v3 only — turbo cannot do it.
+  { id: "whisper-translate", label: "Groq whisper-large-v3 · translate→English", kind: "groq", model: "whisper-large-v3", translate: true, cost: "$0.111/hr" },
 ];
 
 const sessionArg = process.argv[2];
@@ -131,27 +139,52 @@ function termRecall(terms, hypothesisText) {
   return { hit: hit.length, total: terms.length, missed: terms.filter((t) => !hit.includes(t)) };
 }
 
-async function runEngine(engine, wavs, contextFile) {
+async function runEngine(engine, wavs, contextFile, appleWordsByWav) {
   const parts = [];
   const started = Date.now();
+  let anchors = 0;
+  let anchorTotal = 0;
   for (const wav of wavs) {
     if (engine.kind === "apple") {
       const result = await appleTimings(wav, {
         locale: engine.locale,
         contextFile: engine.context ? contextFile : undefined,
       });
-      parts.push(result.transcript ?? (result.words ?? []).map((w) => w.text).join(" "));
+      // The timing source anchors itself by definition — its words ARE
+      // measurements. Recorded so the baseline column is not blank, and so a
+      // cloud engine scoring near it is visibly scoring near the ceiling.
+      const words = result.words ?? [];
+      if (engine.locale === "en-IN" && !engine.context) appleWordsByWav.set(wav, words);
+      anchors += words.length;
+      anchorTotal += words.length;
+      parts.push(result.transcript ?? words.map((w) => w.text).join(" "));
     } else {
       const key = engine.kind === "sarvam" ? process.env.SARVAM_API_KEY : process.env.GROQ_API_KEY;
       if (!key) throw new Error(`${engine.kind.toUpperCase()}_API_KEY is not set`);
       const t = engine.kind === "sarvam"
         ? sarvamTranscriber(key)
-        : groqTranscriber(key, engine.model);
+        : groqTranscriber(key, engine.model, { translate: engine.translate === true });
       const { text } = await t.transcribe(wav, { language });
+      // THE NUMBER THE PRODUCT RESTS ON. A screenshot binds to the sentence it
+      // was taken during through words that carry a measured time, and a cloud
+      // word only gets one by matching an Apple word — longest common
+      // subsequence, in `mergeWords`. A transcript that reads beautifully but
+      // shares no tokens with the timing source anchors nothing, and every
+      // referent in that stretch ends up quoting the same span.
+      const apple = appleWordsByWav.get(wav) ?? [];
+      if (apple.length) {
+        const merged = mergeWords(text, apple, wavDurationMs(wav));
+        anchors += merged.anchors;
+        anchorTotal += merged.total;
+      }
       parts.push(text);
     }
   }
-  return { text: parts.join(" ").replace(/\s+/g, " ").trim(), ms: Date.now() - started };
+  return {
+    text: parts.join(" ").replace(/\s+/g, " ").trim(),
+    ms: Date.now() - started,
+    anchors: anchorTotal ? `${anchors}/${anchorTotal}` : "—",
+  };
 }
 
 async function main() {
@@ -177,13 +210,16 @@ async function main() {
   if (!reference) console.error("no reference.txt — printing transcripts only, no scores");
   console.error("");
 
+  // Apple runs first in ENGINES on purpose: its words are the timing source
+  // every cloud engine is then scored against.
+  const appleWordsByWav = new Map();
   const results = [];
   for (const engine of ENGINES) {
     process.stderr.write(`  ${engine.label} … `);
     try {
-      const { text, ms } = await runEngine(engine, wavs, contextFile);
-      results.push({ engine, text, ms });
-      process.stderr.write(`${(ms / 1000).toFixed(1)}s\n`);
+      const { text, ms, anchors } = await runEngine(engine, wavs, contextFile, appleWordsByWav);
+      results.push({ engine, text, ms, anchors });
+      process.stderr.write(`${(ms / 1000).toFixed(1)}s · anchors ${anchors}\n`);
     } catch (err) {
       results.push({ engine, error: err.message });
       process.stderr.write(`FAILED — ${err.message}\n`);
@@ -191,17 +227,24 @@ async function main() {
   }
 
   const out = [`# Bakeoff — ${dir}`, "", `Language \`${language}\` · ${wavs.length} recording(s)`, ""];
-  if (reference) {
-    out.push("## Scores", "", "| Engine | Term recall | WER | Time | Cost |", "|---|---|---|---|---|");
-    for (const { engine, text, error } of results) {
-      if (error) { out.push(`| ${engine.label} | — | — | — | ${engine.cost ?? "free"} |`); continue; }
-      const recall = termRecall(terms, text);
-      const wer = wordErrorRate(reference, text);
-      out.push(`| ${engine.label} | ${recall ? `${recall.hit}/${recall.total}` : "—"} `
-        + `| ${wer != null ? `${(wer * 100).toFixed(1)}%` : "—"} | — | ${engine.cost ?? "free"} |`);
+  out.push("## Scores", "",
+    "`anchors` is how many of the engine's words got a measured time by matching the",
+    "on-device timing source — what binds a screenshot to the sentence it was taken during.",
+    "",
+    `| Engine | Anchors |${reference ? " Term recall | WER |" : ""} Time | Cost |`,
+    `|---|---|${reference ? "---|---|" : ""}---|---|`);
+  for (const { engine, text, error, ms, anchors } of results) {
+    if (error) {
+      out.push(`| ${engine.label} | — |${reference ? " — | — |" : ""} — | ${engine.cost ?? "free"} |`);
+      continue;
     }
-    out.push("");
+    const scores = reference
+      ? ` ${(() => { const r = termRecall(terms, text); return r ? `${r.hit}/${r.total}` : "—"; })()} `
+        + `| ${(() => { const w = wordErrorRate(reference, text); return w != null ? `${(w * 100).toFixed(1)}%` : "—"; })()} |`
+      : "";
+    out.push(`| ${engine.label} | ${anchors} |${scores} ${(ms / 1000).toFixed(1)}s | ${engine.cost ?? "free"} |`);
   }
+  out.push("");
   out.push("## Transcripts", "");
   if (reference) out.push("**Reference (what was said):**", "", `> ${reference}`, "");
   for (const { engine, text, error } of results) {

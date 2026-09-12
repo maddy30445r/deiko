@@ -229,23 +229,28 @@ function sarvamTranscriber(apiKey) {
 /// Same chunker as Sarvam, so the comparison is of the models and not of how
 /// the audio was cut. Whisper takes a plain `file` field rather than Sarvam's
 /// model/mode pair, and returns `{ text }`.
-function groqTranscriber(apiKey, model = "whisper-large-v3") {
-  return chunkedTranscriber(`groq:${model}`, async (pcm, language) => {
+function groqTranscriber(apiKey, model = "whisper-large-v3", { translate = false } = {}) {
+  return chunkedTranscriber(`groq:${model}${translate ? ":translate" : ""}`, async (pcm, language) => {
     const form = new FormData();
     form.append("file", new Blob([wrapWav(pcm)], { type: "audio/wav" }), "audio.wav");
     form.append("model", model);
     form.append("response_format", "json");
     // The language hint costs nothing and stops Whisper guessing on a short
     // clip. `unknown` means "decide for yourself", which is what a mixed
-    // session wants.
-    if (language && language !== "unknown") form.append("language", language.split("-")[0]);
+    // session wants. The translation endpoint takes no language: its output is
+    // always English, which is the point of using it.
+    if (!translate && language && language !== "unknown") {
+      form.append("language", language.split("-")[0]);
+    }
 
-    const response = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
-      method: "POST",
-      headers: { authorization: `Bearer ${apiKey}` },
-      body: form,
-      signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
-    });
+    const response = await fetch(
+      `https://api.groq.com/openai/v1/audio/${translate ? "translations" : "transcriptions"}`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${apiKey}` },
+        body: form,
+        signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
+      });
 
     const bodyText = await response.text();
     if (!response.ok) {
@@ -1139,4 +1144,4 @@ if (invokedDirectly) {
   });
 }
 
-export { appleTimings, groqTranscriber, sarvamTranscriber };
+export { appleTimings, groqTranscriber, mergeWords, sarvamTranscriber, wavDurationMs };
