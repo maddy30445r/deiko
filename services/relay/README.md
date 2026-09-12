@@ -190,6 +190,27 @@ UUIDs, so without the prefix the two are indistinguishable — every free user's
 token would be sent to Polar for validation and every licence would
 meter as a free trial.
 
+## The client and the relay ship together
+
+**The body is forwarded verbatim, so the CLIENT chooses the provider's parameters and the relay only
+adds the key.** That is what keeps the promise about not touching the audio — and it means the two
+halves are version-coupled. Deploying a relay that points at a different provider breaks every app
+built before it:
+
+```
+old client (model=saaras:v3, mode=translit) → 400 "unknown param `mode`"
+new client (model=whisper-large-v3)         → 200
+```
+
+Worse than it looks, because a provider 4xx is **billed and not refunded** — that rule exists so junk
+bodies cannot probe the upstream off the meter, and a version mismatch is indistinguishable from
+junk. An old install burns its trial a chunk at a time and falls back to on-device words with no
+error a user would recognise.
+
+So: **cut a release whenever the upstream changes**, and treat `make relay-deploy` followed by
+`make release` as one operation rather than two. There is no negotiation step and deliberately so;
+the alternative is the relay parsing and rebuilding the body it promises not to read.
+
 ## What actually bounds the spend
 
 In order, cheapest first:
