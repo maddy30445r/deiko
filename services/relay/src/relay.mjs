@@ -220,7 +220,7 @@ export async function handle({ method, path, token, contentType, body }) {
     try {
       const tier = await tierFor(subject);
       const usedSeconds = await peek(subject, tier);
-      const capSeconds = capFor(tier);
+      const capSeconds = capFor(tier, subject.kind);
       return json(200, {
         tier,
         usedSeconds: Math.round(usedSeconds),
@@ -250,7 +250,7 @@ export async function handle({ method, path, token, contentType, body }) {
       // be made. See `MIN_SECONDS_PER_REQUEST`.
       seconds = Math.max(audioSeconds(body?.length ?? 0), MIN_SECONDS_PER_REQUEST);
       const { usedSeconds, globalUsedSeconds } = await record({ subject, seconds, tier });
-      verdict = decide({ tier, usedSeconds, globalUsedSeconds });
+      verdict = decide({ tier, kind: subject.kind, usedSeconds, globalUsedSeconds });
     } catch (err) {
       // FAILING CLOSED, DELIBERATELY. If the usage table cannot be reached we
       // do not know what anybody has spent, and the honest answer is to stop

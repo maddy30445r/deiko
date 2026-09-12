@@ -275,9 +275,31 @@ export function dayKey(now) {
 export const MONTHLY_TTL_SECONDS = 40 * 24 * 60 * 60;
 export const DAILY_TTL_SECONDS = 7 * 24 * 60 * 60;
 
-/// What a tier is allowed, in seconds of audio.
-export function capFor(tier) {
-  return tier === "pro" ? PRO_MONTHLY_SECONDS : FREE_TRIAL_SECONDS;
+/// What a subject is allowed, in seconds of audio.
+///
+/// A LICENCE THE STORE DOES NOT RECOGNISE IS NOT A TRIAL, and this is the third
+/// time that idea has had to be written down. The first version keyed usage on
+/// `subject.kind` alone, so junk got the MONTHLY row and thirty free minutes
+/// every calendar month. The `#trial` suffix fixed the renewal and left the
+/// rest: a lifetime trial row keyed on *whatever string was typed*, so thirty
+/// minutes could be minted by typing `ee`, then `ff`, then `gg`, for ever.
+///
+/// The device token is derived from the machine precisely so the trial is once
+/// per Mac — `defaults delete` cannot mint another. Handing the same allowance
+/// to anyone who can type a character defeated that completely, and no amount
+/// of row-key cleverness fixes it, because the caller chooses the key.
+///
+/// So: the trial belongs to the DEVICE, and a licence is worth exactly what
+/// the store says it is worth — nothing, until Polar says otherwise. Somebody
+/// who pastes a key that does not validate is told to remove it, and removing
+/// it returns them to their own trial with whatever was left of it.
+///
+/// `kind` is optional so an unknown caller reads as a device, which is the
+/// generous-to-the-honest direction and matches what an unprefixed legacy
+/// token already means.
+export function capFor(tier, kind) {
+  if (tier === "pro") return PRO_MONTHLY_SECONDS;
+  return kind === "license" ? 0 : FREE_TRIAL_SECONDS;
 }
 
 /// THE DECISION.
@@ -297,8 +319,8 @@ export function capFor(tier) {
 /// downstream: `transcribe.mjs` treats 402 as "fall back to on-device and carry
 /// on", which is the free tier working exactly as designed, while a 429 is a
 /// transient condition worth surfacing.
-export function decide({ tier, usedSeconds, globalUsedSeconds }) {
-  const cap = capFor(tier);
+export function decide({ tier, kind, usedSeconds, globalUsedSeconds }) {
+  const cap = capFor(tier, kind);
 
   if (globalUsedSeconds > globalCapFor(tier)) {
     return {
@@ -320,7 +342,14 @@ export function decide({ tier, usedSeconds, globalUsedSeconds }) {
       : {
           allowed: false,
           status: 402,
-          error: "the free trial is used up — transcription continues on your Mac",
+          // 402 EITHER WAY, because the client's handling is the same — stop
+          // uploading, keep Apple's words, carry on — but the sentence is not,
+          // and a licence holder told "your trial is used up" would go looking
+          // for a trial they never started. Theirs ran out the moment the key
+          // failed to validate, and the fix is to take it out.
+          error: kind === "license"
+            ? "that licence is not active — remove it to use this Mac's trial"
+            : "the free trial is used up — transcription continues on your Mac",
           remainingSeconds: 0,
         };
   }

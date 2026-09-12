@@ -131,11 +131,18 @@ final class SettingsModel: ObservableObject {
             let quota = try await License.refresh()
             self.quota = quota
             plan = quota.isPro ? "Pro" : "Free"
+            // A KEY THAT DOES NOT VALIDATE HAS NO ALLOWANCE OF ITS OWN, and
+            // the sentence has to say so. It used to read "that key is not
+            // active — 30 min left of your trial" beside a full bar, which
+            // reads as a trial that reset. Nothing had reset: the bearer had
+            // changed, so a different subject's empty counter was on screen,
+            // and the machine's own trial was sitting where it was left. Say
+            // what to do instead of describing a trial they never started.
             planDetail = quota.isPro
                 ? "\(quota.remainingSentence) this month"
                 : (License.key == nil
                     ? "\(quota.remainingSentence) of your trial"
-                    : "that key is not active — \(quota.remainingSentence) of your trial")
+                    : "that key is not active — remove it to use this Mac's trial")
             planIsProblem = !quota.isPro && License.key != nil
         } catch License.Failure.noRelay {
             plan = "On-device"

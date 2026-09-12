@@ -273,20 +273,50 @@ test("an invalid licence is metered as free, and its verdict is cached too", asy
   );
 });
 
-test("a forged licence key does not get a fresh trial next month", async () => {
-  // THE FORGERY THIS CLOSES. A `lic_` subject used to land in a MONTHLY row
-  // carrying the FREE cap, so anybody who typed junk into Settings got thirty
-  // minutes every calendar month, forever, self-resetting — while an honest
-  // user got thirty minutes once, ever. The forgery beat the truth.
+test("a forged licence key gets no allowance at all, not a fresh trial", async () => {
+  // THE FORGERY THIS CLOSES, IN THREE ACTS. A `lic_` subject first landed in a
+  // MONTHLY row carrying the FREE cap, so junk got thirty minutes every
+  // calendar month, self-resetting. The `#trial` suffix fixed the renewal and
+  // left the rest: a LIFETIME trial keyed on whatever string was typed, so
+  // thirty minutes could still be minted by typing `ee`, then `ff`, for ever.
+  // Found by typing `ee` into Settings and watching the bar refill.
+  //
+  // The trial belongs to the machine — that is what the derived device token is
+  // for — so a licence the store does not recognise is worth nothing.
   licenseValid = false;
-  await post("lic_forged", 20);
-  assert.equal(rows.get(trialRow("forged")).audioSeconds, 20, "lands in the lifetime row");
-  assert.equal(rows.get(monthRow("forged")), undefined, "and never in a monthly one");
-  assert.equal(
-    rows.get(trialRow("forged")).expiresAt,
-    undefined,
-    "a lifetime row must carry no TTL, or the trial renews itself every forty days",
-  );
+  const r = await post("lic_forged", 20);
+  assert.equal(r.status, 402, "no allowance, so the very first chunk is refused");
+  assert.match(JSON.parse(r.body).error, /remove it/,
+    "and the sentence says what to do, rather than naming a trial they never started");
+  assert.equal(rows.get(trialRow("forged"))?.audioSeconds ?? 0, 0,
+    "refused, therefore refunded — a forged key cannot even bank seconds");
+  assert.equal(rows.get(monthRow("forged")), undefined, "and never touches a monthly row");
+  assert.equal(upstream.filter((u) => u.includes("/audio/translations")).length, 0,
+    "nothing was bought");
+});
+
+test("a second forged key is worth no more than the first", async () => {
+  // The whole point: junk is not a fresh identity. There are infinitely many
+  // strings and each used to be worth half an hour.
+  licenseValid = false;
+  for (const key of ["lic_ee", "lic_ff", "lic_gg"]) {
+    const r = await post(key, 20);
+    assert.equal(r.status, 402, `${key} must buy nothing`);
+  }
+  assert.equal(rows.get(globalKey(Date.now()))?.audioSeconds ?? 0, 0,
+    "and none of them reached the day's ceiling either");
+});
+
+test("the device keeps its own trial while a bad key is pasted over it", async () => {
+  // What the user saw and reported as "it reset my trial": the bar refilled
+  // because the BEARER changed, not because any counter moved. Removing the key
+  // must return them to their own trial with whatever was left of it.
+  seed("dev:mine", 600);
+  licenseValid = false;
+  await post("lic_junk", 20);
+  assert.equal(rows.get("dev:mine").audioSeconds, 600, "the machine's trial is untouched");
+  const back = await handle({ method: "GET", path: "/v1/quota", token: "dev_mine" });
+  assert.equal(JSON.parse(back.body).usedSeconds, 600, "and is still there when the key comes out");
 });
 
 test("a legacy unprefixed token still works, as a free device", async () => {
@@ -470,7 +500,13 @@ test("an error-derived free verdict is rechecked in minutes, not tomorrow", asyn
     throw new Error(`unexpected upstream: ${url}`);
   };
   const r = await post("lic_newkey", 20);
-  assert.equal(r.status, 200, "an unknown key still transcribes — as free, never promoted");
+  // THE ACCEPTED COST OF THE FORGERY FIX. This used to be a 200: an
+  // unvalidatable key fell back to the free trial and transcribed. It cannot
+  // any more, because that allowance was what junk keys were minting. A real
+  // customer meets this only with a BRAND-NEW key during a Polar outage —
+  // anyone who has validated once has a cached verdict, and the short retry
+  // below is what makes the window minutes rather than a day.
+  assert.equal(r.status, 402, "an unknown key buys nothing — and is never promoted either");
   const verdict = rows.get("lic:newkey");
   assert.equal(verdict.tier, "free");
   assert.ok(Date.now() - verdict.checkedAt > 20 * 60 * 60 * 1000,
