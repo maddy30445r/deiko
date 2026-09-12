@@ -12,6 +12,7 @@ import {
   GLOBAL_DAILY_SECONDS,
   PRO_MONTHLY_SECONDS,
   MAX_SECONDS_PER_REQUEST,
+  MIN_SECONDS_PER_REQUEST,
   audioSeconds,
   capFor,
   dayKey,
@@ -206,4 +207,48 @@ test("a refusal always reports zero remaining, never a negative number", () => {
     const v = decide({ tier, usedSeconds: 10 ** 9, globalUsedSeconds: 0 });
     assert.equal(v.remainingSeconds, 0);
   }
+});
+
+// ── The id is a security boundary ───────────────────────────────────────────
+
+test("an id carrying '#' is refused — it would spell another subject's usage row", () => {
+  // `lic_<key>#2026-09` made the VERDICT row key equal the real key's MONTHLY
+  // usage row, and tierFor's PutItem replaced the whole item: a paying
+  // customer's month reset to zero for the price of one GET /v1/quota.
+  const month = monthKey(Date.now());
+  assert.equal(subjectFrom(`lic_DEIKO-REAL-KEY#${month}`), null);
+  assert.equal(subjectFrom("lic_DEIKO-REAL-KEY#trial"), null);
+  assert.equal(subjectFrom(`dev_abc#${month}`), null);
+  assert.equal(subjectFrom("lic_a:b"), null, "':' is the other key-grammar character");
+  assert.ok(subjectFrom("lic_DEIKO-REAL-KEY"), "the honest key still passes");
+});
+
+test("an over-long id is refused before it can reach a 2048-byte partition key", () => {
+  // Past DynamoDB's limit the SUBJECT write throws while the global write
+  // beside it lands — seconds banked against the whole day, nothing to refund
+  // them against, and no Sarvam call to show for them.
+  assert.equal(subjectFrom(`dev_${"a".repeat(129)}`), null);
+  assert.equal(subjectFrom(`lic_${"A".repeat(2100)}`), null);
+  assert.equal(subjectFrom("a".repeat(129)), null, "unprefixed too");
+  assert.ok(subjectFrom(`dev_${"a".repeat(128)}`), "128 is the ceiling, not 127");
+});
+
+test("every real issuer's shape still passes, and nothing else does", () => {
+  // Polar prefix + dashed key, the salted 32-hex device digest, the legacy bare
+  // v4 UUID. Dropping any of these from the allowed set is a lockout.
+  assert.ok(subjectFrom("lic_DEIKO-9F2A7C1B-4D3E-4A5B-8C6D-7E8F9A0B1C2D"));
+  assert.ok(subjectFrom("dev_0c23f5dd3e497ca07d3e6560b884ea17"));
+  assert.ok(subjectFrom("7C6C4E1A-58F9-4E2E-9E1B-2F0A3B4C5D6E"));
+  assert.equal(subjectFrom("dev_ abc"), null, "whitespace is not an id");
+  assert.equal(subjectFrom("lic_ключ"), null, "nor is anything outside ASCII");
+  assert.equal(subjectFrom("lic_a/b"), null, "nor a path separator");
+});
+
+// ── The cheapest request has a price ────────────────────────────────────────
+
+test("the byte rule alone is fooled by compressed audio, which is why a floor exists", () => {
+  // Thirty seconds of 8 kbps MP3 is ~30 KB, priced by bytes at under a second.
+  assert.ok(audioSeconds(30 * 1024) < 1);
+  assert.ok(MIN_SECONDS_PER_REQUEST >= 5, "bounds the day at ~8,640 calls");
+  assert.ok(MIN_SECONDS_PER_REQUEST < 25, "an honest 25s chunk must never meet it");
 });

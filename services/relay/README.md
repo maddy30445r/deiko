@@ -133,7 +133,8 @@ than an oversight:
 - **No audio or transcripts on disk.** Bodies are read into memory and
   forwarded; there is no upload directory to forget to clean.
 - **No content in logs.** A line is a timestamp, method, path, status, duration
-  and the first eight characters of a token. Never a word of what was said.
+  and a 12-character fingerprint of the token — never the token, never a word
+  of what was said.
 - **Nothing but narration ever arrives.** Crops, OCR, window titles and
   accessibility text never leave the user's Mac, and no endpoint here accepts
   them.
@@ -200,14 +201,21 @@ In order, cheapest first:
 2. **Per-subject quota** — DynamoDB, counted in audio seconds. A free install
    gets 30 minutes *once*; a Pro licence gets 10 hours a month. Incremented and
    then judged, in one round trip, so concurrent chunks cannot both claim room
-   only one of them has.
+   only one of them has — and **both rows or neither**: a subject write that
+   fails while the global one lands is compensated before the error surfaces.
+   **No request meters below 5 seconds** (`MIN_SECONDS_PER_REQUEST`): the body
+   is forwarded verbatim, so its length is only honest about PCM, and a caller
+   sending 8 kbps MP3 would otherwise buy thirty seconds of Sarvam for one.
+   **The id after the prefix is `[A-Za-z0-9_-]{1,128}`** — it is interpolated
+   into row keys, and `lic_<key>#2026-09` used to spell a paying customer's
+   monthly usage row as a verdict row that `PutItem` then replaced.
 3. **The global daily ceiling** — the one that does not depend on honest
    clients. Per-subject limits are *harder* to forge than they were, not
    impossible: the identifier is derived from the machine rather than stored in
    preferences, so `defaults delete` no longer buys a trial — but a VM, a
    borrowed Mac, or anyone willing to patch the client still can. The ceiling
    caps the whole service's audio for a day no matter how many subjects exist.
-   Four hours is ₹120/day.
+   Twelve hours is ₹360/day, and free callers reach only half of it.
 4. **A separate summary budget** — `DEIKO_SUMMARIES_PER_DAY`. `/v1/summarize`
    accepts any bearer string, and the burst limiter is keyed by token, so a
    caller rotating tokens is not limited by it. Its own row and its own budget
@@ -244,7 +252,7 @@ aws lambda update-function-configuration \
 the first request, so **every** transcription is refused with a 429 — yours
 included. Nothing breaks: the app falls back to Apple's on-device words, which
 is the documented third path and costs nothing. Undo it by setting the value
-back to `14400`, or by re-running `make relay-deploy`.
+back to `43200`, or by re-running `make relay-deploy`.
 
 **The environment is replaced wholesale, not merged** — send the provider keys
 in the same call or the relay comes back up with none and 503s everything.

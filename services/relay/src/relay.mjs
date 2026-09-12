@@ -25,7 +25,14 @@
 
 import { createHash } from "node:crypto";
 
-import { SUMMARIES_PER_DAY, audioSeconds, capFor, decide, subjectFrom } from "./quota.mjs";
+import {
+  MIN_SECONDS_PER_REQUEST,
+  SUMMARIES_PER_DAY,
+  audioSeconds,
+  capFor,
+  decide,
+  subjectFrom,
+} from "./quota.mjs";
 import {
   USAGE_TABLE,
   meteringHealthy,
@@ -231,7 +238,11 @@ export async function handle({ method, path, token, contentType, body }) {
     let verdict, seconds, tier;
     try {
       tier = await tierFor(subject);
-      seconds = audioSeconds(body?.length ?? 0);
+      // FLOORED, because the body's length is only honest about PCM. A caller
+      // choosing a compressed format buys thirty seconds of Sarvam for one
+      // second of quota; the floor bounds how many times a day that trade can
+      // be made. See `MIN_SECONDS_PER_REQUEST`.
+      seconds = Math.max(audioSeconds(body?.length ?? 0), MIN_SECONDS_PER_REQUEST);
       const { usedSeconds, globalUsedSeconds } = await record({ subject, seconds, tier });
       verdict = decide({ tier, usedSeconds, globalUsedSeconds });
     } catch (err) {
@@ -349,13 +360,32 @@ export async function handle({ method, path, token, contentType, body }) {
 /// far past honest latency and far short of the platform's patience.
 const UPSTREAM_TIMEOUT_MS = 20_000;
 
+/// A THROW IS A 502, NOT AN EXCEPTION. The timeout above rejects, and so do
+/// DNS failures and dropped connections — and an uncaught rejection here left
+/// `handle()` entirely, which meant BOTH of the callers' `status >= 500`
+/// refunds never ran. A trial is lifetime, so a Sarvam stall permanently ate
+/// thirty minutes somebody never got a word of. It also carried `err.message`
+/// into a public body by way of the Lambda adapter's catch-all.
+///
+/// Nothing about the provider's failure belongs in the answer, so the body is
+/// fixed text and the real reason goes to CloudWatch.
 async function proxy(url, headers, body) {
-  const upstream = await fetch(url, {
-    method: "POST",
-    headers,
-    body,
-    signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-  });
+  let upstream;
+  try {
+    upstream = await fetch(url, {
+      method: "POST",
+      headers,
+      body,
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+    });
+  } catch (err) {
+    console.error(`upstream ${url} failed: ${String(err?.message ?? err)}`);
+    return {
+      status: 502,
+      body: JSON.stringify({ error: "transcription service unavailable" }),
+      contentType: "application/json",
+    };
+  }
   const text = await upstream.text();
   if (!upstream.ok) {
     // The provider's message is passed through so the app's failure taxonomy

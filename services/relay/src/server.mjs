@@ -53,9 +53,11 @@ const server = createServer(async (req, res) => {
       body,
     });
   } catch (err) {
+    // Same split as the Lambda adapter: the reason is logged, never returned.
+    console.error(`unhandled: ${String(err?.stack ?? err?.message ?? err)}`);
     result = {
       status: 413,
-      body: JSON.stringify({ error: String(err?.message ?? err).slice(0, 200) }),
+      body: JSON.stringify({ error: "request could not be handled" }),
       contentType: "application/json",
     };
   }

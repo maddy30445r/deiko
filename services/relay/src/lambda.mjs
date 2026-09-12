@@ -38,9 +38,15 @@ export async function handler(event) {
   try {
     result = await handle({ method, path, token, contentType, body });
   } catch (err) {
+    // THE REASON GOES TO CLOUDWATCH, NOT TO THE CALLER. `unavailable()` was
+    // taught this for the metering paths and this catch-all was not: anything
+    // that threw past `handle` — an AWS SDK error naming the table and its
+    // ARN — went straight into the body of a public endpoint. A direct
+    // invoker could read the log line too, so the split matters either way.
+    console.error(`unhandled: ${String(err?.stack ?? err?.message ?? err)}`);
     result = {
       status: 500,
-      body: JSON.stringify({ error: String(err?.message ?? err).slice(0, 200) }),
+      body: JSON.stringify({ error: "internal error" }),
       contentType: "application/json",
     };
   }

@@ -164,13 +164,37 @@ export async function peek(subject, tier, now = Date.now()) {
 /// itself every forty days. Only a Pro licence gets the monthly row, so only a
 /// Pro licence gets the TTL — a free licence is a trial like any other, and
 /// giving it an expiring row is exactly the bug `usageKey` documents.
+/// BOTH ROWS OR NEITHER. `Promise.all` rejects on the first failure and says
+/// nothing about the other write, which had already landed — so a subject write
+/// that failed while the global one succeeded banked seconds against the whole
+/// service's day, and the caller's 503 path has no refund in it. An id longer
+/// than DynamoDB's 2048-byte partition key made that deterministic: ~1,080 such
+/// requests walked the ceiling to its limit and 429'd every paying customer,
+/// without buying a second of audio from anybody.
+///
+/// `allSettled` lets the half that landed be taken back before the failure is
+/// re-thrown. Compensation is best-effort: if it also fails, the counter is
+/// over by one chunk, which is the direction the whole file is wrong in
+/// already.
 export async function record({ subject, seconds, tier, now = Date.now() }) {
   const key = usageKey(subject, now, tier);
-  const [usedSeconds, globalUsedSeconds] = await Promise.all([
+  const global = globalKey(now);
+  const [subjectWrite, globalWrite] = await Promise.allSettled([
     addSeconds(key, seconds, key.includes("#") && tier === "pro" ? MONTHLY_TTL_SECONDS : null),
-    addSeconds(globalKey(now), seconds, DAILY_TTL_SECONDS),
+    addSeconds(global, seconds, DAILY_TTL_SECONDS),
   ]);
-  return { usedSeconds, globalUsedSeconds };
+
+  if (subjectWrite.status === "rejected" || globalWrite.status === "rejected") {
+    if (subjectWrite.status === "fulfilled") {
+      await addSeconds(key, -seconds, null).catch(() => {});
+    }
+    if (globalWrite.status === "fulfilled") {
+      await addSeconds(global, -seconds, null).catch(() => {});
+    }
+    throw subjectWrite.reason ?? globalWrite.reason;
+  }
+
+  return { usedSeconds: subjectWrite.value, globalUsedSeconds: globalWrite.value };
 }
 
 /// Give a request's seconds back, because it bought nothing.

@@ -139,6 +139,29 @@ export const BYTES_PER_SECOND = 32_000;
 /// right direction to be wrong in: an honest chunk is never near it.
 export const MAX_SECONDS_PER_REQUEST = 40;
 
+/// WHAT THE CHEAPEST POSSIBLE REQUEST COSTS, and why a floor exists at all.
+///
+/// The comment above accepts the under-count "up to roughly 10×". Measured, it
+/// is worse: thirty seconds of 8 kbps MP3 is 30 KB, which meters as 0.96 s —
+/// a **31×** under-count, because the body is forwarded verbatim and the CALLER
+/// picks the format. Sarvam hears thirty seconds and bills for thirty seconds.
+/// Left alone, the 12-hour ceiling bounds roughly ₹11,500 of real audio a day
+/// rather than the ₹360 it appears to promise.
+///
+/// Parsing the audio to fix it properly is what the relay's header forbids, so
+/// bound the REQUEST COUNT instead: with a floor of five seconds the day holds
+/// at most ~8,640 transcribe calls whatever the codec. Honest chunks are 25 s
+/// and never meet it; only a hold shorter than five seconds rounds up, which is
+/// the correct direction for a limit to be wrong in.
+///
+/// ponytail: a floor, not a format check. The residual is still ~6× nominal, so
+/// THE CAP IN SARVAM'S OWN DASHBOARD IS NOT OPTIONAL — it is the only bound on
+/// that vendor's bill. If this ever needs to be tighter without touching the
+/// audio, scan the multipart body for the `RIFF` container magic and refuse
+/// anything else: reading four bytes of a container header is not parsing
+/// speech.
+export const MIN_SECONDS_PER_REQUEST = 5;
+
 export function audioSeconds(byteLength) {
   if (!byteLength || byteLength < 0) return 0;
   return Math.min(byteLength / BYTES_PER_SECOND, MAX_SECONDS_PER_REQUEST);
@@ -155,17 +178,37 @@ export function audioSeconds(byteLength) {
 /// A bare, unprefixed value is a DEVICE token, because that is what every build
 /// up to 0.3.0 sends. Old installs keep working and land on the free tier,
 /// which is what they are.
+/// WHAT AN ID MAY CONTAIN — a security boundary, not tidiness.
+///
+/// The id is INTERPOLATED INTO ROW KEYS — `lic:<id>`, `lic:<id>#<month>`,
+/// `lic:<id>#trial`, `dev:<id>` — so any character that means something in that
+/// grammar lets one row be spelled two ways. `lic_<key>#2026-09` made
+/// `licenseKey()` return `lic:<key>#2026-09`, which IS the real key's monthly
+/// usage row; `tierFor` then wrote its verdict there with `PutItem`, which
+/// REPLACES THE WHOLE ITEM, and the customer's month reset to zero. One request
+/// a day turned ten hours a month into ten hours a day.
+///
+/// Length is the same bug in a different hat: DynamoDB's partition key stops at
+/// 2048 bytes, so an over-long id made the SUBJECT write throw while the global
+/// write beside it succeeded — seconds banked against the whole service's day
+/// that no refund path could reach, and no Sarvam call to show for them.
+///
+/// The charset is what the three real issuers produce and nothing else: Polar
+/// licence keys (alphanumeric and dashes), the 32-hex device digest, and the
+/// v4-shaped UUIDs every build up to 0.3.0 sent unprefixed.
+const ID_ALLOWED = /^[A-Za-z0-9_-]{1,128}$/;
+
 export function subjectFrom(token) {
   if (typeof token !== "string" || token.length === 0) return null;
   if (token.startsWith("lic_")) {
     const id = token.slice(4);
-    return id ? { kind: "license", id } : null;
+    return ID_ALLOWED.test(id) ? { kind: "license", id } : null;
   }
   if (token.startsWith("dev_")) {
     const id = token.slice(4);
-    return id ? { kind: "device", id } : null;
+    return ID_ALLOWED.test(id) ? { kind: "device", id } : null;
   }
-  return { kind: "device", id: token };
+  return ID_ALLOWED.test(token) ? { kind: "device", id: token } : null;
 }
 
 /// The row a subject's usage accumulates in.

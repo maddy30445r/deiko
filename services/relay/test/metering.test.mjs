@@ -15,11 +15,15 @@ import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 
-import { FREE_TRIAL_SECONDS, monthKey } from "../quota.mjs";
+import { FREE_TRIAL_SECONDS, MIN_SECONDS_PER_REQUEST, globalKey, monthKey } from "../quota.mjs";
 
 // ── A DynamoDB that lives in a Map ──────────────────────────────────────────
 
 const rows = new Map();
+/// Keys whose UpdateItem the fake refuses with a ValidationException — the
+/// exact response an over-long partition key draws from the real service, and
+/// the way to make one half of a two-row write fail while the other lands.
+const failWritesTo = new Set();
 let server;
 let port;
 
@@ -30,6 +34,7 @@ function ddb(target, body) {
     return { Table: { TableStatus: "ACTIVE" } };
   }
   if (target.endsWith("UpdateItem")) {
+    if (failWritesTo.has(key)) throw new Error(`refused write to ${key}`);
     const add = Number(body.ExpressionAttributeValues[":n"].N);
     const row = rows.get(key) ?? {};
     row.audioSeconds = (row.audioSeconds ?? 0) + add;
@@ -140,6 +145,7 @@ after(() => server?.close());
 
 beforeEach(() => {
   rows.clear();
+  failWritesTo.clear();
   upstream = [];
   upstreamBodies = [];
   licenseValid = true;
@@ -486,4 +492,64 @@ test("twenty thousand empty messages do not reach the model", async () => {
   const sent = JSON.parse(upstreamBodies.find((b) => b.includes('"model"')));
   assert.ok(sent.messages.length <= 32,
     `the caller chose 20,000 envelopes; the relay must choose the count (sent ${sent.messages.length})`);
+});
+
+// ── The id is a security boundary, end to end ───────────────────────────────
+
+test("a crafted licence id cannot reset a paying customer's month", async () => {
+  // Before the charset rule, `lic_<key>#<month>` reached tierFor, whose
+  // PutItem replaced the real key's MONTHLY usage row with a verdict object —
+  // the counter gone, for the price of one GET.
+  const key = "DEIKO-REAL-KEY";
+  rows.set(`lic:${key}`, { tier: "pro", checkedAt: Date.now() });
+  seed(monthRow(key), 30_000);
+
+  const r = await handle({
+    method: "GET",
+    path: "/v1/quota",
+    token: `lic_${key}#${monthKey(Date.now())}`,
+  });
+  assert.equal(r.status, 401, "malformed, therefore not a subject at all");
+  assert.equal(rows.get(monthRow(key)).audioSeconds, 30_000, "the month is untouched");
+  assert.equal(upstream.filter((u) => u.includes("polar")).length, 0, "and Polar was never asked");
+});
+
+test("a partial write banks nothing — the global row is taken back when the subject write fails", async () => {
+  // The exact failure an over-long id produced at DynamoDB: the subject write
+  // rejects, the global write beside it lands. Without compensation those
+  // seconds sat on the day's row with no refund path able to reach them.
+  failWritesTo.add("dev:half");
+  const r = await post("dev_half", 20);
+  assert.equal(r.status, 503, "fail closed, as before");
+  assert.equal(rows.get(globalKey(Date.now()))?.audioSeconds ?? 0, 0,
+    "the global write landed and was compensated — no phantom seconds");
+  assert.equal(upstream.filter((u) => u.includes("sarvam")).length, 0, "nothing was bought");
+});
+
+test("an upstream that throws is a 502 that refunds, and says nothing about why", async () => {
+  // A timeout or a DNS failure rejects the fetch. Uncaught, that left handle()
+  // before either `status >= 500` refund — a Sarvam stall ate a lifetime
+  // trial — and carried the message into a public body via the adapter.
+  globalThis.fetch = async (url) => {
+    upstream.push(String(url));
+    if (String(url).includes("sarvam")) throw new Error("getaddrinfo ENOTFOUND api.sarvam.ai");
+    throw new Error(`unexpected upstream: ${url}`);
+  };
+  const r = await post("dev_dns", 20);
+  assert.equal(r.status, 502);
+  assert.doesNotMatch(r.body, /ENOTFOUND|getaddrinfo/, "the reason is for CloudWatch, not the caller");
+  assert.equal(rows.get("dev:dns").audioSeconds, 0, "refunded — nothing was bought");
+  assert.equal(rows.get(globalKey(Date.now())).audioSeconds, 0, "on the day's row too");
+});
+
+// ── The cheapest request has a price ────────────────────────────────────────
+
+test("a tiny body still costs the floor — compressed audio cannot buy thirty seconds for one", async () => {
+  // 16 KB: the byte rule says half a second. A caller sending 8 kbps MP3
+  // would get ~15 s of Sarvam for it; the floor is what bounds how many times
+  // a day that trade can be made.
+  const r = await post("dev_tiny", 0.5);
+  assert.equal(r.status, 200);
+  assert.equal(rows.get("dev:tiny").audioSeconds, MIN_SECONDS_PER_REQUEST);
+  assert.equal(rows.get(globalKey(Date.now())).audioSeconds, MIN_SECONDS_PER_REQUEST);
 });
