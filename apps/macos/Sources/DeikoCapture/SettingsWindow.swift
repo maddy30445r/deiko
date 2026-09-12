@@ -454,7 +454,14 @@ private struct SettingsView: View {
                 // opens, so the first anybody learned of running out was a
                 // transcript that quietly read worse. A bar answers "am I
                 // close?" at a glance, which a sentence never does.
-                if let quota = model.quota {
+                //
+                // NOTHING TO DRAW WHEN THERE IS NO ALLOWANCE. A licence the
+                // store does not recognise now has a cap of zero, and a bar of
+                // zero read "none of none used · one-time trial, then this Mac
+                // transcribes" — three claims, none of them true of a subject
+                // that has no trial and never had one. The plan line above
+                // already says what happened and what to do about it.
+                if let quota = model.quota, quota.capSeconds > 0 {
                     VStack(alignment: .leading, spacing: 4) {
                         ProgressView(value: quota.usedFraction)
                             .tint(quota.isSpent ? DeikoStyle.needsYou : DeikoStyle.accent)
