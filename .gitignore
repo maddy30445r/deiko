@@ -29,8 +29,25 @@ crops/
 *.wav
 # Crops are screenshots of whatever was on screen, and both crop destinations
 # are user-settable (`capture --out`, `ax-probe --crop-dir`) — so the pattern,
-# not just the folders. No source imagery exists in this repo to collide with.
+# not just the folders.
 *.png
+# The landing site IS source imagery, and it is the one thing the pattern above
+# swallows silently: the icon and the OG image would deploy fine from the machine
+# that built them and 404 for everyone who clones. Narrow exception on purpose —
+# a stray crop landing anywhere else in the repo is still ignored.
+!site/assets/*.png
+
+# The design hand-off from Claude Design: the zip and the folder it unpacks to.
+# Neither is source. The site in `site/` is what was built from it and that is
+# what ships; this is the working copy of the artboards, kept locally as
+# reference for the ad and shot-list work. 13MB of screen recordings, a music
+# bed and a dozen mood-board JPEGs do not belong in every clone forever, and
+# the canvas is the real home of the originals.
+*.zip
+mddocs/design/
 
 # macOS
 .DS_Store
+
+# stamped at deploy time by scripts/deploy-site.sh
+site/install.sh

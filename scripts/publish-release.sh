@@ -39,29 +39,44 @@ case "$(basename "$DMG")" in
   *[!A-Za-z0-9._-]*) echo "✗ DMG name '$(basename "$DMG")' — letters, digits, . _ - only"; exit 1 ;;
 esac
 
-if ! ACCOUNT=$(aws sts get-caller-identity --query Account --output text 2>/dev/null); then
-  echo "✗ no AWS credentials. Run 'aws configure' first."
-  exit 1
-fi
+# R2, reached through the S3 API. The bucket is the ONLY thing a release
+# touches — the landing site is a separate Pages deployment, so shipping a
+# build needs nothing of the site on this machine, and a copy fix cannot
+# republish a 40MB disk image.
+#
+# R2 credentials are their own pair (Cloudflare dashboard → R2 → Manage API
+# tokens), not the AWS ones. Kept under R2_* so an expired AWS session — the
+# thing that killed the CloudFront route — cannot silently redirect an upload.
+: "${R2_ACCOUNT_ID:?set R2_ACCOUNT_ID (Cloudflare dashboard → R2)}"
+: "${R2_ACCESS_KEY_ID:?set R2_ACCESS_KEY_ID}"
+: "${R2_SECRET_ACCESS_KEY:?set R2_SECRET_ACCESS_KEY}"
 
-# Same derivation as deploy-site.sh — one bucket, one site.
-BUCKET="${DEIKO_SITE_BUCKET:-deiko-site-$ACCOUNT}"
-aws s3api head-bucket --bucket "$BUCKET" >/dev/null 2>&1 || {
-  echo "✗ bucket $BUCKET does not exist — run scripts/deploy-site.sh first"; exit 1; }
+BUCKET="${DEIKO_R2_BUCKET:-deiko-downloads}"
+ENDPOINT="https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com"
 
-DIST_ID=$(aws cloudfront list-distributions \
-  --query "DistributionList.Items[?Comment=='deiko-site'].Id | [0]" --output text 2>/dev/null || echo "None")
-[ "$DIST_ID" != "None" ] && [ -n "$DIST_ID" ] || {
-  echo "✗ no 'deiko-site' CloudFront distribution — run scripts/deploy-site.sh first"; exit 1; }
+export AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
+export AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
+# BOTH region vars. The repo's .env carries AWS_REGION=ap-south-1 for the relay,
+# AWS_REGION wins over AWS_DEFAULT_REGION in CLI v2, and R2 rejects any region
+# but its own — so setting only the DEFAULT one fails after uploading the whole
+# file, which on a 40MB DMG is a slow way to learn this.
+export AWS_REGION=auto
+export AWS_DEFAULT_REGION=auto
+# AWS CLI v2 sends a CRC32 trailer by default that R2 rejects with a 501 on
+# streamed uploads. Asking for checksums only where the protocol requires them
+# is the documented way round it, and it is not optional for a 40MB PUT.
+export AWS_REQUEST_CHECKSUM_CALCULATION=when_required
 
-CF_DOMAIN=$(aws cloudfront get-distribution --id "$DIST_ID" --query Distribution.DomainName --output text)
+s3() { aws s3 --endpoint-url "$ENDPOINT" "$@"; }
 
-# The name users actually type, when there is one. CloudFront's own
-# `dxxxx.cloudfront.net` is the origin's address, not the product's, and once a
-# custom domain is aliased onto the distribution every URL we bake into
-# version.json and into the installer should say the real one — those strings
-# outlive this script by a release cycle.
-SITE_ORIGIN="${SITE_URL:-https://$CF_DOMAIN}"
+aws s3api --endpoint-url "$ENDPOINT" head-bucket --bucket "$BUCKET" >/dev/null 2>&1 || {
+  echo "✗ R2 bucket $BUCKET not reachable — create it, or check R2_* credentials"; exit 1; }
+
+# The name users actually type. Every URL baked into version.json and the
+# installer says this, and those strings outlive this script by a release
+# cycle — the app's update check is compiled into a shipped plist and can
+# never be corrected remotely.
+SITE_ORIGIN="${SITE_URL:-https://deiko.app}"
 SITE_ORIGIN="${SITE_ORIGIN%/}"
 # An origin, not a URL: this string lands inside version.json AND in the
 # replacement half of the sed below, where `&`, `\` and the delimiter are all
@@ -75,11 +90,11 @@ case "$SITE_ORIGIN" in
 esac
 NAME=$(basename "$DMG")
 
-say "account $ACCOUNT · bucket $BUCKET"
+say "r2 bucket $BUCKET · origin $SITE_ORIGIN"
 say "uploading $NAME ($(du -h "$DMG" | cut -f1))"
 # Immutable: a versioned filename never changes contents, so it can cache for a
 # year and a re-download costs nothing at the edge.
-aws s3 cp "$DMG" "s3://$BUCKET/download/$NAME" \
+s3 cp "$DMG" "s3://$BUCKET/download/$NAME" \
   --cache-control "public,max-age=31536000,immutable" >/dev/null
 
 # The pointer. Cached for a minute only — this is the one file that has to be
@@ -89,29 +104,14 @@ trap 'rm -f "$TMP"' EXIT
 cat > "$TMP" <<JSON
 {"version":"$VERSION","dmg":"$NAME","url":"$SITE_ORIGIN/download/"}
 JSON
-aws s3 cp "$TMP" "s3://$BUCKET/download/version.json" \
+s3 cp "$TMP" "s3://$BUCKET/download/version.json" \
   --content-type application/json \
   --cache-control "public,max-age=60" >/dev/null
 
-# THE INSTALLER, STAMPED WITH THE HOST THAT WILL SERVE IT.
-#
-# `scripts/install.sh` carries a placeholder origin, and for a long time
-# nothing published the file at all: `deploy-site.sh` syncs the site directory
-# and the installer does not live there. So the documented one-liner —
-# `curl -fsSL https://<site>/install.sh | sh` — fetched a 404, and any copy
-# that did get served looked its release up on a domain that does not exist.
-# Publishing it here, from the script that already knows the domain and the
-# version it is publishing, is what keeps the two in step.
-sed "s|https://deiko.example|$SITE_ORIGIN|g" scripts/install.sh > "$TMP.sh"
-aws s3 cp "$TMP.sh" "s3://$BUCKET/install.sh" \
-  --content-type "text/x-shellscript" \
-  --cache-control "public,max-age=300" >/dev/null
-rm -f "$TMP.sh"
-say "published install.sh → $SITE_ORIGIN/install.sh"
-
-aws cloudfront create-invalidation --distribution-id "$DIST_ID" \
-  --paths "/download/version.json" "/install.sh" --query Invalidation.Id --output text >/dev/null
-say "invalidated version.json and install.sh"
+# No purge step. The R2 function passes the cache-control set at upload
+# straight through, and version.json carries max-age=60 — so the pointer is
+# stale for at most a minute and the DMG, whose filename is versioned, is
+# immutable and never needs purging at all.
 
 # PROVE THE STAMPED HOST SERVES WHAT WAS JUST UPLOADED. The uploads went to
 # the CloudFront bucket, but every URL baked into the app, version.json and
@@ -131,11 +131,12 @@ done
 [ "${verified:-}" = 1 ] || {
   echo "✗ $SITE_ORIGIN does not serve /download/version.json."
   echo "  The files are uploaded, but the host every install will ask is wrong —"
-  echo "  SITE_URL must be a domain that fronts this CloudFront distribution."
+  echo "  SITE_URL must be the Pages domain whose /download/* reads this bucket."
   exit 1
 }
 
 echo
 echo "✓ $SITE_ORIGIN/download/$NAME"
 echo "  install with:  curl -fsSL $SITE_ORIGIN/install.sh | sh"
+echo "  (install.sh ships with the site — run deploy-site.sh if the origin changed)"
 echo "  running installs will offer $VERSION on their next launch."
