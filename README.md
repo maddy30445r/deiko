@@ -101,7 +101,7 @@ Transcription picks the first of these that is available:
 1. **your own Groq API key** — your key, your bill, and Deiko's servers never
    see the audio. Part of Pro; a checkout using a `.env` is never gated.
 2. **Deiko's service**, which forwards the audio to a transcription provider and
-   keeps nothing. Free installs get **30 minutes of it, once**; Pro gets five
+   keeps nothing. Free installs get **30 minutes of it, once**; Pro gets ten
    hours a month.
 3. **this Mac alone** — no upload at all, using Apple's on-device recogniser.
    Accuracy is lower, especially for mixed-language speech.
