@@ -331,8 +331,11 @@ release: guard-clean
 		|| echo "  ! SUPPORT_EMAIL is empty — this build shows no way to send feedback"
 	@$(MAKE) --no-print-directory dmg RELAY_URL=$(RELAY_URL) SITE_URL=$(SITE_URL) BUY_URL=$(BUY_URL) SUPPORT_EMAIL=$(SUPPORT_EMAIL)
 	@# SITE_URL travels in the environment: publish-release.sh stamps it into
-	@# install.sh and into version.json, and without it both fall back to the
-	@# CloudFront hostname rather than the domain people actually type.
+	@# version.json, and without it that falls back to a hostname nobody types.
+	@# install.sh is NOT stamped here any more — it ships with the site, from
+	@# scripts/deploy-site.sh, because the only thing substituted into it is the
+	@# origin and that is now a constant. Publishing it from both places would
+	@# race, and the loser wins at whichever path was written last.
 	@SITE_URL=$(SITE_URL) ./scripts/publish-release.sh $(DMG) $(VERSION)
 	@git tag v$(VERSION)
 	@git push origin v$(VERSION)

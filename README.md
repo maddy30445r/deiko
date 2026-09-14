@@ -24,15 +24,21 @@ Claude Code window               and submitted for you
 Requires macOS 14 or later.
 
 ```sh
-curl -fsSL https://<site>/install.sh | sh
+curl -fsSL https://deiko.app/install.sh | sh
 ```
 
 That fetches the latest release, copies it to `/Applications`, clears the
 download quarantine and launches it. [Read it first](scripts/install.sh) — it is
 short, and piping a stranger's script into `sh` deserves a look.
 
-The site has no domain yet, so there is no `<site>` to paste. Until there is,
-builds are handed over as a DMG directly and installed by hand:
+**This is the route that avoids the Gatekeeper dialog entirely**, and not by
+defeating anything: `com.apple.quarantine` is set by the app that downloads a
+file, and `curl` does not set it. Nothing to dismiss, nothing to clear. See
+[the distribution spike](mddocs/spikes/distribution.md) for what that does and
+does not buy.
+
+Prefer the disk image? It is at the URL `version.json` names, and installs by
+hand:
 
 ### By hand
 
