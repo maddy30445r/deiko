@@ -43,7 +43,22 @@ enum AXProbe {
     /// unsynchronised inserts into one Set is CoW buffer corruption. Trivially
     /// reachable by pointing at something in VS Code and Cmd-Tabbing while the
     /// crop still resolves.
-    nonisolated(unsafe) private static var pokedPids: Set<pid_t> = []
+    /// KEYED BY LAUNCH DATE, NOT BY PID ALONE, because a pid is reused.
+    ///
+    /// A Set of pids never forgot anything, and the Bool this returns gates the
+    /// caller's wait for the tree to build. So quitting VS Code and starting it
+    /// again onto the same pid — ordinary on a Mac that has been up for days,
+    /// and Deiko is a menu-bar app meant to run for weeks — made the poke a
+    /// no-op against a brand-new dormant Electron tree, silently restoring the
+    /// exact bug the poke exists to prevent.
+    ///
+    /// `launchDate` distinguishes the two processes. Nil compares equal to nil,
+    /// so anything without one dedupes exactly as before. Chosen over observing
+    /// `didTerminateApplicationNotification` because it needs no observer, no
+    /// unregistration, and — the real reason — no ordering guarantee: a
+    /// termination notice arriving after a new process had taken the pid would
+    /// re-poison the entry, and this cannot.
+    nonisolated(unsafe) private static var poked: [pid_t: Date?] = [:]
     private static let pokedPidsLock = NSLock()
 
     // ── Permission ──────────────────────────────────────────────────────────
@@ -587,18 +602,31 @@ enum AXProbe {
     }
 
     /// Chromium's private opt-in. Set on the APPLICATION element, not the hit
-    /// element. Returns whether we actually issued it (false if already poked).
+    /// element. Returns whether we actually issued it this time (false if the
+    /// same process — same pid AND same launch date — was already poked).
     @discardableResult
     static func enableManualAccessibility(pid: pid_t) -> Bool {
+        let launch = NSRunningApplication(processIdentifier: pid)?.launchDate
         pokedPidsLock.lock()
-        let alreadyPoked = !pokedPids.insert(pid).inserted
+        let alreadyPoked = poked[pid].map { $0 == launch } ?? false
+        poked[pid] = launch
         pokedPidsLock.unlock()
         if alreadyPoked { return false }
 
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(app, messagingTimeout)
-        AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
-        AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+        let manual = AXUIElementSetAttributeValue(
+            app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        let enhanced = AXUIElementSetAttributeValue(
+            app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+        // A FAILED POKE USED TO LOOK EXACTLY LIKE A SUCCESSFUL ONE, and the two
+        // have different fixes: a slow Electron tree needs waiting for, a poke
+        // that never landed needs explaining. `.attributeUnsupported` is the
+        // ordinary answer from a native app and is not a failure.
+        for (name, err) in [("AXManualAccessibility", manual), ("AXEnhancedUserInterface", enhanced)]
+        where err != .success && err != .attributeUnsupported {
+            Emit.log("ax: \(name) on pid \(pid) returned \(err.rawValue)")
+        }
         return true
     }
 

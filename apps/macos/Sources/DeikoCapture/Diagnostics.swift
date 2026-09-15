@@ -68,6 +68,15 @@ enum Diagnostics {
 
         lines.append("transcription: \(transcriberDescription())")
         lines.append("relay configured: \(Credentials.relayURL ?? "none — this build has no relay")")
+        // ALL FOUR STAMPED VALUES, because the one that was wrong was the one
+        // nobody printed. Each decides whether an entire affordance exists —
+        // the update check, the Get Pro button, "Send feedback…" — and a build
+        // that silently lost its relay transcribed a day of sessions on-device
+        // while the brief said nothing was degraded. This is the block a user
+        // pastes; it should be able to answer "what was this app built with".
+        lines.append("site configured: \(Credentials.siteURL?.absoluteString ?? "none — no update check")")
+        lines.append("buy configured: \(Credentials.buyURL?.absoluteString ?? "none — Pro not purchasable")")
+        lines.append("support configured: \(Credentials.supportEmail ?? "none — no feedback affordance")")
         // WHICH SUBJECT THE QUOTA IS COUNTED AGAINST. A PREFIX ONLY, matching
         // what the relay logs — enough to line a bug report up with a row in
         // the usage table, and not the whole bearer, which a diagnostics blob
@@ -85,6 +94,14 @@ enum Diagnostics {
             lines.append("last failure: \(lastFailure.kind) — \(lastFailure.message)")
         }
 
+        // THE OTHER HALF OF "IT DIDN'T WORK". `lastFailure` covers the brief
+        // pipeline; this covers the throw, which had no record of any kind —
+        // the refusal path threw a sentence into the orb and wrote nothing.
+        // A slug, never that sentence: see `FlingReport.diagnosticLine`.
+        if let fling = Handoff.lastFlingLine {
+            lines.append("last fling: \(fling)")
+        }
+
         return lines.joined(separator: "\n")
     }
 
@@ -98,7 +115,14 @@ enum Diagnostics {
     /// used for — did `make release RELAY_URL=…` actually stamp the URL — and a
     /// check that cannot fail is worse than no check, because it is trusted.
     private static func transcriberDescription() -> String {
-        if Credentials.exists("SARVAM_API_KEY") { return "your own Sarvam key" }
+        // `willUse`, NOT `exists`. `childEnvironment()` gates a stored key on
+        // the licence, so a free-tier user with a key pasted into Settings has
+        // `exists == true` while the relay is what actually runs — and this line
+        // would print the opposite of what happens. The name was `SARVAM_API_KEY`
+        // until Whisper replaced Sarvam, and since that name left
+        // `Credentials.names` this check could never fire at all: a machine
+        // using its own Groq key has been reported as using the relay ever since.
+        if Credentials.willUse("GROQ_API_KEY") { return "your own Groq key" }
         if let relay = Credentials.relayURL { return "Deiko relay (\(relay))" }
         return "on-device only — lower accuracy, no upload"
     }

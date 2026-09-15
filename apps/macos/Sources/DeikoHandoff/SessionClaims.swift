@@ -136,6 +136,21 @@ public enum SessionClaims {
             // and the user is the only one who can change it.
             return "Deiko didn't accept this install's licence key — this was transcribed "
                 + "on your Mac. Check the key in Settings."
+        case "on-device":
+            // THE ONE DEGRADATION THAT IS A BUILD MISTAKE RATHER THAN A PLAN.
+            //
+            // Every other reason here is a fact about somebody's account or the
+            // network. This one means the app was assembled with no
+            // DeikoRelayURL, so `selectTranscriber` never had a relay to call —
+            // and the only person who can fix it is whoever ran `make`.
+            //
+            // Kept distinct from "trial" deliberately. A spent trial is normal
+            // and its answer is a purchase; this is a misconfiguration and its
+            // answer is a reinstall. Collapsing the two is how a build that
+            // silently lost its relay produced a day of on-device transcripts
+            // that read as the aligner being broken.
+            return "This build has no transcription relay, so every word came from your Mac "
+                + "— accuracy is lower. Settings → Copy diagnostics shows what was stamped."
         case "unavailable":
             // "Some of this", deliberately: unlike the three above, this fires
             // for a single failed chunk as well as for a dead relay, and most

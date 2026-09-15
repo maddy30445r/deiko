@@ -90,6 +90,21 @@ export const REFUSAL_IS_FINAL = new Set(["trial", "monthly", "ceiling", "rejecte
 export function degradedReason({ cloud, degradedHolds } = {}) {
   if (cloud?.refused) return cloud.refused;
   if ((cloud?.failedChunks ?? 0) > 0) return "unavailable";
+  // NO RELAY IN THIS BUILD — a misconfiguration, not a fact about the plan.
+  //
+  // `selectTranscriber` reaches the on-device recogniser only when there is
+  // neither a BYO Groq key nor a DEIKO_RELAY_URL, and a BYO key names itself
+  // `groq:…`, so this name can only mean nothing was configured. The two
+  // branches above already took every case where a relay WAS reached and then
+  // refused or failed, which is exactly what keeps this apart from "trial": a
+  // spent trial is normal and its answer is a purchase; this one's answer is a
+  // rebuild, and collapsing them is how a day of mangled transcripts read first
+  // as "the free minutes ran out" and then as "the aligner is broken".
+  //
+  // Ahead of "timing" on purpose. A wholly-local transcript is the larger
+  // claim, and timing's sentence — "what you said is intact" — is the wrong
+  // reassurance for a session that never had cloud words at all.
+  if (cloud?.transcriber === "on-device") return "on-device";
   if (degradedHolds?.length) return "timing";
   return null;
 }

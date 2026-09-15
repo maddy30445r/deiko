@@ -294,3 +294,68 @@ test("an edited narration still suppresses screen text from crop-less referents"
     "screen text must keep the strict rule; only captions get per-quote survival",
   );
 });
+
+// ── every degradation Node can name, Swift can say ──────────────────────────
+
+test("each reason degradedReason returns has a sentence in SessionClaims", () => {
+  // GENERALISED ON PURPOSE, rather than pinning one more string pair by hand.
+  // `degradedReason` is the only thing that mints these names and
+  // `degradedSentence` is the only thing that renders them, so a reason added
+  // on the Node side with no Swift case is a session that degrades silently —
+  // which is the exact bug this whole change exists to fix, in miniature.
+  const cloud = read("scripts/lib/cloud.mjs");
+  const claims = read("apps/capture/Sources/DeikoHandoff/SessionClaims.swift");
+
+  const body = cloud.slice(cloud.indexOf("export function degradedReason"));
+  const returned = [...body.matchAll(/return "([a-z-]+)"/g)].map((m) => m[1]);
+
+  assert.ok(returned.includes("on-device"), "degradedReason should still name a relay-less build");
+  for (const reason of new Set(returned)) {
+    assert.ok(
+      claims.includes(`case "${reason}"`),
+      `degradedReason can return "${reason}" and SessionClaims has no case for it`,
+    );
+  }
+  // Direction matters: Node ⊆ Swift. Swift also switches on transcriber names
+  // in trustLine, so the reverse check would fail on strings that are not
+  // reasons at all.
+});
+
+test("the transcriber's name reaches the cloud block degradedReason reads", () => {
+  // `degradedReason` now classifies on `cloud.transcriber`. If cloudBlock stops
+  // writing it, every relay-less session goes back to claiming it is fine.
+  const transcribe = read("scripts/transcribe.mjs");
+  const block = transcribe.slice(transcribe.indexOf("function cloudBlock"));
+  assert.match(block.slice(0, 900), /transcriber:/, "cloudBlock must carry the transcriber's name");
+});
+
+// ── the build stamps what it was told, and a release says so out loud ───────
+
+test("the four stamped values default from .env", () => {
+  // The bug: `make install RELAY_URL=…` produced a correct app, and the next
+  // plain `make install` stamped all four EMPTY over it. Deleting either half
+  // of the fix — the helper or a default — brings that back.
+  const mk = read("Makefile");
+  assert.match(mk, /^env-default = /m, "the .env reader is gone");
+  for (const name of ["RELAY_URL", "SITE_URL", "BUY_URL", "SUPPORT_EMAIL"]) {
+    assert.match(
+      mk,
+      new RegExp(`^${name}\\s*\\?= \\$\\(call env-default,${name}\\)`, "m"),
+      `${name} no longer defaults from .env`,
+    );
+  }
+});
+
+test("a release refuses to inherit a URL from somebody's .env", () => {
+  // `-n` stopped proving intent the moment .env could supply a value, and a
+  // release is the one build whose URLs are baked into a plist that can never
+  // be corrected remotely.
+  const mk = read("Makefile");
+  for (const name of ["RELAY_URL", "SITE_URL"]) {
+    assert.match(
+      mk,
+      new RegExp(`origin ${name}\\)' = 'command line'`),
+      `${name} release guard no longer checks origin`,
+    );
+  }
+});

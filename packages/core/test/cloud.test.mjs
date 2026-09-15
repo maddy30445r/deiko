@@ -97,6 +97,53 @@ test("a clean session has no reason at all", () => {
   assert.equal(degradedReason(), null);
 });
 
+test("a build with no relay is a degradation, and a different one from a spent trial", () => {
+  // The session that made this test exist: transcriber "on-device", nothing
+  // uploaded, nothing refused. `make install` had stamped an empty relay over a
+  // working one, so `selectTranscriber` never had a relay to call — and the
+  // brief said `degraded: false` while the words came out as "using Daku".
+  const noRelay = { cloud: { transcriber: "on-device", uploaded: 0, refused: null, failedChunks: 0 } };
+  assert.equal(degradedReason(noRelay), "on-device");
+
+  // The separation that matters. A spent trial is NORMAL and its answer is a
+  // purchase; a missing relay is a misconfiguration and its answer is a
+  // rebuild. Collapsing them is how the first was read as the second.
+  assert.equal(
+    degradedReason({ cloud: { transcriber: "deiko", uploaded: 3, refused: "trial", failedChunks: 0 } }),
+    "trial",
+  );
+  // A relay that WAS reached and then failed keeps its own name.
+  assert.equal(
+    degradedReason({ cloud: { transcriber: "deiko", uploaded: 2, refused: null, failedChunks: 2 } }),
+    "unavailable",
+  );
+});
+
+test("a reached relay and a user's own key are not degraded", () => {
+  assert.equal(
+    degradedReason({ cloud: { transcriber: "deiko", uploaded: 5, refused: null, failedChunks: 0 } }),
+    null,
+  );
+  // A BYO key names itself, which is what makes "on-device" unambiguous above.
+  assert.equal(
+    degradedReason({ cloud: { transcriber: "groq:whisper-large-v3", uploaded: 4, refused: null, failedChunks: 0 } }),
+    null,
+  );
+});
+
+test("on-device outranks timing", () => {
+  // A wholly-local transcript is the larger claim; timing's sentence ("what you
+  // said is intact") would be the wrong reassurance for a session that never
+  // had cloud words at all.
+  assert.equal(
+    degradedReason({
+      cloud: { transcriber: "on-device", uploaded: 0, refused: null, failedChunks: 0 },
+      degradedHolds: [1, 2],
+    }),
+    "on-device",
+  );
+});
+
 test("a transcript written before `cloud` existed still reads", () => {
   // Sessions on disk from an older build have neither key.
   assert.equal(degradedReason({ degradedHolds: undefined }), null);

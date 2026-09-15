@@ -38,6 +38,24 @@ enum Handoff {
 
     private static func note(_ message: String) { trace?(message) }
 
+    /// The record for the fling in flight, filled in as it goes.
+    ///
+    /// Same pattern as `Diagnostics.lastFailure`, and for the reason that file
+    /// gives: threading it through every early return and every `throw` would
+    /// mean each new exit had to remember to carry it, and the exits that
+    /// forget are exactly the ones nobody notices. Reset at the top of
+    /// `deliver`; read by `Orb` when the call comes back or throws.
+    @MainActor static var lastReport = FlingReport(outcome: .refused)
+
+    /// Nil until a fling has actually happened this launch.
+    ///
+    /// `lastReport` is seeded before every attempt so the fields can be filled
+    /// in as `deliver` runs, which means "has one happened" cannot be read off
+    /// its existence — `elapsedMs` being stamped by the `defer` is the signal.
+    @MainActor static var lastFlingLine: String? {
+        lastReport.elapsedMs > 0 ? lastReport.diagnosticLine : nil
+    }
+
     /// The app owning the frontmost window under a point, for the orb to name
     /// while aiming.
     ///
@@ -152,6 +170,15 @@ enum Handoff {
         // with no text under them and no Return — a partial send, which this
         // file's header says it never reports. Failing here costs nothing: the
         // target has not been touched yet.
+        lastReport = FlingReport(
+            outcome: .refused,
+            appName: target.appName,
+            pid: target.pid,
+            bundleID: NSRunningApplication(processIdentifier: target.pid)?.bundleIdentifier
+        )
+        let startedAt = Date()
+        defer { lastReport.elapsedMs = Date().timeIntervalSince(startedAt) * 1000 }
+
         let payloads: [(name: String, data: Data)] = try images.map { path in
             guard let data = FileManager.default.contents(atPath: path) else {
                 throw HandoffError(
@@ -178,13 +205,60 @@ enum Handoff {
         }
         note("activation settled after \(polls * 50)ms; isActive=\(app.isActive)")
         guard app.isActive else {
-            throw HandoffError("Could not bring \(target.appName) forward.")
+            throw HandoffError("Could not bring \(target.appName) forward.", reason: "no-activate")
         }
 
         // A moment more for the app to route key focus to its front window —
         // `isActive` says the app owns the menu bar, not that its text field
         // is first responder yet.
         try await Task.sleep(for: .milliseconds(150))
+
+        // WAKE THE AX TREE BEFORE ANY FOCUS IS READ, for every host — not just
+        // the ones that take the composer hunt below.
+        //
+        // Electron builds its accessibility tree lazily. Until
+        // AXManualAccessibility is set, a system-wide focused-element read
+        // returns NOTHING for a VS Code window, so `focusedElement()` answers
+        // "nothing focused" however many times we click, the input-strip
+        // fallback cannot verify the click it just made, and the refusal fires
+        // with the caret visibly blinking in the composer. The field report was
+        // exactly that: clicked into the chat, watched it highlight, still
+        // refused. Nothing was wrong with the click — the reading was blind.
+        //
+        // IT USED TO WORK BY ACCIDENT, which is why this looked intermittent.
+        // `Recorder.sample()` pokes the frontmost app on every app switch
+        // during a capture, so a session that passed through VS Code left its
+        // tree awake and the fling landed; a session spent pointing at a
+        // browser and Figma left it dormant and the same fling refused. Which
+        // apps you happened to touch while narrating is not a sane thing for
+        // delivery to depend on.
+        //
+        // A FIXED SLEEP IS A GUESS ABOUT SOMEBODY ELSE'S TREE-BUILD TIME, and
+        // the field disagreed with the guess. Same pid, both first-poke-after-a-
+        // restart: one fling read "nothing focused" through both clicks and both
+        // input-strip offsets and was refused, and the very next one read
+        // AXTextArea then AXWebArea and delivered. 300ms is sometimes short.
+        //
+        // So wait for the tree to ANSWER rather than waiting a number.
+        //
+        // The poll is UNCONDITIONAL, not gated on whether the poke was issued.
+        // An already-awake tree answers on the first iteration and costs
+        // nothing, and that is precisely what stops a stale poke record from
+        // bringing the original bug back in silence.
+        //
+        // It never throws. An app that genuinely has nothing focused waits out
+        // the deadline and proceeds exactly as it did before any of this
+        // existed; the chat-panel refusal further down is still the net.
+        let pokeIssued = AXProbe.enableManualAccessibility(pid: target.pid)
+        lastReport.pokeIssued = pokeIssued
+        let treeAnsweredMs = await awaitTree(pid: target.pid, deadlineMs: 2000)
+        lastReport.treeAnsweredMs = treeAnsweredMs
+        note(
+            treeAnsweredMs.map {
+                "accessibility tree answered after \(Int($0))ms (poke \(pokeIssued ? "issued" : "reused"))"
+            } ?? "accessibility tree never answered within 2000ms — proceeding blind "
+                + "(poke \(pokeIssued ? "issued" : "reused"))"
+        )
 
         // Click where the fling was RELEASED, so focus is the widget the user
         // aimed at — not whatever had it last. Activation alone restores the
@@ -208,7 +282,7 @@ enum Handoff {
                     "\(target.appName) is no longer under the point you dropped on"
                         + (now.map { " (\($0.target.appName) is)" } ?? "")
                         + "."
-                )
+                , reason: "moved")
             }
             // THE CLICK CUTS BOTH WAYS, so focus is verified around it, not
             // assumed. It exists because activation alone restores focus to
@@ -227,6 +301,7 @@ enum Handoff {
             // the selected text. The `before` reading also has to precede the
             // only click, or the blur it exists to catch has already happened.
             let before = focusedElement()
+            lastReport.focusBefore = before.map(describe) ?? "nothing focused"
             note("focus before click: \(before.map(describe) ?? "nothing focused")")
             note("clicking drop point (\(Int(drop.x)), \(Int(drop.y))) — still \(target.appName)")
             guard click(at: point) else {
@@ -351,11 +426,12 @@ enum Handoff {
                     if !focusReachesAPaste(after?.role) {
                         throw HandoffError(
                             "The chat's input box never took focus — pasting would have gone nowhere you could see. Nothing was sent; the prompt is still on disk beside the session. Click into the chat input once, then throw again."
-                        )
+                        , reason: "no-focus")
                     }
                 } else {
-                    AXProbe.enableManualAccessibility(pid: target.pid)
-                    try await Task.sleep(for: .milliseconds(400))
+                    // The poke and its settle moved above, ahead of the first
+                    // focus read, where every host gets it. By here the tree
+                    // has been awake since before the click.
                     container = dropContainer(near: point)
                     var found = container.flatMap { composer(in: $0.element) }
                     if found == nil {
@@ -413,7 +489,7 @@ enum Handoff {
                 if outsidePanel {
                     throw HandoffError(
                         "The drop landed on \(target.appName), but keyboard focus ended in a text area far from where you aimed — pasting would have written the prompt there. Nothing was sent; the prompt is still on disk beside the session. Try dropping on the chat's input box itself."
-                    )
+                    , reason: "focus-elsewhere")
                 }
             }
         }
@@ -727,6 +803,27 @@ enum Handoff {
     /// answers nothing (an app with no AX support, or focus genuinely
     /// nowhere). The frame can be nil for a real element that exposes no
     /// geometry; callers treat that as "cannot confirm".
+    /// Poll until the system-wide focused element belongs to `pid`, or the
+    /// deadline passes. Returns elapsed milliseconds, or nil if it never did.
+    ///
+    /// 2000ms rather than the ~1000ms of futile clicking the field logs show,
+    /// because the cost on the warm path is a single poll and the cost of being
+    /// short is the bug. `AXProbe.messagingTimeout` already bounds each AX call,
+    /// so a hung target cannot stretch one iteration past the deadline.
+    private static func awaitTree(pid: pid_t, deadlineMs: Double) async -> Double? {
+        let start = Date()
+        while Date().timeIntervalSince(start) * 1000 < deadlineMs {
+            var focusedPid: pid_t = 0
+            if let focus = focusedElement(),
+               AXUIElementGetPid(focus.element, &focusedPid) == .success,
+               FlingReport.treeIsReady(focusedPid: focusedPid, targetPid: pid) {
+                return Date().timeIntervalSince(start) * 1000
+            }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return nil
+    }
+
     private static func focusedElement() -> (element: AXUIElement, role: String, frame: CGRect?)? {
         let systemWide = withTimeout(AXUIElementCreateSystemWide())
         var focusedRef: CFTypeRef?
@@ -840,6 +937,14 @@ enum Handoff {
 
 struct HandoffError: LocalizedError {
     let message: String
-    init(_ message: String) { self.message = message }
+    /// A short, path-free name for the refusal, for `FlingReport.diagnosticLine`.
+    /// The `message` cannot be used there: it names the session's `prompt.txt`
+    /// so the developer can find their work, and diagnostics get pasted into
+    /// group chats where a session timestamp says when somebody was working.
+    let reason: String
+    init(_ message: String, reason: String = "other") {
+        self.message = message
+        self.reason = reason
+    }
     var errorDescription: String? { message }
 }

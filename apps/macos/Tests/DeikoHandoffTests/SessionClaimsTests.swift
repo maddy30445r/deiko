@@ -176,3 +176,36 @@ func rejectedKeyIsActionable() {
     #expect(line?.contains("Settings") == true)
     #expect(line?.contains("licence key") == true)
 }
+
+// ── the build-mistake degradation ───────────────────────────────────────────
+
+@Test("a relay-less build names the build, not a plan")
+func onDeviceNamesTheBuild() {
+    let sentence = SessionClaims.degradedSentence("on-device", degraded: true, resetSentence: "")
+    #expect(sentence != nil)
+    // The failure this guards: a build that silently lost its relay produced a
+    // day of on-device transcripts, and the wording that would send somebody to
+    // check their subscription is exactly the wrong advice — the fix is a
+    // rebuild, and nobody would ever find it by looking at their plan.
+    #expect(sentence?.contains("build") == true)
+    #expect(sentence?.contains("used up") != true)
+    #expect(sentence?.contains("free") != true)
+}
+
+@Test("a missing relay and a spent trial never read the same")
+func onDeviceIsNotTrial() {
+    #expect(SessionClaims.degradedSentence("on-device", degraded: true, resetSentence: "")
+            != SessionClaims.degradedSentence("trial", degraded: true, resetSentence: ""))
+}
+
+@Test("on-device never makes the trust line claim an upload")
+func onDeviceStaysLocal() {
+    // `trustLine` is untouched by the new reason and must stay untouched: a
+    // session that uploaded nothing did not reach the network, whatever the
+    // degradation is called.
+    let line = SessionClaims.trustLine(
+        transcriber: "on-device", degradedReason: "on-device",
+        seconds: 80, uploadedChunks: 0, hasSummary: false, ownGroqKey: false
+    )
+    #expect(line.contains("Nothing left this Mac"))
+}

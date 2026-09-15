@@ -1,4 +1,5 @@
 import AppKit
+import DeikoHandoff
 import Foundation
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -62,6 +63,8 @@ enum EventType: String, Codable {
     case holdEnd
     case cursor
     case candidate
+    /// One throw of the coin, with how it came out. See `FlingReport`.
+    case fling
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -556,6 +559,25 @@ struct ProbeEvent: Codable {
 struct TimeSpan: Codable {
     let start: Double
     let end: Double
+}
+
+/// One line per fling, carrying the outcome rather than narrating the attempt.
+///
+/// The prose trace stays — it is what you read once you already suspect a
+/// failure. This is what makes "how often does this work, and when it doesn't,
+/// why" answerable with grep, and it exists because the refusal path was the
+/// silent one: a thrown `HandoffError` became a sentence in the orb and left no
+/// terminal line in the log at all.
+struct FlingEvent: Codable {
+    let type: EventType
+    let t: Double
+    let report: FlingReport
+
+    init(_ report: FlingReport) {
+        self.type = .fling
+        self.t = Clock.nowMs()
+        self.report = report
+    }
 }
 
 struct HelloEvent: Codable {

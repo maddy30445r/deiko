@@ -68,6 +68,22 @@ final class OrbState: ObservableObject {
     var isOverTarget: Bool { if case .over = aim { return true }; return false }
 }
 
+/// One below the lasso overlay, and written as arithmetic so the rule cannot drift.
+///
+/// `.floating` (3) WAS NOT ENOUGH, and the proof was already in the app: the red
+/// capture bar is visible over a full-screen Space with the SAME
+/// `collectionBehavior` and differs only in level (`Overlay.swift`, `.screenSaver`).
+/// A full-screen app's own window is elevated above the floating band, so a
+/// non-activating panel at 3 sits behind it however many Spaces it may join —
+/// which is why the orb appeared over Chrome and not over a full-screened editor,
+/// and `.fullScreenAuxiliary` could not save it: that covers auxiliary panels of
+/// the app that OWNS the full-screen window, not a third-party accessory app.
+///
+/// Expressed as `screenSaver - 1` rather than a literal so that raising the
+/// overlay raises the orb with it: the documented invariant is that the lasso
+/// overlay stays the topmost thing Deiko draws, and subtraction cannot invert it.
+private let orbWindowLevel = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue - 1)
+
 @MainActor
 final class OrbController: NSObject {
 
@@ -141,6 +157,33 @@ final class OrbController: NSObject {
         applyMode()
         window?.orderFrontRegardless()
         installEscapeMonitor()
+        verifyOnScreen()
+    }
+
+    /// ORDERING FRONT IS A REQUEST, NOT A RESULT.
+    ///
+    /// The whole of the full-screen bug was the orb being ordered front and
+    /// simply not arriving, while the app carried on as though it had. Nothing
+    /// in here fixes that — `orbWindowLevel` does — but it turns the next
+    /// occurrence from "sometimes nothing appears" into one line of a grep.
+    ///
+    /// LOG ONLY, never act. A Space transition reads as occluded for a frame or
+    /// two, and hiding or re-ordering on that reading would make the orb flicker
+    /// for real. Checked a beat later because occlusion is answered by the
+    /// window server on a later turn, not synchronously.
+    private func verifyOnScreen() {
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard let window else { return }
+            let onScreen = window.isVisible && window.occlusionState.contains(.visible)
+            guard !onScreen else { return }
+            Emit.log(
+                "orb: ordered front but not on screen — isVisible=\(window.isVisible) "
+                    + "visible=\(window.occlusionState.contains(.visible)) "
+                    + "level=\(window.level.rawValue) frame=\(window.frame) "
+                    + "screens=\(NSScreen.screens.count)"
+            )
+        }
 
         // Fading is phase-driven rather than wired into each send path, so the
         // orb behaves the same whether the brief left via a fling or via the
@@ -178,9 +221,8 @@ final class OrbController: NSObject {
         panel.hasShadow = true
         // Above every normal window on every space — the orb is a handoff
         // object, not a document, and it must be visible wherever the session
-        // ended. Below the lasso overlay's `.screenSaver`, which must stay the
-        // topmost thing Deiko draws.
-        panel.level = .floating
+        // ended, INCLUDING over a full-screen app. See `orbWindowLevel`.
+        panel.level = orbWindowLevel
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         panel.isReleasedWhenClosed = false
         // Nonactivating: pressing the orb must not pull focus off the app the
@@ -434,6 +476,10 @@ final class OrbController: NSObject {
             // on disk, so the report could only ever be "sometimes nothing
             // happens". A field run must never be quieter than a harness.
             Handoff.trace?("fling: not armed — phase \(model.phase), digest \(model.digest == nil ? "absent" : "present")")
+            Emit.event(FlingEvent(FlingReport(
+                outcome: .notArmed,
+                reason: model.digest == nil ? "no-digest" : "phase-\(model.phase)"
+            )))
         }
         _ = fling.press()
     }
@@ -493,6 +539,7 @@ final class OrbController: NSObject {
             // for the first, a miss for the rest, and indistinguishable on disk
             // until now.
             Handoff.trace?("fling: cancelled — released over nothing sendable")
+            Emit.event(FlingEvent(FlingReport(outcome: .cancelled, reason: "no-target")))
         case .none, .aiming:
             break
         }
@@ -524,7 +571,23 @@ final class OrbController: NSObject {
                     text: attach ? prompt.attachedText : prompt.text,
                     images: attach ? prompt.images : []
                 )
+                await MainActor.run {
+                    Handoff.lastReport.outcome = .delivered
+                    Emit.event(FlingEvent(Handoff.lastReport))
+                }
             } catch {
+                // EMITTED BEFORE THE RETHROW, because this is the path that was
+                // silent. `Handoff.deliver` fills the report as it goes and then
+                // throws; the sentence below is shown in the orb and dropped, so
+                // without this a failed fling left no terminal line in the log
+                // at all — a narration that simply stopped.
+                await MainActor.run {
+                    Handoff.lastReport.outcome = .refused
+                    if let handoff = error as? HandoffError {
+                        Handoff.lastReport.reason = handoff.reason
+                    }
+                    Emit.event(FlingEvent(Handoff.lastReport))
+                }
                 let where_ = sessionDir.map { "\($0)/prompt.txt" } ?? "the session folder"
                 throw HandoffError(
                     "\(error.localizedDescription) Your prompt is at \(where_) — "
@@ -633,8 +696,12 @@ final class CoinCursor {
         // Click-through: the panel chases the cursor, and a panel that could
         // swallow the mouse-up would end the fling into itself.
         panel.ignoresMouseEvents = true
-        panel.level = .floating
+        panel.level = orbWindowLevel
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        // NSPanel defaults this to true, and the card beside it sets it false.
+        // A fling crosses apps by definition, so the one window that follows the
+        // cursor is the last one that may vanish when Deiko deactivates.
+        panel.hidesOnDeactivate = false
         panel.contentViewController = NSHostingController(rootView: CoinCursorView(state: state))
         return panel
     }
@@ -775,7 +842,7 @@ final class TargetHighlight {
             w.backgroundColor = .clear
             w.hasShadow = false
             w.ignoresMouseEvents = true
-            w.level = .floating
+            w.level = orbWindowLevel
             w.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
             w.contentView = HighlightView()
             window = w

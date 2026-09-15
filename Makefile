@@ -84,6 +84,31 @@ BUILD := $(shell git rev-list --count HEAD 2>/dev/null || echo 1)
 # generator has not been chosen yet.
 SITE_DIR ?= site
 
+# THE FOUR STAMPED VALUES DEFAULT FROM `.env`, and the reason is a shipped bug.
+#
+# `make install RELAY_URL=https://…` produced a correct app. The next plain
+# `make install` re-stamped all four to EMPTY — `RELAY_URL` was never even
+# declared here, so it expanded to nothing — and the app then reported "relay
+# configured: none" while the brief it produced said `degraded: false`. A day of
+# sessions came out of the on-device recogniser ("using Daku" for "using Deiko")
+# and read as the alignment being broken. A default that is empty is a default
+# that is wrong every time somebody forgets an argument.
+#
+# THE SHELL PARSES `.env`, NOT MAKE. Same read `scripts/deploy-site.sh` and
+# `BriefPipeline.shell` already do, so a value containing `=`, quotes or spaces
+# means what it means everywhere else and there is one parser rather than a
+# second one written in sed. `[ -f .env ]` because a tarball has none.
+#
+# `?=`, NOT `:=` — this is what keeps the invariant below true. A variable given
+# on the command line has origin `command line`, for which `?=` is a no-op, so
+# `make install RELAY_URL=` still builds a relay-less app deliberately.
+#
+# ponytail: sourcing .env executes whatever is in it at parse time; the same
+# exposure already exists in the two other paths that source the same file.
+env-default = $(shell set -a; [ -f .env ] && . ./.env; set +a; printf %s "$$$(1)")
+
+RELAY_URL     ?= $(call env-default,RELAY_URL)
+
 # WHERE THE SITE IS SERVED FROM, once it has a domain.
 #
 # ONE download location, and it is the site — the same place the landing page,
@@ -91,16 +116,17 @@ SITE_DIR ?= site
 # to find out whether it is out of date, and `install.sh` fetches the DMG from
 # beside it.
 #
-# Empty until the domain exists, and that is a supported state: an app with no
-# site URL simply never checks for updates, exactly as an app with no RELAY_URL
-# transcribes on-device. Better than pointing at a host that does not answer.
+# Empty is still a supported state: an app with no site URL simply never checks
+# for updates, exactly as an app with no RELAY_URL transcribes on-device. Better
+# than pointing at a host that does not answer. It is now something you ASK for
+# — `make install SITE_URL=` — rather than something you get by forgetting.
 #
 # This deliberately does NOT use GitHub Releases. It would be free bandwidth,
 # but it is a second place to publish and to keep in step, and its unauthenticated
 # API allows 60 requests/hour PER IP — a team behind one NAT shares that budget
 # for a check that should never be able to fail noisily. A static JSON on
 # CloudFront has no such limit.
-SITE_URL ?=
+SITE_URL ?= $(call env-default,SITE_URL)
 
 # WHERE SOMEBODY BUYS PRO, and where a bug report goes.
 #
@@ -114,9 +140,10 @@ SITE_URL ?=
 # Empty is a supported state for both: the app hides every buy affordance
 # without a BUY_URL, and hides "Send feedback…" without a SUPPORT_EMAIL. Same
 # discipline as RELAY_URL — a stamped constant beats a source literal that is
-# wrong in somebody's local build, and absent beats broken.
-BUY_URL ?=
-SUPPORT_EMAIL ?=
+# wrong in somebody's local build, and absent beats broken. Both default from
+# `.env` now; an explicit `BUY_URL=` still stamps empty.
+BUY_URL ?= $(call env-default,BUY_URL)
+SUPPORT_EMAIL ?= $(call env-default,SUPPORT_EMAIL)
 
 ## bundle — the dev loop's app: assemble, then sign.
 ##
@@ -145,6 +172,13 @@ ifneq ($(RELAY_URL),)
 else
 	@echo "  relay: none — sessions fall back to on-device words"
 endif
+	@# ALL FOUR, because the one that was wrong was the one nobody printed. Each
+	@# decides whether a whole affordance exists — updates, the buy button,
+	@# "Send feedback…" — and a blank here is the only warning before a build
+	@# that silently lacks it.
+	@echo "  site: $(if $(SITE_URL),$(SITE_URL),none — no update check)"
+	@echo "  buy: $(if $(BUY_URL),$(BUY_URL),none — Pro is not purchasable in this build)"
+	@echo "  support: $(if $(SUPPORT_EMAIL),$(SUPPORT_EMAIL),none — no feedback affordance)"
 	@/usr/libexec/PlistBuddy -c "Add :CFBundleExecutable string deiko-capture" $(APP)/Contents/Info.plist >/dev/null 2>&1 || true
 	@/usr/libexec/PlistBuddy -c "Add :CFBundlePackageType string APPL" $(APP)/Contents/Info.plist >/dev/null 2>&1 || true
 	@/usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" $(APP)/Contents/Info.plist >/dev/null 2>&1 || true
@@ -304,15 +338,20 @@ endif
 ## correspond to a commit is worse than no release: the first bug report cites
 ## a version that cannot be checked out.
 release: guard-clean
-	@test -n "$(SITE_URL)" \
-		|| (echo "✗ SITE_URL is empty — a build nobody can reach is not a release"; exit 1)
+	@# ORIGIN, NOT EMPTINESS. These four now default from `.env`, so `-n` stopped
+	@# proving anybody meant it: a release would silently inherit whichever relay
+	@# happened to be in the developer's dotfile. A release is the one build whose
+	@# URLs are baked into a shipped plist and can never be corrected remotely, so
+	@# it must say them out loud on the command line.
+	@test '$(origin SITE_URL)' = 'command line' \
+		|| (echo "✗ pass SITE_URL= explicitly — a release must not inherit .env"; exit 1)
 	@# The same guard for the relay, because this failure is SILENT: PlistBuddy
 	@# happily stamps an empty DeikoRelayURL, every install of that release
 	@# falls back to on-device words forever, and a shipped plist can never be
 	@# corrected remotely. `make dmg RELAY_URL=` stays possible on purpose —
 	@# hand-delivered relay-less builds are a thing — but a RELEASE is not one.
-	@test -n "$(RELAY_URL)" \
-		|| (echo "✗ RELAY_URL is empty — a release with no relay meters nothing and updates nobody"; exit 1)
+	@test '$(origin RELAY_URL)' = 'command line' \
+		|| (echo "✗ pass RELAY_URL= explicitly — a release must not inherit .env"; exit 1)
 	@# BOTH SPELLINGS. Releases up to 0.3.0 were tagged `vX.Y.Z`, but `0.4.1`
 	@# was cut by hand without the prefix — and a guard that only knew about
 	@# `v0.4.1` waved that through and would have put a second tag on the same
@@ -329,7 +368,7 @@ release: guard-clean
 		|| echo "  ! BUY_URL is empty — this build shows no way to buy Pro"
 	@test -n "$(SUPPORT_EMAIL)" \
 		|| echo "  ! SUPPORT_EMAIL is empty — this build shows no way to send feedback"
-	@$(MAKE) --no-print-directory dmg RELAY_URL=$(RELAY_URL) SITE_URL=$(SITE_URL) BUY_URL=$(BUY_URL) SUPPORT_EMAIL=$(SUPPORT_EMAIL)
+	@$(MAKE) --no-print-directory dmg RELAY_URL='$(RELAY_URL)' SITE_URL='$(SITE_URL)' BUY_URL='$(BUY_URL)' SUPPORT_EMAIL='$(SUPPORT_EMAIL)'
 	@# SITE_URL travels in the environment: publish-release.sh stamps it into
 	@# version.json, and without it that falls back to a hostname nobody types.
 	@# install.sh is NOT stamped here any more — it ships with the site, from
