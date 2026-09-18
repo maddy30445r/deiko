@@ -106,7 +106,7 @@ final class WelcomeModel: ObservableObject {
 
     @Published var rows: [Row] = []
     @Published var needsRelaunch = false
-    @Published var keyPresent = Credentials.exists("SARVAM_API_KEY")
+    @Published var keyPresent = Credentials.willUse("GROQ_API_KEY")
 
     var onOpenSettings: (() -> Void)?
     var onDone: (() -> Void)?
@@ -133,7 +133,7 @@ final class WelcomeModel: ObservableObject {
         }
         // `exists`, not `value` — first run must not demand the login password
         // just to draw a checkmark.
-        keyPresent = Credentials.exists("SARVAM_API_KEY")
+        keyPresent = Credentials.willUse("GROQ_API_KEY")
     }
 
     /// Ask for one permission, then re-read the whole set.
@@ -283,7 +283,7 @@ private struct WelcomeView: View {
             HStack(spacing: 12) {
                 glyphTile("key")
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Your own Sarvam key").font(.system(size: 13, weight: .semibold))
+                    Text("Your own Groq key").font(.system(size: 13, weight: .semibold))
                     Text(model.keyPresent
                         ? "in your login keychain — Deiko's servers never see your narration"
                         : "optional — transcription works without one")

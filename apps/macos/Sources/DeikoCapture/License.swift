@@ -123,10 +123,11 @@ enum License {
 
     /// How long a Pro verdict survives without being re-confirmed.
     ///
-    /// This gates ONE thing — whether the Sarvam and Groq boxes in Settings are
-    /// editable — and nothing else, because everything on the paid path is
-    /// decided by the relay per request. A developer on a plane must not find
-    /// their own API key has become read-only.
+    /// This gates NO feature any more. The one thing the client owned was
+    /// whether the key box in Settings was editable, and bringing a key is free
+    /// now; everything on the paid path is decided by the relay per request.
+    /// What is left is what Settings SAYS while the relay cannot be reached: a
+    /// paying customer on a plane must not read as Free.
     private static let graceSeconds: TimeInterval = 7 * 24 * 60 * 60
 
     /// Is this install entitled to the paid features the CLIENT owns?

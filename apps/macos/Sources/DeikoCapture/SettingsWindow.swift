@@ -116,8 +116,8 @@ final class SettingsModel: ObservableObject {
     var isPro: Bool { License.isPro }
 
     /// Whether the relay's LATEST answer says Pro — which is what the buttons
-    /// follow. `License.isPro` carries a seven-day grace so a developer on a
-    /// plane keeps their own API keys editable; following it here would keep
+    /// follow. `License.isPro` carries a seven-day grace so a paying customer on
+    /// a plane still reads as Pro; following it here would keep
     /// offering "manage your subscription" to somebody whose key lapsed a week
     /// ago, and hide the way to renew it.
     var isProNow: Bool { quota?.isPro ?? License.isPro }
@@ -239,8 +239,7 @@ final class SettingsModel: ObservableObject {
 
     /// Whether a key will actually be USED — not merely whether one is stored.
     ///
-    /// The two differ now that BYO is gated: a key can sit in the keychain and
-    /// be ignored, and a `.env` key is used even without a licence. `willUse`
+    /// The two agree now that BYO is free, and the call stays anyway: `willUse`
     /// is the same question the pipeline asks, which is the point — this used
     /// to be its own rule and told a developer their live key was not in play.
     var usingOwnKey: Bool {
@@ -250,13 +249,11 @@ final class SettingsModel: ObservableObject {
 
     /// The little grey word beside a key's label.
     ///
-    /// "Pro" would be a lie on a checkout, where the `.env` key is live without
-    /// anybody having paid — so the tag reports what is TRUE of this key rather
-    /// than what is true of the plan.
+    /// Reports what is TRUE of this key rather than what is true of the plan:
+    /// bringing one is free, so the only two states are "there is one and it is
+    /// what runs" and "there is none and nothing needs one".
     func tag(for name: String) -> String {
-        if License.isPro { return "optional" }
-        if Credentials.willUse(name) { return "in use" }
-        return "Pro"
+        Credentials.willUse(name) ? "in use" : "optional"
     }
 
     /// Where narration audio goes, in one sentence, stated before anything is
@@ -275,7 +272,7 @@ final class SettingsModel: ObservableObject {
         if Credentials.relayURL != nil {
             return isPro
                 ? "Your narration goes to Deiko, which passes it to a transcription service and keeps nothing. It comes back as English, whatever you spoke. Add your own key below to skip Deiko entirely."
-                : "Your narration goes to Deiko, which passes it to a transcription service and keeps nothing. It comes back as English, whatever you spoke. When your trial runs out, transcription continues on this Mac — in English only."
+                : "Your narration goes to Deiko, which passes it to a transcription service and keeps nothing. It comes back as English, whatever you spoke. When your trial runs out, transcription continues on this Mac — in English only. Add your own key below to skip Deiko entirely."
         }
         return "Transcription runs on this Mac. Nothing is uploaded — accuracy is lower, especially for mixed-language speech."
     }
@@ -567,14 +564,7 @@ private struct SettingsView: View {
                 keyRow(label: "Groq", tag: model.tag(for: "GROQ_API_KEY"),
                        text: $model.groqKey,
                        touched: $model.groqTouched,
-                       prompt: model.groqStored ? model.placeholder(stored: true) : "gsk_…",
-                       enabled: model.isPro)
-                if !model.isPro && !model.usingOwnKey {
-                    Text("Using your own key is part of Pro — then your narration never touches Deiko's servers at all.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                       prompt: model.groqStored ? model.placeholder(stored: true) : "gsk_…")
                 HStack {
                     // No longer a warning. A missing key used to mean briefs
                     // stopped at "Transcribing…"; now it means somebody else
@@ -586,7 +576,6 @@ private struct SettingsView: View {
                     Button("Save") { model.saveKeys() }
                         .keyboardShortcut(.defaultAction)
                         .tint(DeikoStyle.accent)
-                        .disabled(!model.isPro)
                 }
                 .padding(.top, 2)
             }
@@ -625,7 +614,7 @@ private struct SettingsView: View {
 
     private func keyRow(
         label: String, tag: String, text: Binding<String>,
-        touched: Binding<Bool>, prompt: String, enabled: Bool
+        touched: Binding<Bool>, prompt: String
     ) -> some View {
         HStack(spacing: 10) {
             (Text(label).font(.system(size: 13))
@@ -634,10 +623,8 @@ private struct SettingsView: View {
             SecureField(prompt, text: text)
                 .font(.system(size: 12, design: .monospaced))
                 .textFieldStyle(.roundedBorder)
-                .disabled(!enabled)
                 .onChange(of: text.wrappedValue) { touched.wrappedValue = true }
         }
-        .opacity(enabled ? 1 : 0.55)
     }
 }
 

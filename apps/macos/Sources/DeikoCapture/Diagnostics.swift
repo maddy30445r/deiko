@@ -115,13 +115,12 @@ enum Diagnostics {
     /// used for — did `make release RELAY_URL=…` actually stamp the URL — and a
     /// check that cannot fail is worse than no check, because it is trusted.
     private static func transcriberDescription() -> String {
-        // `willUse`, NOT `exists`. `childEnvironment()` gates a stored key on
-        // the licence, so a free-tier user with a key pasted into Settings has
-        // `exists == true` while the relay is what actually runs — and this line
-        // would print the opposite of what happens. The name was `SARVAM_API_KEY`
-        // until Whisper replaced Sarvam, and since that name left
-        // `Credentials.names` this check could never fire at all: a machine
-        // using its own Groq key has been reported as using the relay ever since.
+        // `willUse`, NOT `exists` — they agree today, and asking the question
+        // the pipeline asks is what keeps this line honest if they ever diverge
+        // again. The name was `SARVAM_API_KEY` until Whisper replaced Sarvam,
+        // and since that name left `Credentials.names` this check could never
+        // fire at all: a machine using its own Groq key was reported as using
+        // the relay for as long as that lasted.
         if Credentials.willUse("GROQ_API_KEY") { return "your own Groq key" }
         if let relay = Credentials.relayURL { return "Deiko relay (\(relay))" }
         return "on-device only — lower accuracy, no upload"

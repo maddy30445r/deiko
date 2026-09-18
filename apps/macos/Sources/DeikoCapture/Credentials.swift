@@ -35,18 +35,17 @@ enum Credentials {
     static func childEnvironment() -> [String: String] {
         var env = ProcessInfo.processInfo.environment
 
-        // BRINGING YOUR OWN KEY IS PART OF PRO, and the gate has to be HERE
-        // rather than only on the Settings boxes. A disabled text field stops
-        // somebody typing a new key; it does nothing about a key already in the
-        // keychain from before there was anything to pay for, and a gate that
-        // only guards the door people are not using is decoration.
+        // BRINGING YOUR OWN KEY IS FREE, so this passes one whenever there is
+        // one to pass. It was gated on a licence until the vendor changed: the
+        // gate existed to keep heavy users inside Pro, and at Groq's price a
+        // licence pinning the whole monthly cap still earns more than it costs,
+        // so there was nothing left for it to protect. A key also never reaches
+        // the relay — the URL below is withheld while one is in use — so a free
+        // caller who brings one spends no quota of ours either.
         //
-        // A developer checkout is never gated: a key in the process environment
-        // or in the `.env` beside the app belongs to whoever is building this,
-        // and `make dev` must not need a licence.
-        //
-        // Skipping the read also skips a keychain DECRYPT for everybody on the
-        // free tier, which is a password prompt they now never see.
+        // Nobody without a key pays a keychain DECRYPT here: `willUse` asks an
+        // attributes-only question, so there is no password prompt for the
+        // people who have nothing stored.
         for name in names where willUse(name) {
             if let value = value(for: name) { env[name] = value }
         }
@@ -292,29 +291,20 @@ enum Credentials {
 
     /// WILL THE PIPELINE ACTUALLY USE THIS KEY?
     ///
-    /// The single source of truth for the BYO gate. `childEnvironment()` asks it
-    /// to decide what to pass, and Settings asks it to decide what to say —
-    /// because the rule was briefly written out in both places and they
-    /// disagreed. The window told a developer whose `.env` key was live that
-    /// "transcription runs on this Mac. Nothing is uploaded", which is the one
-    /// sentence in this app that must never be wrong.
+    /// The single source of truth. `childEnvironment()` asks it to decide what
+    /// to pass, and Settings asks it to decide what to say — because the rule
+    /// was briefly written out in both places and they disagreed. The window
+    /// told a developer whose `.env` key was live that "transcription runs on
+    /// this Mac. Nothing is uploaded", which is the one sentence in this app
+    /// that must never be wrong.
+    ///
+    /// NOT GATED ON A LICENCE ANY MORE: a stored key is a used key. It stays a
+    /// function of its own, rather than callers asking `exists`, so that the
+    /// pipeline and Settings keep asking ONE question if a rule ever returns.
     ///
     /// Asks only `exists`-style questions, so it never decrypts and never
     /// prompts.
-    static func willUse(_ name: String) -> Bool {
-        guard exists(name) else { return false }
-        return License.isPro || isDeveloperSourced(name)
-    }
-
-    /// Did this key come from a checkout rather than from the Settings window?
-    ///
-    /// Both sources belong to whoever is building Deiko rather than to somebody
-    /// who installed it, so neither is gated behind a licence. Asks only
-    /// `exists`-style questions, so it cannot prompt.
-    private static func isDeveloperSourced(_ name: String) -> Bool {
-        if ProcessInfo.processInfo.environment[name]?.isEmpty == false { return true }
-        return dotEnv()[name]?.isEmpty == false
-    }
+    static func willUse(_ name: String) -> Bool { exists(name) }
 
     /// Is a key set — without decrypting it, and therefore without a prompt.
     ///

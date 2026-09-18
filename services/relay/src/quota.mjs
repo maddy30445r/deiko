@@ -24,20 +24,21 @@
 /// argues for the paid one by being honest rather than by being crippled.
 export const FREE_TRIAL_SECONDS = 30 * 60;
 
-/// Pro's fair use. At Sarvam's ₹30/hour this is ₹300/month of audio against a
-/// $3.99/month or $29.99/year subscription — so it is a ceiling for the pathological
-/// case and NOT a budget. BE PRECISE ABOUT WHAT THAT MEANS NOW: after Polar's
-/// 5% + 50¢ a monthly subscription nets ~₹283 and an annual one ~₹201 a month,
-/// so a licence that actually pinned this cap would cost more than it pays.
-/// Five hours could not do that; ten can.
+/// Pro's fair use. At Groq's $0.111/hour for whisper-large-v3 this is $1.11 a
+/// month of audio against a $2.99/month or $24.99/year subscription — a ceiling
+/// for the pathological case and NOT a budget. After Polar's 5% + 50¢ a monthly
+/// subscription nets ~$2.34 and an annual one ~$1.94 a month, so a licence that
+/// pinned this cap would still earn more than it costs. THAT WAS NOT TRUE when
+/// the vendor was Sarvam at ₹30/hour and this comment said so; if the vendor or
+/// the price moves again, redo this sum before trusting the cap.
 ///
-/// It is priced anyway because nobody reaches it. Measured sessions run a
+/// Nobody reaches it in any case. Measured sessions run a
 /// median of 9 seconds and a mean of 14 — audio is recorded per hold and the
 /// silence between holds is never captured — so ten hours is between two and a
 /// half and four thousand sessions, over eighty a day every day. That is a
 /// stuck client, which is what the burst limiter and the global ceiling below
-/// are for, and a genuine heavy user has a cheaper door: BYO key is a Pro
-/// feature, and a licence using its own Sarvam key costs us nothing at all.
+/// are for, and a genuine heavy user has a cheaper door: bringing a key is
+/// free on every plan, and a caller using their own Groq key costs us nothing.
 ///
 /// Raised from five hours at the same price. The cap was never what bounded
 /// the bill — GLOBAL_DAILY_SECONDS is — and five hours was already three times

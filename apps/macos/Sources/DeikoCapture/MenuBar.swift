@@ -604,7 +604,7 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func planLine() -> String? {
         // Their key, their bill — nothing here is metered, so any quota would
         // be a number about an account Deiko does not hold.
-        if Credentials.willUse("SARVAM_API_KEY") { return "Your own Sarvam key — nothing metered" }
+        if Credentials.willUse("GROQ_API_KEY") { return "Your own Groq key — nothing metered" }
         guard Credentials.relayURL != nil, let quota = License.cachedQuota else { return nil }
 
         if quota.isPro {
