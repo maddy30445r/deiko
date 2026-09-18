@@ -51,3 +51,6 @@ mddocs/design/
 
 # stamped at deploy time by scripts/deploy-site.sh
 site/install.sh
+
+# wrangler pages dev scratch — also what made `make release` see a dirty tree
+.wrangler/
