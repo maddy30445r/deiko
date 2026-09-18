@@ -31,7 +31,9 @@ private final class ConversionState: @unchecked Sendable {
 }
 
 final class Audio {
-    private let engine = AVAudioEngine()
+    /// A FRESH ENGINE PER RECORDING — see `start(path:)`. It was one engine for
+    /// the life of the app, and that is what crashed 0.4.6 in the field.
+    private var engine = AVAudioEngine()
     private var file: AVAudioFile?
     private var converter: AVAudioConverter?
     private var targetFormat: AVAudioFormat?
@@ -112,6 +114,21 @@ final class Audio {
         // WAV, and transcription later failed on a path that does not exist.
         if isRecording { stop() }
 
+        // AN ENGINE REMEMBERS THE HARDWARE IT FIRST SAW. Its input node caches a
+        // format, and nothing refreshes it when the hardware changes underneath
+        // a menu-bar app that lives for days: AirPods connecting, a call app
+        // switching the sample rate, the mic permission being granted mid-run.
+        // The next `installTap` was then handed a stale format and raised
+        // "Failed to create tap due to format mismatch, 1 ch, 44100 Hz" — an
+        // Objective-C exception, which no `do/catch` here can see, so the whole
+        // app died at the start of a session. The two sessions before that
+        // crash recorded a 4KB WAV with no samples: same stale engine, started
+        // "successfully" against a device it was no longer attached to.
+        //
+        // A new engine asks the hardware again. It costs nothing measurable
+        // next to the spin-up `t0` already exists to absorb.
+        engine = AVAudioEngine()
+
         // Reset the origin FIRST, before anything can throw. It used to be
         // reset after the file was opened, so a throwing `start` left the
         // previous recording's t0 in place — and `stop()` then reported that
@@ -149,7 +166,12 @@ final class Audio {
         self.converter = converter
         self.targetFormat = target
 
-        input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
+        // `format: nil` — the tap takes whatever the node is producing NOW. The
+        // mismatch exception is only raised for an explicit format, so there is
+        // no longer a format here for the hardware to disagree with. If the
+        // device changes in the instant since `inputFormat` was read, the
+        // converter reports an error on that buffer instead of the app aborting.
+        input.installTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self] buffer, _ in
             self?.append(buffer)
         }
 

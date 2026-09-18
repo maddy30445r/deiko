@@ -153,7 +153,26 @@ final class OrbController: NSObject {
     }
 
     private func show() {
-        if window == nil { window = makeWindow() }
+        // A NEW PANEL EVERY TIME, never the last one ordered front again.
+        //
+        // The orb was one panel for the life of the app, and a panel that has
+        // been through a delivered fling stops joining all Spaces: it was key
+        // while `Handoff.deliver` activated another app and the Space changed
+        // under it, and from then on the window server kept it on ONE Space,
+        // whatever `collectionBehavior` said. Every session after the first
+        // fling then ended with transcription succeeding and "nothing
+        // happening" — the orb was up, on a Space nobody was looking at. Two
+        // launches on 18 Sep show the same line: fine until the first
+        // "handoff: done", `ordered front but not on screen` ever after.
+        //
+        // Measured rather than reasoned, because the last fix for this was
+        // reasoned (`orbWindowLevel`) and did not hold: fourteen throwaway
+        // panels with this exact configuration, put through hide/reshow,
+        // resize, becoming key and app activation, ALL reached every Space.
+        // The only thing a fresh panel lacks is a past. Everything the orb
+        // knows lives in `model` and `state`, so nothing is lost with it.
+        window?.close()
+        window = makeWindow()
         applyMode()
         window?.orderFrontRegardless()
         installEscapeMonitor()
