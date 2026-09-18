@@ -54,3 +54,4 @@ site/install.sh
 
 # wrangler pages dev scratch — also what made `make release` see a dirty tree
 .wrangler/
+graphify-out/
