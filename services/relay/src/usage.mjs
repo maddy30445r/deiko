@@ -120,11 +120,16 @@ export const USAGE_TABLE = TABLE;
 /// TTL config shows up as rows that never expire — costing storage, never
 /// correctness.
 async function addSeconds(key, seconds, ttlSeconds) {
+  // `createdAt` is stamped by the write that creates the row and never again,
+  // so it reads as "first seen" — ISO, because it is for a person in the console.
   const expression = ttlSeconds
-    ? "ADD audioSeconds :n SET expiresAt = if_not_exists(expiresAt, :ttl)"
-    : "ADD audioSeconds :n";
+    ? "ADD audioSeconds :n SET createdAt = if_not_exists(createdAt, :now), expiresAt = if_not_exists(expiresAt, :ttl)"
+    : "ADD audioSeconds :n SET createdAt = if_not_exists(createdAt, :now)";
 
-  const values = { ":n": { N: String(seconds) } };
+  const values = {
+    ":n": { N: String(seconds) },
+    ":now": { S: new Date().toISOString() },
+  };
   if (ttlSeconds) {
     values[":ttl"] = { N: String(Math.floor(Date.now() / 1000) + ttlSeconds) };
   }
