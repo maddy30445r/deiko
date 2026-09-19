@@ -8,7 +8,7 @@ import DeikoGesture
 //
 //   double-tap Right Option   → start capturing
 //   tap Right Option          → stop
-//   hold Left Option + drag   → lasso a region
+//   hold Left Option + move   → draw a stroke (lasso, arrow, scribble)
 //
 // THEY USED TO BE THE SAME KEY, told apart by whether a drag happened during
 // the press. That distinction is invisible — the user has to feel it — and it
@@ -18,13 +18,21 @@ import DeikoGesture
 // There is no "hold to capture" mode either. It existed for a ten-second
 // capture, and nobody describes a task worth planning in ten seconds.
 //
-// The tap is ACTIVE, not listen-only, because the lasso has to be swallowed:
-// dragging with the button down means "select text" in an editor and "drag
-// this" in a table, so a drag that reached the app underneath would mangle
-// whatever it was drawn around. It swallows ONLY while Left Option is down AND
-// a session is running — with no session, Option-drag keeps doing whatever it
-// does in your apps (box-select in an editor, duplicate in Finder), because
-// Deiko has no business touching input it was not invited to.
+// NOTHING IS SWALLOWED. Drawing used to be Left Option + a button drag, and
+// that drag had to be eaten so it would not select text or move a row in the
+// app underneath — which also ate every Option+click for the whole session.
+// The stroke is now Left Option + plain movement: no button is involved, so
+// there is nothing to eat, and mid-flow you can click Submit, hold Left Option,
+// scribble, let go and click Edit with every click landing.
+//
+// This file only reports the key going down and up; the path comes from the
+// Recorder's own 60Hz cursor samples. `mouseMoved` is deliberately not in the
+// tap mask — the tap is always on, and that would put every mouse move on the
+// machine through this callback, session or not.
+//
+// ponytail: the tap stays `.defaultTap` although it no longer swallows. A
+// listen-only tap is gated by Input Monitoring rather than Accessibility, and
+// swapping a permission is not a free change. Revisit with the onboarding.
 // ───────────────────────────────────────────────────────────────────────────────
 
 /// WHICH KEY STARTS A SESSION — the user's choice, read live.
@@ -63,9 +71,9 @@ private let kLeftOptionFlagMask: UInt64 = 0x20
 enum HotkeyEvent {
     case recordingStarted
     case recordingStopped
-    case dragBegan(Point)
-    case dragMoved(Point)
-    case dragEnded(Point)
+    /// Left Option pressed / released during a session. See the file header.
+    case drawKeyDown(Point)
+    case drawKeyUp(Point)
     case scrolled
 }
 
@@ -78,7 +86,6 @@ final class Hotkey {
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
 
-    private(set) var isDragging = false
 
     /// What a Right Option press MEANS lives in `SessionGesture`, which has no
     /// CGEvent dependency and is unit-tested. This class is only plumbing.
@@ -88,7 +95,8 @@ final class Hotkey {
     private var isLeftOptionDown = false
 
     /// Set between `.recordingStarted` and `.recordingStopped`. Gates the
-    /// swallowing: no session, no interference with the user's mouse.
+    /// drawing key: with no session, Left Option is nobody's business but the
+    /// user's.
     private var isSessionActive = false
 
     /// Called on the main run loop for every gesture transition.
@@ -99,9 +107,6 @@ final class Hotkey {
     func start() -> Bool {
         let mask: CGEventMask =
             (1 << CGEventType.flagsChanged.rawValue) |
-            (1 << CGEventType.leftMouseDown.rawValue) |
-            (1 << CGEventType.leftMouseDragged.rawValue) |
-            (1 << CGEventType.leftMouseUp.rawValue) |
             (1 << CGEventType.scrollWheel.rawValue)
 
         let context = Unmanaged.passUnretained(self).toOpaque()
@@ -109,7 +114,7 @@ final class Hotkey {
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
-            options: .defaultTap,          // .defaultTap = may modify or swallow
+            options: .defaultTap,          // see the file header's ponytail note
             eventsOfInterest: mask,
             callback: { _, type, event, refcon in
                 guard let refcon else { return Unmanaged.passUnretained(event) }
@@ -121,13 +126,14 @@ final class Hotkey {
                 // comment), so this callback is already on the main actor and
                 // `assumeIsolated` is asserting a fact, not hoping for one.
                 let eventPointer = Unmanaged.passUnretained(event).toOpaque()
-                let swallow: Bool = MainActor.assumeIsolated {
+                MainActor.assumeIsolated {
                     let hotkey = Unmanaged<Hotkey>.fromOpaque(refcon).takeUnretainedValue()
                     let cgEvent = Unmanaged<CGEvent>.fromOpaque(eventPointer)
                         .takeUnretainedValue()
-                    return hotkey.handle(type: type, event: cgEvent)
+                    hotkey.handle(type: type, event: cgEvent)
                 }
-                return swallow ? nil : Unmanaged.passUnretained(event)
+                // Always handed back: this tap observes, it never swallows.
+                return Unmanaged.passUnretained(event)
             },
             userInfo: context
         ) else {
@@ -153,28 +159,23 @@ final class Hotkey {
 
     // ── Tap callback ────────────────────────────────────────────────────────
 
-    /// Returns whether to SWALLOW the event (true) or let it through (false).
-    /// A bool rather than an `Unmanaged<CGEvent>?` so nothing non-Sendable has
-    /// to cross back out of the main-actor hop in the callback.
-    private func handle(type: CGEventType, event: CGEvent) -> Bool {
+    private func handle(type: CGEventType, event: CGEvent) {
         // The system disables a tap that dawdles in its callback. Re-enable and
         // carry on rather than dying silently mid-session, then RECONCILE what
         // went unobserved: a half-finished double-tap can no longer be trusted,
         // and Left Option may have come up while we were deaf — which would
-        // otherwise leave every drag swallowed forever.
+        // otherwise leave a stroke open until the next press.
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
             gesture.tapRecovered()
             let flags = CGEventSource.flagsState(.combinedSessionState)
+            let wasLeftOptionDown = isLeftOptionDown
             isLeftOptionDown = flags.rawValue & kLeftOptionFlagMask != 0
-            if !isLeftOptionDown, isDragging {
-                isDragging = false
-                emit(.dragEnded(Point(x: event.location.x, y: event.location.y)))
-            }
-            return false
+            let here = Point(x: event.location.x, y: event.location.y)
+            if wasLeftOptionDown, !isLeftOptionDown { emit(.drawKeyUp(here)) }
+            return
         }
 
-        let pass = false
         let location = Point(x: event.location.x, y: event.location.y)
 
         switch type {
@@ -190,35 +191,17 @@ final class Hotkey {
                     apply(gesture.press(at: Clock.nowMs()))
                 }
             } else if keyCode == kLeftOptionKeyCode {
+                let wasDown = isLeftOptionDown
                 isLeftOptionDown = event.flags.rawValue & kLeftOptionFlagMask != 0
-                if !isLeftOptionDown, isDragging {
-                    isDragging = false
-                    emit(.dragEnded(location))
+                // Edges only: other modifiers changing while Option is held
+                // also arrive here with its keycode on some keyboards.
+                if isLeftOptionDown != wasDown, isSessionActive {
+                    emit(isLeftOptionDown ? .drawKeyDown(location) : .drawKeyUp(location))
                 }
             }
             // Always pass modifiers through: swallowing one would break Option
             // as a normal modifier everywhere else.
-            return pass
-
-        case .leftMouseDown:
-            // `isSessionActive` is half the guard on purpose: with no session
-            // running, an Option-drag is the user's own gesture and must reach
-            // their app untouched.
-            guard isLeftOptionDown, isSessionActive else { return pass }
-            isDragging = true
-            emit(.dragBegan(location))
-            return true                     // swallowed — see file header
-
-        case .leftMouseDragged:
-            guard isDragging else { return pass }
-            emit(.dragMoved(location))
-            return true
-
-        case .leftMouseUp:
-            guard isDragging else { return pass }
-            isDragging = false
-            emit(.dragEnded(location))
-            return true
+            return
 
         case .scrollWheel:
             // Not swallowed: scrolling to reach the thing you want to point at
@@ -228,29 +211,25 @@ final class Hotkey {
             // no longer bounds the session, so the Recorder decides whether it
             // is currently interested.
             emit(.scrolled)
-            return pass
+            return
 
         default:
-            return pass
+            return
         }
     }
 
     /// Called by the Recorder when a session ends by any route other than a
-    /// tap — a watchdog, or Quit. Keeps the swallow gate honest.
+    /// tap — a watchdog, or Quit. Keeps the drawing-key gate honest.
     func noteSessionEnded() {
         isSessionActive = false
         gesture.sessionEndedExternally()
-        if isDragging {
-            isDragging = false
-            emit(.dragEnded(AXProbe.cursorLocation()))
-        }
     }
 
     /// Called by the Recorder when a session starts by any route other than a
     /// tap — today, "Forgot something?" reopening a finished session.
     ///
-    /// `isSessionActive` is what makes Left Option drags mean "draw a lasso"
-    /// rather than passing through to the app underneath. Setting it here is what
+    /// `isSessionActive` is what makes holding Left Option mean "draw a stroke".
+    /// Setting it here is what
     /// lets you circle something in the extra hold, exactly as in the first.
     func noteSessionStarted() {
         isSessionActive = true
@@ -268,10 +247,6 @@ final class Hotkey {
             emit(.recordingStarted)
         case .stopNow:
             isSessionActive = false
-            if isDragging {
-                isDragging = false
-                emit(.dragEnded(AXProbe.cursorLocation()))
-            }
             emit(.recordingStopped)
         }
     }

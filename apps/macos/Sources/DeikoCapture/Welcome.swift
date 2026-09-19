@@ -311,7 +311,7 @@ private struct WelcomeView: View {
         let key = SessionKey.selected
         return HStack(spacing: 16) {
             keycap("\(key.symbol) \(key.symbol)", "double-tap \(key.name) — start")
-            keycap("⌥ + drag", "left Option — lasso a region")
+            keycap("⌥ + move", "left Option — lasso a region")
             keycap(key.symbol, "tap — stop")
         }
         .frame(maxWidth: .infinity)

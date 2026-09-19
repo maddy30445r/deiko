@@ -9,7 +9,7 @@ Describing a bug in prose is slow and lossy. Pointing at it is neither.
 ```
 double-tap Right Option        start
                                talk, and point at what you mean
-hold Left Option + drag        lasso a region
+hold Left Option + move        lasso a region (no mouse button)
 tap Right Option               stop
 
                                → a small orb appears with what Deiko heard

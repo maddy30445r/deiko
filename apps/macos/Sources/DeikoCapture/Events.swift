@@ -457,7 +457,7 @@ struct ProbeEvent: Codable {
     let t: Double
     let shape: Shape
     /// For regions: when the drag actually began and ended, on the session
-    /// clock. Emitted because the recorder KNOWS this — it saw `dragBegan` —
+    /// clock. Emitted because the recorder KNOWS this — it saw `drawKeyDown` —
     /// while the TS loader used to reconstruct it from frozen cursor samples,
     /// which could not tell "cursor frozen mid-drag" from "cursor parked here
     /// before pressing" and once recovered a 9.7-second phantom drag. Nil for

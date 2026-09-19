@@ -17,7 +17,7 @@ import DeikoGesture
 //
 //   tap Right Option        → start: audio, cursor sampling, overlay, all of it
 //   point and pause         → a candidate referent, IF you are talking
-//   hold Right Option+drag  → a region referent
+//   hold Left Option + move → a stroke: lasso, arrow, scribble
 //   tap Right Option        → stop, finish the crops, write it out
 //
 // It was push-to-talk until session 20260728-152834 measured what that costs:
@@ -67,13 +67,23 @@ final class Recorder {
     private let captureCrops: Bool
 
     private var sampler: Timer?
-    private var trail: [TrailPoint] = []
     private var pulses: [Pulse] = []
 
     private var lassoPath: [Point]?
-    /// When the current lasso's drag began — the recorder sees `dragBegan`
+    /// When the current stroke began — the recorder sees `drawKeyDown`
     /// directly, so the span it emits is measured, not reconstructed.
     private var lassoStartT: Double?
+
+    /// A stroke: Left Option held, cursor moving. It is only a CANDIDATE until
+    /// the cursor is `minHoverStrokePt` away from where the key went down — Option is
+    /// also Option+Backspace, Option+arrow, and `@ [ ] { }` on most non-US
+    /// layouts, and none of those may flash ink or leave a mark. Once promoted
+    /// it is handed to `lassoPath` and is an ordinary stroke from there on.
+    private var hoverPath: [Point]?
+    private var hoverStartT: Double?
+    private var hoverPromoted = false
+    /// Tunable on purpose, like `settleRadius`: hands and trackpads differ.
+    var minHoverStrokePt: Double = 24
 
     /// Referents in the CURRENT hold, reported in `holdEnd`; and across the
     /// whole session, reported in `sessionEnd`.
@@ -565,21 +575,24 @@ final class Recorder {
             beginRecording()
         case .recordingStopped:
             Task { _ = await self.stopSession() }
-        case .dragBegan(let p):
+        case .drawKeyDown(let p):
             guard isRecording else { break }
-            lassoPath = [p]
-            lassoStartT = Clock.nowMs()
-        case .dragMoved(let p):
-            lassoPath?.append(p)
-        case .dragEnded(let p):
-            guard lassoPath != nil else { break }
-            lassoPath?.append(p)
-            commitLasso()
+            endHoverStroke()
+            hoverPath = [p]
+        case .drawKeyUp:
+            if hoverPromoted, lassoPath != nil { commitLasso() }
+            endHoverStroke()
         case .scrolled:
             // Reported unconditionally by the tap now; only meaningful while
             // a session is live.
             if isRecording { lastScrollT = Clock.nowMs() }
         }
+    }
+
+    private func endHoverStroke() {
+        hoverPath = nil
+        hoverStartT = nil
+        hoverPromoted = false
     }
 
     private func beginRecording() {
@@ -643,10 +656,9 @@ final class Recorder {
 
         Emit.event(HoldEvent.start(id: sessionId, hold: holdIndex, audioPath: audioPath))
         Emit.log("● recording — point at things and talk. Hold LEFT Option and "
-            + "drag to circle an area. Tap \(SessionKey.selected.name) to stop.")
+            + "move to circle an area. Tap \(SessionKey.selected.name) to stop.")
         onStateChange?()
 
-        trail.removeAll()
         pulses.removeAll()
         recentSpeeds.removeAll()
         approachAtRest = 0
@@ -683,6 +695,7 @@ final class Recorder {
         sampler = nil
         overlay.hide()
         lassoPath = nil
+        endHoverStroke()
         let audioT0 = audio.stop()
         endLiveTiming()
 
@@ -773,9 +786,45 @@ final class Recorder {
         recentSpeeds.append((now, step / sampleInterval))
         recentSpeeds.removeAll { now - $0.t > 200 }
 
-        trail.append(TrailPoint(position: position, t: now))
-        trail.removeAll { now - $0.t > 700 }
         pulses.removeAll { now - $0.t > 450 }
+
+        // A BUTTON DOWN MEANS THE GESTURE IS THE APP'S, NOT OURS. Nothing is
+        // swallowed any more, so Option + press-and-drag reaches the app as
+        // what it has always been there — select text, duplicate a file — and
+        // drawing over it as well gave the user both at once. The stroke is
+        // dropped, not committed, and stays dropped until Option is pressed
+        // again. Polled here rather than tapped: the tap sees no mouse events,
+        // on purpose (see `Hotkey.swift`).
+        if hoverPath != nil, NSEvent.pressedMouseButtons & 1 != 0 {
+            if hoverPromoted { lassoPath = nil; lassoStartT = nil }
+            endHoverStroke()
+        }
+
+        // The button-less stroke, fed from these samples rather than from the
+        // event tap — see `Hotkey.swift`. Stationary frames are skipped so a
+        // long-held Option cannot grow the path.
+        if hoverPath != nil, step > 0 {
+            if hoverPromoted {
+                lassoPath?.append(position)
+            } else {
+                // DISPLACEMENT from the key-down point, not path length: a
+                // resting hand jitters, and summed jitter reaches any
+                // threshold if Option is held long enough (deleting a few
+                // words with Option+Backspace is exactly that).
+                //
+                // The clock starts at the first movement, not the key press:
+                // the span binds narration to the stroke, and a key held for
+                // ten seconds before drawing would claim all ten.
+                if hoverStartT == nil { hoverStartT = now }
+                hoverPath?.append(position)
+                let origin = hoverPath?.first ?? position
+                if hypot(position.x - origin.x, position.y - origin.y) >= minHoverStrokePt {
+                    lassoPath = hoverPath
+                    lassoStartT = hoverStartT
+                    hoverPromoted = true
+                }
+            }
+        }
 
         if lassoPath == nil {
             detectSettle(position: position, moved: moved, now: now)
@@ -814,7 +863,7 @@ final class Recorder {
         // a session that records nothing and explains nothing. Capture stays
         // permissive; the pill speaks up. Both are right about the same fact.
         overlay.update(
-            cursor: position, trail: trail, lasso: lassoPath,
+            cursor: position, lasso: lassoPath,
             pulses: pulses,
             hearingVoice: msSinceVoice != nil || runningFor <= silenceGateMs
         )

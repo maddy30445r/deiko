@@ -7,8 +7,10 @@ import DeikoGesture
 //
 // A transparent, click-through window above every app, drawing:
 //   • a Deiko cursor ring while a session runs
-//   • a fading trace behind the cursor
-//   • the lasso stroke while dragging
+//   • the stroke while Left Option is held — and NOTHING behind the cursor
+//     otherwise. There used to be a fading comet tail; once moving the mouse
+//     became the drawing gesture, a coloured line on every ordinary move
+//     read as ink nobody asked for.
 //   • a pulse when a referent is captured (PRD §9.2) — accent for a point,
 //     teal for a region, distinguishable mid-session at a glance
 //   • a flourish when a stroke commits — the CLASSIFIED shape, briefly, so a
@@ -28,20 +30,11 @@ import DeikoGesture
 // `viewPoint(from:)`, and nowhere else.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// How long a trail point stays visible. Long enough to read the path you took,
-/// short enough that it doesn't smear into a scribble.
-private let trailLifetimeMs: Double = 700
-
 /// A captured-referent pulse's duration. Under Reduce Motion the expanding
 /// ring becomes a single short blink at fixed size — still a receipt, no
 /// motion.
 private let pulseLifetimeMs: Double = 450
 private let reducedPulseLifetimeMs: Double = 100
-
-struct TrailPoint {
-    let position: Point
-    let t: Double
-}
 
 struct Pulse {
     let position: Point
@@ -123,8 +116,8 @@ final class Overlay {
         }
         for pill in pills { pill.show() }
 
-        // 60fps redraw only while visible. The trail fades continuously, so it
-        // has to repaint even when the cursor is still.
+        // 60fps redraw only while visible. Pulses and flourishes fade
+        // continuously, so it has to repaint even when the cursor is still.
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { _ in
             MainActor.assumeIsolated { view.needsDisplay = true }
         }
@@ -181,7 +174,7 @@ final class Overlay {
     }
 
     func update(
-        cursor: Point, trail: [TrailPoint], lasso: [Point]?, pulses: [Pulse],
+        cursor: Point, lasso: [Point]?, pulses: [Pulse],
         hearingVoice: Bool
     ) {
         // Every pill, because the microphone belongs to the session rather than
@@ -190,9 +183,6 @@ final class Overlay {
         for pill in pills { pill.hearingVoice = hearingVoice }
         guard let view else { return }
         view.cursor = cursor
-        // Reduce Motion: the trail is pure motion — a comet tail — so it is
-        // the one element that goes entirely, not a substitute.
-        view.trail = DeikoStyle.reduceMotion ? [] : trail
         view.lasso = lasso
         view.pulses = pulses
     }
@@ -213,7 +203,6 @@ final class OverlayView: NSView {
     /// The main screen's Cocoa maxY — the pivot for the y-flip. See `show()`.
     var flipY: CGFloat = 0
     var cursor: Point = Point(x: 0, y: 0)
-    var trail: [TrailPoint] = []
     var lasso: [Point]?
     var pulses: [Pulse] = []
     var flourish: Flourish?
@@ -231,33 +220,10 @@ final class OverlayView: NSView {
 
         let now = Clock.nowMs()
 
-        drawTrail(ctx, now: now)
         if let lasso { drawLasso(ctx, path: lasso) }
         drawPulses(ctx, now: now)
         drawFlourish(ctx, now: now)
         drawCursor(ctx)
-    }
-
-    private func drawTrail(_ ctx: CGContext, now: Double) {
-        guard trail.count >= 2 else { return }
-
-        // Drawn as individual fading segments rather than one stroked path:
-        // a single path can only carry one alpha, and the whole point is that
-        // the tail is dimmer than the head.
-        for i in 1..<trail.count {
-            let a = trail[i - 1]
-            let b = trail[i]
-            let age = now - b.t
-            guard age < trailLifetimeMs else { continue }
-
-            let life = 1 - (age / trailLifetimeMs)
-            ctx.setStrokeColor(DeikoStyle.accentNS.withAlphaComponent(0.55 * life).cgColor)
-            ctx.setLineWidth(1 + 3 * life)
-            ctx.setLineCap(.round)
-            ctx.move(to: viewPoint(from: a.position))
-            ctx.addLine(to: viewPoint(from: b.position))
-            ctx.strokePath()
-        }
     }
 
     private func drawLasso(_ ctx: CGContext, path: [Point]) {

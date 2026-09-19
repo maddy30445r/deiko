@@ -386,6 +386,33 @@ final class OrbController: NSObject {
             "The brief and its screenshots are removed from \(dir). This cannot be undone."
         alert.addButton(withTitle: "Delete")
         alert.addButton(withTitle: "Cancel")
+        // ABOVE THE ORB, explicitly. An alert opens at the modal-panel level
+        // (8); the orb sits at `orbWindowLevel` (999) and its expanded panel is
+        // bigger than the alert, so the alert opened entirely behind it. The
+        // modal loop then blocked the orb while the only way out was invisible
+        // — which reads as a hang, in an app that Force Quit does not list.
+        //
+        // HELD there for as long as the alert is up, not set once. `runModal`
+        // resets the level to 8 as it starts (measured: 1000 before, 8 during),
+        // so it has to be set from inside the modal loop — and setting it once
+        // in there still lost on the FIRST alert after launch and won on the
+        // second, which is AppKit resetting it again as it activates this
+        // accessory app. Rather than guess when the last reset lands, put it
+        // back whenever it is found changed, and say so.
+        //
+        // ponytail: a 50ms poll for the life of one alert. If the log below
+        // pins down the exact reset, replace with a single set after it.
+        let above = NSWindow.Level(rawValue: orbWindowLevel.rawValue + 1)
+        let hold = Timer(timeInterval: 0.05, repeats: true) { _ in
+            MainActor.assumeIsolated {
+                guard alert.window.level != above else { return }
+                Emit.log("  delete alert was at level \(alert.window.level.rawValue) — raised above the orb")
+                alert.window.level = above
+                alert.window.orderFrontRegardless()
+            }
+        }
+        RunLoop.main.add(hold, forMode: .modalPanel)
+        defer { hold.invalidate() }
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
         // THE ALERT SPINS A NESTED RUNLOOP, so the world can move while it is

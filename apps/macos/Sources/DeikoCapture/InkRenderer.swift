@@ -51,7 +51,10 @@ enum InkRenderer {
             CGPoint(x: (p.x - cropRect.x) * sx, y: Double(h) - (p.y - cropRect.y) * sy)
         }
         let scale = max(1.0, sx)
-        let ink = DeikoStyle.inkNS.withAlphaComponent(0.9).cgColor
+        // A scribble runs back and forth ACROSS the thing it emphasises, so at
+        // full strength it strikes out the text the agent is meant to read.
+        // Highlighter weight keeps it legible; every other kind outlines.
+        let ink = DeikoStyle.inkNS.withAlphaComponent(kind == .emphasis ? 0.35 : 0.9).cgColor
 
         let points = strokePath.map(px)
         ctx.setStrokeColor(ink)

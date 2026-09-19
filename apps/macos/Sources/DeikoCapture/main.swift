@@ -463,8 +463,8 @@ func runRecord(_ args: Args) {
                                 stop it. Let go of the key and walk through as
                                 many windows as you like.
       point and pause           → a candidate referent, when you are talking
-      hold LEFT Option + drag   → a region referent (that drag alone is
-                                swallowed, and only while a session is running)
+      hold LEFT Option + move   → a region referent. No mouse button, and
+                                nothing is swallowed: clicks always land
       TAP Right Option          stop, and write the session out
 
       Ctrl-C                    same as stopping.
@@ -605,7 +605,7 @@ deiko-capture \(DeikoVersion.current)
                               Point and pause at something WHILE TALKING for a
                               candidate referent; a settle more than a few
                               seconds from any speech is not recorded at all.
-                              Hold LEFT Option and drag to circle an area.
+                              Hold LEFT Option and move to circle an area.
 
                               The directory <root>/<stamp> is created when
                               capture starts, so a run that records nothing
