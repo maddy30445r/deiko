@@ -27,10 +27,28 @@ enum OCR {
     /// Recognise text in `image`, returning lines positioned in global screen
     /// coordinates. `rect` is where the image came from, in that same space.
     /// The user's languages first, English last so it is never dropped.
-    /// Filtered to what this Vision build supports at `.accurate`, computed once.
+    ///
+    /// MATCHED BY LANGUAGE AND SCRIPT, NOT BY STRING. Vision names its
+    /// languages `en-US`, `zh-Hans`, `ja-JP`; macOS reports the user's as
+    /// `en-IN`, `zh-Hans-CN`, `zh-CN`. An `contains` filter therefore matched
+    /// NOTHING on every Mac including this one — measured — and the list fell
+    /// back to `["en-US"]`, which is exactly the English-only behaviour this
+    /// exists to fix. Script matters and is kept: `zh-Hans-CN` and `zh-CN`
+    /// both resolve to `zh-Hans`, `zh-Hant-TW` to `zh-Hant`.
     private static let recognitionLanguages: [String] = {
         let supported = (try? VNRecognizeTextRequest().supportedRecognitionLanguages()) ?? ["en-US"]
-        var out = Locale.preferredLanguages.filter { supported.contains($0) }
+        var out: [String] = []
+        for tag in Locale.preferredLanguages {
+            let want = Locale.Language(identifier: tag)
+            let match = supported.first { $0 == tag }
+                ?? supported.first {
+                    let has = Locale.Language(identifier: $0)
+                    return has.languageCode == want.languageCode && has.script == want.script
+                }
+                ?? supported.first { Locale.Language(identifier: $0).languageCode == want.languageCode }
+            if let match, !out.contains(match) { out.append(match) }
+        }
+        // Identifiers, paths and JSON keys are Latin whatever the UI language.
         if !out.contains("en-US") { out.append("en-US") }
         return out
     }()

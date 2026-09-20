@@ -52,8 +52,24 @@ enum SpeechLocale {
 
     /// BCP-47, with a hyphen — the spelling `SFSpeechRecognizer(locale:)` and
     /// `transcribe.mjs --locale` have always been handed.
+    ///
+    /// RESOLVED AGAINST WHAT THIS MAC HAS. Which locales are on-device depends
+    /// on the models the user has downloaded: this Mac reports five, all
+    /// English, and a Mac set up in Chinese may report none of them. A stored
+    /// or default `en-IN` that is not in that list would leave the Settings
+    /// picker blank and hand the recogniser a locale it refuses, so an
+    /// unavailable choice degrades to one that exists — the system language's
+    /// if this Mac has it, otherwise the first.
     static var selected: String {
-        get { UserDefaults.standard.string(forKey: defaultsKey) ?? fallback }
+        get {
+            let stored = UserDefaults.standard.string(forKey: defaultsKey) ?? fallback
+            let available = onDevice
+            if available.isEmpty || available.contains(stored) { return stored }
+            let want = Locale.Language(identifier: stored).languageCode
+            return available.first { Locale.Language(identifier: $0).languageCode == want }
+                ?? available.first { $0 == fallback }
+                ?? available[0]
+        }
         set { UserDefaults.standard.set(newValue, forKey: defaultsKey) }
     }
 

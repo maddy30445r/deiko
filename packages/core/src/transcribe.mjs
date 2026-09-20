@@ -1222,8 +1222,8 @@ async function main() {
   console.error(`  anchored: ${anchored}/${allWords.length} words carry a measured time`);
   if (degradedHolds.length) {
     console.error(
-      `  ⚠ hold${degradedHolds.length > 1 ? "s" : ""} ${degradedHolds.join(", ")}: on-device recognition ` +
-        `heard nothing, so word times are estimated. What you said is intact; what you pointed at may bind loosely.`,
+      `  ⚠ hold${degradedHolds.length > 1 ? "s" : ""} ${degradedHolds.join(", ")}: nothing measured these ` +
+        `word times, so they are estimated. What you said is intact; what you pointed at may bind loosely.`,
     );
   }
   console.error(timingReport(performance.now() - startedAt));
