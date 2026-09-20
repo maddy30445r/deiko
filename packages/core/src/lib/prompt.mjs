@@ -131,7 +131,12 @@ function withheldNote(referents) {
  * sentence a developer would plausibly type themselves costs nothing on a
  * session that was already in English.
  */
-const REPLY_LANGUAGE = "Reply in English.";
+// "Same as I speak" (DEIKO_NARRATION=native) writes the brief in whatever was
+// spoken, so the ask has to follow — an agent told "Reply in English" under a
+// Chinese brief answers in the one language its author did not choose.
+const REPLY_LANGUAGE = process.env.DEIKO_NARRATION === "native"
+  ? "Reply in the same language as this brief."
+  : "Reply in English.";
 
 /** The verb each stroke kind earns in the prompt. The wire's `mark.kind` comes
  *  from Swift's StrokeKind — an unknown value (a newer app than this script)

@@ -57,6 +57,9 @@ enum Credentials {
         // resolves to `Contents/Resources/build/Deiko.app`. Telling it removes
         // the guess.
         env["DEIKO_APP_PATH"] = Bundle.main.bundleURL.path
+        // The two language settings — see Narration.swift for what each does.
+        env["DEIKO_NARRATION"] = Narration.selected.rawValue
+        env["DEIKO_SPEECH_LOCALE"] = SpeechLocale.selected
 
         // THE DEFAULT PATH FOR SOMEBODY WHO HAS NO KEYS — AND ONLY THEM.
         //

@@ -40,7 +40,7 @@ function readBody(req) {
 const server = createServer(async (req, res) => {
   const started = Date.now();
   const token = bearerFrom(req.headers.authorization);
-  const path = (req.url ?? "/").split("?")[0];
+  const [path, query = ""] = (req.url ?? "/").split("?");
 
   let result;
   try {
@@ -48,6 +48,7 @@ const server = createServer(async (req, res) => {
     result = await handle({
       method: req.method ?? "GET",
       path,
+      query,
       token,
       contentType: req.headers["content-type"] ?? "",
       body,

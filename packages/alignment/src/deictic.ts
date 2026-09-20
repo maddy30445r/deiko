@@ -91,10 +91,34 @@ const DEVANAGARI = [
   "उसमें", "उसको", "उसका", "उसकी", "उसे", "उनको", "उनका",
 ] as const;
 
+/**
+ * Mandarin pointing words, as Whisper tokenises them.
+ *
+ * Chinese has no spaces, so what counts as a "word" is whatever the recogniser
+ * emits as one timed token. Measured on a real clip, whisper-large-v3 returned
+ * `这个` as ONE token (0.00–0.18s) and then split the noun after it character
+ * by character — so both the two-character forms and the bare demonstratives
+ * are listed, since either can arrive on its own.
+ *
+ * `该` ("that / should") and `其` are deliberately absent: `该` is far more often
+ * the modal "should" in spoken Mandarin, and a pointing word that fires on
+ * "should" would bind screenshots to instructions rather than to referents —
+ * the same homograph trap `EXCLUDED_HOMOGRAPHS` guards for English.
+ */
+const CHINESE = [
+  // 这 / this
+  "这", "这个", "这些", "这里", "这儿", "这边", "这块",
+  // 那 / that
+  "那", "那个", "那些", "那里", "那儿", "那边", "那块",
+  // 此 / this (formal, but it does get said)
+  "此", "此处",
+] as const;
+
 export const DEICTIC_WORDS: ReadonlySet<string> = new Set<string>([
   ...ENGLISH,
   ...HINGLISH,
   ...DEVANAGARI,
+  ...CHINESE,
 ]);
 
 /** Guards the exclusion above against being undone by a careless edit. */
@@ -122,4 +146,25 @@ export function normalizeWord(word: string): string {
 
 export function isDeictic(word: string): boolean {
   return DEICTIC_WORDS.has(normalizeWord(word));
+}
+
+const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+
+/**
+ * Words back into a sentence. A space between tokens is right for every script
+ * that writes with spaces, and wrong for the ones that do not: Whisper hands
+ * Chinese back a character or two at a time, and `join(" ")` turned
+ * 这个按钮 into "这个 按 钮" in the first Mandarin brief. No space where both
+ * sides are CJK, or where CJK is followed by punctuation; a space everywhere
+ * else, so "这个 button" keeps the gap a mixed sentence actually has.
+ */
+export function joinWords(words: readonly string[]): string {
+  let out = "";
+  for (const word of words) {
+    if (!word) continue;
+    if (!out) { out = word; continue; }
+    const tight = CJK.test(out[out.length - 1]!) && (CJK.test(word[0]!) || /^\p{P}/u.test(word));
+    out += (tight ? "" : " ") + word;
+  }
+  return out;
 }

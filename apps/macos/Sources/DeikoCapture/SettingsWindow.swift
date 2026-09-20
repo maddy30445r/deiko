@@ -231,6 +231,23 @@ final class SettingsModel: ObservableObject {
         sessionKey = key
     }
 
+    // ── What language the brief is in ───────────────────────────────────────
+
+    @Published var narration = Narration.selected
+    @Published var speechLocale = SpeechLocale.selected
+    /// Asked once, on first read: the speech framework answers per locale.
+    let onDeviceLocales = SpeechLocale.onDevice
+
+    func setNarration(_ value: Narration) {
+        Narration.selected = value
+        narration = value
+    }
+
+    func setSpeechLocale(_ identifier: String) {
+        SpeechLocale.selected = identifier
+        speechLocale = identifier
+    }
+
     /// "Groq: from your login keychain" — named, because
     /// the two can genuinely come from different places.
     var keySources: String {
@@ -267,12 +284,12 @@ final class SettingsModel: ObservableObject {
             // the relay when a personal key is in use. One key covers the words
             // and the summary now, so there is no half-configured state left in
             // which this sentence could be false.
-            return "Your narration goes straight to Groq with your key, and comes back as English. Deiko's servers never see it."
+            return "Your narration goes straight to Groq with your key. \(narration.comesBackAs) Deiko's servers never see it."
         }
         if Credentials.relayURL != nil {
             return isPro
-                ? "Your narration goes to Deiko, which passes it to a transcription service and keeps nothing. It comes back as English, whatever you spoke. Add your own key below to skip Deiko entirely."
-                : "Your narration goes to Deiko, which passes it to a transcription service and keeps nothing. It comes back as English, whatever you spoke. When your trial runs out, transcription continues on this Mac — in English only. Add your own key below to skip Deiko entirely."
+                ? "Your narration goes to Deiko, which passes it to a transcription service and keeps nothing. \(narration.comesBackAs) Add your own key below to skip Deiko entirely."
+                : "Your narration goes to Deiko, which passes it to a transcription service and keeps nothing. \(narration.comesBackAs) When your trial runs out, transcription continues on this Mac, in the offline language below. Add your own key below to skip Deiko entirely."
         }
         return "Transcription runs on this Mac. Nothing is uploaded — accuracy is lower, especially for mixed-language speech."
     }
@@ -314,6 +331,7 @@ private struct SettingsView: View {
                 SectionLabel("PLAN")
                 licence
                 SectionLabel("TRANSCRIPTION")
+                language
                 keys
                 Text("Keys never leave the login keychain. Your recording is deleted as soon as the brief is made — what stays on this Mac is the brief and its screenshots.")
                     .font(.system(size: 11))
@@ -547,6 +565,60 @@ private struct SettingsView: View {
                             + "your subscription is between you and Polar.")
                     }
                 }
+            }
+            .padding(14)
+        }
+    }
+
+    /// Which language the brief is written in, and which recogniser runs when
+    /// the cloud is not involved. Two pickers because they answer different
+    /// questions: the first is about the brief, the second about this Mac.
+    private var language: some View {
+        InsetCard {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    Text("Brief language")
+                        .font(.system(size: 13))
+                        .frame(width: 110, alignment: .leading)
+                    Picker("", selection: Binding(
+                        get: { model.narration },
+                        set: { model.setNarration($0) }
+                    )) {
+                        ForEach(Narration.allCases, id: \.self) { Text($0.name).tag($0) }
+                    }
+                    .labelsHidden()
+                    .frame(width: 180)
+                    Spacer()
+                }
+                Text(model.narration == .english
+                    ? "Whatever you speak, the brief is written in English — the language your agent works in. Mixing languages in one sentence is fine."
+                    : "The brief is written in the language you spoke, with Whisper's own word timing. Agents read Chinese, Japanese, Spanish and the rest just fine.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Divider()
+
+                HStack(spacing: 10) {
+                    Text("Offline recogniser")
+                        .font(.system(size: 13))
+                        .frame(width: 110, alignment: .leading)
+                    Picker("", selection: Binding(
+                        get: { model.speechLocale },
+                        set: { model.setSpeechLocale($0) }
+                    )) {
+                        ForEach(model.onDeviceLocales, id: \.self) { id in
+                            Text(SpeechLocale.name(id)).tag(id)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 180)
+                    Spacer()
+                }
+                Text("Apple's on-device recogniser for this language runs when the cloud is not used — after the free minutes, or offline. Only languages this Mac can recognise without the network are listed; nothing is ever sent to Apple.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .padding(14)
         }

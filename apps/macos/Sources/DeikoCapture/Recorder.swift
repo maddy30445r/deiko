@@ -723,10 +723,11 @@ final class Recorder {
     // cares which path produced the file.
 
     private func prepareLiveTiming() {
-        // `en-IN` because that is what the file path uses. Recognising live
-        // under a different locale would change the words depending on which
-        // path happened to run — the worst kind of difference to debug.
-        guard let live = LiveSpeechTiming(localeIdentifier: "en-IN") else { return }
+        // The same locale the file path uses (Settings → offline recogniser).
+        // Recognising live under a different one would change the words
+        // depending on which path happened to run — the worst kind of
+        // difference to debug.
+        guard let live = LiveSpeechTiming(localeIdentifier: SpeechLocale.selected) else { return }
         liveTiming = live
         audio.onBuffer = { [weak live] buffer in live?.append(buffer) }
     }

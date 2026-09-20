@@ -53,6 +53,11 @@ import {
 /// beating the Sarvam it replaces, at a third of the price.
 /// See mddocs/spikes/2026-09-12-transcription-bakeoff.md.
 const GROQ_STT_URL = "https://api.groq.com/openai/v1/audio/translations";
+/// The same model, asked to write down what it heard instead of translating it.
+/// Chosen by `?task=transcribe` on /v1/transcribe — a query string rather than a
+/// multipart field, because the body is forwarded verbatim and never parsed.
+/// Everything else about the request (metering, refunds, refusals) is identical.
+const GROQ_TRANSCRIBE_URL = "https://api.groq.com/openai/v1/audio/transcriptions";
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 /// Bigger than any chunk the client sends — `transcribe.mjs` splits at 25s of
@@ -166,7 +171,7 @@ function revoked(token) {
  * @param {Buffer|Uint8Array|null} request.body
  * @returns {Promise<{status:number, body:string, contentType:string}>}
  */
-export async function handle({ method, path, token, contentType, body }) {
+export async function handle({ method, path, query = "", token, contentType, body }) {
   const groqKey = process.env.GROQ_API_KEY;
 
   const json = (status, obj) => ({
@@ -274,7 +279,8 @@ export async function handle({ method, path, token, contentType, body }) {
     // which is why the client's BYO field is a single key and the promise it
     // makes — bring one and Deiko's servers see nothing at all — is finally
     // true rather than true-if-you-brought-both.
-    const out = await proxy(GROQ_STT_URL, {
+    const native = new URLSearchParams(query).get("task") === "transcribe";
+    const out = await proxy(native ? GROQ_TRANSCRIBE_URL : GROQ_STT_URL, {
       // The client's own multipart body and boundary, forwarded verbatim.
       // Parsing and re-encoding it would mean touching the audio for no reason,
       // so the CLIENT picks the model and this only adds the key.

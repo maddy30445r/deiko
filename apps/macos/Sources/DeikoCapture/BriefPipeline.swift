@@ -362,11 +362,11 @@ enum BriefPipeline {
                     continue
                 }
                 group.addTask {
-                    // `en-IN` because that is `transcribe.mjs`'s own default
-                    // for `--locale`. Recognising here under a different locale
-                    // would quietly change the words compared with the CLI.
+                    // The same locale `transcribe.mjs` reads from
+                    // DEIKO_SPEECH_LOCALE, so the words cannot differ between
+                    // this path and the script's own fallback launch.
                     let result = await SpeechTiming.transcribe(
-                        url: wav, localeIdentifier: "en-IN"
+                        url: wav, localeIdentifier: SpeechLocale.selected
                     )
                     // WRITTEN EVEN WHEN RECOGNITION FAILED. A result carrying
                     // `error` is a real answer — the script reads it, throws,

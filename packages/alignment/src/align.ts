@@ -1,4 +1,4 @@
-import { isDeictic, normalizeWord } from "./deictic.js";
+import { isDeictic, joinWords, normalizeWord } from "./deictic.js";
 import {
   type AlignmentOptions,
   type AlignmentResult,
@@ -98,7 +98,7 @@ export function align(
     claimed.add(candidate.id);
     bindings.push({
       candidateId: candidate.id,
-      utterance: spoken.map((w) => w.text).join(" "),
+      utterance: joinWords(spoken.map((w) => w.text)),
       utteranceStart: spoken[0]!.start,
       // Capped below the deictic path on purpose: overlapping speech is real
       // evidence but weaker than a word that explicitly points.
@@ -225,7 +225,7 @@ function utteranceAround(
 
   const span = words.slice(start, end + 1);
   return {
-    utterance: span.map((w) => w.text).join(" "),
+    utterance: joinWords(span.map((w) => w.text)),
     utteranceStart: span[0]!.start,
   };
 }
@@ -234,5 +234,5 @@ function clamp01(n: number): number {
   return Math.max(0, Math.min(1, n));
 }
 
-export { isDeictic, normalizeWord };
+export { isDeictic, joinWords, normalizeWord };
 export * from "./types.js";

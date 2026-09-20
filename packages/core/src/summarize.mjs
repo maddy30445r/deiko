@@ -40,8 +40,11 @@ const MODEL = "openai/gpt-oss-20b";
 const SYSTEM = [
   "You summarise a developer's spoken description of a coding task.",
   "",
-  "The transcript is Hinglish — Hindi written in Latin script, mixed with English",
-  "technical terms. Read both. Answer in English.",
+  ...(process.env.DEIKO_NARRATION === "native"
+    ? ["The transcript may be in any language, mixed with English technical terms.",
+       "Answer in the same language as the transcript."]
+    : ["The transcript is Hinglish — Hindi written in Latin script, mixed with English",
+       "technical terms. Read both. Answer in English."]),
   "",
   "Reply with at most three short lines saying what the developer is asking for.",
   "No preamble, no headings, no bullet characters, no closing offer to help.",

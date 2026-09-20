@@ -26,6 +26,15 @@ enum OCR {
 
     /// Recognise text in `image`, returning lines positioned in global screen
     /// coordinates. `rect` is where the image came from, in that same space.
+    /// The user's languages first, English last so it is never dropped.
+    /// Filtered to what this Vision build supports at `.accurate`, computed once.
+    private static let recognitionLanguages: [String] = {
+        let supported = (try? VNRecognizeTextRequest().supportedRecognitionLanguages()) ?? ["en-US"]
+        var out = Locale.preferredLanguages.filter { supported.contains($0) }
+        if !out.contains("en-US") { out.append("en-US") }
+        return out
+    }()
+
     static func recognize(_ image: CGImage, in rect: Frame) -> [OCRLine] {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
@@ -33,7 +42,13 @@ enum OCR {
         // correction "fixes" them into English and destroys exactly the strings
         // we care about.
         request.usesLanguageCorrection = false
-        request.recognitionLanguages = ["en-US"]
+        // NOT ONLY ENGLISH. Vision reads only the scripts of the languages it
+        // is given, so with `["en-US"]` a Chinese menu came back as nothing and
+        // the brief named nothing it pointed at — the first Mandarin user's
+        // screenshots arrived with no labels. The Mac's own languages, English
+        // always kept for the identifiers, and Vision picks the script per line.
+        request.recognitionLanguages = recognitionLanguages
+        request.automaticallyDetectsLanguage = true
 
         let handler = VNImageRequestHandler(cgImage: image, options: [:])
         do {

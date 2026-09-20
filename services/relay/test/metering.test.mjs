@@ -95,7 +95,7 @@ function stubFetch() {
         { status: 200, headers: { "content-type": "application/json" } },
       );
     }
-    if (href.includes("/audio/translations")) {
+    if (href.includes("/audio/translations") || href.includes("/audio/transcriptions")) {
       return new Response(JSON.stringify({ transcript: "ok" }), { status: 200 });
     }
     if (href.includes("/chat/completions")) {
@@ -191,6 +191,17 @@ test("a free install transcribes with no configuration at all", async () => {
   const r = await post("dev_new-mac", 20);
   assert.equal(r.status, 200);
   assert.ok(upstream.some((u) => u.includes("/audio/translations")), "should have reached the transcription upstream");
+});
+
+test("?task=transcribe asks Groq for the words as spoken, and is metered the same", async () => {
+  const r = await handle({
+    method: "POST", path: "/v1/transcribe", query: "task=transcribe", token: "dev_zh",
+    contentType: "multipart/form-data; boundary=x", body: Buffer.alloc(20 * 32_000),
+  });
+  assert.equal(r.status, 200);
+  assert.ok(upstream.some((u) => u.includes("/audio/transcriptions")), "should reach the transcriptions upstream");
+  assert.ok(!upstream.some((u) => u.includes("/audio/translations")), "and not the translation one");
+  assert.equal(rows.get("dev:zh").audioSeconds, 20);
 });
 
 test("seconds land on the device's lifetime row, and on today's global row", async () => {

@@ -67,6 +67,7 @@ enum Diagnostics {
         lines.append("")
 
         lines.append("transcription: \(transcriberDescription())")
+        lines.append("narration: \(Narration.selected.rawValue) · offline recogniser: \(SpeechLocale.selected)")
         lines.append("relay configured: \(Credentials.relayURL ?? "none — this build has no relay")")
         // ALL FOUR STAMPED VALUES, because the one that was wrong was the one
         // nobody printed. Each decides whether an entire affordance exists —

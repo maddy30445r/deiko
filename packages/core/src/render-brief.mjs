@@ -22,7 +22,7 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { resolve, join, basename } from "node:path";
 
-import { align } from "../packages/alignment/dist/src/align.js";
+import { align, joinWords } from "../packages/alignment/dist/src/align.js";
 import { loadSession } from "../packages/alignment/dist/src/referents/session.js";
 import { toCandidates } from "../packages/alignment/dist/src/referents/candidates.js";
 import { loadEvents } from "./lib/session-io.mjs";
@@ -68,13 +68,13 @@ function utteranceText(words, gapMs = 700) {
   let prev = null;
   for (const w of words) {
     if (prev !== null && w.start - prev > gapMs && line.length) {
-      lines.push(line.join(" "));
+      lines.push(joinWords(line));
       line = [];
     }
     line.push(w.text);
     prev = w.end;
   }
-  if (line.length) lines.push(line.join(" "));
+  if (line.length) lines.push(joinWords(line));
   // Plain newlines. The caller adds the blockquote prefix — doing it in both
   // places produced "> > " on every continuation line.
   return lines.join("\n");

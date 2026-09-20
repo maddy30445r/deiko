@@ -94,6 +94,13 @@ const BYTES_PER_SAMPLE = 2;
 /// the reservation is what makes the fallback rare rather than routine.
 const UPLOAD_CONCURRENCY = 4;
 
+/// "Same as I speak" (Settings → Brief language). Whisper writes down what it
+/// heard, in that language, with its OWN word timestamps — and those times are
+/// the timeline, not Apple's English recogniser's. The default translates to
+/// English and matches against Apple's timeline, which is the original design
+/// and still the right one for Hinglish (see `mergeWords`).
+const NATIVE = process.env.DEIKO_NARRATION === "native";
+
 /// A stalled upload should cost one chunk, not the session. Without a signal
 /// `fetch` falls through to undici's ~300s default, which is five minutes of
 /// an orb reading "Transcribing…" with nothing to show for it. Sixty seconds
@@ -166,8 +173,20 @@ function chunkedTranscriber(name, uploadOne, state = {}) {
         process.stderr.write(
           `· ${failures.length}/${chunks.length} chunks failed — the transcript is missing some words `);
       }
+      // Each chunk's times start at ITS OWN zero. Walk the chunk lengths to
+      // put them on the hold's clock before anything downstream sees them.
+      let offsetMs = 0;
+      const shifted = parts.map((p, i) => {
+        const at = offsetMs;
+        offsetMs += (chunks[i].length / (SAMPLE_RATE * BYTES_PER_SAMPLE)) * 1000;
+        const shift = (xs) => (xs ?? []).map((x) => ({ ...x, start: x.start + at, end: x.end + at }));
+        return { ...p, segments: shift(p.segments), words: shift(p.words) };
+      });
       return {
-        text: parts.map((p) => p.text).filter(Boolean).join(" "),
+        text: shifted.map((p) => p.text).filter(Boolean).join(" "),
+        language: shifted.find((p) => p.language)?.language ?? null,
+        segments: shifted.flatMap((p) => p.segments),
+        words: shifted.flatMap((p) => p.words),
         failedChunks: failures.length,
         // Carried up so the cache can tell a refused stretch from silence.
         refused: parts.some((p) => p.refused),
@@ -197,13 +216,20 @@ function chunkedTranscriber(name, uploadOne, state = {}) {
 /// `language` is deliberately unused: the translation endpoint takes no
 /// language hint, which is the property being bought. The parameter stays in
 /// the signature because `chunkedTranscriber` passes it to every uploader.
-function sttForm(pcm, _language) {
+function sttForm(pcm, language) {
   const form = new FormData();
   form.append("file", new Blob([wrapWav(pcm)], { type: "audio/wav" }), "audio.wav");
   // large-v3, not turbo: turbo is $0.04/hr against $0.111 but CANNOT translate,
   // and translation is the whole point of the endpoint below.
   form.append("model", "whisper-large-v3");
-  form.append("response_format", "json");
+  // `verbose_json` carries the segments with their times on BOTH endpoints,
+  // and the words on transcription. Same price; the answer is a little longer.
+  form.append("response_format", "verbose_json");
+  if (NATIVE) {
+    form.append("timestamp_granularities[]", "word");
+    form.append("timestamp_granularities[]", "segment");
+    if (language && language !== "unknown") form.append("language", language.split("-")[0]);
+  }
   return form;
 }
 
@@ -216,12 +242,16 @@ function sttForm(pcm, _language) {
 ///
 /// `translate` is the shipped behaviour and `false` exists for `bakeoff.mjs`,
 /// which measures the alternative rather than assuming it.
-function groqTranscriber(apiKey, model = "whisper-large-v3", { translate = true } = {}) {
+function groqTranscriber(apiKey, model = "whisper-large-v3", { translate = !NATIVE } = {}) {
   return chunkedTranscriber(`groq:${model}${translate ? ":translate" : ""}`, async (pcm, language) => {
     const form = new FormData();
     form.append("file", new Blob([wrapWav(pcm)], { type: "audio/wav" }), "audio.wav");
     form.append("model", model);
-    form.append("response_format", "json");
+    form.append("response_format", "verbose_json");
+    if (!translate) {
+      form.append("timestamp_granularities[]", "word");
+      form.append("timestamp_granularities[]", "segment");
+    }
     // The language hint costs nothing and stops Whisper guessing on a short
     // clip. `unknown` means "decide for yourself", which is what a mixed
     // session wants. The translation endpoint takes no language: its output is
@@ -244,7 +274,7 @@ function groqTranscriber(apiKey, model = "whisper-large-v3", { translate = true 
       throw new Error(`Groq ${response.status}: ${bodyText.slice(0, 400)}`);
     }
     try {
-      return { text: String(JSON.parse(bodyText)?.text ?? "").trim() };
+      return extractResult(JSON.parse(bodyText));
     } catch {
       throw new Error(`Groq returned non-JSON: ${bodyText.slice(0, 400)}`);
     }
@@ -261,7 +291,9 @@ function groqTranscriber(apiKey, model = "whisper-large-v3", { translate = true 
  * one Settings field away from their own key, which skips this entirely.
  */
 function relayTranscriber(endpoint, token) {
-  const url = `${endpoint.replace(/\/+$/, "")}/v1/transcribe`;
+  // The relay picks the Groq endpoint from this query — the multipart body is
+  // forwarded verbatim, so a form field could not carry the choice.
+  const url = `${endpoint.replace(/\/+$/, "")}/v1/transcribe${NATIVE ? "?task=transcribe" : ""}`;
 
   // SOME REFUSALS ANSWER FOR THE WHOLE SESSION, AND SOME ARE WORTH RETRYING.
   //
@@ -323,7 +355,7 @@ function relayTranscriber(endpoint, token) {
     }
 
     try {
-      return { text: extractText(JSON.parse(bodyText)) };
+      return extractResult(JSON.parse(bodyText));
     } catch {
       throw new Error(`Deiko relay returned non-JSON: ${bodyText.slice(0, 400)}`);
     }
@@ -430,8 +462,46 @@ function wrapWav(pcm) {
   return Buffer.concat([header, pcm]);
 }
 
-function extractText(raw) {
-  return String(raw?.text ?? "").trim();
+/// What a Whisper answer contributes, in one shape for both endpoints and both
+/// response formats. Times come back in seconds from the start of the audio
+/// that was SENT — a chunk, not the hold — and leave here in milliseconds;
+/// `chunkedTranscriber` shifts them onto the hold.
+function extractResult(raw) {
+  const ms = (v) => Math.round(Number(v ?? 0) * 1000);
+  const clean = (t) => String(t ?? "").trim();
+  return {
+    text: clean(raw?.text),
+    language: raw?.language ? String(raw.language) : null,
+    segments: (raw?.segments ?? [])
+      .map((x) => ({ start: ms(x.start), end: ms(x.end), text: clean(x.text) }))
+      .filter((x) => x.text),
+    words: (raw?.words ?? [])
+      .map((x) => ({ start: ms(x.start), end: ms(x.end), text: clean(x.word) }))
+      .filter((x) => x.text),
+  };
+}
+
+/// The cloud's words on the cloud's own timeline, best measurement first:
+/// Whisper's words when it was asked for them, its segments otherwise, and an
+/// even spread only when it gave no times at all.
+function timeFromCloud(cloud, audioDurationMs) {
+  if (cloud.words?.length) {
+    return cloud.words.map((w) => ({ ...w, source: "whisper", anchored: true }));
+  }
+  if (cloud.segments?.length) {
+    return cloud.segments.flatMap((seg) => {
+      const tokens = seg.text.split(/\s+/).filter(Boolean);
+      const per = (seg.end - seg.start) / Math.max(tokens.length, 1);
+      return tokens.map((word, i) => ({
+        text: word,
+        start: seg.start + i * per,
+        end: seg.start + (i + 1) * per,
+        source: "segment",
+        anchored: false,
+      }));
+    });
+  }
+  return spreadEvenly(cloud.text, audioDurationMs);
 }
 
 // ── The anchor merge ────────────────────────────────────────────────────────
@@ -736,7 +806,9 @@ async function main() {
     return i > -1 ? process.argv[i + 1] : fallback;
   };
   const language = flag("--language", "unknown");
-  const args = { locale: flag("--locale", "en-IN") };
+  // Settings → offline recogniser, via the app's environment; `en-IN` is what
+  // it always was before there was a setting.
+  const args = { locale: flag("--locale", process.env.DEIKO_SPEECH_LOCALE || "en-IN") };
 
   const dir = resolve(sessionDir);
   const events = loadEvents(dir);
@@ -915,13 +987,22 @@ async function main() {
         console.error(`FAILED\n    ${timingOutcome.reason.message}`);
         continue;
       }
+      // Whether the words are still timed depends on whether the CLOUD timed
+      // them. With "Same as I speak" Whisper sends word timestamps, and an
+      // Apple failure costs nothing but the fallback; without them the words
+      // are placed by segment or spread evenly, and that IS degraded.
+      const cloud = textOutcome.value;
+      const measured = (cloud.words?.length ?? 0) > 0;
       console.error(
-        `on-device FAILED (${timingOutcome.reason.message}) — keeping ${transcriber.name} text, unanchored`,
+        `on-device FAILED (${timingOutcome.reason.message}) — keeping ${transcriber.name} text`
+          + (measured ? ", on its own word times" : ", unanchored"),
       );
-      degradedHolds.push(hold);
-      degraded = true;
+      if (!measured) {
+        degradedHolds.push(hold);
+        degraded = true;
+      }
       timing = {
-        words: spreadEvenly(text, wavDurationMs(wav)),
+        words: timeFromCloud(cloud, wavDurationMs(wav)),
         transcript: text,
         deliveryGapsMs: [],
       };
@@ -958,7 +1039,7 @@ async function main() {
     // measured time" when not one of them does.
     if (degraded) {
       holdTexts.push({ hold, text: timing.transcript });
-      console.error(`  hold ${hold} → ${holdWords.length} words, times estimated across the hold`);
+      console.error(`  hold ${hold} → ${holdWords.length} words, times ${holdWords.some((w) => w.source === "segment") ? "from the cloud's segments" : "estimated across the hold"}`);
       cache[hold] = { bytes, words: holdWords };
       allWords.push(...holdWords.map((w) => ({
         text: w.text,
@@ -970,27 +1051,54 @@ async function main() {
       continue;
     }
 
+    const cloud = textOutcome.status === "fulfilled" ? textOutcome.value : null;
+
+    if (NATIVE && cloud?.words?.length) {
+      // "SAME AS I SPEAK": Whisper's words on Whisper's clock, and no merge.
+      // There is nothing for Apple's recogniser to anchor — a Chinese
+      // transcript shares no token with an English timeline — and there is no
+      // need: word timestamps came back with the text (measured, 这个 at
+      // 0.00–0.18s on the first Mandarin clip). Apple's words stay the
+      // fallback for the holds the cloud did not answer.
+      holdWords = timeFromCloud(cloud, wavDurationMs(wav));
+      holdTexts.push({ hold, text: cloud.text });
+      console.error(
+        `  hold ${hold} → ${holdWords.length} words timed by ${transcriber.name}`
+          + `${cloud.language ? ` (${cloud.language})` : ""}`);
+      console.error(`    "${cloud.text.slice(0, 110)}"`);
+    } else {
     process.stderr.write(`  hold ${hold} → merging … `);
     try {
       if (textOutcome.status === "rejected") throw textOutcome.reason;
-      const result = textOutcome.value;
-      holdTexts.push({ hold, text: result.text });
-      if (result.text) {
+      holdTexts.push({ hold, text: cloud.text });
+      if (cloud.text) {
         const merged = await timed("merge", async () =>
-          mergeWords(result.text, timing.words, wavDurationMs(wav)));
+          mergeWords(cloud.text, timing.words, wavDurationMs(wav)));
         if (merged.anchors > 0) {
           holdWords = merged.words;
           console.error(`merged ${merged.total} words (anchors ${merged.anchors}/${merged.total})`);
         } else {
-          console.error(`no anchors — keeping on-device words`);
+          // NOTHING AGREED — KEEP THE CLOUD'S WORDS ANYWAY. This used to keep
+          // Apple's, on the reasoning that agreeing on nothing meant the cloud
+          // text could not be placed. But the cloud text is still the RIGHT
+          // text: the first Mandarin-speaking user's brief was Apple's English
+          // recogniser mishearing Chinese, because the translation shared no
+          // token with it and lost. Whisper's own segment times place the
+          // words to within a second or two, inside the ±1.5s binding window.
+          holdWords = timeFromCloud(cloud, wavDurationMs(wav));
+          if (!cloud.segments?.length) degradedHolds.push(hold);
+          console.error(
+            `no anchors — keeping ${transcriber.name}'s words, times `
+              + `${cloud.segments?.length ? "from its segments" : "estimated across the hold"}`);
         }
-        console.error(`    "${result.text.slice(0, 110)}"`);
+        console.error(`    "${cloud.text.slice(0, 110)}"`);
       } else {
         console.error(`empty — keeping on-device words`);
       }
     } catch (err) {
       console.error(`failed (${err.message.slice(0, 80)}) — continuing on timings alone`);
       holdTexts.push({ hold, text: timing.transcript });
+    }
     }
 
     // Cached before the shift, for the same reason the shift is applied after:

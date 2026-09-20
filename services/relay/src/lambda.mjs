@@ -20,6 +20,7 @@ export async function handler(event) {
 
   const method = event?.requestContext?.http?.method ?? "GET";
   const path = event?.rawPath ?? "/";
+  const query = event?.rawQueryString ?? "";
   // Lambda lower-cases header names for Function URLs, but not every invoker
   // does; check both rather than depend on it.
   const headers = event?.headers ?? {};
@@ -36,7 +37,7 @@ export async function handler(event) {
 
   let result;
   try {
-    result = await handle({ method, path, token, contentType, body });
+    result = await handle({ method, path, query, token, contentType, body });
   } catch (err) {
     // THE REASON GOES TO CLOUDWATCH, NOT TO THE CALLER. `unavailable()` was
     // taught this for the metering paths and this catch-all was not: anything
