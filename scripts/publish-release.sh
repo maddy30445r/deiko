@@ -101,8 +101,15 @@ s3 cp "$DMG" "s3://$BUCKET/download/$NAME" \
 # fresh, because everything downstream reads the current version out of it.
 TMP=$(mktemp)
 trap 'rm -f "$TMP"' EXIT
+# `url` IS WHERE THE APP SENDS SOMEBODY WHO CLICKS "Update to X…", and it was
+# "$SITE_ORIGIN/download/" — a directory with no object behind it, so R2's
+# function answered 404 and the one affordance an existing user has for
+# updating led to a broken page. The site root is where the install one-liner
+# lives, and that line is what actually performs an update: it replaces the
+# bundle and clears quarantine. `robots.txt` disallows /download/ too, so this
+# is the only one of the two a person was ever meant to open.
 cat > "$TMP" <<JSON
-{"version":"$VERSION","dmg":"$NAME","url":"$SITE_ORIGIN/download/"}
+{"version":"$VERSION","dmg":"$NAME","url":"$SITE_ORIGIN/"}
 JSON
 s3 cp "$TMP" "s3://$BUCKET/download/version.json" \
   --content-type application/json \
