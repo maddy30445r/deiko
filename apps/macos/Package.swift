@@ -58,7 +58,7 @@ let package = Package(
             // inputs to `make bundle` rather than to SwiftPM. Listed so a
             // clean build does not warn about "unhandled files" at everybody
             // who builds from source.
-            exclude: ["Info.plist", "Deiko.icns"],
+            exclude: ["Info.plist", "Deiko.icns", "Bricolage.ttf", "Bricolage-OFL.txt"],
             linkerSettings: [
                 // A SwiftPM executable has no bundle, so TCC has nowhere to read
                 // usage descriptions from — and requesting Speech Recognition

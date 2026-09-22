@@ -493,6 +493,7 @@ struct ReviewView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(DeikoStyle.paper)
     }
 
     // ── States ──────────────────────────────────────────────────────────────
@@ -591,7 +592,7 @@ struct ReviewView: View {
             VStack(alignment: .leading, spacing: 7) {
                 HStack {
                     HStack(spacing: 6) {
-                        SectionLabel("DEIKO'S READING")
+                        SectionLabel("Deiko's reading")
                             .foregroundStyle(DeikoStyle.mark)
                         if model.summaryPending {
                             ProgressView().controlSize(.small)
@@ -977,7 +978,7 @@ struct ReviewView: View {
     private var narrationEditor: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                SectionLabel("WHAT YOU SAID")
+                SectionLabel("What you said")
                 Spacer()
                 if model.narrationEdited {
                     Text("edited")

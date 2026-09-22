@@ -184,16 +184,16 @@ final class WelcomeModel: ObservableObject {
 
 // ── View ────────────────────────────────────────────────────────────────────
 
-private struct WelcomeView: View {
+struct WelcomeView: View {
     @ObservedObject var model: WelcomeModel
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 header
-                SectionLabel("DEIKO NEEDS TO SEE AND HEAR WHAT YOU POINT AT")
+                SectionLabel("What Deiko needs to see and hear")
                 permissions
-                SectionLabel("ONE MORE THING")
+                SectionLabel("One more thing")
                 setupRows
                 gestureStrip
                 footer
@@ -201,6 +201,7 @@ private struct WelcomeView: View {
             .padding(.horizontal, 32)
             .padding(.vertical, 20)
         }
+        .background(DeikoStyle.paper)
         .onAppear {
             model.refresh()
             model.startWatching()
@@ -208,6 +209,10 @@ private struct WelcomeView: View {
         .onDisappear { model.stopWatching() }
     }
 
+    /// The header sits on the lavender wall — the one surface in the app that
+    /// is allowed to be a colour rather than paper, and the same one the site
+    /// stands its product windows on. It opens on the product's own sentence
+    /// rather than its name: nobody installed this to read the word "Deiko".
     private var header: some View {
         HStack(spacing: 14) {
             ZStack {
@@ -219,14 +224,16 @@ private struct WelcomeView: View {
                 DeikoMark(diameter: 16, color: DeikoStyle.mark)
             }
             .frame(width: 44, height: 44)
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Deiko").font(.system(size: 22, weight: .semibold))
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Show, don\u{2019}t type.").deikoTitle(24)
                 Text("Point at your screen and talk. What you said — and what you pointed at — becomes a brief for your coding agent.")
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .padding(16)
+        .background(DeikoStyle.wall, in: RoundedRectangle(cornerRadius: DeikoStyle.insetRadius))
     }
 
     private var permissions: some View {
@@ -316,7 +323,7 @@ private struct WelcomeView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(12)
-        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: DeikoStyle.insetRadius))
+        .background(DeikoStyle.wall, in: RoundedRectangle(cornerRadius: DeikoStyle.insetRadius))
     }
 
     private var footer: some View {
@@ -330,7 +337,7 @@ private struct WelcomeView: View {
             // actually deliver on the promise.
             Button("Start pointing") { model.onDone?() }
                 .keyboardShortcut(.defaultAction)
-                .tint(DeikoStyle.accent)
+                .buttonStyle(InkButtonStyle())
                 .disabled(!model.readyToPoint)
         }
         .padding(.top, 2)
@@ -341,9 +348,9 @@ private struct WelcomeView: View {
     private func glyphTile(_ symbol: String) -> some View {
         Image(systemName: symbol)
             .font(.system(size: 13))
-            .foregroundStyle(.primary)
+            .foregroundStyle(DeikoStyle.accent)
             .frame(width: 26, height: 26)
-            .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 6))
+            .background(DeikoStyle.accentSoft, in: RoundedRectangle(cornerRadius: DeikoStyle.controlRadius))
     }
 
     private func grantedTag(_ word: String) -> some View {
@@ -360,11 +367,11 @@ private struct WelcomeView: View {
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
                 .background(
-                    RoundedRectangle(cornerRadius: 5)
-                        .fill(Color(nsColor: .textBackgroundColor).opacity(0.8))
+                    RoundedRectangle(cornerRadius: 7)
+                        .fill(DeikoStyle.card)
                         .overlay(
-                            RoundedRectangle(cornerRadius: 5)
-                                .strokeBorder(Color.primary.opacity(0.18), lineWidth: 1)
+                            RoundedRectangle(cornerRadius: 7)
+                                .strokeBorder(DeikoStyle.hairline, lineWidth: 1)
                         )
                 )
             Text(meaning)

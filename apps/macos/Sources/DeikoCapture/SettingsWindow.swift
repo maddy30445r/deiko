@@ -316,7 +316,7 @@ final class SettingsModel: ObservableObject {
 
 // ── View ────────────────────────────────────────────────────────────────────
 
-private struct SettingsView: View {
+struct SettingsView: View {
     @StateObject private var model = SettingsModel()
     /// Passed down rather than read from a global: see the controller's
     /// properties of the same names.
@@ -328,24 +328,25 @@ private struct SettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                SectionLabel("PLAN")
+                SectionLabel("Plan")
                 licence
-                SectionLabel("TRANSCRIPTION")
+                SectionLabel("Transcription")
                 language
                 keys
                 Text("Keys never leave the login keychain. Your recording is deleted as soon as the brief is made — what stays on this Mac is the brief and its screenshots.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                SectionLabel("CAPTURING")
+                SectionLabel("Capturing")
                 capturing
-                SectionLabel("SESSIONS")
+                SectionLabel("Sessions")
                 sessions
                 Divider()
                 about
             }
             .padding(24)
         }
+        .background(DeikoStyle.paper)
         .task {
             model.openSessionDir = openSessionDir
             model.sessionRoot = sessionRoot
@@ -477,9 +478,25 @@ private struct SettingsView: View {
                 // that has no trial and never had one. The plan line above
                 // already says what happened and what to do about it.
                 if let quota = model.quota, quota.capSeconds > 0 {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ProgressView(value: quota.usedFraction)
-                            .tint(quota.isSpent ? DeikoStyle.needsYou : DeikoStyle.accent)
+                    VStack(alignment: .leading, spacing: 6) {
+                        // DRAWN, not an NSProgressIndicator. The system bar
+                        // ignores `.tint` on macOS — it follows the user's own
+                        // accent colour — so the indigo fill this design asks
+                        // for, and the red one when the trial is spent, simply
+                        // never appeared. Two capsules cost less than the
+                        // workaround would.
+                        GeometryReader { bar in
+                            ZStack(alignment: .leading) {
+                                Capsule().fill(DeikoStyle.hairline)
+                                Capsule()
+                                    .fill(quota.isSpent ? DeikoStyle.needsYou : DeikoStyle.accent)
+                                    .frame(width: bar.size.width * min(max(quota.usedFraction, 0), 1))
+                            }
+                        }
+                        .frame(height: 6)
+                        .accessibilityElement()
+                        .accessibilityLabel("Transcription minutes used")
+                        .accessibilityValue(quota.usedSentence)
                         Text(quota.isPro
                             ? "\(quota.usedSentence) · \(License.Quota.proResetSentence)"
                             : "\(quota.usedSentence) · one-time trial, then this Mac transcribes")
@@ -702,31 +719,62 @@ private struct SettingsView: View {
 
 // ── Shared pieces (Settings + first run share this vocabulary) ──────────────
 
-/// The uppercase 11pt section label the canvas uses everywhere.
+/// The heading over a group of rows.
+///
+/// It used to be an 11pt tracked uppercase label, borrowed from System
+/// Settings. It is a sentence-case title now: uppercase-tracked labels are
+/// harder to read, macOS itself has been leaving them behind, and every
+/// heading on the site is set this way. Same job, said at a normal volume.
 struct SectionLabel: View {
     let text: String
     init(_ text: String) { self.text = text }
     var body: some View {
-        Text(text)
-            .font(.system(size: 11, weight: .semibold))
-            .kerning(0.66)
-            .foregroundStyle(.secondary)
+        // More room above than below: the heading belongs to what follows it.
+        Text(text).deikoTitle(15).padding(.top, 8)
     }
 }
 
-/// A white/inset rounded card holding rows — the canvas's grouping surface.
+/// A card holding rows — the grouping surface every window is built from.
+/// Paper on a desk: solid, hairlined, with one long indigo-tinted shadow.
 struct InsetCard<Content: View>: View {
     @ViewBuilder let content: Content
     var body: some View {
         VStack(alignment: .leading, spacing: 0) { content }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: DeikoStyle.insetRadius)
-                    .fill(Color(nsColor: .textBackgroundColor).opacity(0.5))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: DeikoStyle.insetRadius)
-                            .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
-                    )
-            )
+            .deikoCard()
+    }
+}
+
+/// The primary action — ink, not the system accent.
+///
+/// The accent is spent on the GESTURE (the coin, the mark, a selected row);
+/// spending it on buttons too would make "Deiko is pointing at something" and
+/// "this is a button" the same colour. In dark mode ink inverts to the accent,
+/// because near-black on near-black is a button nobody can find.
+struct InkButtonStyle: ButtonStyle {
+    // Named `Label`, not `Body`: `Body` is the protocol's own associated type,
+    // and a nested struct by that name satisfies it instead — the conformance
+    // then fails on a private type it never meant to name.
+    func makeBody(configuration: Configuration) -> some View { Label(configuration: configuration) }
+
+    private struct Label: View {
+        let configuration: Configuration
+        // Read here rather than on the style: a ButtonStyle is not a View, so
+        // this is the only place the environment actually resolves — and a
+        // disabled primary that looks enabled is the bug that ships otherwise.
+        @Environment(\.isEnabled) private var enabled
+
+        var body: some View {
+            configuration.label
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(DeikoStyle.buttonInkText)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: DeikoStyle.controlRadius)
+                        .fill(DeikoStyle.buttonInk)
+                )
+                .opacity(enabled ? (configuration.isPressed ? 0.82 : 1) : 0.35)
+        }
     }
 }

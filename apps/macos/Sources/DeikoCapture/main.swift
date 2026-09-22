@@ -106,6 +106,11 @@ case "icon":
 case "ink-demo":
     runInkDemo(args)
 
+// deiko-capture ui-shot --out /tmp/deiko-ui
+// Every window, light and dark, as PNGs — the design system's ink-demo.
+case "ui-shot":
+    UIShot.run(args)
+
 // Also a subcommand, not only a Settings button. The moment diagnostics are
 // worth having is the moment the app is not working — and if it will not
 // launch, a button inside it is not reachable.

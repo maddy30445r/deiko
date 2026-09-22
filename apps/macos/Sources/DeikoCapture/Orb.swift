@@ -995,12 +995,20 @@ struct OrbRootView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .topLeading)
+        // Material FIRST, card colour over it. The material is what makes this
+        // legible over a dark editor and what answers Reduce Transparency
+        // without a second code path; the card colour on top pulls it to the
+        // paper white every other Deiko surface is made of.
         .background(
             RoundedRectangle(cornerRadius: DeikoStyle.panelRadius)
                 .fill(.regularMaterial)
                 .overlay(
                     RoundedRectangle(cornerRadius: DeikoStyle.panelRadius)
-                        .strokeBorder(Color.primary.opacity(0.09), lineWidth: 1)
+                        .fill(DeikoStyle.card.opacity(0.72))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: DeikoStyle.panelRadius)
+                        .strokeBorder(DeikoStyle.hairline, lineWidth: 1)
                 )
         )
         .overlay(alignment: .topTrailing) {
@@ -1052,6 +1060,8 @@ struct OrbRootView: View {
     private var coinSlot: some View {
         ZStack {
             CoinView(kind: coinKind)
+                .padding(5)
+                .background(DeikoStyle.accentSoft, in: Circle())
                 .modifier(Breathing(active: isWorking))
                 // THE COIN MUST NOT ANIMATE ITS OWN POSITION.
                 //
@@ -1131,11 +1141,14 @@ struct OrbRootView: View {
     @ViewBuilder private var phaseReadout: some View {
         switch model.phase {
         case .working(let what):
-            Text(what).font(.system(size: 13))
+            Text(what).deikoTitle(15)
             if let captured = state.captured {
                 Text(capturedLine(captured))
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DeikoStyle.mark)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(DeikoStyle.accentSoft, in: RoundedRectangle(cornerRadius: DeikoStyle.controlRadius))
             }
         case .failed(let problem):
             failureReadout(problem)
@@ -1150,6 +1163,7 @@ struct OrbRootView: View {
 
     private func failureReadout(_ problem: PipelineFailure) -> some View {
         VStack(alignment: .leading, spacing: 8) {
+            Text("That didn\u{2019}t work").deikoTitle(15)
             Text(problem.message)
                 .font(.system(size: 13))
                 .fixedSize(horizontal: false, vertical: true)
@@ -1181,6 +1195,9 @@ struct OrbRootView: View {
     /// Deiko's reading when it exists; the digest's counts when it does not
     /// (no `GROQ_API_KEY`). Either way, "did it hear me" is answerable here.
     @ViewBuilder private var summaryLines: some View {
+        // One title line, so the card says what STATE it is in before it says
+        // what it heard. Everything under it stays in the system face.
+        Text("Ready to hand over").deikoTitle(15)
         if let summary = model.summary {
             Text(summary)
                 .font(.system(size: 13))
@@ -1256,7 +1273,7 @@ struct OrbRootView: View {
         .background(
             Capsule()
                 .fill(.regularMaterial)
-                .overlay(Capsule().strokeBorder(Color.primary.opacity(0.09), lineWidth: 1))
+                .overlay(Capsule().strokeBorder(DeikoStyle.hairline, lineWidth: 1))
         )
         // Centred in the 400pt width but NOT stretched to it — the canvas
         // draws a pill on its own, and a pill inside an invisible card carries
@@ -1310,7 +1327,11 @@ struct OrbRootView: View {
                 .fill(.regularMaterial)
                 .overlay(
                     RoundedRectangle(cornerRadius: DeikoStyle.panelRadius)
-                        .strokeBorder(Color.primary.opacity(0.09), lineWidth: 1)
+                        .fill(DeikoStyle.card.opacity(0.72))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: DeikoStyle.panelRadius)
+                        .strokeBorder(DeikoStyle.hairline, lineWidth: 1)
                 )
         )
     }

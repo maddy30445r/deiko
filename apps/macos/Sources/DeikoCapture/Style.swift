@@ -116,7 +116,90 @@ enum DeikoStyle {
         dark: NSColor(white: 1, alpha: 0.12)
     )
 
+    // ── Surface ─────────────────────────────────────────────────────────────
+    //
+    // The studio white the site is built from, translated for a window that
+    // has to survive dark mode. Light mode is the site's own paper and white;
+    // dark mode is the same system rebuilt, NOT the light one dimmed — a card
+    // is lighter than its ground in the dark, where in the light it is darker.
+
+    /// A window's ground. Cards sit ON this, never the reverse.
+    static let paperNS = dynamic(
+        light: NSColor(srgbRed: 250 / 255, green: 250 / 255, blue: 251 / 255, alpha: 1),
+        dark: NSColor(srgbRed: 30 / 255, green: 31 / 255, blue: 38 / 255, alpha: 1)
+    )
+
+    /// The card that holds rows — the grouping surface everywhere.
+    static let cardNS = dynamic(
+        light: NSColor.white,
+        dark: NSColor(srgbRed: 38 / 255, green: 39 / 255, blue: 47 / 255, alpha: 1)
+    )
+
+    /// 1px, and never more. The site's whole border vocabulary.
+    static let hairlineNS = dynamic(
+        light: NSColor(srgbRed: 236 / 255, green: 236 / 255, blue: 239 / 255, alpha: 1),
+        dark: NSColor(white: 1, alpha: 0.09)
+    )
+
+    /// The tint behind indigo text and icons: chips, glyph tiles, the coin's
+    /// socket, a selected row.
+    static let accentSoftNS = dynamic(
+        light: NSColor(srgbRed: 238 / 255, green: 241 / 255, blue: 255 / 255, alpha: 1),
+        dark: NSColor(srgbRed: 146 / 255, green: 166 / 255, blue: 241 / 255, alpha: 0.16)
+    )
+
+    /// The primary button. Ink in the light, and the accent in the dark, where
+    /// near-black on near-black would be a button you cannot find.
+    static let buttonInkNS = dynamic(
+        light: NSColor(srgbRed: 22 / 255, green: 22 / 255, blue: 24 / 255, alpha: 1),
+        dark: NSColor(srgbRed: 146 / 255, green: 166 / 255, blue: 241 / 255, alpha: 1)
+    )
+
+    /// What sits on `buttonInk`.
+    static let buttonInkTextNS = dynamic(
+        light: NSColor.white,
+        dark: NSColor(srgbRed: 26 / 255, green: 27 / 255, blue: 34 / 255, alpha: 1)
+    )
+
+    /// Shadows are long, soft and tinted indigo — paper resting on a desk,
+    /// never a hard offset.
+    /// The site's card shadow is `0 24px 60px -28px` — a long fall with a
+    /// NEGATIVE spread, which is what keeps it under the card instead of
+    /// around it. SwiftUI has no spread, so the same shape is bought with a
+    /// weaker colour and a lower offset; a stronger one here reads as a cloud.
+    static let shadowNS = dynamic(
+        light: NSColor(srgbRed: 30 / 255, green: 36 / 255, blue: 90 / 255, alpha: 0.15),
+        dark: NSColor(white: 0, alpha: 0.4)
+    )
+
+    /// The lavender wall: the site's presentation surface, and the one place
+    /// colour fills an area. It goes behind a header or a preview — NEVER
+    /// behind a control, which is how it stays a backdrop instead of a theme.
+    static var wall: LinearGradient {
+        LinearGradient(
+            colors: [Color(nsColor: wallTopNS), Color(nsColor: wallBottomNS)],
+            startPoint: .topLeading, endPoint: .bottomTrailing
+        )
+    }
+
+    static let wallTopNS = dynamic(
+        light: NSColor(srgbRed: 223 / 255, green: 228 / 255, blue: 255 / 255, alpha: 1),
+        dark: NSColor(srgbRed: 52 / 255, green: 58 / 255, blue: 99 / 255, alpha: 1)
+    )
+
+    static let wallBottomNS = dynamic(
+        light: NSColor(srgbRed: 245 / 255, green: 246 / 255, blue: 255 / 255, alpha: 1),
+        dark: NSColor(srgbRed: 38 / 255, green: 40 / 255, blue: 56 / 255, alpha: 1)
+    )
+
     static var accent: Color { Color(nsColor: accentNS) }
+    static var paper: Color { Color(nsColor: paperNS) }
+    static var card: Color { Color(nsColor: cardNS) }
+    static var hairline: Color { Color(nsColor: hairlineNS) }
+    static var accentSoft: Color { Color(nsColor: accentSoftNS) }
+    static var buttonInk: Color { Color(nsColor: buttonInkNS) }
+    static var buttonInkText: Color { Color(nsColor: buttonInkTextNS) }
+    static var shadow: Color { Color(nsColor: shadowNS) }
     static var coinShine: Color { Color(nsColor: coinShineNS) }
     static var mark: Color { Color(nsColor: markNS) }
     static var coinFill: Color { Color(nsColor: coinFillNS) }
@@ -125,10 +208,60 @@ enum DeikoStyle {
 
     // ── Shape ───────────────────────────────────────────────────────────────
 
-    /// 6 controls · 10 inset cards · 16 floating panels · capsules for pills.
-    static let controlRadius: CGFloat = 6
-    static let insetRadius: CGFloat = 10
-    static let panelRadius: CGFloat = 16
+    /// 8 controls · 14 cards and rows · 18 floating panels · capsules for
+    /// pills. Nested corners get smaller as they get deeper, never larger.
+    static let controlRadius: CGFloat = 8
+    static let insetRadius: CGFloat = 14
+    static let panelRadius: CGFloat = 18
+
+    // ── Type ────────────────────────────────────────────────────────────────
+    //
+    // TITLES ONLY, and this is the whole rule. Bricolage Grotesque carries
+    // window titles, card headings and the orb's verdict line — the few words
+    // that say whose app this is. Every control label, every sentence, and
+    // anything read at 11pt stays in the system face, because that is the type
+    // macOS hinted for small sizes and the type the rest of the Mac speaks.
+    //
+    // The face is registered into THIS PROCESS only (`.process` scope), so
+    // Deiko never installs a font on someone's Mac. If the file is missing —
+    // a build that forgot to copy it — `title` falls back to the system
+    // semibold and every window still reads correctly, just in SF.
+
+    /// The 12pt optical size at SemiBold: the cut drawn for small text, which
+    /// is the only size this app uses it at. SIL OFL 1.1, see Bricolage-OFL.txt.
+    private static let titleFace: String? = {
+        let fm = FileManager.default
+        var candidates: [URL] = []
+        if let resources = Bundle.main.resourceURL {
+            candidates.append(resources.appendingPathComponent("Bricolage.ttf"))
+        }
+        // `make dev` runs the bare binary straight out of `.build`, which has
+        // no Resources directory at all. The compile-time path of this file is
+        // the checkout it was built from — right for a developer's build, and
+        // simply a path that does not exist in anybody else's, which is what
+        // the `fileExists` below is for.
+        candidates.append(
+            URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .appendingPathComponent("Bricolage.ttf")
+        )
+        guard let url = candidates.first(where: { fm.fileExists(atPath: $0.path) }),
+              CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil),
+              let descriptors = CTFontManagerCreateFontDescriptorsFromURL(url as CFURL) as? [CTFontDescriptor],
+              let first = descriptors.first
+        else { return nil }
+        return CTFontDescriptorCopyAttribute(first, kCTFontNameAttribute) as? String
+    }()
+
+    /// A title. Sentence case, always — the uppercase tracked label this app
+    /// used to shout in is not in the design any more.
+    static func title(_ size: CGFloat) -> Font {
+        if let titleFace { return .custom(titleFace, size: size) }
+        return .system(size: size, weight: .semibold)
+    }
+
+    /// -0.02em, the tracking the display face is drawn to be set at.
+    static func titleTracking(_ size: CGFloat) -> CGFloat { -size * 0.02 }
 
     // ── Motion ──────────────────────────────────────────────────────────────
 
@@ -136,6 +269,29 @@ enum DeikoStyle {
     /// screen, and the next pulse should already obey it.
     static var reduceMotion: Bool {
         NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+}
+
+// ── The shared modifiers ────────────────────────────────────────────────────
+
+extension View {
+    /// Bricolage at this size, tracked the way it is drawn to be set.
+    func deikoTitle(_ size: CGFloat) -> some View {
+        font(DeikoStyle.title(size)).tracking(DeikoStyle.titleTracking(size))
+    }
+
+    /// Paper resting on a desk: one long, soft, indigo-tinted shadow and a
+    /// hairline. Offset downward, because a shadow with no offset is a glow.
+    func deikoCard(radius: CGFloat = DeikoStyle.insetRadius) -> some View {
+        background(
+            RoundedRectangle(cornerRadius: radius)
+                .fill(DeikoStyle.card)
+                .overlay(
+                    RoundedRectangle(cornerRadius: radius)
+                        .strokeBorder(DeikoStyle.hairline, lineWidth: 1)
+                )
+                .shadow(color: DeikoStyle.shadow, radius: 13, x: 0, y: 7)
+        )
     }
 }
 

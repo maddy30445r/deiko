@@ -161,6 +161,11 @@ bundle-unsigned: $(DEBUG_BIN) resources
 	@cp $(CAPTURE_DIR)/Sources/DeikoCapture/Info.plist $(APP)/Contents/Info.plist
 	@cp $(DEBUG_BIN) $(APP)/Contents/MacOS/deiko-capture
 	@cp $(CAPTURE_DIR)/Sources/DeikoCapture/Deiko.icns $(RES)/Deiko.icns
+	@# The title face. Registered per-process at launch (see Style.swift), so
+	@# it is never installed on anybody's Mac; missing it only drops the app
+	@# back to the system face.
+	@cp $(CAPTURE_DIR)/Sources/DeikoCapture/Bricolage.ttf $(RES)/Bricolage.ttf
+	@cp $(CAPTURE_DIR)/Sources/DeikoCapture/Bricolage-OFL.txt $(RES)/Bricolage-OFL.txt
 	@/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $(VERSION)" $(APP)/Contents/Info.plist
 	@/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(BUILD)" $(APP)/Contents/Info.plist
 	@/usr/libexec/PlistBuddy -c "Set :DeikoRelayURL $(RELAY_URL)" $(APP)/Contents/Info.plist
