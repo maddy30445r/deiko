@@ -203,6 +203,19 @@ DEIKO_USAGE_TABLE="$TABLE" node -e '
     "DEIKO_SUMMARIES_PER_DAY",
     "DEIKO_PRO_BENEFIT_IDS",
     "POLAR_API_BASE",
+    // The playground. Without the secret every /v1/playground/* route 503s,
+    // which is the right default: the public page stays shut until somebody
+    // deliberately opens it.
+    "DEIKO_PLAYGROUND_SECRET",
+    "DEIKO_PLAYGROUND_CLIPS_PER_DAY",
+    "DEIKO_PLAYGROUND_INTENTS_PER_DAY",
+    "DEIKO_PLAYGROUND_CLIPS_PER_TICKET",
+    "DEIKO_PLAYGROUND_MAX_CLIP_BYTES",
+    "DEIKO_PLAYGROUND_MODEL",
+    "DEIKO_PLAYGROUND_ORIGINS",
+    "DEIKO_PLAYGROUND_QUERIES_PER_TICKET",
+    "DEIKO_PLAYGROUND_TICKETS_PER_IP_PER_DAY",
+    "DEIKO_PLAYGROUND_TICKET_TTL_MS",
   ]) {
     if (process.env[name]) vars[name] = process.env[name];
   }

@@ -51,6 +51,8 @@ const server = createServer(async (req, res) => {
       query,
       token,
       contentType: req.headers["content-type"] ?? "",
+      origin: req.headers.origin ?? "",
+      ip: req.socket?.remoteAddress ?? "",
       body,
     });
   } catch (err) {
@@ -66,6 +68,7 @@ const server = createServer(async (req, res) => {
   res.writeHead(result.status, {
     "content-type": result.contentType,
     "content-length": Buffer.byteLength(result.body),
+    ...(result.headers ?? {}),
   });
   res.end(result.body);
 

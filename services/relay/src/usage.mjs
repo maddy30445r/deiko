@@ -37,6 +37,11 @@ import {
   DAILY_TTL_SECONDS,
   globalKey,
   licenseKey,
+  playgroundClipKey,
+  playgroundIntentKey,
+  playgroundIpKey,
+  playgroundTicketKey,
+  playgroundTicketQueryKey,
   summaryKey,
   usageKey,
 } from "./quota.mjs";
@@ -243,6 +248,49 @@ export async function recordSummary({ now = Date.now() } = {}) {
 /// very ceiling that is refusing them.
 export async function refundSummary({ now = Date.now() } = {}) {
   await addSeconds(summaryKey(now), -1, null);
+}
+
+/// ── Playground counters ─────────────────────────────────────────────────────
+///
+/// Three rows, all TTL'd like the daily global: the day's clips, the day's
+/// intent calls, and one row per issued ticket. None of them is the row the
+/// app spends, which is the entire point — a flood on the public page
+/// exhausts the public page.
+export async function recordPlaygroundClip(ticketId, { now = Date.now() } = {}) {
+  const [clipsToday, ticketClips] = await Promise.all([
+    addSeconds(playgroundClipKey(now), 1, DAILY_TTL_SECONDS),
+    addSeconds(playgroundTicketKey(ticketId), 1, DAILY_TTL_SECONDS),
+  ]);
+  return { clipsToday, ticketClips };
+}
+
+export async function refundPlaygroundClip(ticketId, { now = Date.now() } = {}) {
+  await Promise.all([
+    addSeconds(playgroundClipKey(now), -1, null),
+    addSeconds(playgroundTicketKey(ticketId), -1, null),
+  ]);
+}
+
+export async function recordPlaygroundIntent(ticketId, { now = Date.now() } = {}) {
+  const [intentsToday, ticketQueries] = await Promise.all([
+    addSeconds(playgroundIntentKey(now), 1, DAILY_TTL_SECONDS),
+    addSeconds(playgroundTicketQueryKey(ticketId), 1, DAILY_TTL_SECONDS),
+  ]);
+  return { intentsToday, ticketQueries };
+}
+
+export async function refundPlaygroundIntent(ticketId, { now = Date.now() } = {}) {
+  await Promise.all([
+    addSeconds(playgroundIntentKey(now), -1, null),
+    addSeconds(playgroundTicketQueryKey(ticketId), -1, null),
+  ]);
+}
+
+/// Count a ticket against the caller who asked for it. Returns how many they
+/// have taken today, so the route can refuse the next one.
+export async function recordPlaygroundTicket(ipHash, { now = Date.now() } = {}) {
+  const ticketsToday = await addSeconds(playgroundIpKey(ipHash, now), 1, DAILY_TTL_SECONDS);
+  return { ticketsToday };
 }
 
 /// Is this licence real, and what does it entitle its holder to?

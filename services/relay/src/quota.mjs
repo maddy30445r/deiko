@@ -256,6 +256,91 @@ export function summaryKey(now) {
   return `global#${dayKey(now)}#summary`;
 }
 
+/// ── THE PLAYGROUND ──────────────────────────────────────────────────────────
+///
+/// The website's playground lets anybody on the internet spend the Groq key
+/// without installing anything. It gets its OWN budget rows so that it cannot
+/// close transcription for the app, which is the failure that matters: the
+/// global audio ceiling fails closed for everyone at once, and a public page
+/// is the easiest thing in this repo to point a script at.
+///
+/// Counted in REQUESTS, not seconds. The byte-length estimate the app relies
+/// on is honest only about PCM, and a browser sends compressed audio — a
+/// ten-second Opus clip is a few tens of KB and would meter as under a second.
+/// So the playground does not pretend to measure time at all: one clip is one
+/// unit, the clip length is bounded by `PLAYGROUND_MAX_CLIP_BYTES`, and the
+/// day's bill is bounded by the count.
+/// Deliberately small while this is new. 200 clips × 20s is ~67 minutes of
+/// Groq audio a day — pennies — and it is the number to raise once the page
+/// has shown it is worth the spend, not before.
+export const PLAYGROUND_CLIPS_PER_DAY =
+  Number(process.env.DEIKO_PLAYGROUND_CLIPS_PER_DAY ?? 200);
+
+/// The model call that turns a sentence into a patch. Cheaper than audio, but
+/// it is still somebody else's bill on a public page.
+export const PLAYGROUND_INTENTS_PER_DAY =
+  Number(process.env.DEIKO_PLAYGROUND_INTENTS_PER_DAY ?? 400);
+
+/// What one visitor may spend before the page has to ask for a new ticket.
+/// Two clips at twenty seconds each — about forty seconds of talking. Ten
+/// was too short in practice: it cut real sentences mid-word and whisper
+/// returned a garbled fragment, which read as bad transcription rather than
+/// as a limit being hit.
+export const PLAYGROUND_CLIPS_PER_TICKET =
+  Number(process.env.DEIKO_PLAYGROUND_CLIPS_PER_TICKET ?? 2);
+
+/// THE ONLY THING BOUNDING CLIP LENGTH, since compressed audio cannot be
+/// metered by time before it is decoded. Twenty seconds of Opus at the 24 kbps
+/// the page asks for is ~60 KB; 192 KB leaves room for a browser that ignores
+/// the hint and picks a fatter codec, while still refusing anything that could
+/// only be a much longer recording. It tracks the clip length: if that goes
+/// up again, this has to go up with it or clips 413 instead.
+export const PLAYGROUND_MAX_CLIP_BYTES =
+  Number(process.env.DEIKO_PLAYGROUND_MAX_CLIP_BYTES ?? 192 * 1024);
+
+/// How long a browser ticket is good for. Short, because the only thing
+/// stopping a scraper from minting them is the daily ceiling behind them.
+export const PLAYGROUND_TICKET_TTL_MS =
+  Number(process.env.DEIKO_PLAYGROUND_TICKET_TTL_MS ?? 15 * 60 * 1000);
+
+/// HOW MANY TIMES ONE VISITOR MAY ASK. The clip cap alone was not a limit:
+/// the page can type instead of speak, and typing skips transcription
+/// entirely, so the model route was reachable without ever spending a clip.
+/// A query is one interpreted instruction, spoken or typed.
+export const PLAYGROUND_QUERIES_PER_TICKET =
+  Number(process.env.DEIKO_PLAYGROUND_QUERIES_PER_TICKET ?? 2);
+
+/// AND HOW MANY TICKETS ONE CALLER MAY MINT. Without this the per-ticket caps
+/// bound nothing at all — reloading the page asks for another ticket, and a
+/// script can ask a thousand times. Keyed by a HASH of the address, never the
+/// address: the relay's header promises it logs no content, and an IP in
+/// DynamoDB is the same kind of mistake.
+export const PLAYGROUND_TICKETS_PER_IP_PER_DAY =
+  Number(process.env.DEIKO_PLAYGROUND_TICKETS_PER_IP_PER_DAY ?? 4);
+
+export function playgroundClipKey(now) {
+  return `global#${dayKey(now)}#pgclip`;
+}
+
+export function playgroundIntentKey(now) {
+  return `global#${dayKey(now)}#pgintent`;
+}
+
+/// One ticket's own spend, so a single visitor cannot drink the day.
+export function playgroundTicketKey(id) {
+  return `pg:${id}`;
+}
+
+/// A ticket's interpreted instructions, counted apart from its clips.
+export function playgroundTicketQueryKey(id) {
+  return `pg:${id}#q`;
+}
+
+/// How many tickets one caller has taken today. `hash` is already a digest.
+export function playgroundIpKey(hash, now) {
+  return `pgip:${hash}#${dayKey(now)}`;
+}
+
 /// `2026-08` and `2026-08-10`, in UTC.
 ///
 /// UTC rather than any local zone because the service runs in one region and

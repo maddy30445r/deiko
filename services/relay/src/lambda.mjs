@@ -27,6 +27,10 @@ export async function handler(event) {
   const authorization = headers.authorization ?? headers.Authorization;
   const contentType = headers["content-type"] ?? headers["Content-Type"] ?? "";
   const token = bearerFrom(authorization);
+  const origin = headers.origin ?? headers.Origin ?? "";
+  // Function URLs put the caller here. Only the playground uses it, and only
+  // as a salted hash, to ration how many tickets one caller may mint.
+  const ip = event?.requestContext?.http?.sourceIp ?? "";
 
   // Binary bodies arrive base64-encoded. The audio is binary, so getting this
   // wrong would corrupt every upload while leaving the JSON routes working —
@@ -37,7 +41,7 @@ export async function handler(event) {
 
   let result;
   try {
-    result = await handle({ method, path, query, token, contentType, body });
+    result = await handle({ method, path, query, token, contentType, body, origin, ip });
   } catch (err) {
     // THE REASON GOES TO CLOUDWATCH, NOT TO THE CALLER. `unavailable()` was
     // taught this for the metering paths and this catch-all was not: anything
@@ -58,7 +62,9 @@ export async function handler(event) {
 
   return {
     statusCode: result.status,
-    headers: { "content-type": result.contentType },
+    // `result.headers` is how the playground returns its CORS headers; every
+    // other route sets none and this spreads nothing.
+    headers: { "content-type": result.contentType, ...(result.headers ?? {}) },
     body: result.body,
   };
 }
