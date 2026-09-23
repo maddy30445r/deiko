@@ -274,8 +274,8 @@ final class SettingsModel: ObservableObject {
         }
         if Credentials.relayURL != nil {
             return isPro
-                ? "Your narration goes to Deiko, which passes it to a transcription service and keeps nothing. \(narration.comesBackAs) Add your own key below and your audio and summary skip Deiko; sorting still goes through it."
-                : "Your narration goes to Deiko, which passes it to a transcription service and keeps nothing. \(narration.comesBackAs) When your trial runs out, transcription continues on this Mac, in the offline language below. Add your own key below and your audio and summary skip Deiko; sorting still goes through it."
+                ? "Your narration goes to Deiko, which passes it to a transcription service and keeps nothing. \(narration.comesBackAs) Add your own key below and transcription and the summary happen at Groq instead; sorting still sends what you said, a one-line summary, your window titles and notes on earlier work through Deiko, which keeps nothing."
+                : "Your narration goes to Deiko, which passes it to a transcription service and keeps nothing. \(narration.comesBackAs) When your trial runs out, transcription continues on this Mac, in the offline language below. Add your own key below and transcription and the summary happen at Groq instead; sorting still sends what you said, a one-line summary, your window titles and notes on earlier work through Deiko, which keeps nothing."
         }
         return "Transcription runs on this Mac. Nothing is uploaded — accuracy is lower, especially for mixed-language speech."
     }
