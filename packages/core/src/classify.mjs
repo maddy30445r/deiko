@@ -4,34 +4,38 @@
  *
  *   node scripts/classify.mjs ~/Documents/Deiko/<id>
  *
- * Asks the classifier — Jev, through Deiko's relay — three things about a
- * brief in one call: which collection it belongs to, which earlier brief it
- * continues, and whether each of the newest earlier briefs is useful
- * background for it; plus how much work it looks like. The answers become
- * `context.json` beside the session, which `render-brief.mjs` reads and the
- * board and review card show.
+ * Scores every earlier task on this machine, sends the best eight to the
+ * classifier — Jev, through Deiko's relay — and asks in one call which
+ * collection the brief belongs to, which of those tasks it joins (or none, and
+ * it starts a new one), and how much work it looks like. The answers become
+ * `context.json` beside the session, and a new task a row in `tasks.json`;
+ * `render-brief.mjs` reads both and the board and review card show them.
  *
- * WHAT LEAVES THIS MACHINE: what the developer said, the app names, the repo
- * hints, the window titles, the collection names and hints, and one line per
- * earlier brief — its narration and the first line of its outcome. Never a
- * screenshot, never the text read off a screen. Window titles are the one
- * addition to the summary's rule (`summarize.mjs`), taken deliberately: a
- * title names a file, a repo or a ticket, and that is what places a brief.
+ * WHAT LEAVES THIS MACHINE: what the developer said, the Groq summary line,
+ * the app names, the repo hints, the window titles, the collection names and
+ * hints, and for up to eight shortlisted tasks their title, where they stand,
+ * their decisions, window titles, apps, the files the agent listed and the
+ * last outcome (at most 600 characters). Never a screenshot, never text read
+ * off a screen: the screen's words shortlist tasks locally and are never
+ * sent. Window titles are the one addition to the summary's rule
+ * (`summarize.mjs`), taken deliberately: a title names a file, a repo or a
+ * ticket, and that is what places a brief.
  *
  * Failure is not fatal, ever. No relay, no network, a bad answer — the file
  * is simply absent and the brief ships as it always did. And a brief the
  * developer placed by hand (`decidedBy: "you"`) is never re-guessed.
  */
 
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 
 import { loadEvents } from "./lib/session-io.mjs";
 import { redact } from "./lib/redact.mjs";
+import { MIN_NARRATION, decide, readBriefLine } from "./lib/context.mjs";
 import {
-  CANDIDATE_LIMIT, MIN_NARRATION, STAMP, decide, pickCandidates, readBriefLine,
-} from "./lib/context.mjs";
+  groupTasks, readBoard, readTasks, scoreTasks, stampTime, taskState, taskText, titleFor,
+} from "./lib/tasks.mjs";
 
 /// Titles are the widest thing sent; thirty distinct ones cover any session.
 const MAX_TITLES = 30;
@@ -86,40 +90,63 @@ async function main() {
     return;
   }
 
-  let titles = [];
+  let windowTitles = [];
   try {
-    titles = [...new Set(
+    windowTitles = [...new Set(
       loadEvents(dir)
         .filter((e) => e.type === "probe" && typeof e.windowTitle === "string" && e.windowTitle.trim())
         .map((e) => redact(e.windowTitle).trim()),
     )].slice(0, MAX_TITLES);
   } catch {
-    titles = [];
+    windowTitles = [];
   }
 
   const collections = readCollections(root);
 
-  // The newest earlier briefs, read until the window is full. Names sort as
-  // stamps, so the walk stops early on a big board rather than reading it all.
-  const sessions = [];
-  const names = readdirSync(root).filter((n) => STAMP.test(n) && n !== id).sort().reverse();
-  for (const name of names) {
-    if (sessions.length >= CANDIDATE_LIMIT) break;
-    const line = readBriefLine(join(root, name));
-    if ((line.narration ?? "").trim().length >= MIN_NARRATION) sessions.push(line);
-  }
-  const candidates = pickCandidates(sessions, { exclude: id, collections });
+  const me = readBriefLine(dir);
+  const board = readBoard(root).filter((b) => b.id < id);   // older only: a re-run over history must not see the future
+  const taskTitles = readTasks(root);
+  const groups = groupTasks(board);
+  const now = stampTime(id);
+  const ago = (ms) => {
+    const m = Math.round((now - ms) / 60e3);
+    return m < 60 ? `${m} min ago` : m < 48 * 60 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} days ago`;
+  };
+  const scored = scoreTasks({
+    query: [me.summaryLine, me.narration, ...windowTitles, ...(summary.repoHints ?? []), ...me.screenTerms].join(" "),
+    tasks: [...groups].map(([tid, bs]) => ({ id: tid, text: taskText(taskTitles.get(tid) ?? titleFor(bs.at(-1)), bs), lastActive: stampTime(bs[0].id) })),
+    repoHints: summary.repoHints ?? [],
+    now,
+  });
+  const shortlist = scored.map((s) => {
+    const bs = groups.get(s.id);
+    const last = bs.find((b) => b.outcome)?.outcome;
+    return {
+      id: s.id,
+      title: redact(taskTitles.get(s.id) ?? titleFor(bs.at(-1))),
+      now: taskState(bs).now.join("\n"),
+      decided: bs.flatMap((b) => b.outcome?.decided ?? []).slice(0, 5).map(redact).join("\n"),
+      windows: [...new Set(bs.flatMap((b) => b.windows))].slice(0, 5),
+      apps: [...new Set(bs.flatMap((b) => b.apps))].slice(0, 5),
+      files: [...new Set(bs.flatMap((b) => b.outcome?.files ?? []))].slice(0, 10).map(redact),
+      outcome: last ? redact([...last.did, ...last.open].join(" ")).slice(0, 600) : "",
+      lastActive: ago(stampTime(bs[0].id)),
+      sameRepo: s.sameRepo,
+    };
+  });
 
   const body = {
     narration: redact(narration),
+    summary: me.summaryLine ? redact(me.summaryLine) : "",
     // REDACTED LIKE THE TITLES THEY COME FROM. `repoHints` is built by
     // splitting window titles (`render-brief.mjs`), so sending it raw put the
     // same screen-read string on the wire twice — once cleaned, once not.
     apps: (summary.apps ?? []).map(redact),
     repoHints: (summary.repoHints ?? []).map(redact),
-    titles,
-    collections: collections.map(({ id: cid, name, hint }) => ({ id: cid, name, hint: hint ?? "" })),
-    candidates,
+    titles: windowTitles,
+    collections: collections.map((c) => ({ id: c.id, name: c.name, hint: c.hint ?? "" })),
+    tasks: shortlist,
+    // NEVER screenTerms — they scored the shortlist above and stay here.
   };
 
   const post = () => fetch(`${relay.replace(/\/+$/, "")}/v1/classify`, {
@@ -166,6 +193,9 @@ async function main() {
     answers: answer?.answers ?? {},
     collections,
     repoHints: summary.repoHints ?? [],
+    shortlist: shortlist.map((t) => t.id),
+    sessionId: id,
+    title: titleFor(me),
   });
   if (decision.newCollection) {
     // RE-READ, AND CHECK THE ID. Two things happen between the read at the
@@ -184,6 +214,18 @@ async function main() {
       writeFileSync(join(root, "collections.json"), JSON.stringify(current, null, 2) + "\n");
     } else {
       decision.collection = decision.newCollection.id;
+    }
+  }
+  if (decision.newTask) {
+    // RE-READ, AND CHECK THE ID. The id is this brief's own stamp, so a
+    // re-classify racing the first ("Forgot something?") finds the row the
+    // first one wrote and leaves it.
+    let list = [];
+    try { list = JSON.parse(readFileSync(join(root, "tasks.json"), "utf8")); } catch { list = []; }
+    if (!Array.isArray(list)) list = [];
+    if (!list.some((t) => t?.id === decision.newTask.id)) {
+      list.push(decision.newTask);
+      writeFileSync(join(root, "tasks.json"), JSON.stringify(list, null, 2) + "\n");
     }
   }
 
@@ -205,19 +247,15 @@ async function main() {
 
   const context = {
     collection: decision.collection,
-    continues: decision.continues,
-    related: decision.related,
+    task: decision.task,
     tier: decision.tier,
     confidence: decision.confidence,
     decidedBy: "jev",
     model: typeof answer?.model === "string" ? answer.model : null,
   };
   writeFileSync(contextPath, JSON.stringify(context, null, 2) + "\n");
-  console.error(
-    `✓ context → ${context.collection ?? "unsorted"} · `
-      + `${context.continues ? `continues ${context.continues}` : "stands alone"} · `
-      + `${context.related.length} related · ${context.tier ?? "?"}`,
-  );
+  console.error(`✓ context → ${context.collection ?? "unsorted"} · `
+    + `${decision.newTask ? "new task" : `joins ${context.task}`} · ${context.tier ?? "?"}`);
 }
 
 // Even an unexpected throw must not fail the pipeline that called us.

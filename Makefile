@@ -1,4 +1,4 @@
-.PHONY: dev build test probe watch region clean setup bundle install icon dmg release guard-clean relay-deploy relay-dev site-deploy resources dist record transcribe align ground brief summarize signing-setup reset-permissions
+.PHONY: dev build test probe watch region clean setup bundle install icon dmg release guard-clean relay-deploy relay-dev site-deploy resources dist record transcribe align ground brief summarize signing-setup reset-permissions reclassify
 
 # Code-signing identity for the bundle.
 #
@@ -546,14 +546,29 @@ brief:
 summarize:
 	@node scripts/summarize.mjs $(SESSION)
 
-## classify — which collection a brief belongs to and which earlier briefs it
-## draws on, decided by Jev through the relay and written to context.json
+## classify — which collection and which task a brief belongs to, decided by
+## Jev through the relay and written to context.json
 ##
 ## Never fatal, like summarize: no relay, a short narration, or a brief the
 ## developer already placed by hand, and nothing is written. `brief` reads the
 ## file if it is there.
 classify:
 	@node scripts/classify.mjs $(SESSION)
+
+## reclassify — group an existing board into tasks, oldest brief first
+##
+## Renders, classifies, renders again, so each brief's brief.json carries the
+## new matching fields before it is placed and its prompt carries its task
+## after. Needs DEIKO_RELAY_URL (and DEIKO_RELAY_TOKEN if you use one) in the
+## environment — source .env first. Hand-placed briefs are left alone.
+ROOT ?= $(HOME)/Documents/Deiko
+reclassify:
+	@npm run build -w @deiko/alignment --silent
+	@for d in $$(ls -d "$(ROOT)"/2*-* | sort); do \
+		node scripts/render-brief.mjs "$$d" >/dev/null 2>&1 || echo "· $$d did not render"; \
+		node scripts/classify.mjs "$$d"; \
+		node scripts/render-brief.mjs "$$d" >/dev/null 2>&1 || true; \
+	done
 
 ## ground — score how well a session resolved its referents, and check M1
 ##
