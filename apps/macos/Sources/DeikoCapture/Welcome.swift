@@ -296,7 +296,11 @@ struct WelcomeView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Your own Groq key").font(.system(size: 13, weight: .semibold))
                     Text(model.keyPresent
-                        ? "in your login keychain — Deiko's servers never see your narration"
+                        // NO LONGER "Deiko's servers never see your narration" —
+                        // the classifier sends it, redacted, to sort the brief
+                        // into a task. True of what this row is actually about:
+                        // transcription and the summary go straight to Groq.
+                        ? "in your login keychain — transcription and the summary go straight to Groq"
                         : "optional — transcription works without one")
                         .font(.system(size: 11))
                         .foregroundStyle(DeikoStyle.ink2)

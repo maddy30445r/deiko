@@ -11,6 +11,13 @@
  * `context.json` beside the session, and a new task a row in `tasks.json`;
  * `render-brief.mjs` reads both and the board and review card show them.
  *
+ * RUNS FOR OWN-KEY USERS TOO. Sorting is not transcription: somebody who
+ * brought their own Groq key keeps their audio and narration off Deiko's
+ * servers, but their briefs are still placed through the relay, so this reads
+ * `DEIKO_CLASSIFY_URL`/`DEIKO_CLASSIFY_TOKEN` — its own pair, set whenever a
+ * relay exists regardless of keys — falling back to `DEIKO_RELAY_URL`/
+ * `DEIKO_RELAY_TOKEN` for a build or test that only sets those.
+ *
  * WHAT LEAVES THIS MACHINE: what the developer said, the Groq summary line,
  * the app names, the repo hints, the window titles, the collection names and
  * hints, and for up to eight shortlisted tasks their title, where they stand,
@@ -55,7 +62,7 @@ async function main() {
     console.error("usage: node scripts/classify.mjs <session-dir>");
     process.exit(2);
   }
-  const relay = process.env.DEIKO_RELAY_URL;
+  const relay = process.env.DEIKO_CLASSIFY_URL || process.env.DEIKO_RELAY_URL;
   if (!relay) {
     console.error("· no relay configured — skipping the classification");
     return;
@@ -152,8 +159,8 @@ async function main() {
   const post = () => fetch(`${relay.replace(/\/+$/, "")}/v1/classify`, {
     method: "POST",
     headers: {
-      ...(process.env.DEIKO_RELAY_TOKEN
-        ? { Authorization: `Bearer ${process.env.DEIKO_RELAY_TOKEN}` }
+      ...(process.env.DEIKO_CLASSIFY_TOKEN || process.env.DEIKO_RELAY_TOKEN
+        ? { Authorization: `Bearer ${process.env.DEIKO_CLASSIFY_TOKEN || process.env.DEIKO_RELAY_TOKEN}` }
         : {}),
       "Content-Type": "application/json",
     },

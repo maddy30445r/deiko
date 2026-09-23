@@ -80,6 +80,15 @@ enum Credentials {
             env["DEIKO_RELAY_URL"] = relay
             env["DEIKO_RELAY_TOKEN"] = License.bearerToken()
         }
+        // SORTING IS NOT TRANSCRIPTION. A brief is placed in its task through
+        // the relay whoever transcribed it — the owner decided own-key users
+        // keep their memory. Its own names, so `transcribe.mjs` and
+        // `summarize.mjs`, which route through DEIKO_RELAY_URL when it is set,
+        // still never see a relay for somebody using their own key.
+        if let relay = relayURL {
+            env["DEIKO_CLASSIFY_URL"] = relay
+            env["DEIKO_CLASSIFY_TOKEN"] = License.bearerToken()
+        }
         return env
     }
 

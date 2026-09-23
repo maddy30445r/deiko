@@ -253,14 +253,14 @@ final class SettingsModel: ObservableObject {
     /// recorded rather than after.
     var whereAudioGoes: String {
         if usingOwnKey {
-            // TRUE NOW, AND IT WAS NOT. The relay URL used to be passed to the
-            // pipeline regardless, and the summary step fell back to it when
-            // there was no Groq key — so this sentence was shown to exactly the
-            // people it was false for. `Credentials.childEnvironment` withholds
-            // the relay when a personal key is in use. One key covers the words
-            // and the summary now, so there is no half-configured state left in
-            // which this sentence could be false.
-            return "Your narration goes straight to Groq with your key. \(narration.comesBackAs) Deiko's servers never see it."
+            // NO LONGER "Deiko's servers never see it" — the owner decided
+            // sorting runs through the relay for everyone, own-key users
+            // included, so a brief can still be placed into a task. Audio and
+            // the summary are untouched: both go straight to Groq with the
+            // user's own key, exactly as before, and never reach Deiko. Only
+            // the classifier, through its own `DEIKO_CLASSIFY_URL`, reaches
+            // Deiko's relay — which is what this sentence now has to admit.
+            return "Your narration goes straight to Groq with your key. \(narration.comesBackAs) To sort each brief into its task, what you said, a one-line summary and your window titles go to Deiko, which keeps nothing."
         }
         if Credentials.relayURL != nil {
             return isPro

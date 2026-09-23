@@ -1148,7 +1148,8 @@ struct ReviewView: View {
             Self.trustLine(
                 d,
                 hasSummary: model.summary != nil,
-                ownGroqKey: Credentials.willUse("GROQ_API_KEY")
+                ownGroqKey: Credentials.willUse("GROQ_API_KEY"),
+                filed: model.context?.model != nil
             ),
             systemImage: "arrow.up.forward.square"
         )
@@ -1160,14 +1161,15 @@ struct ReviewView: View {
     /// What left this Mac, for this session. The claim itself lives in
     /// `SessionClaims` (DeikoHandoff), which is testable; this only supplies
     /// the digest's fields.
-    static func trustLine(_ d: BriefDigest, hasSummary: Bool, ownGroqKey: Bool) -> String {
+    static func trustLine(_ d: BriefDigest, hasSummary: Bool, ownGroqKey: Bool, filed: Bool) -> String {
         SessionClaims.trustLine(
             transcriber: d.summary.transcriber,
             degradedReason: d.summary.degradedReason,
             seconds: Int((d.summary.durationMs / 1000).rounded()),
             uploadedChunks: d.summary.uploadedChunks,
             hasSummary: hasSummary,
-            ownGroqKey: ownGroqKey
+            ownGroqKey: ownGroqKey,
+            filed: filed
         )
     }
 

@@ -47,13 +47,17 @@ public enum SessionClaims {
     ///     rather than through Deiko.
     ///   - uploadedChunks: how many requests actually reached the network this
     ///     run. Nil for a brief rendered before this was recorded.
+    ///   - filed: whether this brief was placed by the classifier through the
+    ///     relay — true for own-key users too, since sorting runs through
+    ///     Deiko regardless of who transcribed the audio.
     public static func trustLine(
         transcriber: String?,
         degradedReason: String?,
         seconds: Int,
         uploadedChunks: Int?,
         hasSummary: Bool,
-        ownGroqKey: Bool
+        ownGroqKey: Bool,
+        filed: Bool
     ) -> String {
         var parts: [String] = []
 
@@ -98,6 +102,15 @@ public enum SessionClaims {
             parts.append(ownGroqKey
                 ? "your narration to Groq, with your key"
                 : "your narration, for the summary")
+        }
+
+        // SORTING IS NOT TRANSCRIPTION. Own-key users keep their audio and
+        // summary off Deiko's servers, but a brief placed by the classifier
+        // still sent it what you said and your window titles, through the
+        // relay — so the card has to admit that too, or the line understates
+        // what left this Mac.
+        if filed {
+            parts.append("what you said and your window titles, to file it")
         }
 
         return parts.isEmpty
