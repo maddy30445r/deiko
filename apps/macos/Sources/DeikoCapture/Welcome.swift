@@ -298,7 +298,7 @@ struct WelcomeView: View {
         guard model.keyPresent else { return "optional — transcription works without one" }
         let local = "in your login keychain — transcription and the summary go straight to Groq"
         guard Credentials.relayURL != nil else { return local }
-        return local + "; sorting — including notes on earlier work — goes through a model at Deiko, which keeps nothing"
+        return local + "; to sort briefs, what you said and notes on earlier work pass through Deiko to a sorting model, and Deiko keeps nothing"
     }
 
     private var setupRows: some View {
