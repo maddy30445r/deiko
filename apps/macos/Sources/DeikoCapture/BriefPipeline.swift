@@ -471,6 +471,9 @@ enum BriefPipeline {
         /// handoff pastes this beside the brief instead. Nil when the session
         /// was rendered without a persona.
         let personaText: String?
+        /// The persona's own `.md`, for a chat that takes a document paste.
+        /// The text above is the fallback for one that does not.
+        let personaFile: String?
     }
 
     /// Read from disk rather than held in memory: the review window may have
@@ -486,6 +489,7 @@ enum BriefPipeline {
         // the review window may have changed which persona this brief is for
         // since the orb first appeared, and the files are what saw that.
         let persona = Personas.browserText(forSession: sessionDir)
+        let personaFile = Personas.file(forSession: sessionDir)
         // THE TWO MUST FALL BACK TOGETHER, and they used to fall back
         // independently.
         //
@@ -505,7 +509,8 @@ enum BriefPipeline {
         guard let attached = try? String(
             contentsOf: dir.appendingPathComponent("prompt-attached.txt"), encoding: .utf8
         ) else {
-            return Prompt(text: text, attachedText: text, images: [], personaText: persona)
+            return Prompt(text: text, attachedText: text, images: [],
+                          personaText: persona, personaFile: personaFile)
         }
         let images = (try? digest(sessionDir: sessionDir).cropPaths) ?? []
         // Same rule from the other side: an attached text that numbers
@@ -514,7 +519,8 @@ enum BriefPipeline {
             text: text,
             attachedText: images.isEmpty ? text : attached,
             images: images,
-            personaText: persona
+            personaText: persona,
+            personaFile: personaFile
         )
     }
 

@@ -160,7 +160,8 @@ enum Handoff {
     }
 
     static func deliver(
-        to target: HandoffTarget, text: String, images: [String], persona: String? = nil
+        to target: HandoffTarget, text: String, images: [String],
+        persona: String? = nil, personaFile: String? = nil
     ) async throws {
         // Read every crop BEFORE anything is activated, clicked or pasted.
         //
@@ -547,6 +548,19 @@ enum Handoff {
         // Same delay as between images, for the same reason: nothing can
         // observe that a paste has landed, so the next `clearContents()` is a
         // hazard until the composer has taken this one.
+        // THE DOCUMENT FIRST, THEN THE WORDS. A chat that takes document
+        // pastes gets the persona as a named file — which is what somebody
+        // reading the thread later should see, rather than a page of
+        // instructions in the message. A chat that ignores it is left exactly
+        // as it was, and the short text below covers it. Deiko gets no signal
+        // about which happened, so it does both rather than guessing.
+        if let personaFile, FileManager.default.fileExists(atPath: personaFile) {
+            try stillFocused("the persona file was pasted")
+            note("pasting \((personaFile as NSString).lastPathComponent) into \(target.appName)")
+            try pasteFile(personaFile)
+            try await Task.sleep(for: .seconds(pasteboardRestoreDelay))
+        }
+
         if let persona, !persona.isEmpty {
             try stillFocused("the persona was pasted")
             note("pasting the persona (\(persona.count) characters) into \(target.appName)")
@@ -603,6 +617,25 @@ enum Handoff {
             // content nobody offered it.
             item.setString("", forType: transientType)
             return pasteboard.writeObjects([item])
+        }
+    }
+
+    /// A file on the clipboard, the way Finder's Copy puts it there.
+    ///
+    /// MEASURED: Chrome turns this into a real `File` in the page's paste
+    /// event — `types: ["Files"]`, `qa-ticket.md (text/markdown, 851b)` — so a
+    /// chat that handles document pastes attaches the persona as a document
+    /// instead of receiving it as prose. Gemini ignores it (nothing is
+    /// inserted, no tile appears), which is why the short text still follows.
+    ///
+    /// No text flavour rides along, deliberately: when both were on the
+    /// pasteboard for images, browsers preferred the URL and inserted
+    /// `file:///Users/…` as dead text. A file URL alone either becomes a file
+    /// or becomes nothing.
+    private static func pasteFile(_ path: String) throws {
+        let url = URL(fileURLWithPath: path)
+        try pasteboardPaste(what: "the persona file") { pasteboard in
+            pasteboard.writeObjects([url as NSURL])
         }
     }
 

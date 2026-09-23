@@ -620,7 +620,8 @@ final class OrbController: NSObject {
                     // told where the persona file is and reads it itself;
                     // pasting its contents there too would put the same
                     // instructions in the chat twice.
-                    persona: attach ? prompt.personaText : nil
+                    persona: attach ? prompt.personaText : nil,
+                    personaFile: attach ? prompt.personaFile : nil
                 )
                 await MainActor.run {
                     Handoff.lastReport.outcome = .delivered

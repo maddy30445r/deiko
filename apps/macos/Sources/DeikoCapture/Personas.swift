@@ -132,6 +132,17 @@ enum Personas {
     /// `BriefPipeline.prompt` had to reach for `MainActor.assumeIsolated` to
     /// call it, which is a crash for the first caller that is not already
     /// there rather than a compile error.
+    /// The persona file this session points at, for a destination that can
+    /// take a document rather than prose.
+    nonisolated static func file(forSession sessionDir: String) -> String? {
+        let pointer = URL(fileURLWithPath: sessionDir).appendingPathComponent("persona.txt")
+        guard let path = try? String(contentsOf: pointer, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty,
+            FileManager.default.fileExists(atPath: path)
+        else { return nil }
+        return path
+    }
+
     /// WHAT A BROWSER GETS: the short form when there is one, the whole file
     /// when the persona is hand-written (see `Persona.summary`).
     nonisolated static func browserText(forSession sessionDir: String) -> String? {
