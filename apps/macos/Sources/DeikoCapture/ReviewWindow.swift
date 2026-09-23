@@ -77,9 +77,8 @@ final class ReviewModel: ObservableObject {
         }
     }
 
-    /// WHERE THIS BRIEF SITS in what Deiko remembers: its collection, the
-    /// brief it continues, the earlier ones it draws on, and how much work it
-    /// looks like. Nil until the classifier has answered — which happens
+    /// WHERE THIS BRIEF SITS in what Deiko remembers: its collection, its
+    /// task, and how much work it looks like. Nil until the classifier has answered — which happens
     /// after the card is already on screen, so the row appears a moment
     /// later rather than holding the brief back.
     @Published var context: SessionContext?
@@ -98,17 +97,17 @@ final class ReviewModel: ObservableObject {
         apply(next)
     }
 
-    /// Which earlier brief this one continues. `nil` is "it stands on its
-    /// own", which is a real answer and not an absence.
-    func setContinues(_ id: String?) {
+    /// Which task this brief belongs to. Its own id is "starts fresh", which
+    /// is a real answer and not an absence.
+    func setTask(_ id: String) {
         var next = context ?? SessionContext()
-        next.continues = id
-        // The classifier keeps its related list out of the way of this: a
-        // brief cannot both be the one continued and merely related.
-        next.related.removeAll { $0 == id }
+        next.task = id
         next.decidedBy = "you"
         apply(next)
     }
+
+    var sessionID: String? { sessionDir.map { ($0 as NSString).lastPathComponent } }
+    var ownTask: String? { sessionID.map(Tasks.own) }
 
     private func apply(_ next: SessionContext) {
         guard let sessionDir else { return }
@@ -477,6 +476,12 @@ final class ReviewModel: ObservableObject {
         classifyTask?.cancel()
         placing = true
         classifyTask = Task { [self] in
+            // THE SUMMARY IS THE BRIEF'S BEST LINE — it names the task and
+            // matches it — and it is written by a call that starts at the
+            // same moment. Wait for it; it has its own fifteen-second cap.
+            // ponytail: a throw inside that window ships without its task,
+            // as a throw before placement always has.
+            await summaryTask?.value
             // THE BOARD IS WHAT "carries on from" CHOOSES FROM, and until now
             // only the main window ever loaded it. Record a session without
             // opening that window — which is the ordinary way to use Deiko —
@@ -500,6 +505,7 @@ final class ReviewModel: ObservableObject {
                 guard stillCurrent(sessionDir) else { return }
                 if let rerendered { digest = rerendered }
                 context = SessionContext.read(sessionDir: sessionDir)
+                await SessionsStore.shared.load(root: (sessionDir as NSString).deletingLastPathComponent)
                 collections = Collections.all()
             }
             placing = false
@@ -957,13 +963,13 @@ struct ReviewView: View {
                 // sentence nobody needs to read. So the unlinked state is two
                 // words in the second voice — present, clickable, silent —
                 // and linking it promotes the whole phrase to indigo.
-                if let earlier = continuesLabel(context) {
+                if let earlier = taskLabel(context) {
                     Text("carries on from")
                         .font(.system(size: 11))
                         .foregroundStyle(DeikoStyle.ink2)
-                    continuesMenu(context, label: earlier, linked: true)
+                    taskMenu(context, label: earlier, linked: true)
                 } else {
-                    continuesMenu(context, label: "on its own", linked: false)
+                    taskMenu(context, label: "on its own", linked: false)
                 }
 
                 if let tier = context.tierLabel {
@@ -979,17 +985,32 @@ struct ReviewView: View {
         }
     }
 
-    @ViewBuilder private func continuesMenu(
+    @ViewBuilder private func taskMenu(
         _ context: SessionContext, label: String, linked: Bool
     ) -> some View {
         Menu {
-            Button("Nothing — it stands on its own") { model.setContinues(nil) }
-            if !SessionsStore.shared.items.isEmpty { Divider() }
-            ForEach(SessionsStore.shared.items.prefix(20)) { item in
+            if let own = model.ownTask {
+                Button("Nothing — it starts fresh") { model.setTask(own) }
+                Button("Name this task…") {
+                    guard let title = Collections.askText(
+                        title: "Name this task",
+                        informative: "The next brief about the same work joins it.",
+                        value: model.summary?.split(separator: "\n").first.map(String.init) ?? "",
+                        placeholder: "What the work is",
+                        confirm: "Name"
+                    ), !title.isEmpty else { return }
+                    Tasks.name(own, title)
+                    model.setTask(own)
+                }
+            }
+            let others = SessionsStore.shared.recentTasks(excluding: model.ownTask)
+            if !others.isEmpty { Divider() }
+            ForEach(others) { group in
                 Button {
-                    model.setContinues(item.id)
+                    model.setTask(group.id)
                 } label: {
-                    Text(item.id == context.continues ? "✓ \(item.title)" : "   \(item.title)")
+                    let title = SessionsStore.shared.title(ofTask: group.id)
+                    Text(group.id == context.task ? "✓ \(title)" : "   \(title)")
                 }
             }
         } label: {
@@ -1000,15 +1021,16 @@ struct ReviewView: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .help("The earlier brief this one carries on from. Its folder travels with this brief, so your agent can read what happened then.")
+        .help("The piece of work this brief carries on. Where it stands travels with this brief, so your agent picks up from there.")
     }
 
-    /// The continued brief in a few words — its own title, shortened, because
-    /// a whole narration in a menu label would push the row off the card.
-    private func continuesLabel(_ context: SessionContext) -> String? {
-        guard let id = context.continues else { return nil }
-        guard let item = SessionsStore.shared.items.first(where: { $0.id == id }) else { return id }
-        return item.title.count > 28 ? String(item.title.prefix(28)) + "…" : item.title
+    /// The task in a few words, or nil when this brief is on its own.
+    private func taskLabel(_ context: SessionContext) -> String? {
+        guard let id = context.task, id != model.ownTask,
+              SessionsStore.shared.items.contains(where: { $0.task == id && $0.id != model.sessionID })
+        else { return nil }
+        let title = SessionsStore.shared.title(ofTask: id)
+        return title.count > 28 ? String(title.prefix(28)) + "…" : title
     }
 
     /// Named by hand, and nothing is created until somebody types something.

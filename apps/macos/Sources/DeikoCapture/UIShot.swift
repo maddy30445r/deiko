@@ -102,10 +102,9 @@ enum UIShot {
         model.collections = Collections.all()
         model.context = SessionContext(
             collection: Collections.all().first?.id,
-            continues: SessionsStore.shared.items.first?.id,
-            related: [],
+            task: SessionsStore.shared.items.first?.task,
             tier: "quick",
-            confidence: .init(collection: 0.72, continues: 0.88, tier: 0.91),
+            confidence: .init(collection: 0.72, task: 0.88, tier: 0.91),
             decidedBy: "jev",
             model: "jev-1.13.0"
         )
@@ -136,10 +135,9 @@ enum UIShot {
         }
         model.context = SessionContext(
             collection: Collections.all().first?.id,
-            continues: items.dropFirst().first?.id,
-            related: [],
+            task: items.dropFirst().first?.task,
             tier: "quick",
-            confidence: .init(collection: 0.72, continues: 0.88, tier: 0.91),
+            confidence: .init(collection: 0.72, task: 0.88, tier: 0.91),
             decidedBy: "jev",
             model: "jev-1.13.0"
         )

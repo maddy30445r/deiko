@@ -4,12 +4,16 @@ import Foundation
 // ─────────────────────────────────────────────────────────────────────────────
 // THE MEMORY, ON DISK
 //
-// Two flat files, beside the sessions, following `persona.txt`'s arrangement:
+// Flat files, beside the sessions, following `persona.txt`'s arrangement:
 //
 //   ~/Documents/Deiko/collections.json   the projects a brief can land in
-//   <session>/context.json               where this brief landed, which earlier
-//                                        briefs it continues or draws on, and
-//                                        how much work it looked like
+//   ~/Documents/Deiko/tasks.json         what each task is called
+//   ~/Documents/Deiko/tasks/<id>.md      a task's note, compiled by
+//                                        `render-brief.mjs` and never
+//                                        written here
+//   <session>/context.json               where this brief landed, which task
+//                                        it belongs to, and how much work it
+//                                        looked like
 //
 // `scripts/classify.mjs` writes `context.json` from the classifier's answers;
 // the review card and the board rewrite it when the developer corrects a
@@ -22,16 +26,16 @@ import Foundation
 struct SessionContext: Codable, Equatable {
     struct Confidence: Codable, Equatable {
         var collection: Double?
-        var continues: Double?
+        var task: Double?
         var tier: Double?
     }
 
     /// A collection id, or nil for Unsorted.
     var collection: String?
-    /// The session this brief continues, corrects or refers back to.
-    var continues: String?
-    /// Earlier briefs that are useful background, most likely first.
-    var related: [String] = []
+    /// The task this brief belongs to — `t-<stamp>` of the brief that started
+    /// it. Nil reads as its own task, which is what every brief was before
+    /// tasks existed.
+    var task: String?
     /// `quick` / `medium` / `complex` / `reasoning` — see `TIERS` in
     /// `scripts/lib/context.mjs`.
     var tier: String?
@@ -226,5 +230,50 @@ enum Collections {
             Emit.log("collections: could not write \(file.lastPathComponent) — \(error.localizedDescription)")
             return false
         }
+    }
+}
+
+struct BriefTask: Codable, Identifiable, Equatable {
+    let id: String
+    var title: String
+}
+
+/// Task titles, beside the collections. Membership is not here — it is each
+/// brief's `context.json` — so this file only ever answers "what is it called".
+enum Tasks {
+    static var file: URL {
+        URL(fileURLWithPath: Collections.root).appendingPathComponent("tasks.json")
+    }
+
+    /// The task a brief is when nobody has put it in another one.
+    static func own(_ stamp: String) -> String { "t-" + stamp }
+
+    static func all() -> [BriefTask] {
+        guard let data = try? Data(contentsOf: file) else { return [] }
+        return (try? JSONDecoder().decode([BriefTask].self, from: data)) ?? []
+    }
+
+    /// Name or rename a task. Upserts: a task nobody has named yet has no row.
+    static func name(_ id: String, _ raw: String) {
+        let title = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return }
+        var list = all()
+        if let index = list.firstIndex(where: { $0.id == id }) {
+            list[index].title = title
+        } else {
+            list.append(BriefTask(id: id, title: title))
+        }
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            try encoder.encode(list).write(to: file, options: .atomic)
+        } catch {
+            Emit.log("tasks: could not write \(file.lastPathComponent) — \(error.localizedDescription)")
+        }
+    }
+
+    /// Compiled by `render-brief.mjs` for tasks of two briefs or more.
+    static func notePath(for id: String) -> URL {
+        URL(fileURLWithPath: Collections.root).appendingPathComponent("tasks/\(id).md")
     }
 }

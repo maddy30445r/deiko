@@ -302,7 +302,8 @@ final class SessionsStore: ObservableObject {
         /// All three come from the same detached pass that reads the manifest,
         /// so the memory costs the board one more small decode per session.
         let collection: String?
-        let continues: String?
+        /// The task this brief belongs to; its own when nobody moved it.
+        let task: String
         /// The first line an agent wrote back about what it did, if one did.
         let outcome: String?
     }
@@ -325,6 +326,45 @@ final class SessionsStore: ObservableObject {
 
     func count(of id: String) -> Int { counts[id] ?? 0 }
 
+    @Published private(set) var taskTitles: [String: String] = [:]
+
+    struct Group: Identifiable {
+        let id: String
+        let items: [Item]
+    }
+
+    /// Briefs by task, each task's newest first, tasks ordered by their
+    /// newest brief — so a task sits where its latest work is rather than
+    /// jumping to the top of the board.
+    func groups(of items: [Item]) -> [Group] {
+        Dictionary(grouping: items, by: \.task)
+            .map { Group(id: $0.key, items: $0.value.sorted { $0.date > $1.date }) }
+            .sorted { $0.items[0].date > $1.items[0].date }
+    }
+
+    func title(ofTask id: String) -> String {
+        taskTitles[id]
+            ?? items.filter { $0.task == id }.min { $0.date < $1.date }?.title
+            ?? "A task"
+    }
+
+    func recentTasks(excluding id: String?) -> [Group] {
+        Array(groups(of: items).filter { $0.id != id }.prefix(20))
+    }
+
+    /// Put a brief in another task. Re-rendered, because the prompt carries
+    /// the task — unlike a collection move, which changes nothing it says.
+    func move(_ item: Item, toTask id: String) {
+        var context = SessionContext.read(sessionDir: item.dir) ?? SessionContext()
+        context.task = id
+        context.decidedBy = "you"
+        try? context.write(sessionDir: item.dir)
+        Task {
+            _ = try? await BriefPipeline.rerender(sessionDir: item.dir)
+            await load(root: root)
+        }
+    }
+
     /// File a brief somewhere else, from the board rather than the card.
     /// Marked as the developer's decision, which the classifier never
     /// overwrites.
@@ -339,7 +379,7 @@ final class SessionsStore: ObservableObject {
         items[index] = Item(
             id: item.id, dir: item.dir, date: item.date, line: item.line,
             crops: item.crops, apps: item.apps, repo: item.repo,
-            collection: collection, continues: item.continues, outcome: item.outcome
+            collection: collection, task: item.task, outcome: item.outcome
         )
     }
 
@@ -403,13 +443,14 @@ final class SessionsStore: ObservableObject {
                     apps: digest?.summary.apps ?? [],
                     repo: digest?.summary.repoHints.first,
                     collection: context?.collection,
-                    continues: context?.continues,
+                    task: stored?.task ?? Tasks.own(name),
                     outcome: outcome
                 )
             }
         }.value
         items = read
         collections = Collections.all()
+        taskTitles = Dictionary(Tasks.all().map { ($0.id, $0.title) }, uniquingKeysWith: { a, _ in a })
         counts = read.reduce(into: [:]) { tally, item in
             if let id = item.collection { tally[id, default: 0] += 1 }
         }
@@ -580,6 +621,20 @@ private struct BoardPane: View {
         case all, unsorted, collection(String)
     }
 
+    /// A section in a grid always starts a new row, so a section per lone
+    /// brief stacked most of the board into one column. Lone briefs next to
+    /// each other share one headerless section; a task of two or more gets
+    /// its own.
+    static func sections(_ groups: [SessionsStore.Group]) -> [[SessionsStore.Group]] {
+        groups.reduce(into: []) { out, group in
+            if group.items.count == 1, let last = out.last, last[0].items.count == 1 {
+                out[out.count - 1].append(group)
+            } else {
+                out.append([group])
+            }
+        }
+    }
+
     private var shown: [SessionsStore.Item] {
         let inFilter = sessions.items.filter { item in
             switch filter {
@@ -672,7 +727,18 @@ private struct BoardPane: View {
                         // staggered the top edge and read as a rendering fault
                         // rather than masonry.
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), spacing: 14, alignment: .top)], spacing: 14) {
-                            ForEach(shown) { item in BoardCard(item: item, store: sessions) }
+                            // ONE SECTION PER TASK. A task of two briefs or
+                            // more is headed; a single brief is a plain card,
+                            // which is most of any board. No pinned headers:
+                            // a pinned view fights the scroll view for the
+                            // same tracking areas the fixed band escaped.
+                            ForEach(Self.sections(sessions.groups(of: shown)), id: \.[0].id) { run in
+                                Section {
+                                    ForEach(run.flatMap(\.items)) { item in BoardCard(item: item, store: sessions) }
+                                } header: {
+                                    if run.count == 1, run[0].items.count > 1 { TaskHeader(group: run[0], store: sessions) }
+                                }
+                            }
                         }
                     }
                 }
@@ -837,15 +903,6 @@ private struct BoardCard: View {
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            // NOT AN ARROW. A glyph standing in for a word is an icon system
-            // this app does not have; the sentence says it and reads aloud.
-            if let continues = item.continues,
-               let earlier = store.items.first(where: { $0.id == continues }) {
-                (Text("Carries on from ").font(.system(size: 11))
-                    + Text(earlier.title).font(.system(size: 11, weight: .medium)))
-                    .foregroundStyle(DeikoStyle.ink2)
-                    .lineLimit(1)
-            }
             HStack(spacing: 6) {
                 Text(Self.stamp(item.date))
                 if !item.crops.isEmpty {
@@ -900,6 +957,46 @@ private struct BoardCard: View {
     }
 }
 
+/// A task's name above its briefs: what it is, how many, since when. The
+/// menu is on the words, like a collection's is on its chip.
+private struct TaskHeader: View {
+    let group: SessionsStore.Group
+    let store: SessionsStore
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(store.title(ofTask: group.id))
+                .font(.system(size: 13, weight: .medium))
+                .lineLimit(1)
+            Text("· \(group.items.count) briefs · since \(BoardCard.stamp(group.items.last!.date))")
+                .font(.system(size: 11))
+                .foregroundStyle(DeikoStyle.ink2)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .padding(.top, 10)
+        .contentShape(Rectangle())
+        .contextMenu {
+            Button("Rename…") {
+                guard let title = Collections.askText(
+                    title: "Rename this task",
+                    informative: "Its briefs stay together. The next one that belongs here joins them.",
+                    value: store.title(ofTask: group.id),
+                    placeholder: "What the work is",
+                    confirm: "Rename"
+                ), !title.isEmpty else { return }
+                Tasks.name(group.id, title)
+                Task { await store.load(root: store.root) }
+            }
+            Button("Open the task note") {
+                let note = Tasks.notePath(for: group.id)
+                if FileManager.default.fileExists(atPath: note.path) { NSWorkspace.shared.open(note) }
+            }
+        }
+        .help("Right-click to rename this task or open its note")
+    }
+}
+
 /// Every verb a recorded session has, in one place, so the board card and the
 /// dashboard row cannot drift apart.
 struct SessionMenu: View {
@@ -917,7 +1014,7 @@ struct SessionMenu: View {
             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.dir)])
         }
         Divider()
-        Menu("Move to") {
+        Menu("Move to collection") {
             Button("Unsorted") { store.move(item, to: nil) }
             if !store.collections.isEmpty { Divider() }
             ForEach(store.collections) { collection in
@@ -929,6 +1026,16 @@ struct SessionMenu: View {
             }
             Divider()
             Button("New collection…") { newCollection() }
+        }
+        Menu("Move to task") {
+            Button("On its own") { store.move(item, toTask: Tasks.own(item.id)) }
+            let others = store.recentTasks(excluding: item.task)
+            if !others.isEmpty { Divider() }
+            ForEach(others) { group in
+                Button("\(store.title(ofTask: group.id)) · \(group.items.count)") {
+                    store.move(item, toTask: group.id)
+                }
+            }
         }
         Divider()
         Button("Delete…", role: .destructive) { confirmDelete() }

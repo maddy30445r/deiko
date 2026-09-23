@@ -440,8 +440,8 @@ enum BriefPipeline {
         return try digest(sessionDir: sessionDir)
     }
 
-    /// Place the brief: which collection, which earlier briefs it continues
-    /// or draws on, how much work it looks like. Written to `context.json`
+    /// Place the brief: which collection, which task it belongs to, how much
+    /// work it looks like. Written to `context.json`
     /// by the script; nil when it decided nothing — no relay, a short
     /// narration, a network that was not there.
     ///
