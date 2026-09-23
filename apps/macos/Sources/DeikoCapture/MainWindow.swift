@@ -970,9 +970,9 @@ private struct CollectionMenu: View {
         Button("Describe…") {
             guard let hint = Collections.askText(
                 title: "What is \(collection.name)?",
-                informative: "One line. Deiko reads it when it decides where a new brief belongs — \"the Cloudflare site, not the app\".",
+                informative: "One line on what it covers. Deiko reads it when it works out where a new brief belongs.",
                 value: collection.hint,
-                placeholder: "the Cloudflare site, not the app",
+                placeholder: "the mobile app, not the website",
                 confirm: "Save"
             ) else { return }
             Collections.describe(id: collection.id, hint: hint)

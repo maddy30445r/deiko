@@ -84,7 +84,7 @@ struct Collection: Codable, Identifiable, Equatable {
     let id: String
     var name: String
     /// One line the classifier reads as the option's description — "the
-    /// Cloudflare site, not the app". The cheapest accuracy there is.
+    /// mobile app, not the website". The cheapest accuracy there is.
     var hint: String = ""
 }
 
