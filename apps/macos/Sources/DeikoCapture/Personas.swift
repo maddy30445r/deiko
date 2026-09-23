@@ -45,11 +45,13 @@ enum Personas {
     static func all() -> [Persona] {
         var list = stored()
         let known = Set(list.map(\.id))
-        let seenBuiltIns = Set(UserDefaults.standard.stringArray(forKey: listKey + "_SEEDED") ?? [])
-        for builtIn in Persona.builtIns where !known.contains(builtIn.id) && !seenBuiltIns.contains(builtIn.id) {
+        // Additive, and that is all it needs to be: `remove` refuses to delete
+        // a built-in, so one can never go missing and come back. An earlier
+        // version kept a "already seeded" set to prevent exactly that, which
+        // could not happen.
+        for builtIn in Persona.builtIns where !known.contains(builtIn.id) {
             list.append(builtIn)
         }
-        UserDefaults.standard.set(Persona.builtIns.map(\.id), forKey: listKey + "_SEEDED")
         list = list.map(adoptHandEdit)
         save(list)
         return list
@@ -115,7 +117,13 @@ enum Personas {
     }
 
     /// The file's contents, for a destination that cannot open a path.
-    static func text(forSession sessionDir: String) -> String? {
+    ///
+    /// `nonisolated`: this reads two files and touches none of the state the
+    /// rest of this type guards, so it does not need the main actor — and
+    /// `BriefPipeline.prompt` had to reach for `MainActor.assumeIsolated` to
+    /// call it, which is a crash for the first caller that is not already
+    /// there rather than a compile error.
+    nonisolated static func text(forSession sessionDir: String) -> String? {
         let pointer = URL(fileURLWithPath: sessionDir).appendingPathComponent("persona.txt")
         guard let path = try? String(contentsOf: pointer, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty,

@@ -345,10 +345,29 @@ private struct PersonaEditor: View {
                     Toggle("Overwrite this persona?", isOn: $overwriting)
                         .font(.system(size: 13))
                         .onChange(of: overwriting) { _, on in
-                            // Turning it OFF returns to the form and drops the
-                            // written text — said plainly in the line below,
-                            // because it is the one destructive control here.
-                            if on { text = draft.markdown } else { draft.overrideText = nil }
+                            if on { text = draft.markdown; return }
+                            // ASKED, BECAUSE IT IS A DELETION. Turning this off
+                            // returns to the form, and the prompt somebody
+                            // wrote by hand is gone with it — an 11pt caption
+                            // underneath was not a warning, it was a label.
+                            guard draft.overrideText != nil || text != draft.markdown else {
+                                draft.overrideText = nil
+                                return
+                            }
+                            let alert = NSAlert()
+                            alert.alertStyle = .warning
+                            alert.messageText = "Go back to the form?"
+                            alert.informativeText =
+                                "The prompt you wrote is replaced by one built from the options. "
+                                + "Your text is not kept."
+                            alert.addButton(withTitle: "Discard my text")
+                            alert.addButton(withTitle: "Keep editing")
+                            if alert.runModal() == .alertFirstButtonReturn {
+                                draft.overrideText = nil
+                                text = draft.markdown
+                            } else {
+                                overwriting = true
+                            }
                         }
                     Text(overwriting
                         ? "The options above are ignored while this is on."
