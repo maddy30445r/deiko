@@ -120,7 +120,9 @@ Deiko is two things on one Mac, and the whole system falls out of telling them a
 
 The world is the same one the marketing site is built in — white and paper grey, near-black ink, one indigo the product owns — translated for a window that has to survive dark mode. Every colour is a light/dark pair built twice rather than dimmed once: a card is lighter than its ground in the dark and darker in the light, and the primary button, ink in daylight, inverts to the accent at night because near-black on near-black is a button nobody can find.
 
-Personality lives in precision, not decoration. There is one display face and it is allowed on titles only; one accent and it is spent on the gesture; one red and it means a microphone is open. What is left is spacing, hairlines and a shadow that reads as paper resting on a desk.
+Precision is the floor, not the point. There is one display face and it is allowed on titles only; one accent and it is spent on the gesture; one red and it means a microphone is open — and inside that discipline the app is meant to be **charming**: quirky where it costs nothing, funny about the problem rather than about itself, written the way a developer friend would say it. The restraint exists so the charm has somewhere to land. A window that is merely correct is a failure of this design, not a conservative reading of it.
+
+Charm here is specific: it lives in the copy ("drag the coin onto the agent · click it for more"), in the coin being an object you can pick up and throw, in empty states that dare you to try the gesture, and in the product admitting what it is ("this is a scrappy little demo we hacked together so you can have a go"). It never lives in decoration bolted onto a control, and it never costs somebody clarity at 11pt.
 
 **Key Characteristics:**
 - Paper-grey grounds, white cards, hairline borders, one indigo accent (`#4a5bac`).
@@ -129,6 +131,7 @@ Personality lives in precision, not decoration. There is one display face and it
 - Red means a microphone is open, and is the one colour that never moves.
 - Colours drawn onto somebody else's pixels are fixed, not dynamic.
 - Sentence case everywhere; no tracked uppercase labels.
+- Charming and quirky inside the discipline — the copy, the coin and the empty states carry it; never the chrome.
 
 ## Colors
 
@@ -181,6 +184,8 @@ A near-monochrome studio palette with one indigo, three state colours and a lave
 - **Mono** (400, 11–12px): the persona file, keycaps, the brief, crop counts.
 
 ### Named Rules
+**The Charm Pays Rent Rule.** Every quirk has to earn its place by doing a job — naming the gesture, admitting a limit, making an object feel throwable. A joke that costs a reader clarity, or a flourish that decorates a control, is cut. Dry is a bug; cute-at-the-expense-of-legible is the same bug wearing a hat.
+
 **The Titles Only Rule.** Bricolage carries window titles, card headings and the orb's verdict. Never a control label, never anything under 14pt. If the file is missing, every window falls back to the system face and still reads correctly.
 
 **The Normal Volume Rule.** Section headings are sentence case. The tracked uppercase label this app used to shout in ("DEIKO NEEDS TO SEE AND HEAR WHAT YOU POINT AT") is not in the design any more.
@@ -258,6 +263,8 @@ An empty pane sits on the lavender wall with a 16px title and one line that says
 - **Do** write section headings in sentence case.
 - **Do** scale a component by its own size parameter, never by wrapping a fixed drawing in a smaller frame.
 - **Do** answer the pointer: rows and cards that can be opened carry a hover state.
+- **Do** write like a developer friend who is funny about the problem: plain, specific, a little quirky, never corporate. "Nothing heard you — Deiko needs the microphone" beats "Audio input unavailable".
+- **Do** spend personality on the moments that repeat — the empty state, the thing you drag, the sentence under a number — where it compounds instead of decorating.
 
 ### Don't:
 - **Don't** use red for anything except an open microphone.
@@ -267,3 +274,4 @@ An empty pane sits on the lavender wall with a 16px title and one line that says
 - **Don't** set a tracked uppercase label anywhere.
 - **Don't** use glass or material except on a surface that floats over another application.
 - **Don't** let a custom surface skip Reduce Transparency, Increase Contrast or accessibility text sizes; what Apple draws, Apple maintains, and what we draw is ours to check.
+- **Don't** mistake "native and restrained" for permission to be dry. A pane of correct grey rows with no voice in it has failed this system as surely as a gradient would.
