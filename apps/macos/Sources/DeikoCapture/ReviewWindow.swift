@@ -1149,7 +1149,7 @@ struct ReviewView: View {
                 d,
                 hasSummary: model.summary != nil,
                 ownGroqKey: Credentials.willUse("GROQ_API_KEY"),
-                filed: model.context?.model != nil
+                filed: model.currentSessionDir.map(ClassifyRequest.wasSent(sessionDir:)) ?? false
             ),
             systemImage: "arrow.up.forward.square"
         )

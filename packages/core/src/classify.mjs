@@ -72,6 +72,18 @@ async function main() {
   const id = basename(dir);
   const root = dirname(dir);
   const contextPath = join(dir, "context.json");
+  // WRITTEN BEFORE THE REQUEST, NOT AFTER THE ANSWER. `context.json` alone
+  // cannot say "the words left this Mac to be sorted" — it might never get
+  // written (two 5xx in a row, a timeout, a network error) or might get
+  // overwritten by a hand placement that races the answer back
+  // (`decidedBy: "you"`, `model: null`), in either case while the POST below
+  // already carried the narration and window titles out. `SessionClaims`
+  // exists precisely so a card never understates what left; this marker is
+  // its input for the classifier the same way `uploadedChunks` is for audio.
+  // Read by the app as `filed` — see `ClassifyRequest.wasSent` in
+  // `Context.swift` — not by anything else here, and it carries no content:
+  // an ISO timestamp is for a human debugging on disk, nothing more.
+  const sentMarker = join(dir, "classify.sent");
 
   if (existsSync(contextPath)) {
     try {
@@ -170,6 +182,10 @@ async function main() {
 
   let answer;
   try {
+    // Before the network call, not after: everything below can fail or
+    // never resolve, and by the time any of them do, the body — narration,
+    // summary, window titles — has already gone out.
+    writeFileSync(sentMarker, new Date().toISOString() + "\n");
     let response = await post();
     // ONE RETRY, ON A 5XX ONLY. Measured live: about one call in ten came
     // back 503 from the model's side while its neighbours succeeded, and a

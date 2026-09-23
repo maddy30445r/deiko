@@ -14,6 +14,8 @@ import Foundation
 //   <session>/context.json               where this brief landed, which task
 //                                        it belongs to, and how much work it
 //                                        looked like
+//   <session>/classify.sent              stamped by `classify.mjs` itself,
+//                                        before its POST — see `ClassifyRequest`
 //
 // `scripts/classify.mjs` writes `context.json` from the classifier's answers;
 // the review card and the board rewrite it when the developer corrects a
@@ -81,6 +83,25 @@ struct SessionContext: Codable, Equatable {
         case "reasoning": return "Needs a thinker"
         default: return nil
         }
+    }
+}
+
+/// Whether `classify.mjs` ever sent this session to the relay.
+///
+/// NOT `SessionContext`. `context.json` might not exist at all — two 5xx in a
+/// row, a timeout, no network — or it might exist with `model: nil` and
+/// `decidedBy: "you"` because a hand placement raced the answer back and won.
+/// Either way the POST that carried the narration, the summary and the
+/// window titles had already gone out by the time any of that happened, so
+/// asking `context.json` "was this filed?" can answer "no" for a session
+/// whose words already left — exactly the understatement `SessionClaims`
+/// exists to prevent. `classify.mjs` writes `classify.sent` immediately
+/// before its first POST for that reason; this only checks it exists.
+enum ClassifyRequest {
+    static func wasSent(sessionDir: String) -> Bool {
+        FileManager.default.fileExists(
+            atPath: URL(fileURLWithPath: sessionDir).appendingPathComponent("classify.sent").path
+        )
     }
 }
 

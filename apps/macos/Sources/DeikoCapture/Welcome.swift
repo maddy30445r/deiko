@@ -289,19 +289,25 @@ struct WelcomeView: View {
         }
     }
 
+    /// NO LONGER "Deiko's servers never see your narration" — the classifier
+    /// sends it, redacted, to sort the brief into a task, whenever there is a
+    /// relay to sort it through. Same claim as `SettingsWindow.whereAudioGoes`,
+    /// kept in sync by hand since this card has no room for the fuller
+    /// sentence — see that file for why the sorting clause is conditional.
+    private var ownKeySubtitle: String {
+        guard model.keyPresent else { return "optional — transcription works without one" }
+        let local = "in your login keychain — transcription and the summary go straight to Groq"
+        guard Credentials.relayURL != nil else { return local }
+        return local + "; sorting still goes through Deiko"
+    }
+
     private var setupRows: some View {
         InsetCard {
             HStack(spacing: 12) {
                 glyphTile("key")
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Your own Groq key").font(.system(size: 13, weight: .semibold))
-                    Text(model.keyPresent
-                        // NO LONGER "Deiko's servers never see your narration" —
-                        // the classifier sends it, redacted, to sort the brief
-                        // into a task. True of what this row is actually about:
-                        // transcription and the summary go straight to Groq.
-                        ? "in your login keychain — transcription and the summary go straight to Groq"
-                        : "optional — transcription works without one")
+                    Text(ownKeySubtitle)
                         .font(.system(size: 11))
                         .foregroundStyle(DeikoStyle.ink2)
                 }

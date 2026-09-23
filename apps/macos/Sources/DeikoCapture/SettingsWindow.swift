@@ -260,7 +260,16 @@ final class SettingsModel: ObservableObject {
             // user's own key, exactly as before, and never reach Deiko. Only
             // the classifier, through its own `DEIKO_CLASSIFY_URL`, reaches
             // Deiko's relay — which is what this sentence now has to admit.
-            return "Your narration goes straight to Groq with your key. \(narration.comesBackAs) To sort each brief into its task, what you said, a one-line summary and your window titles go to Deiko, which keeps nothing."
+            //
+            // THE SORTING CLAUSE IS CONDITIONAL, NOT ALWAYS TRUE. A build with
+            // no relay stamped at all (`Credentials.relayURL == nil`) never
+            // gets `DEIKO_CLASSIFY_URL` either — `childEnvironment` sets it
+            // from the same `relayURL` — so nothing is sorted and nothing
+            // reaches Deiko. Saying otherwise there would be the exact bug
+            // this sentence exists to avoid, just moved one line down.
+            let goesToGroq = "Your narration goes straight to Groq with your key. \(narration.comesBackAs)"
+            guard Credentials.relayURL != nil else { return goesToGroq }
+            return goesToGroq + " To sort each brief into its task, what you said, a one-line summary and your window titles go to Deiko, which keeps nothing."
         }
         if Credentials.relayURL != nil {
             return isPro

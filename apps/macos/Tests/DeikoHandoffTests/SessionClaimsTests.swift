@@ -70,16 +70,20 @@ func summaryThroughRelay() {
     #expect(line.contains("your narration, for the summary"))
 }
 
-@Test("a brief the classifier placed says so, on top of whatever else left")
+@Test("a brief the classifier sent to the relay says so, on top of whatever else left")
 func filedAddsTheSortingClaim() {
+    // `filed` means the request WENT OUT, not that an answer came back or a
+    // task was assigned — `context.json` can be absent or unplaced and this
+    // still be true. See `ClassifyRequest.wasSent` (DeikoCapture) for where
+    // the caller actually gets this boolean from.
     let line = SessionClaims.trustLine(
         transcriber: "deiko", degradedReason: nil,
         seconds: 30, uploadedChunks: 2, hasSummary: true, ownGroqKey: false, filed: true
     )
-    #expect(line.contains("what you said and your window titles, to file it"))
+    #expect(line.contains("what you said, its summary and your window titles, to file it"))
 }
 
-@Test("an own-key session that was still filed names both — Groq for the words, Deiko for sorting")
+@Test("an own-key session that was still sent to the classifier names both — Groq for the words, Deiko for sorting")
 func ownKeySessionCanStillBeFiled() {
     // The owner's decision this task implements: bringing your own key keeps
     // audio and the summary off Deiko, but the brief is still sorted through
@@ -91,7 +95,7 @@ func ownKeySessionCanStillBeFiled() {
     )
     #expect(line.contains("~12s of audio to Groq, with your key"))
     #expect(line.contains("your narration to Groq, with your key"))
-    #expect(line.contains("what you said and your window titles, to file it"))
+    #expect(line.contains("what you said, its summary and your window titles, to file it"))
     #expect(!line.contains("Deiko's transcription"))
 }
 
