@@ -1,0 +1,104 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+
+import {
+  SHORTLIST, TASK_ID, groupTasks, parseOutcome, renderTaskNote, scoreTasks,
+  stampTime, taskIdFor, taskState, taskText, titleFor, tokens,
+} from "../lib/tasks.mjs";
+
+const brief = (id, line, extra = {}) => ({
+  id, dir: `/Users/dev/Documents/Deiko/${id}`, line, summaryLine: line, narration: line,
+  collection: null, task: null, apps: [], windows: [], screenTerms: [], outcome: null, ...extra,
+});
+
+// The three real Sep 18 price-bug briefs, by their Groq summaries.
+const price = [
+  brief("20260918-155836", "Price display doesn't update after editing – toast shows new value but UI stays old.",
+    { apps: ["Chrome"], windows: ["Products — acme-portal"], screenTerms: ["$99", "price", "save"] }),
+  brief("20260918-160606", "Fix the UI so that the updated price ($323) shows immediately after saving instead of staying at $99.",
+    { task: "t-20260918-155836", screenTerms: ["$99", "$323", "price"] }),
+  brief("20260918-162340", "Bug: editing price updates DB but UI still shows old $99; saving again fails to persist.",
+    { task: "t-20260918-155836", outcome: parseOutcome("## Did\nSynced the price after save.\n## Decided\nReject negative prices in the form.\n## Open\nThe listing page still caches the old price.\n## Files\nsrc/Price.tsx") }),
+];
+const chart = [brief("20260918-163139", "They're confused why the week-32 signup chart shows a drop while another chart stays flat.", { apps: ["Chrome"] })];
+const sitemap = [brief("20260919-140923", "They want an explanation of the content and what a sitemap XML is.")];
+
+test("ids and times come from stamps", () => {
+  assert.equal(taskIdFor("20260918-155836"), "t-20260918-155836");
+  assert.ok(TASK_ID.test("t-20260918-155836"));
+  assert.equal(TASK_ID.test("t-../etc"), false);
+  assert.equal(new Date(stampTime("20260918-155836")).getHours(), 15);
+});
+
+test("tokens keep money and drop one-letter noise", () => {
+  assert.deepEqual(tokens("The $99 price, a UI!"), ["the", "$99", "price", "ui"]);
+});
+
+test("an outcome is read by its four headings; no headings is all Did", () => {
+  const o = parseOutcome("## Did\n- one\n## Decided\ntwo\n## Open\nthree\n## Files\n- a.ts\n");
+  assert.deepEqual(o, { did: ["one"], decided: ["two"], open: ["three"], files: ["a.ts"] });
+  assert.deepEqual(parseOutcome("# Done\nMoved it.\nTested it.").did, ["Moved it.", "Tested it."]);
+  assert.deepEqual(parseOutcome("").did, []);
+});
+
+test("a title is the summary, never Groq saying it could not tell", () => {
+  assert.equal(titleFor({ summaryLine: "Fix the price", narration: "hey so" }), "Fix the price");
+  assert.equal(titleFor({ summaryLine: "The transcript is too short to determine a request.", narration: "fix the drag on the board please now" }),
+    "fix the drag on the board please now");
+  assert.equal(titleFor({ narration: "Thank you.", apps: ["Figma"] }), "Something in Figma");
+  assert.equal(titleFor({}), "A brief");
+});
+
+test("a brief with no task is its own task; members are newest first", () => {
+  const groups = groupTasks([...price, ...chart]);
+  assert.deepEqual([...groups.keys()].sort(), ["t-20260918-155836", "t-20260918-163139"]);
+  assert.deepEqual(groups.get("t-20260918-155836").map((b) => b.id),
+    ["20260918-162340", "20260918-160606", "20260918-155836"]);
+});
+
+test("where a task stands is the newest outcome's Open, else what was last asked", () => {
+  const state = taskState([...price].reverse());
+  assert.deepEqual(state.now, ["The listing page still caches the old price."]);
+  assert.deepEqual(state.lastDid, ["Synced the price after save."]);
+  assert.deepEqual(taskState(chart).now, [`Asked: ${chart[0].line}`]);
+});
+
+const asTasks = (groups, lastActive) => [...groups].map(([id, bs]) => ({
+  id, text: taskText(bs.at(-1).line, bs), lastActive: lastActive ?? stampTime(bs[0].id),
+}));
+
+test("the price bug is shortlisted first for another brief about it", () => {
+  const tasks = asTasks(groupTasks([...price, ...chart, ...sitemap]));
+  const top = scoreTasks({ query: "same price bug again, it still shows $99 after save", tasks, now: stampTime("20260920-100000") });
+  assert.equal(top[0].id, "t-20260918-155836");
+});
+
+test("recency and repo add to a match; they do not replace one", () => {
+  const now = stampTime("20260920-100000");
+  const tasks = [
+    { id: "t-20260918-155836", text: taskText("price", price), lastActive: stampTime("20260918-162340") },
+    { id: "t-20260920-095000", text: "the week 32 signup chart", lastActive: now - 10 * 60e3 },
+  ];
+  const top = scoreTasks({ query: "the price toast still shows $99 after save", tasks, now });
+  assert.equal(top[0].id, "t-20260918-155836");
+  const repo = scoreTasks({ query: "unrelated words", tasks, now: now + 3 * 86400e3, repoHints: ["acme-portal"] });
+  assert.equal(repo.find((t) => t.id === "t-20260918-155836").sameRepo, true);
+});
+
+test("the shortlist is capped", () => {
+  const many = Array.from({ length: 20 }, (_, i) => ({ id: `t-202609${String(i + 10)}-100000`, text: "price", lastActive: 0 }));
+  assert.equal(scoreTasks({ query: "price", tasks: many, now: 0 }).length, SHORTLIST);
+});
+
+test("the note is deterministic, capped and names two files, never a folder", () => {
+  const members = [...price].reverse().map((b) => ({ ...b, task: "t-20260918-155836" }));
+  const note = renderTaskNote({ id: "t-20260918-155836", title: "Price display doesn't update", collection: "acme-portal", briefs: members });
+  assert.equal(note, renderTaskNote({ id: "t-20260918-155836", title: "Price display doesn't update", collection: "acme-portal", briefs: members }));
+  assert.match(note, /^# Price display doesn't update\nacme-portal · 3 briefs · Sep 18 · updated from 20260918-162340\n/);
+  assert.match(note, /## Now\nThe listing page still caches the old price\.\n/);
+  assert.match(note, /## Decided\n- Sep 18: Reject negative prices in the form\.\n/);
+  assert.match(note, /\/20260918-162340\/prompt\.txt · \/Users\/dev\/Documents\/Deiko\/20260918-162340\/outcome\.md/);
+  assert.equal(/20260918-\d{6}(?!\/(prompt\.txt|outcome\.md))\b/.test(note.split("## Briefs")[1].replace(/updated from \S+/, "")), false);
+  const fifty = Array.from({ length: 60 }, (_, i) => brief(`202609${String(10 + (i % 18)).padStart(2, "0")}-${String(100000 + i)}`, `brief ${i}`));
+  assert.match(renderTaskNote({ id: "t-x", title: "big", briefs: fifty }), /- … and 10 earlier\n$/);
+});
