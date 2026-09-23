@@ -120,13 +120,15 @@ const MAX_SUMMARY_MESSAGES = 32;
 //
 // Jev (TypeSafe AI) answers typed questions about a piece of state with
 // calibrated probabilities: which collection a brief belongs to, which earlier
-// brief it continues, whether each earlier brief is useful background, and how
-// much work it asks. One request, every question evaluated in parallel.
+// task it belongs to, and how much work it asks. One request, every question
+// evaluated in parallel.
 //
 // THE CALLER SENDS FACTS, NOT QUESTIONS. This route spends Deiko's TypeSafe
 // key and takes any bearer, so the request to the model is built here from a
 // capped, coerced body — a stranger with the URL cannot name a model, a
-// question count or a rubric. `classifyRequest` is exported so the shape is
+// question count or a rubric. The model receives a narration, a summary, and
+// digests of at most eight shortlisted tasks — never the raw screen text the
+// client scanned to write them. `classifyRequest` is exported so the shape is
 // testable without a network.
 // WHO ANSWERS THE QUESTIONS, and why there are two of them.
 //
@@ -196,18 +198,20 @@ function jevSpeaker() {
 export const MAX_CLASSIFY_BYTES = 96 * 1024;
 const CLASSIFY_LIMITS = {
   narration: 2000,
+  summary: 600,
   apps: 10,
   repoHints: 5,
   titles: 30,
   title: 200,
   collections: 60,
   name: 200,
-  candidates: 120,
-  line: 200,
-  outcome: 120,
+  tasks: 8,
+  now: 600,
+  decided: 600,
+  outcome: 600,
 };
-/// A folder name Deiko minted. The same gate `Sessions.swift` uses.
-const STAMP = /^\d{8}-\d{6}$/;
+/// A task Deiko minted: `t-` and the stamp of the brief that started it.
+const TASK_ID = /^t-\d{8}-\d{6}$/;
 /// The Score levels, in order. MIRRORS `TIERS` in `scripts/lib/context.mjs`,
 /// which names them back to the app by index. Change both.
 const TIER_RUBRIC = [
@@ -232,24 +236,29 @@ export function classifyRequest(sent) {
   const windowTitles = strings(sent.titles, L.titles, L.title);
 
   // Ids become question keys and option keys, so each must be unique and none
-  // may be the `none` option the questions add themselves.
-  const seen = new Set(["none"]);
+  // may be the `none`/`new` options the questions add themselves.
+  const seen = new Set(["none", "new"]);
   const fresh = (id) => (seen.has(id) ? false : (seen.add(id), true));
   const collections = (Array.isArray(sent.collections) ? sent.collections : [])
     .filter((c) => c && typeof c.id === "string" && /^[a-z0-9-]{1,80}$/.test(c.id)
       && typeof c.name === "string" && c.name.trim() && fresh(c.id))
     .slice(0, L.collections)
     .map((c) => ({ id: c.id, name: str(c.name, L.name), hint: str(c.hint, L.name) }));
-  const candidates = (Array.isArray(sent.candidates) ? sent.candidates : [])
-    .filter((c) => c && typeof c.id === "string" && STAMP.test(c.id)
-      && typeof c.line === "string" && c.line.trim() && fresh(c.id))
-    .slice(0, L.candidates)
-    .map((c) => ({
-      id: c.id,
-      date: str(c.date, 20),
-      collection: c.collection == null ? null : str(c.collection, L.name),
-      line: str(c.line, L.line),
-      outcome: c.outcome == null ? null : str(c.outcome, L.outcome),
+  const tasks = (Array.isArray(sent.tasks) ? sent.tasks : [])
+    .filter((t) => t && typeof t.id === "string" && TASK_ID.test(t.id)
+      && typeof t.title === "string" && t.title.trim() && fresh(t.id))
+    .slice(0, L.tasks)
+    .map((t) => ({
+      id: t.id,
+      title: str(t.title, L.title),
+      now: str(t.now, L.now),
+      decided: str(t.decided, L.decided),
+      windows: strings(t.windows, 5, L.title),
+      apps: strings(t.apps, 5, 80),
+      files: strings(t.files, 10, 120),
+      outcome: str(t.outcome, L.outcome),
+      lastActive: str(t.lastActive, 40),
+      sameRepo: t.sameRepo === true,
     }));
 
   const questions = {
@@ -271,28 +280,28 @@ export function classifyRequest(sent) {
       },
     };
   }
-  if (candidates.length) {
-    questions.continues = {
+  if (tasks.length) {
+    const describe = (t) => [
+      t.title,
+      t.now.split("\n")[0],
+      t.windows.length ? `windows: ${t.windows.join(", ")}` : "",
+      t.lastActive ? `active ${t.lastActive}${t.sameRepo ? ", same repo" : ""}` : "",
+    ].filter(Boolean).join(" — ");
+    questions.task = {
       type: "choice",
-      instructions: "Which earlier brief does this one continue, correct, or refer back to",
+      instructions: "Which piece of earlier work is this brief part of — the same task picked up again, corrected or extended",
       criteria: {
-        ...Object.fromEntries(candidates.map((c) => [c.id, `${c.date}: ${c.line}`])),
-        none: "It stands on its own",
+        ...Object.fromEntries(tasks.map((t) => [t.id, describe(t)])),
+        new: "None of these — a new piece of work",
       },
     };
-    for (const c of candidates) {
-      questions[`rel_${c.id}`] = {
-        type: "noul",
-        instructions: `Earlier brief ${c.id} is useful background for the current brief`,
-      };
-    }
   }
 
   return {
     state: {
-      brief: { narration, apps, repoHints, windowTitles },
+      brief: { narration, summary: str(sent.summary, L.summary), apps, repoHints, windowTitles },
       collections,
-      earlierBriefs: candidates,
+      tasks,
     },
     questions,
   };

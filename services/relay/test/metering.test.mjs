@@ -438,40 +438,35 @@ test("a classification is counted on its own row and never on the audio ceiling"
 });
 
 test("the relay builds the classifier request itself: pinned model, pinned questions", async () => {
-  const candidates = Array.from({ length: 130 }, (_, i) => ({
-    id: `202609${String(i % 28 + 1).padStart(2, "0")}-${String(100000 + i).slice(-6)}`,
-    date: "Sep 1", line: `earlier brief ${i}`,
+  const tasks = Array.from({ length: 10 }, (_, i) => ({
+    id: `t-202609${String(i + 10)}-100000`, title: `task ${i}`, now: "where it stands",
+    windows: ["Orb.swift — Deiko"], lastActive: "2 days ago", sameRepo: i === 0,
   }));
-  candidates.push({ id: "../etc/passwd", date: "?", line: "not a session" });
-  candidates.push({ id: "none", date: "?", line: "not a session either" });
+  tasks.push({ id: "t-../etc", title: "not a task" }, { id: "new", title: "not a task either" });
   await classify("dev_greedy", {
     model: "some-expensive-model",
     questions: { steal: { type: "choice", criteria: { a: "b" } } },
     narration: "same drag bug as last time on the board",
+    summary: "Fix the drag on the board.",
     titles: ["Orb.swift — Deiko"],
-    collections: [{ id: "deiko", name: "Deiko", hint: "the mac app" }, { id: "Bad Id", name: "x" }, { id: "none", name: "x" }],
-    candidates,
+    collections: [{ id: "deiko", name: "Deiko", hint: "the mac app" }, { id: "Bad Id", name: "x" }],
+    tasks,
+    candidates: [{ id: "20260901-100000", line: "old shape, ignored" }],
+    screenTerms: ["must", "never", "travel"],
   });
   const sent = JSON.parse(upstreamBodies.at(-1));
-  assert.equal(sent.model, "jev-1.13.0", "the model is ours to pick");
-  assert.equal(sent.questions.steal, undefined, "and so are the questions");
-  const keys = Object.keys(sent.questions);
-  assert.equal(keys.filter((k) => k.startsWith("rel_")).length, 120, "candidates are capped");
-  assert.equal(keys.length, 3 + 120, "tier, collection, continues, one yes/no per candidate");
-  assert.equal(keys.some((k) => k.includes("..")), false, "a bogus id never becomes a question");
-  assert.deepEqual(Object.keys(sent.questions.collection.criteria), ["deiko", "none"]);
-  assert.equal(sent.questions.collection.criteria.deiko, "Deiko — the mac app");
-  assert.equal(sent.questions.continues.criteria.none, "It stands on its own");
-  // Lowercase, and case-sensitive per docs.typesafe.ai/api — a capitalised
-  // `Choice` is a 400 on the first real call, which is the worst moment to
-  // find out.
-  assert.deepEqual(
-    [...new Set(Object.values(sent.questions).map((q) => q.type))].sort(),
-    ["choice", "noul", "score"],
-  );
-  assert.ok(Array.isArray(sent.questions.tier.criteria), "score levels are an ordered array");
-  assert.equal(typeof sent.questions.collection.criteria, "object", "choice options are a map");
-  assert.equal(sent.state.brief.windowTitles[0], "Orb.swift — Deiko");
+  assert.equal(sent.model, "jev-1.13.0");
+  assert.deepEqual(Object.keys(sent.questions).sort(), ["collection", "task", "tier"]);
+  const options = Object.keys(sent.questions.task.criteria);
+  assert.equal(options.length, 8 + 1, "eight tasks and new");
+  assert.equal(options.at(-1), "new");
+  assert.equal(options.some((k) => k.includes("..")), false);
+  assert.equal(sent.questions.task.criteria["t-20260910-100000"],
+    "task 0 — where it stands — windows: Orb.swift — Deiko — active 2 days ago, same repo");
+  assert.equal(sent.state.brief.summary, "Fix the drag on the board.");
+  assert.equal(sent.state.earlierBriefs, undefined);
+  assert.equal(JSON.stringify(sent).includes("travel"), false, "screen terms never leave");
+  assert.deepEqual([...new Set(Object.values(sent.questions).map((q) => q.type))].sort(), ["choice", "score"]);
 });
 
 test("with an empty board only the tier is asked", async () => {
