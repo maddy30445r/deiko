@@ -554,9 +554,28 @@ enum Handoff {
         // instructions in the message. A chat that ignores it is left exactly
         // as it was, and the short text below covers it. Deiko gets no signal
         // about which happened, so it does both rather than guessing.
+        // WHETHER IT LANDED IS NOT WORTH KNOWING, and that was measured twice
+        // rather than assumed — the first answer was wrong both ways round.
+        //
+        // A chat that accepts the paste draws a tile naming the file, and that
+        // tile IS reachable: `ax-probe` reads `qa-ticket.md` off a real one.
+        // But Chrome only builds its page tree once an assistive client asks,
+        // the first read is what does the asking (which is why one probe says
+        // there is nothing there and the next says there is), and finding the
+        // tile reliably means driving `AXProbe`'s region sampler — a grid of
+        // hit tests — on every browser handoff. That is a lot of machinery,
+        // and a fresh way to be wrong, bought to remove four lines of text
+        // that agree with the file they accompany.
+        //
+        // So both travel. A chat that takes the file shows a document and four
+        // lines that agree with it; one that ignores the file (Gemini,
+        // measured: nothing inserted, no tile) is left with the four lines.
+        // Neither outcome loses an instruction, which is the property that
+        // makes not knowing acceptable.
         if let personaFile, FileManager.default.fileExists(atPath: personaFile) {
+            let name = (personaFile as NSString).lastPathComponent
             try stillFocused("the persona file was pasted")
-            note("pasting \((personaFile as NSString).lastPathComponent) into \(target.appName)")
+            note("pasting \(name) into \(target.appName)")
             try pasteFile(personaFile)
             try await Task.sleep(for: .seconds(pasteboardRestoreDelay))
         }
