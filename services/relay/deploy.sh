@@ -205,9 +205,11 @@ DEIKO_USAGE_TABLE="$TABLE" node -e '
     // every brief without earlier work, which is the right default until a
     // TypeSafe account exists.
     "TYPESAFE_API_KEY",
-    // Or the same model through a gateway. Vercel's is free on the Hobby plan
-    // and takes TypeSafe's own request shape; Cloudflare's wants a prepaid
+    // Or the same model through a gateway. Vercel is free on the Hobby plan
+    // and takes the TypeSafe request shape; Cloudflare wants a prepaid
     // balance. All optional; the first one set wins, in this order.
+    // NO APOSTROPHES IN THIS BLOCK: it sits inside a single-quoted shell
+    // string, and one ended the script mid-comment on a real deploy.
     "AI_GATEWAY_API_KEY",
     "OPENROUTER_API_KEY",
     "CLOUDFLARE_ACCOUNT_ID",
