@@ -126,6 +126,18 @@ test("the tier is the most likely level, or the rounded score without probabilit
   assert.equal(TIERS.length, 4);
 });
 
+test("score probabilities may arrive as an object keyed by level, as Vercel sends them", () => {
+  // Measured on a live call: score 1.13, mass split 0.21 / 0.45 / 0.34 / 0.
+  const out = decide({ answers: { tier: {
+    score: 1.13, confidence: 0.44,
+    probabilities: { "0": 0.21, "1": 0.45, "2": 0.34, "3": 0 },
+  } } });
+  assert.equal(out.tier, "medium");
+  assert.equal(out.confidence.tier, 0.44);
+  // And the array form from TypeSafe's own docs still works.
+  assert.equal(decide({ answers: { tier: { probabilities: [0.1, 0.1, 0.7, 0.1] } } }).tier, "complex");
+});
+
 test("a missing or partial answer is a quiet no", () => {
   assert.deepEqual(decide({}), {
     collection: null, continues: null, related: [], tier: null, confidence: {}, newCollection: null,

@@ -136,7 +136,13 @@ async function main() {
       signal: AbortSignal.timeout(15_000),
     });
     if (!response.ok) {
-      console.error(`· deiko relay ${response.status} — skipping the classification`);
+      // THE REASON TRAVELS WITH THE STATUS. A bare "503" was all this printed
+      // while one call in three was failing, and the relay's body — which
+      // names whether it was the meter, the key or the model — went in the
+      // bin. Truncated, because a gateway that echoes its input back in an
+      // error must not turn a log line into a content log.
+      const why = (await response.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 160);
+      console.error(`· deiko relay ${response.status}${why ? ` — ${why}` : ""} — skipping the classification`);
       return;
     }
     answer = await response.json();

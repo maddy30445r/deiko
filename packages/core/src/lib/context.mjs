@@ -161,8 +161,19 @@ export function decide({ answers = {}, collections = [], repoHints = [] } = {}) 
   const tier = answers.tier;
   if (tier) {
     let level = null;
-    if (Array.isArray(tier.probabilities) && tier.probabilities.length) {
-      level = tier.probabilities.indexOf(Math.max(...tier.probabilities));
+    // TWO SHAPES FOR ONE FIELD. TypeSafe's docs show `probabilities` as an
+    // array indexed by level; Vercel's gateway returns it as an object keyed
+    // "0", "1", … — measured on a live call. Without this branch the object
+    // was quietly ignored and the tier fell back to rounding the score, which
+    // is not the same answer when the mass is split.
+    const probs = Array.isArray(tier.probabilities)
+      ? tier.probabilities
+      : tier.probabilities && typeof tier.probabilities === "object"
+        ? Object.keys(tier.probabilities).sort((a, b) => Number(a) - Number(b))
+            .map((k) => Number(tier.probabilities[k]))
+        : [];
+    if (probs.length) {
+      level = probs.indexOf(Math.max(...probs));
     } else if (typeof tier.score === "number") {
       level = Math.round(tier.score);
     }
