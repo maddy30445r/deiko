@@ -546,6 +546,15 @@ brief:
 summarize:
 	@node scripts/summarize.mjs $(SESSION)
 
+## classify — which collection a brief belongs to and which earlier briefs it
+## draws on, decided by Jev through the relay and written to context.json
+##
+## Never fatal, like summarize: no relay, a short narration, or a brief the
+## developer already placed by hand, and nothing is written. `brief` reads the
+## file if it is there.
+classify:
+	@node scripts/classify.mjs $(SESSION)
+
 ## ground — score how well a session resolved its referents, and check M1
 ##
 ## The companion to `align`: that one scores which utterance bound to which

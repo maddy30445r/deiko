@@ -19,8 +19,8 @@
  * payload the end user has to read in their own chat.
  */
 
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
-import { resolve, join, basename } from "node:path";
+import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
+import { resolve, join, basename, dirname } from "node:path";
 
 import { align, joinWords } from "../packages/alignment/dist/src/align.js";
 import { loadSession } from "../packages/alignment/dist/src/referents/session.js";
@@ -29,6 +29,7 @@ import { loadEvents } from "./lib/session-io.mjs";
 import { carriesSecret, assertNoSecrets } from "./lib/redact.mjs";
 import { buildPrompt, quoteSurvives } from "./lib/prompt.mjs";
 import { degradedReason as cloudDegradedReason } from "./lib/cloud.mjs";
+import { STAMP, briefDate, readBriefLine, wantsQuickHint } from "./lib/context.mjs";
 
 // ── Repo identity ───────────────────────────────────────────────────────────
 
@@ -277,7 +278,62 @@ const personaPath = existsSync(personaPointer)
   ? readFileSync(personaPointer, "utf8").trim() || null
   : null;
 
-const { text, evidence } = buildPrompt({ narration, referents: released, personaPath });
+// What this brief remembers: the collection it landed in and the earlier
+// briefs it continues or draws on, as `classify.mjs` decided or the developer
+// corrected. Absent — no relay, a fresh board, a brief rendered from the
+// command line — and the prompt says nothing about earlier work, which is the
+// document it always was.
+//
+// Ids are resolved to sessions HERE, at render time, and a folder that has
+// gone is dropped: a path to a deleted session is an instruction the agent
+// cannot follow and may claim to have.
+const contextPath = join(dir, "context.json");
+let context = null;
+if (existsSync(contextPath)) {
+  try {
+    context = JSON.parse(readFileSync(contextPath, "utf8"));
+  } catch {
+    console.error(`  ⚠ ${basename(contextPath)} is unreadable — rendering without earlier work`);
+  }
+}
+const root = dirname(dir);
+let collectionNames = new Map();
+try {
+  collectionNames = new Map(
+    JSON.parse(readFileSync(join(root, "collections.json"), "utf8")).map((c) => [c.id, c.name]),
+  );
+} catch {
+  // No collections yet, or an unreadable file: an earlier brief is listed
+  // without its collection, which is a smaller thing than not listing it.
+}
+// The continued brief first, then the rest newest first.
+const earlierIds = context
+  ? [context.continues, ...[...(context.related ?? [])].sort().reverse()]
+  : [];
+const earlier = [];
+for (const id of new Set(earlierIds)) {
+  if (typeof id !== "string" || !STAMP.test(id) || id === basename(dir)) continue;
+  const sibling = join(root, id);
+  const line = readBriefLine(sibling);
+  if (!line.narration?.trim()) continue;
+  const cropsDir = join(sibling, "crops");
+  earlier.push({
+    id,
+    dir: sibling,
+    date: briefDate(id),
+    line: line.narration,
+    outcome: line.outcome,
+    collection: collectionNames.get(line.collection) ?? null,
+    hasCrops: existsSync(cropsDir) && readdirSync(cropsDir).some((f) => f.endsWith(".png")),
+  });
+}
+const continues = earlier.length > 0 && earlier[0].id === context?.continues;
+const quickHint = wantsQuickHint(context, process.env.DEIKO_OPTIMIZE_COSTS === "1");
+const outcomePath = join(dir, "outcome.md");
+
+const { text, evidence } = buildPrompt({
+  narration, referents: released, personaPath, earlier, continues, outcomePath, quickHint,
+});
 
 // The same message for a destination that cannot open a local path.
 //
@@ -290,7 +346,9 @@ const { text, evidence } = buildPrompt({ narration, referents: released, persona
 // Rendered now, both of them, because nobody knows where the coin will land
 // until the developer throws it — and re-running the renderer at that moment
 // would put a Node spawn between letting go and the paste landing.
-const attached = buildPrompt({ narration, referents: released, attached: true });
+const attached = buildPrompt({
+  narration, referents: released, attached: true, earlier, continues, outcomePath, quickHint,
+});
 
 // Fail closed on the captured content, not on the assembled prompt. `text`
 // includes crop paths Deiko minted itself — an absolute POSIX path is a

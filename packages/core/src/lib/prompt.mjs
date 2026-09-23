@@ -186,7 +186,10 @@ function markLabel(r, endpoints) {
  * Both variants are rendered up front because the renderer runs long before
  * anybody knows where the coin will land.
  */
-export function buildPrompt({ narration, referents, attached = false, personaPath = null }) {
+export function buildPrompt({
+  narration, referents, attached = false, personaPath = null,
+  earlier = [], continues = false, outcomePath = null, quickHint = false,
+}) {
   const narrationRedacted = redact(narration ?? "").trim();
   const out = [narrationRedacted, "", REPLY_LANGUAGE];
 
@@ -315,6 +318,42 @@ export function buildPrompt({ narration, referents, attached = false, personaPat
     out.push("", "Text from other things I pointed at:", "```", ...linesRedacted, "```");
   }
 
+  // EARLIER WORK this brief draws on — chosen by the classifier or by the
+  // developer on the review card, resolved to sessions by `render-brief.mjs`.
+  //
+  // As PATHS for an agent that can open them: the earlier brief, what was done
+  // about it, and the screenshots from then, so it reads what it needs rather
+  // than being handed all of it. As two lines for a destination with no
+  // filesystem, for the same reason the crops are numbered there. The
+  // narrations and outcomes are speech and files an agent wrote, so they join
+  // `evidence` below; the paths do not, like every other path this renderer
+  // mints.
+  //
+  // The continued brief comes first, and the last line says so. Nothing here
+  // tells the agent what to do with any of it — that is the developer's line
+  // at the top, as always.
+  const earlierSpoken = [];
+  if (earlier.length) {
+    const rows = earlier.map((e) => {
+      const line = redact(e.line ?? "").replace(/\s+/g, " ").trim();
+      const outcome = e.outcome ? redact(e.outcome).replace(/\s+/g, " ").trim() : "";
+      earlierSpoken.push(line);
+      if (outcome) earlierSpoken.push(outcome);
+      if (attached) {
+        return `- ${e.date} I asked "${line}".${outcome ? ` Outcome: ${outcome}` : ""}`;
+      }
+      const files = ["prompt.txt", ...(outcome ? ["outcome.md"] : []), ...(e.hasCrops ? ["crops/"] : [])];
+      const where = e.collection ? ` (${e.collection})` : "";
+      return `- ${e.date}, "${line}"${where}: ${e.dir} — ${files.join(", ")}`;
+    });
+    out.push(
+      "",
+      attached ? "Earlier work this relates to:" : "Earlier work this relates to — read what you need:",
+      ...rows,
+    );
+    if (continues) out.push(rows.length === 1 ? "This continues it." : "This continues the first one.");
+  }
+
   // No headings, no paths — just the redacted content a secret could actually
   // hide in. Speech first (the narration, then every quote that reached a path
   // line), then the screen text.
@@ -330,7 +369,7 @@ export function buildPrompt({ narration, referents, attached = false, personaPat
   // already surfaced in `text` via the `[n] swept from … to …` label, and
   // this is what makes that captured screen content visible to the guard.
   const screenText = [...linesRedacted, ...connectorLines];
-  const spoken = [narrationRedacted, ...quotes.values()];
+  const spoken = [narrationRedacted, ...quotes.values(), ...earlierSpoken];
   const evidence = screenText.length
     ? [...spoken, "```", ...screenText, "```"].join("\n")
     : spoken.join("\n");
@@ -350,6 +389,21 @@ export function buildPrompt({ narration, referents, attached = false, personaPat
   // there instead.
   if (personaPath && !attached) {
     out.push("", `How I want this written up is in ${personaPath} — read that first.`);
+  }
+
+  // ADVISORY, and it says so. Deiko never picks the model — the harness the
+  // brief lands in does — so the most this can be is one soft sentence when
+  // the classifier was confident the task is small. Both variants: a browser
+  // chat's model picker is a person's decision too.
+  if (quickHint) {
+    out.push("", "This looks like a quick one and a fast model is probably enough. Judge for yourself.");
+  }
+
+  // THE WRITE-BACK. Three lines from the agent, beside the brief they answer,
+  // is what turns the board from a list of requests into a memory of what
+  // happened. A path, so only a destination that can write one is asked.
+  if (outcomePath && !attached) {
+    out.push("", `When you are done, write three lines on what you did to ${outcomePath}.`);
   }
 
   return { text: out.join("\n") + "\n", evidence };

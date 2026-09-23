@@ -600,3 +600,83 @@ test("the attached variant never names a path it cannot open", () => {
   assert.equal(attached.text.includes("personas/qa-ticket.md"), false);
   assert.equal(attached.text, buildPrompt({ ...oneShot(), attached: true }).text);
 });
+
+// ── Earlier work, the write-back and the cost hint ──────────────────────────
+//
+// Memory rides inside the prompt. Every one of these is off by default, so a
+// call without them renders the document it always did — the persona tests
+// above already pin that, and these pin what each addition adds and where.
+
+const earlierOne = () => [{
+  id: "20260918-155717",
+  dir: "/Users/dev/Documents/Deiko/20260918-155717",
+  date: "Sep 18",
+  line: "fix the drag on the board",
+  outcome: "Moved the drag threshold. Added a test.",
+  collection: "Deiko",
+  hasCrops: true,
+}];
+
+test("earlier work lists paths for an agent that can open them", () => {
+  const plain = buildPrompt(oneShot());
+  const withEarlier = buildPrompt({ ...oneShot(), earlier: earlierOne(), continues: true });
+  const added = withEarlier.text.slice(plain.text.length - 1);
+  assert.equal(
+    added,
+    "\n\nEarlier work this relates to — read what you need:\n"
+      + "- Sep 18, \"fix the drag on the board\" (Deiko): /Users/dev/Documents/Deiko/20260918-155717 — prompt.txt, outcome.md, crops/\n"
+      + "This continues it.\n",
+  );
+});
+
+test("earlier narrations and outcomes are evidence; their paths are not", () => {
+  const plain = buildPrompt(oneShot());
+  const withEarlier = buildPrompt({ ...oneShot(), earlier: earlierOne() });
+  assert.equal(
+    withEarlier.evidence,
+    plain.evidence + "\nfix the drag on the board\nMoved the drag threshold. Added a test.",
+  );
+  assert.equal(withEarlier.evidence.includes("/Users/dev"), false);
+});
+
+test("a browser gets the earlier brief inline, never as a path", () => {
+  const attached = buildPrompt({ ...oneShot(), attached: true, earlier: earlierOne(), continues: true });
+  assert.ok(attached.text.endsWith(
+    "\n\nEarlier work this relates to:\n"
+      + "- Sep 18 I asked \"fix the drag on the board\". Outcome: Moved the drag threshold. Added a test.\n"
+      + "This continues it.\n",
+  ));
+  assert.equal(attached.text.includes("20260918-155717"), false);
+});
+
+test("two earlier briefs: the continued one is first and is named as such", () => {
+  const two = [...earlierOne(), { ...earlierOne()[0], id: "20260915-234940", dir: "/Users/dev/Documents/Deiko/20260915-234940", date: "Sep 15", line: "the board card hover looks wrong", outcome: null, hasCrops: false }];
+  const { text } = buildPrompt({ ...oneShot(), earlier: two, continues: true });
+  assert.match(text, /- Sep 18, .*\n- Sep 15, "the board card hover looks wrong" \(Deiko\): \/Users\/dev\/Documents\/Deiko\/20260915-234940 — prompt\.txt\nThis continues the first one\.\n$/);
+});
+
+test("the write-back asks only a destination that can write a file", () => {
+  const plain = buildPrompt(oneShot());
+  const local = buildPrompt({ ...oneShot(), outcomePath: "/Users/dev/Documents/Deiko/20260923-161205/outcome.md" });
+  assert.equal(
+    local.text.slice(plain.text.length - 1),
+    "\n\nWhen you are done, write three lines on what you did to /Users/dev/Documents/Deiko/20260923-161205/outcome.md.\n",
+  );
+  assert.equal(local.evidence, plain.evidence);
+  const attached = buildPrompt({ ...oneShot(), attached: true, outcomePath: "/Users/dev/Documents/Deiko/20260923-161205/outcome.md" });
+  assert.equal(attached.text, buildPrompt({ ...oneShot(), attached: true }).text);
+});
+
+test("the cost hint is one sentence, after the persona line, before the write-back", () => {
+  const { text } = buildPrompt({
+    ...oneShot(),
+    personaPath: "/Users/dev/Documents/Deiko/personas/qa-ticket.md",
+    quickHint: true,
+    outcomePath: "/Users/dev/Documents/Deiko/20260923-161205/outcome.md",
+  });
+  assert.ok(text.endsWith(
+    "How I want this written up is in /Users/dev/Documents/Deiko/personas/qa-ticket.md — read that first.\n"
+      + "\nThis looks like a quick one and a fast model is probably enough. Judge for yourself.\n"
+      + "\nWhen you are done, write three lines on what you did to /Users/dev/Documents/Deiko/20260923-161205/outcome.md.\n",
+  ));
+});

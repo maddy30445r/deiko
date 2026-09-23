@@ -43,6 +43,7 @@ import {
   playgroundTicketKey,
   playgroundTicketQueryKey,
   summaryKey,
+  classifyKey,
   usageKey,
 } from "./quota.mjs";
 
@@ -248,6 +249,17 @@ export async function recordSummary({ now = Date.now() } = {}) {
 /// very ceiling that is refusing them.
 export async function refundSummary({ now = Date.now() } = {}) {
   await addSeconds(summaryKey(now), -1, null);
+}
+
+/// One classification against the day, on the classifier's own row. See
+/// `recordSummary` for why a text call never touches the audio ceiling.
+export async function recordClassify({ now = Date.now() } = {}) {
+  const classifiesToday = await addSeconds(classifyKey(now), 1, DAILY_TTL_SECONDS);
+  return { classifiesToday };
+}
+
+export async function refundClassify({ now = Date.now() } = {}) {
+  await addSeconds(classifyKey(now), -1, null);
 }
 
 /// ── Playground counters ─────────────────────────────────────────────────────

@@ -168,6 +168,20 @@ final class SettingsModel: ObservableObject {
     /// switch still showing on.
     @Published var launchAtLogin = SMAppService.mainApp.status == .enabled
 
+    /// Whether a brief the classifier called quick carries the line telling
+    /// the agent a fast model is probably enough.
+    ///
+    /// OFF by default, and advisory even when on: Deiko does not pick the
+    /// model — whichever harness the brief lands in already did — so the most
+    /// this can honestly do is say what the brief looks like and leave the
+    /// judgement where it actually sits.
+    @Published var optimizeCosts = UserDefaults.standard.bool(forKey: BriefPipeline.optimizeCostsKey)
+
+    func setOptimizeCosts(_ on: Bool) {
+        UserDefaults.standard.set(on, forKey: BriefPipeline.optimizeCostsKey)
+        optimizeCosts = on
+    }
+
     func setLaunchAtLogin(_ on: Bool) {
         do {
             if on {
@@ -364,6 +378,18 @@ struct SettingsView: View {
                     set: { model.setLaunchAtLogin($0) }
                 ))
                 .font(.system(size: 13))
+
+                Divider()
+
+                Toggle("Mention when a brief looks quick", isOn: Binding(
+                    get: { model.optimizeCosts },
+                    set: { model.setOptimizeCosts($0) }
+                ))
+                .font(.system(size: 13))
+                Text("Adds one line to a small brief saying a fast model is probably enough. Your agent still decides for itself — Deiko has never picked the model and this does not change that.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(DeikoStyle.ink2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .padding(14)
         }
@@ -405,7 +431,7 @@ struct SettingsView: View {
 
                 Text(Sessions.retentionDays > 0
                     ? "Sessions older than \(Sessions.retentionDays) days are removed when Deiko starts. Your recordings were already deleted as each brief was made — this is the screenshots."
-                    : "Nothing is removed automatically.")
+                    : "Nothing goes on a timer. The board is what Deiko remembers, so every brief here is one the next brief can be filed beside. Delete one from its card, or all of them below.")
                     .font(.system(size: 11))
                     .foregroundStyle(DeikoStyle.ink2)
                     .fixedSize(horizontal: false, vertical: true)

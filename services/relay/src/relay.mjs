@@ -35,6 +35,7 @@ import {
   PLAYGROUND_TICKETS_PER_IP_PER_DAY,
   PLAYGROUND_TICKET_TTL_MS,
   SUMMARIES_PER_DAY,
+  CLASSIFIES_PER_DAY,
   audioSeconds,
   capFor,
   decide,
@@ -49,7 +50,9 @@ import {
   recordPlaygroundIntent,
   recordPlaygroundTicket,
   recordSummary,
+  recordClassify,
   refund,
+  refundClassify,
   refundPlaygroundClip,
   refundPlaygroundIntent,
   refundSummary,
@@ -112,6 +115,126 @@ const SUMMARY_MAX_CONTENT_CHARS = 8_000;
 /// How many message envelopes may reach the model. The client sends two — a
 /// system line and the narration — so this is sixteen times the honest need.
 const MAX_SUMMARY_MESSAGES = 32;
+
+// ── What a classification is allowed to be ──────────────────────────────────
+//
+// Jev (TypeSafe AI) answers typed questions about a piece of state with
+// calibrated probabilities: which collection a brief belongs to, which earlier
+// brief it continues, whether each earlier brief is useful background, and how
+// much work it asks. One request, every question evaluated in parallel.
+//
+// THE CALLER SENDS FACTS, NOT QUESTIONS. This route spends Deiko's TypeSafe
+// key and takes any bearer, so the request to the model is built here from a
+// capped, coerced body — a stranger with the URL cannot name a model, a
+// question count or a rubric. `classifyRequest` is exported so the shape is
+// testable without a network.
+const JEV_URL = "https://api.typesafe.ai/v1/systemone";
+/// Pinned: the floors in `scripts/lib/context.mjs` are tuned to this version.
+const JEV_MODEL = "jev-1.13.0";
+export const MAX_CLASSIFY_BYTES = 96 * 1024;
+const CLASSIFY_LIMITS = {
+  narration: 2000,
+  apps: 10,
+  repoHints: 5,
+  titles: 30,
+  title: 200,
+  collections: 60,
+  name: 200,
+  candidates: 120,
+  line: 200,
+  outcome: 120,
+};
+/// A folder name Deiko minted. The same gate `Sessions.swift` uses.
+const STAMP = /^\d{8}-\d{6}$/;
+/// The Score levels, in order. MIRRORS `TIERS` in `scripts/lib/context.mjs`,
+/// which names them back to the app by index. Change both.
+const TIER_RUBRIC = [
+  "quick: one small answer or edit, no investigation",
+  "medium: needs an explanation or a light change in one place",
+  "complex: several files, logs or tools, step by step",
+  "reasoning: trade-offs or a design decision across constraints",
+];
+
+export function classifyRequest(sent) {
+  if (!sent || typeof sent.narration !== "string" || !sent.narration.trim()) return null;
+  const L = CLASSIFY_LIMITS;
+  const str = (v, n) => String(v ?? "").slice(0, n);
+  const strings = (v, count, n) => (Array.isArray(v) ? v : [])
+    .filter((s) => typeof s === "string" && s.trim())
+    .slice(0, count)
+    .map((s) => s.slice(0, n));
+
+  const narration = sent.narration.slice(0, L.narration);
+  const apps = strings(sent.apps, L.apps, 80);
+  const repoHints = strings(sent.repoHints, L.repoHints, 80);
+  const windowTitles = strings(sent.titles, L.titles, L.title);
+
+  // Ids become question keys and option keys, so each must be unique and none
+  // may be the `none` option the questions add themselves.
+  const seen = new Set(["none"]);
+  const fresh = (id) => (seen.has(id) ? false : (seen.add(id), true));
+  const collections = (Array.isArray(sent.collections) ? sent.collections : [])
+    .filter((c) => c && typeof c.id === "string" && /^[a-z0-9-]{1,80}$/.test(c.id)
+      && typeof c.name === "string" && c.name.trim() && fresh(c.id))
+    .slice(0, L.collections)
+    .map((c) => ({ id: c.id, name: str(c.name, L.name), hint: str(c.hint, L.name) }));
+  const candidates = (Array.isArray(sent.candidates) ? sent.candidates : [])
+    .filter((c) => c && typeof c.id === "string" && STAMP.test(c.id)
+      && typeof c.line === "string" && c.line.trim() && fresh(c.id))
+    .slice(0, L.candidates)
+    .map((c) => ({
+      id: c.id,
+      date: str(c.date, 20),
+      collection: c.collection == null ? null : str(c.collection, L.name),
+      line: str(c.line, L.line),
+      outcome: c.outcome == null ? null : str(c.outcome, L.outcome),
+    }));
+
+  const questions = {
+    tier: {
+      type: "Score",
+      instructions: "How much work the brief asks of a coding agent",
+      criteria: TIER_RUBRIC,
+    },
+  };
+  // A Choice needs something to choose from; with nothing on the board the
+  // question is not asked, and the client reads a missing answer as "none".
+  if (collections.length) {
+    questions.collection = {
+      type: "Choice",
+      instructions: "Which collection does this brief belong to",
+      criteria: {
+        ...Object.fromEntries(collections.map((c) => [c.id, c.hint ? `${c.name} — ${c.hint}` : c.name])),
+        none: "None of these",
+      },
+    };
+  }
+  if (candidates.length) {
+    questions.continues = {
+      type: "Choice",
+      instructions: "Which earlier brief does this one continue, correct, or refer back to",
+      criteria: {
+        ...Object.fromEntries(candidates.map((c) => [c.id, `${c.date}: ${c.line}`])),
+        none: "It stands on its own",
+      },
+    };
+    for (const c of candidates) {
+      questions[`rel_${c.id}`] = {
+        type: "Noul",
+        instructions: `Earlier brief ${c.id} is useful background for the current brief`,
+      };
+    }
+  }
+
+  return {
+    state: {
+      brief: { narration, apps, repoHints, windowTitles },
+      collections,
+      earlierBriefs: candidates,
+    },
+    questions,
+  };
+}
 
 // ── Burst limiting ──────────────────────────────────────────────────────────
 //
@@ -324,6 +447,7 @@ function corsHeaders(origin) {
  */
 export async function handle({ method, path, query = "", token, contentType, body, origin = "", ip = "" }) {
   const groqKey = process.env.GROQ_API_KEY;
+  const typesafeKey = process.env.TYPESAFE_API_KEY;
 
   const json = (status, obj) => ({
     status,
@@ -345,6 +469,7 @@ export async function handle({ method, path, query = "", token, contentType, bod
       ok: true,
       transcription: Boolean(groqKey),
       summary: Boolean(groqKey),
+      classify: Boolean(typesafeKey),
       metering: await meteringHealthy(),
       table: USAGE_TABLE,
     });
@@ -746,6 +871,43 @@ export async function handle({ method, path, query = "", token, contentType, bod
       max_completion_tokens: SUMMARY_MAX_COMPLETION_TOKENS,
     }));
     if (out.status >= 500) await refundSummary().catch(() => {});
+    return out;
+  }
+
+  if (path === "/v1/classify") {
+    if (!typesafeKey) return json(503, { error: "relay has no classifier key configured" });
+    if (body && body.length > MAX_CLASSIFY_BYTES) {
+      return json(413, { error: "body too large" });
+    }
+    let sent;
+    try {
+      sent = JSON.parse(Buffer.from(body ?? "").toString("utf8"));
+    } catch {
+      sent = null;
+    }
+    // THE BODY IS REBUILT, NEVER FORWARDED — see `classifyRequest`.
+    const request = classifyRequest(sent);
+    if (!request) return json(400, { error: "expected { narration: \"…\", … }" });
+
+    // Its own day, its own row, like a summary: a flood of classifications
+    // exhausts classifications and nothing else.
+    try {
+      const { classifiesToday } = await recordClassify();
+      if (classifiesToday > CLASSIFIES_PER_DAY) {
+        await refundClassify().catch(() => {});
+        return json(429, {
+          error: "the classifier is at its daily ceiling — try again tomorrow",
+        });
+      }
+    } catch (err) {
+      return json(503, { error: unavailable(err) });
+    }
+
+    const out = await proxy(JEV_URL, {
+      authorization: `Bearer ${typesafeKey}`,
+      "content-type": "application/json",
+    }, JSON.stringify({ model: JEV_MODEL, ...request }));
+    if (out.status >= 500) await refundClassify().catch(() => {});
     return out;
   }
 

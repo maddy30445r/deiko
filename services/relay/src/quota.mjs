@@ -115,6 +115,13 @@ export function globalCapFor(tier) {
 export const SUMMARIES_PER_DAY =
   Number(process.env.DEIKO_SUMMARIES_PER_DAY ?? 2000);
 
+/// Classifications, the same shape for the same reason: a text call that
+/// takes any bearer, on its own row, counted in requests. Twice the summary
+/// ceiling because a brief re-classified after a correction is still one
+/// brief, and a Jev decision costs a tenth of a summary.
+export const CLASSIFIES_PER_DAY =
+  Number(process.env.DEIKO_CLASSIFIES_PER_DAY ?? 4000);
+
 /// 16 kHz, mono, 16-bit — so two bytes a sample, 32,000 bytes a second. The
 /// client's chunker uses exactly these constants.
 ///
@@ -254,6 +261,12 @@ export function globalKey(now) {
 /// vendors' bills and must not be able to close each other.
 export function summaryKey(now) {
   return `global#${dayKey(now)}#summary`;
+}
+
+/// The day's classification count. Its own row, like the summary's, so the
+/// classifier's vendor bill and the summary's cannot close each other.
+export function classifyKey(now) {
+  return `global#${dayKey(now)}#classify`;
 }
 
 /// ── THE PLAYGROUND ──────────────────────────────────────────────────────────

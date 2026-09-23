@@ -40,6 +40,11 @@ enum UIShot {
             }
             shoot(orbCard(), size: NSSize(width: 400, height: 130), look: look, to: "\(out)-orb-\(name).png")
             shoot(orbReady(), size: NSSize(width: 400, height: 190), look: look, to: "\(out)-orbready-\(name).png")
+            // The expanded panel, at the size the orb gives it. The most
+            // consequential screen in the app — it is the last thing anybody
+            // reads before a brief leaves the Mac — and it had no capture.
+            shoot(reviewPanel(), size: NSSize(width: 620, height: 640), look: look,
+                  to: "\(out)-review-\(name).png")
         }
         // The status item, at the size it is actually drawn — 1x and 2x — so a
         // mark that looks wrong in the menu bar can be looked at without
@@ -91,6 +96,18 @@ enum UIShot {
         model.phase = .ready
         model.summary = "Make the Save button use the header indigo, and give it more padding."
         model.personaName = "QA ticket"
+        // Posed as a hesitant answer on purpose: "Looks like" is the wording
+        // that invites the correction, and it is the one worth looking at.
+        model.collections = Collections.all()
+        model.context = SessionContext(
+            collection: Collections.all().first?.id,
+            continues: SessionsStore.shared.items.first?.id,
+            related: [],
+            tier: "quick",
+            confidence: .init(collection: 0.72, continues: 0.88, tier: 0.91),
+            decidedBy: "jev",
+            model: "jev-1.13.0"
+        )
         return OrbRootView(
             model: model,
             state: OrbState(),
@@ -100,6 +117,34 @@ enum UIShot {
                 onDelete: {}, onHeightChange: { _ in }
             )
         )
+    }
+
+    /// The review panel as somebody meets it: rendered, placed, and about to
+    /// be thrown. Posed from the newest real session on this Mac so the
+    /// narration, the crops and the counts are the ones the app would draw.
+    private static func reviewPanel() -> some View {
+        let model = ReviewModel()
+        model.phase = .ready
+        model.summary = "Make the Save button use the header indigo, and give it more padding."
+        model.personaName = "QA ticket"
+        model.collections = Collections.all()
+        let items = SessionsStore.shared.items
+        if let newest = items.first {
+            model.digest = try? BriefPipeline.digest(sessionDir: newest.dir)
+            model.narration = model.digest?.summary.narration ?? ""
+        }
+        model.context = SessionContext(
+            collection: Collections.all().first?.id,
+            continues: items.dropFirst().first?.id,
+            related: [],
+            tier: "quick",
+            confidence: .init(collection: 0.72, continues: 0.88, tier: 0.91),
+            decidedBy: "jev",
+            model: "jev-1.13.0"
+        )
+        return ReviewView(model: model, onExtend: {}, onCollapse: {}, onDelete: {})
+            .frame(width: 620, height: 640)
+            .background(DeikoStyle.card)
     }
 
     /// A real window, briefly on screen. SwiftUI lays out against a window and

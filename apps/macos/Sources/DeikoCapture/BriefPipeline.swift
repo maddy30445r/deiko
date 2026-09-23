@@ -135,13 +135,14 @@ enum BriefPipeline {
     /// script. A bundle ships `dist/` already built, so there is nothing to
     /// build and nothing to wrap.
     private enum Stage {
-        case transcribe, brief, summarize
+        case transcribe, brief, summarize, classify
 
         var script: String {
             switch self {
             case .transcribe: return "transcribe.mjs"
             case .brief: return "render-brief.mjs"
             case .summarize: return "summarize.mjs"
+            case .classify: return "classify.mjs"
             }
         }
 
@@ -150,6 +151,7 @@ enum BriefPipeline {
             case .transcribe: return "transcribe"
             case .brief: return "brief"
             case .summarize: return "summarize"
+            case .classify: return "classify"
             }
         }
 
@@ -159,8 +161,19 @@ enum BriefPipeline {
             case .transcribe: return "Transcribing"
             case .brief: return "Rendering the brief"
             case .summarize: return "Summarising"
+            case .classify: return "Placing it"
             }
         }
+    }
+
+    /// The one setting the renderer reads from the app: whether a brief the
+    /// classifier called quick may carry the "a fast model is probably
+    /// enough" line. A defaults key, so the Settings toggle and this cannot
+    /// drift.
+    static let optimizeCostsKey = "DEIKO_OPTIMIZE_COSTS"
+
+    private static func briefEnvironment() -> [String: String] {
+        UserDefaults.standard.bool(forKey: optimizeCostsKey) ? [optimizeCostsKey: "1"] : [:]
     }
 
     /// Run one stage, whichever layout this app is running in.
@@ -261,7 +274,7 @@ enum BriefPipeline {
             Emit.log("transcribe: \(line)")
         }
         await MainActor.run { Personas.point(session: sessionDir, to: Personas.current()) }
-        try await run(.brief, sessionDir: sessionDir)
+        try await run(.brief, sessionDir: sessionDir, extraEnvironment: briefEnvironment())
         mark("render")
         let brief = try digest(sessionDir: sessionDir)
         // The brief exists, so the recording has done its one job.
@@ -423,8 +436,21 @@ enum BriefPipeline {
     /// can change it for this brief alone. Re-pointing here would have quietly
     /// reverted that choice the next time somebody fixed a misheard word.
     static func rerender(sessionDir: String) async throws -> BriefDigest {
-        try await run(.brief, sessionDir: sessionDir)
+        try await run(.brief, sessionDir: sessionDir, extraEnvironment: briefEnvironment())
         return try digest(sessionDir: sessionDir)
+    }
+
+    /// Place the brief: which collection, which earlier briefs it continues
+    /// or draws on, how much work it looks like. Written to `context.json`
+    /// by the script; nil when it decided nothing — no relay, a short
+    /// narration, a network that was not there.
+    ///
+    /// Separate from `run`, like `summary`, and for the same reason: it is a
+    /// network round trip and the brief must not wait on it. The caller
+    /// re-renders afterwards so the prompt on disk carries what was placed.
+    static func classify(sessionDir: String) async -> SessionContext? {
+        _ = try? await run(.classify, sessionDir: sessionDir)
+        return SessionContext.read(sessionDir: sessionDir)
     }
 
     /// Three lines about the session, for the developer to glance at. Nil when

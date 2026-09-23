@@ -201,6 +201,11 @@ DEIKO_USAGE_TABLE="$TABLE" node -e '
     // in code, so each is passed only when it has been chosen deliberately.
     "DEIKO_GLOBAL_DAILY_SECONDS",
     "DEIKO_SUMMARIES_PER_DAY",
+    // The classifier. Without the key /v1/classify 503s and the app renders
+    // every brief without earlier work, which is the right default until a
+    // TypeSafe account exists.
+    "TYPESAFE_API_KEY",
+    "DEIKO_CLASSIFIES_PER_DAY",
     "DEIKO_PRO_BENEFIT_IDS",
     "POLAR_API_BASE",
     // The playground. Without the secret every /v1/playground/* route 503s,

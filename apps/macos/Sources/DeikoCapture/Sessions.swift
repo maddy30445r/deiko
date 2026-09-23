@@ -30,11 +30,12 @@ enum Sessions {
     ///
     /// ONE constant, and a defaults key beside it for anybody who wants a
     /// different answer without a rebuild. `0` disables the sweep entirely —
-    /// worth having, because "delete my work on a timer" is a reasonable thing
-    /// to refuse, and a user who refuses it should not have to trust that
-    /// setting it to a huge number works.
+    /// and is now the default. The board is Deiko's memory: every brief is a
+    /// candidate for "the same thing as last time", and a memory that forgets
+    /// on a timer is not much of one. Deleting is a decision, made on a card
+    /// or in Settings. Anyone who set the key keeps their number.
     static let retentionDaysKey = "DEIKO_SESSION_RETENTION_DAYS"
-    static let defaultRetentionDays = 30
+    static let defaultRetentionDays = 0
 
     /// When retention first applied to this install.
     ///

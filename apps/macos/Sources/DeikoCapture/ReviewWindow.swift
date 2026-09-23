@@ -75,6 +75,58 @@ final class ReviewModel: ObservableObject {
         }
     }
 
+    /// WHERE THIS BRIEF SITS in what Deiko remembers: its collection, the
+    /// brief it continues, the earlier ones it draws on, and how much work it
+    /// looks like. Nil until the classifier has answered — which happens
+    /// after the card is already on screen, so the row appears a moment
+    /// later rather than holding the brief back.
+    @Published var context: SessionContext?
+    /// The collections to choose from, read when the context lands rather
+    /// than in a view body: it is a file read, and the card re-renders on
+    /// every keystroke of a correction.
+    @Published var collections: [Collection] = []
+
+    /// Place this brief somewhere else, and re-render so the prompt says so.
+    /// Marked as the developer's decision, which the classifier never
+    /// overwrites — a correction that got re-guessed would be no correction.
+    func setCollection(_ id: String?) {
+        var next = context ?? SessionContext()
+        next.collection = id
+        next.decidedBy = "you"
+        apply(next)
+    }
+
+    /// Which earlier brief this one continues. `nil` is "it stands on its
+    /// own", which is a real answer and not an absence.
+    func setContinues(_ id: String?) {
+        var next = context ?? SessionContext()
+        next.continues = id
+        // The classifier keeps its related list out of the way of this: a
+        // brief cannot both be the one continued and merely related.
+        next.related.removeAll { $0 == id }
+        next.decidedBy = "you"
+        apply(next)
+    }
+
+    private func apply(_ next: SessionContext) {
+        guard let sessionDir else { return }
+        context = next
+        try? next.write(sessionDir: sessionDir)
+        task?.cancel()
+        task = Task {
+            do {
+                let rerendered = try await BriefPipeline.rerender(sessionDir: sessionDir)
+                guard stillCurrent(sessionDir) else { return }
+                digest = rerendered
+            } catch {
+                guard stillCurrent(sessionDir) else { return }
+                // The brief on disk is still the last good one; show what it
+                // actually says rather than the change we failed to apply.
+                context = SessionContext.read(sessionDir: sessionDir)
+            }
+        }
+    }
+
     /// The persona this brief was written for, for the one line on the card
     /// that says so. Read when the digest lands, not in a view body: it is a
     /// file read, and the card re-renders on every keystroke of a correction.
@@ -165,6 +217,7 @@ final class ReviewModel: ObservableObject {
     private var sessionDir: String?
     private var task: Task<Void, Never>?
     private var summaryTask: Task<Void, Never>?
+    private var classifyTask: Task<Void, Never>?
 
     /// The session on screen, for the controller to hand back to the recorder.
     var currentSessionDir: String? { sessionDir }
@@ -257,6 +310,8 @@ final class ReviewModel: ObservableObject {
     func load(sessionDir: String) {
         cancelPendingWork()
         self.sessionDir = sessionDir
+        context = nil
+        collections = []
         handedTo = nil
         phase = .working("Transcribing…")
         task = Task {
@@ -271,6 +326,7 @@ final class ReviewModel: ObservableObject {
                 self.originalNarration = digest.summary.narration
                 self.phase = .ready
                 self.fetchSummary(sessionDir: sessionDir)
+                self.fetchContext(sessionDir: sessionDir)
                 self.runQueuedHandoff()
             } catch {
                 guard stillCurrent(sessionDir) else { return }
@@ -343,6 +399,17 @@ final class ReviewModel: ObservableObject {
         task?.cancel()
         task = Task {
             do {
+                // THE PLACING GETS A MOMENT, AND ONLY A MOMENT.
+                //
+                // `fetchContext` re-renders when the classifier answers, and
+                // this reads `prompt.txt`. Without a wait the two race, and
+                // the loser is whichever wrote last — so a brief thrown two
+                // seconds after the card appeared could carry the version
+                // without its earlier work, or a re-render could land on top
+                // of a correction. One second is long enough for a call that
+                // takes 70–500ms and short enough that nobody waits on a
+                // classifier that is not coming.
+                await Self.settle(classifyTask, within: .seconds(1))
                 if narrationEdited || rerenderPending {
                     phase = .working(narrationEdited
                         ? "Applying your correction…"
@@ -391,6 +458,28 @@ final class ReviewModel: ObservableObject {
         }
     }
 
+    /// Where this brief belongs, and what it remembers.
+    ///
+    /// Its own task beside the summary's, for the same reason: a network round
+    /// trip must not stand in front of a finished brief. The re-render is what
+    /// makes it real — `prompt.txt` is written before the classifier answers,
+    /// so the earlier-work section only exists after this second pass.
+    ///
+    /// A brief thrown while this is in flight does not miss it: `approve`
+    /// waits on this task for up to a second before reading the prompt.
+    private func fetchContext(sessionDir: String) {
+        classifyTask?.cancel()
+        classifyTask = Task {
+            guard await BriefPipeline.classify(sessionDir: sessionDir) != nil else { return }
+            guard stillCurrent(sessionDir) else { return }
+            let rerendered = try? await BriefPipeline.rerender(sessionDir: sessionDir)
+            guard stillCurrent(sessionDir) else { return }
+            if let rerendered { self.digest = rerendered }
+            self.context = SessionContext.read(sessionDir: sessionDir)
+            self.collections = Collections.all()
+        }
+    }
+
     /// Runs alongside the visible brief, never in front of it. Its own task, so
     /// cancelling the window does not have to wait on a network call, and so a
     /// slow round trip cannot delay Good to go.
@@ -402,6 +491,19 @@ final class ReviewModel: ObservableObject {
             guard stillCurrent(sessionDir) else { return }
             self.summary = text
             self.summaryPending = false
+        }
+    }
+
+    /// Wait for a task, but not indefinitely. Whichever finishes first wins
+    /// and the other is abandoned — the task itself is not cancelled, because
+    /// a classification that arrives late is still worth having on the card.
+    private static func settle(_ work: Task<Void, Never>?, within limit: Duration) async {
+        guard let work else { return }
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await work.value }
+            group.addTask { try? await Task.sleep(for: limit) }
+            await group.next()
+            group.cancelAll()
         }
     }
 
@@ -488,6 +590,8 @@ final class ReviewModel: ObservableObject {
         task = nil
         summaryTask?.cancel()
         summaryTask = nil
+        classifyTask?.cancel()
+        classifyTask = nil
         // A held throw belongs to the session it was thrown at, and nothing
         // else. `load` calls this on entry, so without it a fling queued
         // against one session would fire the moment the NEXT session finished
@@ -675,6 +779,7 @@ struct ReviewView: View {
                 trustRow(d)
                 repoRow(d)
                 personaRow
+                contextRow
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -713,6 +818,122 @@ struct ReviewView: View {
             }
             .padding(.top, 1)
         }
+    }
+
+    /// WHERE THIS BRIEF SITS, and the one place to move it before it goes.
+    ///
+    /// Appears when the classifier answers, which is a moment after the card
+    /// — deliberately, because the brief is what somebody is waiting for.
+    /// Two menus and a chip, in the same 11pt register as the persona line
+    /// above: a correction here is an ordinary thing to do, not an error
+    /// being fixed.
+    @ViewBuilder private var contextRow: some View {
+        if let context = model.context {
+            HStack(spacing: 6) {
+                // THE UNCERTAINTY IS IN THE WORD, not in a mark beside it.
+                //
+                // A 4pt dot meaning "Deiko guessed" is a decoration that has
+                // to be explained, which the Charm Pays Rent rule cuts. The
+                // sentence can carry it for nothing: a confident answer reads
+                // "Filed in Deiko", a hesitant one "Looks like Deiko" — and
+                // the second invites the correction the first does not need.
+                Text(context.isGuess ? "Looks like" : "Filed in")
+                    .font(.system(size: 11))
+                    .foregroundStyle(DeikoStyle.ink2)
+                Menu {
+                    Button("Unsorted") { model.setCollection(nil) }
+                    if !model.collections.isEmpty { Divider() }
+                    ForEach(model.collections) { collection in
+                        Button {
+                            model.setCollection(collection.id)
+                        } label: {
+                            Text(collection.id == context.collection
+                                 ? "✓ \(collection.name)" : "   \(collection.name)")
+                        }
+                    }
+                    Divider()
+                    Button("New collection…") { newCollection() }
+                } label: {
+                    Text(Collections.name(for: context.collection) ?? "Unsorted")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(DeikoStyle.mark)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Which project this brief belongs to. Deiko files the next one beside it.")
+
+                Text("·").font(.system(size: 11)).foregroundStyle(DeikoStyle.ink2)
+
+                // A BRIEF THAT CONTINUES NOTHING STILL SAYS SO, quietly.
+                //
+                // Hiding this menu until there is a link would leave no way
+                // to make one; labelling it "carries on from nothing" is a
+                // sentence nobody needs to read. So the unlinked state is two
+                // words in the second voice — present, clickable, silent —
+                // and linking it promotes the whole phrase to indigo.
+                if let earlier = continuesLabel(context) {
+                    Text("carries on from")
+                        .font(.system(size: 11))
+                        .foregroundStyle(DeikoStyle.ink2)
+                    continuesMenu(context, label: earlier, linked: true)
+                } else {
+                    continuesMenu(context, label: "on its own", linked: false)
+                }
+
+                if let tier = context.tierLabel {
+                    Text(tier)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(DeikoStyle.mark)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(DeikoStyle.accentSoft, in: Capsule())
+                        .help("How much work this looks like. Your agent still decides for itself.")
+                }
+            }
+            .padding(.top, 1)
+        }
+    }
+
+    @ViewBuilder private func continuesMenu(
+        _ context: SessionContext, label: String, linked: Bool
+    ) -> some View {
+        Menu {
+            Button("Nothing — it stands on its own") { model.setContinues(nil) }
+            if !SessionsStore.shared.items.isEmpty { Divider() }
+            ForEach(SessionsStore.shared.items.prefix(20)) { item in
+                Button {
+                    model.setContinues(item.id)
+                } label: {
+                    Text(item.id == context.continues ? "✓ \(item.title)" : "   \(item.title)")
+                }
+            }
+        } label: {
+            Text(label)
+                .font(.system(size: 11, weight: linked ? .medium : .regular))
+                .foregroundStyle(linked ? DeikoStyle.mark : DeikoStyle.ink2)
+                .lineLimit(1)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("The earlier brief this one carries on from. Its folder travels with this brief, so your agent can read what happened then.")
+    }
+
+    /// The continued brief in a few words — its own title, shortened, because
+    /// a whole narration in a menu label would push the row off the card.
+    private func continuesLabel(_ context: SessionContext) -> String? {
+        guard let id = context.continues else { return nil }
+        guard let item = SessionsStore.shared.items.first(where: { $0.id == id }) else { return id }
+        return item.title.count > 28 ? String(item.title.prefix(28)) + "…" : item.title
+    }
+
+    /// Named by hand, and nothing is created until somebody types something.
+    /// Prefilled with the repo Deiko saw, which is usually the right answer.
+    private func newCollection() {
+        guard let made = Collections.ask(
+            prefill: model.digest?.summary.repoHints.first,
+            informative: "Briefs about the same project, kept together. Deiko files the next one beside this."
+        ) else { return }
+        model.collections = Collections.all()
+        model.setCollection(made.id)
     }
 
     /// `43s · 6 things pointed at · Code` — the app name in mono, because it

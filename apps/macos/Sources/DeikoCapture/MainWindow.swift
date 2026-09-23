@@ -272,10 +272,43 @@ final class SessionsStore: ObservableObject {
         let crops: [String]
         let apps: [String]
         let repo: String?
+        /// Where this brief sits in what Deiko remembers — see `Context.swift`.
+        /// All three come from the same detached pass that reads the manifest,
+        /// so the memory costs the board one more small decode per session.
+        let collection: String?
+        let continues: String?
+        /// The first line an agent wrote back about what it did, if one did.
+        let outcome: String?
     }
 
     @Published private(set) var items: [Item] = []
     @Published private(set) var loaded = false
+    /// The projects briefs are filed under, reloaded beside them: a collection
+    /// created by the classifier during a brief must appear on the board
+    /// without anybody restarting anything.
+    @Published private(set) var collections: [Collection] = []
+
+    /// How many briefs sit in each collection, for the chip row and the
+    /// dashboard. Unsorted is not a collection and is counted by the caller.
+    func count(of id: String) -> Int {
+        items.filter { $0.collection == id }.count
+    }
+
+    /// File a brief somewhere else, from the board rather than the card.
+    /// Marked as the developer's decision, which the classifier never
+    /// overwrites.
+    func move(_ item: Item, to collection: String?) {
+        var context = SessionContext.read(sessionDir: item.dir) ?? SessionContext()
+        context.collection = collection
+        context.decidedBy = "you"
+        try? context.write(sessionDir: item.dir)
+        guard let index = items.firstIndex(where: { $0.id == item.id }) else { return }
+        items[index] = Item(
+            id: item.id, dir: item.dir, date: item.date, line: item.line,
+            crops: item.crops, apps: item.apps, repo: item.repo,
+            collection: collection, continues: item.continues, outcome: item.outcome
+        )
+    }
 
     var thisWeek: Int {
         let since = Date().addingTimeInterval(-7 * 24 * 3600)
@@ -307,6 +340,15 @@ final class SessionsStore: ObservableObject {
                 guard let date = Sessions.stamp(name) else { return nil }
                 let digest = try? BriefPipeline.digest(sessionDir: dir)
                 let narration = digest?.summary.narration.trimmingCharacters(in: .whitespacesAndNewlines)
+                let context = SessionContext.read(sessionDir: dir)
+                let outcome = (try? String(
+                    contentsOf: URL(fileURLWithPath: dir).appendingPathComponent("outcome.md"),
+                    encoding: .utf8
+                ))?
+                    .split(separator: "\n")
+                    .map { $0.trimmingCharacters(in: .whitespaces).replacingOccurrences(
+                        of: "^#+\\s*", with: "", options: .regularExpression) }
+                    .first { !$0.isEmpty }
                 return Item(
                     id: name,
                     dir: dir,
@@ -314,11 +356,15 @@ final class SessionsStore: ObservableObject {
                     line: (narration?.isEmpty == false) ? narration : nil,
                     crops: digest?.cropPaths ?? [],
                     apps: digest?.summary.apps ?? [],
-                    repo: digest?.summary.repoHints.first
+                    repo: digest?.summary.repoHints.first,
+                    collection: context?.collection,
+                    continues: context?.continues,
+                    outcome: outcome
                 )
             }
         }.value
         items = read
+        collections = Collections.all()
         loaded = true
     }
 }
@@ -345,7 +391,7 @@ private struct DashboardPane: View {
                 HStack(spacing: 12) {
                     stat("\(sessions.items.count)", "briefs kept", Sessions.retentionDays > 0
                         ? "older than \(Sessions.retentionDays) days are swept"
-                        : "nothing is swept automatically")
+                        : "every one of them is memory for the next")
                     stat("\(sessions.thisWeek)", "this week", "double-tap \(SessionKey.selected.name) to add one")
                     stat("\(sessions.items.reduce(0) { $0 + $1.crops.count })", "screenshots drawn",
                          "the crops that travelled with your briefs")
@@ -475,15 +521,57 @@ private struct DashboardPane: View {
 private struct BoardPane: View {
     @ObservedObject var sessions: SessionsStore
     @State private var query = ""
+    @State private var filter: Filter = .all
     @FocusState private var searching: Bool
 
+    /// Which slice of the board is on screen. Unsorted is its own answer
+    /// rather than an empty collection: "nothing filed this yet" is a thing
+    /// somebody looks for on purpose.
+    private enum Filter: Equatable {
+        case all, unsorted, collection(String)
+    }
+
     private var shown: [SessionsStore.Item] {
+        let inFilter = sessions.items.filter { item in
+            switch filter {
+            case .all: return true
+            case .unsorted: return item.collection == nil
+            case .collection(let id): return item.collection == id
+            }
+        }
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else { return sessions.items }
-        return sessions.items.filter {
+        guard !q.isEmpty else { return inFilter }
+        return inFilter.filter {
             ($0.line ?? "").lowercased().contains(q)
                 || ($0.repo ?? "").lowercased().contains(q)
                 || $0.apps.contains { $0.lowercased().contains(q) }
+        }
+    }
+
+    /// The chips, in the order they are useful: everything, then the projects
+    /// with the most in them, then whatever has not been filed.
+    @ViewBuilder private var chips: some View {
+        if !sessions.collections.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 7) {
+                    chip("All", count: sessions.items.count, filter: .all)
+                    ForEach(sessions.collections.sorted { sessions.count(of: $0.id) > sessions.count(of: $1.id) }) { collection in
+                        chip(collection.name, count: sessions.count(of: collection.id),
+                             filter: .collection(collection.id))
+                            .contextMenu { CollectionMenu(collection: collection, store: sessions) }
+                    }
+                    let loose = sessions.items.filter { $0.collection == nil }.count
+                    if loose > 0 { chip("Unsorted", count: loose, filter: .unsorted) }
+                }
+                .padding(.vertical, 1)
+            }
+            .padding(.bottom, 2)
+        }
+    }
+
+    private func chip(_ name: String, count: Int, filter target: Filter) -> some View {
+        ChipButton(name: name, count: count, on: filter == target) {
+            filter = filter == target ? .all : target
         }
     }
 
@@ -503,12 +591,13 @@ private struct BoardPane: View {
                         .accessibilityHidden(true)
                 }
         }) {
+            chips
             if shown.isEmpty {
                 EmptyPane(
-                    title: sessions.items.isEmpty ? "The board is empty" : "Nothing matches “\(query)”",
+                    title: sessions.items.isEmpty ? "The board is empty" : "Nothing here yet",
                     line: sessions.items.isEmpty
                         ? "Briefs pin themselves here as you record them. Nothing is uploaded — this is the folder in your Documents."
-                        : "Try an app name, a repo, or a word you said."
+                        : "Try another collection, an app name, or a word you said."
                 )
             } else {
                 // `.top`, because the default is `.center`: cards of unequal
@@ -520,6 +609,44 @@ private struct BoardPane: View {
                 .padding(.top, 2)
             }
         }
+    }
+}
+
+/// One filter chip. The selected one is the wash chip the system already has
+/// (DESIGN.md §Chips); the rest are hairline outlines, so the row reads as one
+/// thing with one answer chosen rather than as a bank of buttons.
+private struct ChipButton: View {
+    let name: String
+    let count: Int
+    let on: Bool
+    let tap: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: tap) {
+            HStack(spacing: 5) {
+                Text(name).font(.system(size: 11, weight: .medium))
+                // The count is the quiet half of the chip in both states —
+                // it is the reason to click, never the label.
+                Text("\(count)")
+                    .font(.system(size: 11))
+                    .opacity(0.65)
+            }
+            .foregroundStyle(on ? DeikoStyle.mark : DeikoStyle.ink2)
+            .padding(.horizontal, 9).padding(.vertical, 3)
+            .background {
+                if on {
+                    Capsule().fill(DeikoStyle.accentSoft)
+                } else {
+                    Capsule()
+                        .fill(hovering ? DeikoStyle.accentSoft.opacity(0.5) : .clear)
+                        .overlay(Capsule().strokeBorder(DeikoStyle.hairline, lineWidth: 1))
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .animation(.easeOut(duration: 0.12), value: hovering)
+        .onHover { hovering = $0 }
     }
 }
 
@@ -538,6 +665,29 @@ private struct BoardCard: View {
                 .foregroundStyle(item.line == nil ? DeikoStyle.ink2 : .primary)
                 .lineLimit(3)
                 .fixedSize(horizontal: false, vertical: true)
+            // WHAT CAME OF IT, in the agent's own words, when one wrote back.
+            //
+            // Labelled rather than dropped in bare: an unmarked second
+            // sentence under the narration reads as more of what the
+            // developer said, and this is the one line on the card that
+            // somebody else wrote. Both stay in the second voice — the
+            // narration is still how you recognise the session.
+            if let outcome = item.outcome {
+                (Text("What happened: ").font(.system(size: 11, weight: .medium))
+                    + Text(outcome).font(.system(size: 11)))
+                    .foregroundStyle(DeikoStyle.ink2)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            // NOT AN ARROW. A glyph standing in for a word is an icon system
+            // this app does not have; the sentence says it and reads aloud.
+            if let continues = item.continues,
+               let earlier = store.items.first(where: { $0.id == continues }) {
+                (Text("Carries on from ").font(.system(size: 11))
+                    + Text(earlier.title).font(.system(size: 11, weight: .medium)))
+                    .foregroundStyle(DeikoStyle.ink2)
+                    .lineLimit(1)
+            }
             HStack(spacing: 6) {
                 Text(Self.stamp(item.date))
                 if !item.crops.isEmpty {
@@ -607,7 +757,30 @@ struct SessionMenu: View {
             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.dir)])
         }
         Divider()
+        Menu("Move to") {
+            Button("Unsorted") { store.move(item, to: nil) }
+            if !store.collections.isEmpty { Divider() }
+            ForEach(store.collections) { collection in
+                Button {
+                    store.move(item, to: collection.id)
+                } label: {
+                    Text(collection.id == item.collection ? "✓ \(collection.name)" : "   \(collection.name)")
+                }
+            }
+            Divider()
+            Button("New collection…") { newCollection() }
+        }
+        Divider()
         Button("Delete…", role: .destructive) { confirmDelete() }
+    }
+
+    private func newCollection() {
+        guard let made = Collections.ask(
+            prefill: item.repo,
+            informative: "Briefs about the same project, kept together."
+        ) else { return }
+        store.move(item, to: made.id)
+        Task { await store.load(root: Sessions.defaultRoot) }
     }
 
     /// ASKED, ALWAYS. The screenshots are the only copy, and "Delete all past
@@ -623,6 +796,56 @@ struct SessionMenu: View {
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         store.delete(item)
+    }
+}
+
+/// What can be done to a collection, from the chip that names it. Renaming
+/// and describing are the two things that change how the classifier reads it;
+/// deleting forgets the folder, never the briefs.
+private struct CollectionMenu: View {
+    let collection: Collection
+    let store: SessionsStore
+
+    var body: some View {
+        Button("Describe…") {
+            guard let hint = Collections.askText(
+                title: "What is \(collection.name)?",
+                informative: "One line. Deiko reads it when it decides where a new brief belongs — \"the Cloudflare site, not the app\".",
+                value: collection.hint,
+                placeholder: "the Cloudflare site, not the app",
+                confirm: "Save"
+            ) else { return }
+            Collections.describe(id: collection.id, hint: hint)
+            reload()
+        }
+        Button("Rename…") {
+            guard let name = Collections.askText(
+                title: "Rename \(collection.name)",
+                informative: "Briefs stay where they are.",
+                value: collection.name,
+                placeholder: "Project name",
+                confirm: "Rename"
+            ), !name.isEmpty else { return }
+            Collections.rename(id: collection.id, to: name)
+            reload()
+        }
+        Divider()
+        Button("Delete collection…", role: .destructive) {
+            let alert = NSAlert()
+            alert.messageText = "Delete the \(collection.name) collection?"
+            alert.informativeText = "Its \(store.count(of: collection.id)) brief"
+                + "\(store.count(of: collection.id) == 1 ? "" : "s") stay on the board, unsorted. "
+                + "No session is deleted."
+            alert.addButton(withTitle: "Delete")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            Collections.delete(id: collection.id)
+            reload()
+        }
+    }
+
+    private func reload() {
+        Task { await store.load(root: Sessions.defaultRoot) }
     }
 }
 

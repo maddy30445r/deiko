@@ -80,6 +80,8 @@ function ddb(target, body) {
 let upstream = [];
 let upstreamBodies = [];
 let licenseValid = true;
+/// When set, the classifier upstream answers 502, for the refund path.
+let jevDown = false;
 
 function stubFetch() {
   globalThis.fetch = async (url, init) => {
@@ -100,6 +102,12 @@ function stubFetch() {
     }
     if (href.includes("/chat/completions")) {
       return new Response(JSON.stringify({ choices: [] }), { status: 200 });
+    }
+    if (href.includes("api.typesafe.ai")) {
+      if (jevDown) return new Response("boom", { status: 502 });
+      return new Response(JSON.stringify({ model: "jev-1.13.0", answers: {} }), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
     }
     throw new Error(`unexpected upstream: ${href}`);
   };
@@ -137,6 +145,7 @@ before(async () => {
   process.env.AWS_SECRET_ACCESS_KEY = "test";
   process.env.SARVAM_API_KEY = "test-sarvam";
   process.env.GROQ_API_KEY = "test-groq";
+  process.env.TYPESAFE_API_KEY = "test-typesafe";
 
   ({ handle, logLine } = await import("../relay.mjs"));
 });
@@ -149,6 +158,7 @@ beforeEach(() => {
   upstream = [];
   upstreamBodies = [];
   licenseValid = true;
+  jevDown = false;
   stubFetch();
 });
 
@@ -388,6 +398,80 @@ test("the caller does not get to choose the model or the token budget", async ()
   const sent = JSON.parse(upstreamBodies.at(-1));
   assert.equal(sent.model, "openai/gpt-oss-20b", "the model is ours to pick");
   assert.equal(sent.max_completion_tokens, 200, "and so is the completion budget");
+});
+
+// ── Classification ──────────────────────────────────────────────────────────
+
+const classify = (token, body) => handle({
+  method: "POST", path: "/v1/classify", token,
+  contentType: "application/json",
+  body: Buffer.from(JSON.stringify(body ?? { narration: "fix the drag on the board" })),
+});
+const classifyDay = () => `global#${new Date().toISOString().slice(0, 10)}#classify`;
+
+test("a classification is counted on its own row and never on the audio ceiling", async () => {
+  const audioDay = `global#${new Date().toISOString().slice(0, 10)}`;
+  const r = await classify("dev_anyone");
+  assert.equal(r.status, 200);
+  assert.equal(rows.get(classifyDay())?.audioSeconds, 1, "an unmetered route is an unbounded bill");
+  assert.equal(rows.get(audioDay)?.audioSeconds ?? 0, 0, "a text call must not touch the audio ceiling");
+  assert.equal(rows.get(`global#${new Date().toISOString().slice(0, 10)}#summary`)?.audioSeconds ?? 0, 0,
+    "nor the summary's");
+});
+
+test("the relay builds the classifier request itself: pinned model, pinned questions", async () => {
+  const candidates = Array.from({ length: 130 }, (_, i) => ({
+    id: `202609${String(i % 28 + 1).padStart(2, "0")}-${String(100000 + i).slice(-6)}`,
+    date: "Sep 1", line: `earlier brief ${i}`,
+  }));
+  candidates.push({ id: "../etc/passwd", date: "?", line: "not a session" });
+  candidates.push({ id: "none", date: "?", line: "not a session either" });
+  await classify("dev_greedy", {
+    model: "some-expensive-model",
+    questions: { steal: { type: "Choice", criteria: { a: "b" } } },
+    narration: "same drag bug as last time on the board",
+    titles: ["Orb.swift — Deiko"],
+    collections: [{ id: "deiko", name: "Deiko", hint: "the mac app" }, { id: "Bad Id", name: "x" }, { id: "none", name: "x" }],
+    candidates,
+  });
+  const sent = JSON.parse(upstreamBodies.at(-1));
+  assert.equal(sent.model, "jev-1.13.0", "the model is ours to pick");
+  assert.equal(sent.questions.steal, undefined, "and so are the questions");
+  const keys = Object.keys(sent.questions);
+  assert.equal(keys.filter((k) => k.startsWith("rel_")).length, 120, "candidates are capped");
+  assert.equal(keys.length, 3 + 120, "tier, collection, continues, one yes/no per candidate");
+  assert.equal(keys.some((k) => k.includes("..")), false, "a bogus id never becomes a question");
+  assert.deepEqual(Object.keys(sent.questions.collection.criteria), ["deiko", "none"]);
+  assert.equal(sent.questions.collection.criteria.deiko, "Deiko — the mac app");
+  assert.equal(sent.questions.continues.criteria.none, "It stands on its own");
+  assert.equal(sent.state.brief.windowTitles[0], "Orb.swift — Deiko");
+});
+
+test("with an empty board only the tier is asked", async () => {
+  await classify("dev_first");
+  const sent = JSON.parse(upstreamBodies.at(-1));
+  assert.deepEqual(Object.keys(sent.questions), ["tier"]);
+});
+
+test("a classification without a narration is refused", async () => {
+  const r = await classify("dev_empty", { candidates: [] });
+  assert.equal(r.status, 400);
+  assert.equal(rows.get(classifyDay())?.audioSeconds ?? 0, 0, "a refusal is not counted");
+});
+
+test("an upstream failure refunds the classification", async () => {
+  jevDown = true;
+  const r = await classify("dev_unlucky");
+  assert.equal(r.status, 502);
+  assert.equal(rows.get(classifyDay())?.audioSeconds ?? 0, 0);
+});
+
+test("an oversized classification body is refused before it is parsed", async () => {
+  const r = await handle({
+    method: "POST", path: "/v1/classify", token: "dev_big",
+    contentType: "application/json", body: Buffer.alloc(97 * 1024, "x"),
+  });
+  assert.equal(r.status, 413);
 });
 
 test("an oversized summary body is refused before it is parsed", async () => {

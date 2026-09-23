@@ -1,0 +1,214 @@
+import AppKit
+import Foundation
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE MEMORY, ON DISK
+//
+// Two flat files, beside the sessions, following `persona.txt`'s arrangement:
+//
+//   ~/Documents/Deiko/collections.json   the projects a brief can land in
+//   <session>/context.json               where this brief landed, which earlier
+//                                        briefs it continues or draws on, and
+//                                        how much work it looked like
+//
+// `scripts/classify.mjs` writes `context.json` from the classifier's answers;
+// the review card and the board rewrite it when the developer corrects a
+// guess, and mark it `decidedBy: "you"` so the classifier never overwrites a
+// decision a person made. `render-brief.mjs` reads it. Nothing here talks to
+// a network and nothing is indexed: the folder walk the board already does
+// is the index.
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct SessionContext: Codable, Equatable {
+    struct Confidence: Codable, Equatable {
+        var collection: Double?
+        var continues: Double?
+        var tier: Double?
+    }
+
+    /// A collection id, or nil for Unsorted.
+    var collection: String?
+    /// The session this brief continues, corrects or refers back to.
+    var continues: String?
+    /// Earlier briefs that are useful background, most likely first.
+    var related: [String] = []
+    /// `quick` / `medium` / `complex` / `reasoning` — see `TIERS` in
+    /// `scripts/lib/context.mjs`.
+    var tier: String?
+    var confidence = Confidence()
+    /// `"jev"` or `"you"`. A person's answer is final.
+    var decidedBy: String = "you"
+    var model: String?
+
+    static func path(sessionDir: String) -> URL {
+        URL(fileURLWithPath: sessionDir).appendingPathComponent("context.json")
+    }
+
+    static func read(sessionDir: String) -> SessionContext? {
+        guard let data = try? Data(contentsOf: path(sessionDir: sessionDir)) else { return nil }
+        return try? JSONDecoder().decode(SessionContext.self, from: data)
+    }
+
+    func write(sessionDir: String) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(self).write(to: Self.path(sessionDir: sessionDir), options: .atomic)
+    }
+
+    /// Whether the collection was the classifier's guess rather than a sure
+    /// thing or a person's choice — the case the card marks so a correction
+    /// reads as invited.
+    var isGuess: Bool {
+        decidedBy != "you" && collection != nil && (confidence.collection ?? 1) < 0.85
+    }
+
+    /// The tier, in the words the card uses.
+    var tierLabel: String? {
+        switch tier {
+        case "quick": return "Quick one"
+        case "medium": return "A short one"
+        case "complex": return "Needs digging"
+        case "reasoning": return "Needs a thinker"
+        default: return nil
+        }
+    }
+}
+
+struct Collection: Codable, Identifiable, Equatable {
+    let id: String
+    var name: String
+    /// One line the classifier reads as the option's description — "the
+    /// Cloudflare site, not the app". The cheapest accuracy there is.
+    var hint: String = ""
+}
+
+enum Collections {
+
+    static var file: URL {
+        URL(fileURLWithPath: Sessions.defaultRoot).appendingPathComponent("collections.json")
+    }
+
+    static func all() -> [Collection] {
+        guard let data = try? Data(contentsOf: file) else { return [] }
+        return (try? JSONDecoder().decode([Collection].self, from: data)) ?? []
+    }
+
+    static func name(for id: String?) -> String? {
+        guard let id else { return nil }
+        return all().first { $0.id == id }?.name
+    }
+
+    /// A collection id from its name. MIRRORS `slug` in `scripts/lib/context.mjs`:
+    /// the classifier creates collections too, and the two must agree on what
+    /// "Deiko" is called.
+    static func slug(_ name: String) -> String {
+        var out = ""
+        var pendingDash = false
+        for scalar in name.lowercased().unicodeScalars {
+            if ("a"..."z").contains(scalar) || ("0"..."9").contains(scalar) {
+                if pendingDash, !out.isEmpty { out.append("-") }
+                pendingDash = false
+                out.unicodeScalars.append(scalar)
+            } else {
+                pendingDash = true
+            }
+        }
+        return out.isEmpty ? "collection" : out
+    }
+
+    /// Add a collection by name, or return the one that already has it.
+    @discardableResult
+    static func add(name raw: String) -> Collection? {
+        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return nil }
+        var list = all()
+        if let existing = list.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
+            return existing
+        }
+        let id = slug(name)
+        if let clash = list.first(where: { $0.id == id }) { return clash }
+        let made = Collection(id: id, name: name)
+        list.append(made)
+        return save(list) ? made : nil
+    }
+
+    static func rename(id: String, to raw: String) {
+        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        var list = all()
+        guard let index = list.firstIndex(where: { $0.id == id }) else { return }
+        list[index].name = name
+        save(list)
+    }
+
+    static func describe(id: String, hint: String) {
+        var list = all()
+        guard let index = list.firstIndex(where: { $0.id == id }) else { return }
+        list[index].hint = hint.trimmingCharacters(in: .whitespacesAndNewlines)
+        save(list)
+    }
+
+    /// Forget a collection. Sessions that pointed at it keep their
+    /// `context.json` and read as Unsorted; nothing else on disk is touched.
+    static func delete(id: String) {
+        save(all().filter { $0.id != id })
+    }
+
+    /// ONE WAY TO ASK FOR A LINE OF TEXT, because three surfaces need it —
+    /// naming a collection from the review card, naming one from a board
+    /// card, renaming and describing one from its chip — and three
+    /// hand-rolled alerts drift into three different wordings of the same
+    /// question.
+    ///
+    /// Returns nil when cancelled, which is not the same as an empty string:
+    /// clearing a description is a real answer.
+    @MainActor
+    static func askText(
+        title: String, informative: String, value: String = "",
+        placeholder: String, confirm: String
+    ) -> String? {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = informative
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        field.placeholderString = placeholder
+        field.stringValue = value
+        alert.accessoryView = field
+        alert.addButton(withTitle: confirm)
+        alert.addButton(withTitle: "Cancel")
+        // The caret starts in the field, so the first keystroke types rather
+        // than ringing the system bell.
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        return field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Name a new collection and make it. Nil when cancelled or left blank.
+    @MainActor
+    static func ask(prefill: String?, informative: String) -> Collection? {
+        guard let name = askText(
+            title: "New collection",
+            informative: informative,
+            value: prefill ?? "",
+            placeholder: "Project name",
+            confirm: "Create"
+        ), !name.isEmpty else { return nil }
+        return add(name: name)
+    }
+
+    @discardableResult
+    private static func save(_ list: [Collection]) -> Bool {
+        do {
+            try FileManager.default.createDirectory(
+                at: file.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            try encoder.encode(list).write(to: file, options: .atomic)
+            return true
+        } catch {
+            Emit.log("collections: could not write \(file.lastPathComponent) — \(error.localizedDescription)")
+            return false
+        }
+    }
+}
