@@ -272,6 +272,56 @@ enum DeikoStyle {
     }
 }
 
+// ── Appearance ──────────────────────────────────────────────────────────────
+
+/// Light, dark, or whatever the Mac is doing.
+///
+/// The design is built twice — every colour in `DeikoStyle` is a dynamic pair —
+/// so following the system is the right default and costs nothing. The choice
+/// exists because this app draws OVER other people's windows: somebody who
+/// runs macOS light but codes in a dark editor all day has a real reason to
+/// want the orb dark, and "match my editor, not my Finder" is not a preference
+/// the system can express for them.
+///
+/// Applied to `NSApp`, which every window and every dynamic colour resolves
+/// against — including the orb and the review panel, not just this window.
+/// The capture pill is deliberately exempt: it is a fixed red that must look
+/// identical over any wallpaper, in any appearance.
+enum Appearance: String, CaseIterable, Identifiable {
+    case system, light, dark
+
+    var id: String { rawValue }
+
+    var name: String {
+        switch self {
+        case .system: return "Match macOS"
+        case .light: return "Light"
+        case .dark: return "Dark"
+        }
+    }
+
+    private static let key = "DEIKO_APPEARANCE"
+
+    static var selected: Appearance {
+        get { Appearance(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .system }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: key)
+            newValue.apply()
+        }
+    }
+
+    /// Nil means "stop deciding" — AppKit then follows the system, which is
+    /// not the same as setting it to the system's current value: that one
+    /// would freeze at whatever it was when the app launched.
+    func apply() {
+        NSApp.appearance = switch self {
+        case .system: nil
+        case .light: NSAppearance(named: .aqua)
+        case .dark: NSAppearance(named: .darkAqua)
+        }
+    }
+}
+
 // ── The shared modifiers ────────────────────────────────────────────────────
 
 extension View {

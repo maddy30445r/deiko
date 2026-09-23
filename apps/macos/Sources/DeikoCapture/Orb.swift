@@ -810,6 +810,12 @@ struct CoinView: View {
     /// Held coins float: the shadow grows from 2pt to 8pt of throw the moment
     /// the coin is picked up. The card's shadow never changes.
     var held: Bool = false
+    /// 56 is the coin you throw. EVERYTHING inside scales with this, because
+    /// the size used to be hard-coded at the bottom of `body` — so asking for
+    /// a smaller one with `.frame(width: 26)` clipped the layout box and left
+    /// a 56pt coin painting straight over the window's own title bar. The
+    /// sidebar's brand row was exactly that bug.
+    var diameter: CGFloat = 56
 
     var body: some View {
         ZStack {
@@ -821,16 +827,19 @@ struct CoinView: View {
                     startPoint: .top, endPoint: .center
                 )
             )
-            Circle().strokeBorder(ring, lineWidth: 1.5)
+            Circle().strokeBorder(ring, lineWidth: 1.5 * scale)
             glyph
         }
-        .frame(width: 56, height: 56)
+        .frame(width: diameter, height: diameter)
         .shadow(
             color: .black.opacity(held ? 0.45 : 0.3),
-            radius: held ? 14 : 3,
-            y: held ? 8 : 2
+            radius: (held ? 14 : 3) * scale,
+            y: (held ? 8 : 2) * scale
         )
     }
+
+    /// Everything inside the coin is drawn against the 56pt original.
+    private var scale: CGFloat { diameter / 56 }
 
     private var fill: Color {
         switch kind {
@@ -851,9 +860,9 @@ struct CoinView: View {
     @ViewBuilder private var glyph: some View {
         switch kind {
         case .working:
-            DeikoMark(diameter: 20, color: Color.secondary)
+            DeikoMark(diameter: 20 * scale, color: Color.secondary)
         case .ready:
-            DeikoMark(diameter: 20, color: DeikoStyle.mark)
+            DeikoMark(diameter: 20 * scale, color: DeikoStyle.mark)
         case .overNothing:
             // Dashed and hollow — the mark's dot is what "this is aimed at
             // something" looks like, so over nothing it is absent.
@@ -862,7 +871,7 @@ struct CoinView: View {
                     Color.secondary,
                     style: StrokeStyle(lineWidth: 2, dash: [3, 3])
                 )
-                .frame(width: 20, height: 20)
+                .frame(width: 20 * scale, height: 20 * scale)
         case .failed:
             Text("!")
                 .font(.system(size: 22, weight: .semibold))

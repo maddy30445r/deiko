@@ -28,6 +28,13 @@ import SwiftUI
 @MainActor
 final class SettingsModel: ObservableObject {
 
+    @Published var appearance: Appearance = Appearance.selected
+
+    func setAppearance(_ next: Appearance) {
+        appearance = next
+        Appearance.selected = next
+    }
+
     /// The boxes start EMPTY even when a key is stored.
     ///
     /// Pre-filling them meant decrypting on every open, which is what made
@@ -283,6 +290,13 @@ struct SettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Settings").deikoTitle(24)
+                    Text("Keys, capture and what stays on this Mac.")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.bottom, 2)
                 SectionLabel("Plan")
                 licence
                 SectionLabel("Transcription")
@@ -294,14 +308,18 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 SectionLabel("Capturing")
                 capturing
+                SectionLabel("Appearance")
+                appearance
                 SectionLabel("Sessions")
                 sessions
                 Divider()
                 about
             }
-            .padding(24)
+            .padding(.horizontal, 26)
+            .padding(.top, 44)
+            .padding(.bottom, 28)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(DeikoStyle.paper)
         .task {
             model.openSessionDir = openSessionDir
             model.sessionRoot = sessionRoot
@@ -346,6 +364,31 @@ struct SettingsView: View {
                     set: { model.setLaunchAtLogin($0) }
                 ))
                 .font(.system(size: 13))
+            }
+            .padding(14)
+        }
+    }
+
+    /// Light, dark, or the system's answer — for every Deiko window, the orb
+    /// included. See `Appearance`.
+    private var appearance: some View {
+        InsetCard {
+            VStack(alignment: .leading, spacing: 10) {
+                Picker("", selection: Binding(
+                    get: { model.appearance },
+                    set: { model.setAppearance($0) }
+                )) {
+                    ForEach(Appearance.allCases) { choice in
+                        Text(choice.name).tag(choice)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+
+                Text("Applies to every Deiko window, including the orb over your editor. The capturing pill stays red in both — it has one job and one colour.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .padding(14)
         }

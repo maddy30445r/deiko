@@ -40,6 +40,30 @@ enum UIShot {
             }
             shoot(orbCard(), size: NSSize(width: 400, height: 130), look: look, to: "\(out)-orb-\(name).png")
         }
+        // The status item, at the size it is actually drawn — 1x and 2x — so a
+        // mark that looks wrong in the menu bar can be looked at without
+        // squinting at a 16pt corner of somebody's screen.
+        for (state, image) in [
+            ("ready", DeikoStyle.menuBarIcon(recording: false, blocked: false)),
+            ("recording", DeikoStyle.menuBarIcon(recording: true, blocked: false)),
+            ("blocked", DeikoStyle.menuBarIcon(recording: false, blocked: true)),
+        ] {
+            for scale in [1, 8] {
+                let size = NSSize(width: image.size.width * CGFloat(scale), height: image.size.height * CGFloat(scale))
+                guard let rep = NSBitmapImageRep(
+                    bitmapDataPlanes: nil, pixelsWide: Int(size.width), pixelsHigh: Int(size.height),
+                    bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                    colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+                ) else { continue }
+                NSGraphicsContext.saveGraphicsState()
+                NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+                image.draw(in: NSRect(origin: .zero, size: size))
+                NSGraphicsContext.restoreGraphicsState()
+                try? rep.representation(using: .png, properties: [:])?
+                    .write(to: URL(fileURLWithPath: "\(out)-menubar-\(state)-\(scale)x.png"))
+            }
+        }
+
         Emit.log("wrote \(out)-{welcome,orb,dashboard,board,personas,settings}-{light,dark}.png")
     }
 

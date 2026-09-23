@@ -232,6 +232,10 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func install() {
+        // FIRST, before any window exists. Setting this after a window is on
+        // screen repaints it mid-flight; applied here, the orb and the app
+        // window come up already in the appearance somebody chose.
+        Appearance.selected.apply()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         screenRecordingMissingAtLaunch = !Permission.screenRecording.isGranted
 

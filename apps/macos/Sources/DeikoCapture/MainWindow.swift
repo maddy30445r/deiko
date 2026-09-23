@@ -122,37 +122,21 @@ struct MainWindowView: View {
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 9) {
-                CoinView(kind: .ready)
-                    .frame(width: 26, height: 26)
+                CoinView(kind: .ready, diameter: 24)
                 Text("Deiko").deikoTitle(17)
             }
             .padding(.horizontal, 12)
-            // Clear of the traffic lights: the title bar is transparent and
-            // hidden, so this row sits under them unless it is pushed down.
-            .padding(.top, 30)
+            // CLEAR OF THE TRAFFIC LIGHTS. The title bar is transparent and
+            // its title hidden, so the window's own buttons are drawn over
+            // this column — they finish around 32pt down, and the brand row
+            // was landing at 25.
+            .padding(.top, 44)
             .padding(.bottom, 14)
 
             ForEach(MainSection.allCases) { section in
-                Button { nav.section = section } label: {
-                    HStack(spacing: 9) {
-                        Image(systemName: section.symbol)
-                            .font(.system(size: 13))
-                            .frame(width: 17)
-                            .foregroundStyle(nav.section == section ? DeikoStyle.accent : .secondary)
-                        Text(section.title)
-                            .font(.system(size: 13, weight: nav.section == section ? .semibold : .regular))
-                        Spacer()
-                    }
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 7)
-                    .background(
-                        RoundedRectangle(cornerRadius: DeikoStyle.controlRadius)
-                            .fill(nav.section == section ? DeikoStyle.accentSoft : .clear)
-                    )
-                    .contentShape(Rectangle())
+                SidebarRow(section: section, selected: nav.section == section) {
+                    nav.section = section
                 }
-                .buttonStyle(.plain)
-                .padding(.horizontal, 6)
             }
 
             Spacer()
@@ -195,7 +179,45 @@ struct MainWindowView: View {
         case .personas: PersonasPane()
         case .settings:
             SettingsView(openSessionDir: openSessionDir, sessionRoot: sessionRoot)
+                // Its own scroll view, so it is not wrapped in `PaneScroll` —
+                // but it carries the same header, because a section that
+                // opens differently from its neighbours reads as a different
+                // window.
+
         }
+    }
+}
+
+private struct SidebarRow: View {
+    let section: MainSection
+    let selected: Bool
+    let go: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: go) {
+            HStack(spacing: 9) {
+                Image(systemName: section.symbol)
+                    .font(.system(size: 13))
+                    .frame(width: 17)
+                    .foregroundStyle(selected ? DeikoStyle.accent : .secondary)
+                Text(section.title)
+                    .font(.system(size: 13, weight: selected ? .semibold : .regular))
+                Spacer()
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: DeikoStyle.controlRadius)
+                    .fill(selected ? DeikoStyle.accentSoft
+                          : (hovering ? Color.primary.opacity(0.055) : .clear))
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 6)
+        .onHover { hovering = $0 }
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
     }
 }
 
@@ -371,6 +393,7 @@ private struct BoardPane: View {
 
 private struct BoardCard: View {
     let item: SessionsStore.Item
+    @State private var hovering = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -404,7 +427,18 @@ private struct BoardCard: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(11)
-        .deikoCard()
+        .background(
+            RoundedRectangle(cornerRadius: DeikoStyle.insetRadius)
+                .fill(DeikoStyle.card)
+                .overlay(
+                    RoundedRectangle(cornerRadius: DeikoStyle.insetRadius)
+                        .strokeBorder(hovering ? Color.primary.opacity(0.22) : DeikoStyle.hairline, lineWidth: 1)
+                )
+                .shadow(color: DeikoStyle.shadow, radius: hovering ? 16 : 10, x: 0, y: hovering ? 9 : 5)
+        )
+        .offset(y: hovering ? -1 : 0)
+        .animation(.easeOut(duration: 0.14), value: hovering)
+        .onHover { hovering = $0 }
         .onTapGesture(count: 2) { NSWorkspace.shared.open(URL(fileURLWithPath: item.dir)) }
         .help("Double-click to open this session's folder")
     }
@@ -484,7 +518,9 @@ struct PaneScroll<Content: View, Trailing: View>: View {
                 content
             }
             .padding(.horizontal, 26)
-            .padding(.top, 26)
+            // Same reason as the sidebar's: there is no title bar to sit under,
+            // so the pane has to leave the room one would have taken.
+            .padding(.top, 44)
             .padding(.bottom, 28)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
