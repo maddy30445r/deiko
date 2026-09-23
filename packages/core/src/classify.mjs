@@ -112,8 +112,11 @@ async function main() {
 
   const body = {
     narration: redact(narration),
-    apps: summary.apps ?? [],
-    repoHints: summary.repoHints ?? [],
+    // REDACTED LIKE THE TITLES THEY COME FROM. `repoHints` is built by
+    // splitting window titles (`render-brief.mjs`), so sending it raw put the
+    // same screen-read string on the wire twice — once cleaned, once not.
+    apps: (summary.apps ?? []).map(redact),
+    repoHints: (summary.repoHints ?? []).map(redact),
     titles,
     collections: collections.map(({ id: cid, name, hint }) => ({ id: cid, name, hint: hint ?? "" })),
     candidates,
@@ -150,6 +153,22 @@ async function main() {
   if (decision.newCollection) {
     collections.push({ ...decision.newCollection, hint: "" });
     writeFileSync(join(root, "collections.json"), JSON.stringify(collections, null, 2) + "\n");
+  }
+
+  // CHECKED AGAIN, NOW. The check at the top of this script happened before a
+  // network round trip that can take fifteen seconds, and the board's "Move
+  // to" can file this very session in the meantime. Writing then would undo a
+  // choice somebody had already made, which is the one thing `decidedBy` is
+  // for.
+  if (existsSync(contextPath)) {
+    try {
+      if (JSON.parse(readFileSync(contextPath, "utf8"))?.decidedBy === "you") {
+        console.error("· placed by hand while we were asking — leaving it");
+        return;
+      }
+    } catch {
+      // Unreadable is not "decided"; it is replaced below.
+    }
   }
 
   const context = {

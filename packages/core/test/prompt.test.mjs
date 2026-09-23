@@ -614,7 +614,6 @@ const earlierOne = () => [{
   line: "fix the drag on the board",
   outcome: "Moved the drag threshold. Added a test.",
   collection: "Deiko",
-  hasCrops: true,
 }];
 
 test("earlier work lists paths for an agent that can open them", () => {
@@ -624,7 +623,8 @@ test("earlier work lists paths for an agent that can open them", () => {
   assert.equal(
     added,
     "\n\nEarlier work this relates to — read what you need:\n"
-      + "- Sep 18, \"fix the drag on the board\" (Deiko): /Users/dev/Documents/Deiko/20260918-155717 — prompt.txt, outcome.md, crops/\n"
+      + "- Sep 18, \"fix the drag on the board\" (Deiko): /Users/dev/Documents/Deiko/20260918-155717/prompt.txt"
+      + " · what happened: /Users/dev/Documents/Deiko/20260918-155717/outcome.md\n"
       + "This continues it.\n",
   );
 });
@@ -650,9 +650,11 @@ test("a browser gets the earlier brief inline, never as a path", () => {
 });
 
 test("two earlier briefs: the continued one is first and is named as such", () => {
-  const two = [...earlierOne(), { ...earlierOne()[0], id: "20260915-234940", dir: "/Users/dev/Documents/Deiko/20260915-234940", date: "Sep 15", line: "the board card hover looks wrong", outcome: null, hasCrops: false }];
+  const two = [...earlierOne(), { ...earlierOne()[0], id: "20260915-234940", dir: "/Users/dev/Documents/Deiko/20260915-234940", date: "Sep 15", line: "the board card hover looks wrong", outcome: null }];
   const { text } = buildPrompt({ ...oneShot(), earlier: two, continues: true });
-  assert.match(text, /- Sep 18, .*\n- Sep 15, "the board card hover looks wrong" \(Deiko\): \/Users\/dev\/Documents\/Deiko\/20260915-234940 — prompt\.txt\nThis continues the first one\.\n$/);
+  assert.match(text, /- Sep 18, .*\n- Sep 15, "the board card hover looks wrong" \(Deiko\): \/Users\/dev\/Documents\/Deiko\/20260915-234940\/prompt\.txt\nThis continues the first one\.\n$/);
+  assert.equal(earlierLines(text).join("\n").includes("crops/"), false,
+    "a folder is never handed over");
 });
 
 test("the write-back asks only a destination that can write a file", () => {
@@ -679,4 +681,23 @@ test("the cost hint is one sentence, after the persona line, before the write-ba
       + "\nThis looks like a quick one and a fast model is probably enough. Judge for yourself.\n"
       + "\nWhen you are done, write three lines on what you did to /Users/dev/Documents/Deiko/20260923-161205/outcome.md.\n",
   ));
+});
+
+/** Just the "Earlier work" bullets — the current session's own crop paths are
+ *  gated separately and legitimately appear elsewhere in the prompt. */
+const earlierLines = (text) => text.split("\n").filter((l) => l.startsWith("- Sep "));
+
+test("an earlier session's folder, crops and raw events are never named", () => {
+  // The gates a crop passes to reach a brief — credential visible, never
+  // OCR'd, taken out by hand — all work by leaving the PNG out of the text
+  // while it stays on disk. Naming the folder walked straight past them, and
+  // `events.jsonl` beside it holds the unredacted OCR of that whole session.
+  const { text } = buildPrompt({ ...oneShot(), earlier: earlierOne(), continues: true });
+  const lines = earlierLines(text).join("\n");
+  assert.equal(lines.includes("crops/"), false);
+  assert.equal(lines.includes("events.jsonl"), false);
+  assert.equal(
+    /20260918-155717(?!\/(prompt\.txt|outcome\.md))/.test(lines), false,
+    "the session id appears only as one of the two files cleared to travel",
+  );
 });

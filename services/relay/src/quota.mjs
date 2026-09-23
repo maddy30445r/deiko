@@ -116,11 +116,21 @@ export const SUMMARIES_PER_DAY =
   Number(process.env.DEIKO_SUMMARIES_PER_DAY ?? 2000);
 
 /// Classifications, the same shape for the same reason: a text call that
-/// takes any bearer, on its own row, counted in requests. Twice the summary
-/// ceiling because a brief re-classified after a correction is still one
-/// brief, and a Jev decision costs a tenth of a summary.
+/// takes any bearer, on its own row, counted in requests.
+///
+/// SIZED FROM THE BIGGEST REQUEST, NOT THE AVERAGE. The first number here was
+/// 4000, justified as "a Jev decision costs a tenth of a summary" — which is
+/// true of a decision about an empty board and false of the one this client
+/// actually sends. A full request carries 120 earlier briefs, about 10k input
+/// tokens against a summary's 2k, so it costs a few times a summary rather
+/// than a tenth of one. At Jev's $0.042 per million that is ~$0.0004 each, so
+/// this ceiling is the day's worst case in money: about 40 cents.
+///
+/// Like every ceiling here it bounds the blast radius of a stranger with the
+/// URL, not honest use — a thousand briefs a day across everybody is far past
+/// anything real, and the counter is global rather than per person.
 export const CLASSIFIES_PER_DAY =
-  Number(process.env.DEIKO_CLASSIFIES_PER_DAY ?? 4000);
+  Number(process.env.DEIKO_CLASSIFIES_PER_DAY ?? 1000);
 
 /// 16 kHz, mono, 16-bit — so two bytes a sample, 32,000 bytes a second. The
 /// client's chunker uses exactly these constants.

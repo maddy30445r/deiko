@@ -477,10 +477,10 @@ extension View {
     /// A bare glyph or word with no background of its own. The ring needs a
     /// little room around the letterforms or it reads as a box drawn on top
     /// of them rather than around them.
-    func deikoFocusRingLoose(radius: CGFloat = 6, inset: CGFloat = -4) -> some View {
-        padding(-inset)
+    func deikoFocusRingLoose(radius: CGFloat = 6) -> some View {
+        padding(4)
             .deikoFocusRing(RoundedRectangle(cornerRadius: radius))
-            .padding(inset)
+            .padding(-4)
     }
 }
 

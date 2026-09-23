@@ -470,6 +470,19 @@ final class ReviewModel: ObservableObject {
     private func fetchContext(sessionDir: String) {
         classifyTask?.cancel()
         classifyTask = Task {
+            // THE BOARD IS WHAT "carries on from" CHOOSES FROM, and until now
+            // only the main window ever loaded it. Record a session without
+            // opening that window — which is the ordinary way to use Deiko —
+            // and the menu held nothing but "it stands on its own", while a
+            // link the classifier had already made showed as a raw stamp
+            // because no title could be found for it. Loaded once per launch;
+            // `load` is already a detached read.
+            if !SessionsStore.shared.loaded {
+                await SessionsStore.shared.load(
+                    root: (sessionDir as NSString).deletingLastPathComponent
+                )
+            }
+            guard stillCurrent(sessionDir) else { return }
             guard await BriefPipeline.classify(sessionDir: sessionDir) != nil else { return }
             guard stillCurrent(sessionDir) else { return }
             let rerendered = try? await BriefPipeline.rerender(sessionDir: sessionDir)
@@ -858,7 +871,11 @@ struct ReviewView: View {
                     Divider()
                     Button("New collection…") { newCollection() }
                 } label: {
-                    Text(Collections.name(for: context.collection) ?? "Unsorted")
+                    // FROM THE MODEL, NOT THE DISK. `Collections.name(for:)`
+                    // reads and decodes the file; this body re-runs on every
+                    // keystroke of a narration correction, which is the exact
+                    // trap the persona line above documents.
+                    Text(model.collections.first { $0.id == context.collection }?.name ?? "Unsorted")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(DeikoStyle.mark)
                 }

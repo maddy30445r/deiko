@@ -301,11 +301,16 @@ final class SessionsStore: ObservableObject {
     /// without anybody restarting anything.
     @Published private(set) var collections: [Collection] = []
 
-    /// How many briefs sit in each collection, for the chip row and the
-    /// dashboard. Unsorted is not a collection and is counted by the caller.
-    func count(of id: String) -> Int {
-        items.filter { $0.collection == id }.count
-    }
+    /// How many briefs sit in each collection, and how many sit in none.
+    ///
+    /// Tallied once when the board loads rather than filtered per lookup: the
+    /// chip row sorts collections by size, and a comparator that walks every
+    /// session is the shape of thing that is fine at thirty briefs and silly
+    /// at three thousand.
+    @Published private(set) var counts: [String: Int] = [:]
+    @Published private(set) var unsortedCount = 0
+
+    func count(of id: String) -> Int { counts[id] ?? 0 }
 
     /// File a brief somewhere else, from the board rather than the card.
     /// Marked as the developer's decision, which the classifier never
@@ -316,6 +321,8 @@ final class SessionsStore: ObservableObject {
         context.decidedBy = "you"
         try? context.write(sessionDir: item.dir)
         guard let index = items.firstIndex(where: { $0.id == item.id }) else { return }
+        if let was = item.collection { counts[was, default: 1] -= 1 } else { unsortedCount -= 1 }
+        if let now = collection { counts[now, default: 0] += 1 } else { unsortedCount += 1 }
         items[index] = Item(
             id: item.id, dir: item.dir, date: item.date, line: item.line,
             crops: item.crops, apps: item.apps, repo: item.repo,
@@ -378,6 +385,10 @@ final class SessionsStore: ObservableObject {
         }.value
         items = read
         collections = Collections.all()
+        counts = read.reduce(into: [:]) { tally, item in
+            if let id = item.collection { tally[id, default: 0] += 1 }
+        }
+        unsortedCount = read.count { $0.collection == nil }
         loaded = true
     }
 }
@@ -573,8 +584,9 @@ private struct BoardPane: View {
                              filter: .collection(collection.id))
                             .contextMenu { CollectionMenu(collection: collection, store: sessions) }
                     }
-                    let loose = sessions.items.filter { $0.collection == nil }.count
-                    if loose > 0 { chip("Unsorted", count: loose, filter: .unsorted) }
+                    if sessions.unsortedCount > 0 {
+                        chip("Unsorted", count: sessions.unsortedCount, filter: .unsorted)
+                    }
                 }
                 .padding(.vertical, 1)
             }

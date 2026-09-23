@@ -342,9 +342,23 @@ export function buildPrompt({
       if (attached) {
         return `- ${e.date} I asked "${line}".${outcome ? ` Outcome: ${outcome}` : ""}`;
       }
-      const files = ["prompt.txt", ...(outcome ? ["outcome.md"] : []), ...(e.hasCrops ? ["crops/"] : [])];
+      // TWO FILES BY NAME, NEVER THE FOLDER.
+      //
+      // This listed the session directory and `crops/`, which quietly undid
+      // every gate the earlier brief passed through. A crop is withheld — for
+      // a credential visible in the capture, for never having been OCR'd, or
+      // because the developer took it out by hand — by being left out of that
+      // brief; the PNG stays on disk. So "read this folder" handed an agent
+      // the images Deiko had refused to send, and `events.jsonl` beside them,
+      // which holds the raw unredacted OCR of everything that session saw.
+      //
+      // `prompt.txt` is the brief that already passed those gates, and it
+      // names its own released crops by path. `outcome.md` is what an agent
+      // wrote. Nothing else in a session directory is cleared to travel.
       const where = e.collection ? ` (${e.collection})` : "";
-      return `- ${e.date}, "${line}"${where}: ${e.dir} — ${files.join(", ")}`;
+      const asked = `${e.dir}/prompt.txt`;
+      const happened = outcome ? ` · what happened: ${e.dir}/outcome.md` : "";
+      return `- ${e.date}, "${line}"${where}: ${asked}${happened}`;
     });
     out.push(
       "",

@@ -19,7 +19,7 @@
  * payload the end user has to read in their own chat.
  */
 
-import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { resolve, join, basename, dirname } from "node:path";
 
 import { align, joinWords } from "../packages/alignment/dist/src/align.js";
@@ -316,7 +316,6 @@ for (const id of new Set(earlierIds)) {
   const sibling = join(root, id);
   const line = readBriefLine(sibling);
   if (!line.narration?.trim()) continue;
-  const cropsDir = join(sibling, "crops");
   earlier.push({
     id,
     dir: sibling,
@@ -324,7 +323,6 @@ for (const id of new Set(earlierIds)) {
     line: line.narration,
     outcome: line.outcome,
     collection: collectionNames.get(line.collection) ?? null,
-    hasCrops: existsSync(cropsDir) && readdirSync(cropsDir).some((f) => f.endsWith(".png")),
   });
 }
 const continues = earlier.length > 0 && earlier[0].id === context?.continues;

@@ -28,14 +28,13 @@ export const CANDIDATE_LIMIT = 120;
 
 /// Where a probability becomes a decision.
 ///
-/// `guessed` is not a floor: between `collection` and `guessed` the answer is
-/// taken but shown as a guess, so a correction reads as invited rather than as
-/// fixing a mistake.
+/// The app has one more of these — the confidence below which a collection is
+/// shown as a guess rather than a fact — and it lives in `Context.swift`,
+/// because nothing here ever reads it.
 export const FLOORS = {
   collection: 0.6,
   continues: 0.7,
   related: 0.7,
-  guessed: 0.85,
   quickHint: 0.8,
 };
 

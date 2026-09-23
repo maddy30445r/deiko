@@ -49,6 +49,15 @@ const SECRET_MARKER =
 function looksOpaque(token) {
   if (token.length < 12) return false;
   if (/[+/]/.test(token)) return true; // base64 punctuation
+  // THE CASE-MIX TEST BELOW HAS A HOLE THAT HEX WALKS THROUGH. Requiring
+  // upper AND lower AND digit means `0123456789abcdef0123456789abcdef` — the
+  // shape of a great many real keys — did not read as opaque, so it survived
+  // even with "api key" written beside it, and the 40-char standalone rule is
+  // too long to catch it. Pure hex is never an English word and never an
+  // identifier anybody types, so it is opaque and then takes the same rules as
+  // everything else: dropped next to a marker, dropped unmarked only past
+  // `UNMARKED_MIN`. A short commit SHA still travels.
+  if (/^[0-9a-f]+$/i.test(token)) return true;
   const hasUpper = /[A-Z\u0400-\u04FF]/.test(token);
   const hasLower = /[a-z]/.test(token);
   const hasDigit = /\d/.test(token);

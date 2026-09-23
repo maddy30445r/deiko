@@ -58,8 +58,14 @@ struct SessionContext: Codable, Equatable {
     /// Whether the collection was the classifier's guess rather than a sure
     /// thing or a person's choice — the case the card marks so a correction
     /// reads as invited.
+    /// Above this the answer is stated; below it, hedged. The floors that
+    /// decide whether an answer is taken at all live in
+    /// `scripts/lib/context.mjs`; this one is only ever about wording, so it
+    /// lives where the wording does.
+    static let sureEnough = 0.85
+
     var isGuess: Bool {
-        decidedBy != "you" && collection != nil && (confidence.collection ?? 1) < 0.85
+        decidedBy != "you" && collection != nil && (confidence.collection ?? 1) < Self.sureEnough
     }
 
     /// The tier, in the words the card uses.
