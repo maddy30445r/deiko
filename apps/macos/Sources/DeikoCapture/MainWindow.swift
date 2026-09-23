@@ -605,9 +605,7 @@ private struct BoardPane: View {
                 if sessions.unsortedCount > 0 {
                     chip("Unsorted", count: sessions.unsortedCount, filter: .unsorted)
                 }
-                Spacer(minLength: 0)
             }
-            .fixedSize(horizontal: false, vertical: true)
             .padding(.bottom, 2)
         }
     }
@@ -658,12 +656,61 @@ private struct BoardPane: View {
 /// One filter chip. The selected one is the wash chip the system already has
 /// (DESIGN.md §Chips); the rest are hairline outlines, so the row reads as one
 /// thing with one answer chosen rather than as a bank of buttons.
+///
+/// THE WHOLE LOOK LIVES IN A `ButtonStyle`, and that is the point rather than
+/// a tidying. This was built the way `SidebarRow` is — `.buttonStyle(.plain)`
+/// with the capsule drawn in the label's `.background` — and the sidebar works.
+/// In a pane it did not: the chips drew correctly and took neither a hover nor
+/// a click, while the pointer carried on to the cards. The sidebar is not
+/// inside a `ScrollView` and every pane is, and inside a pane every control
+/// that works is either a menu or a custom `ButtonStyle` (`InkButtonStyle` on
+/// the Dashboard). The chip was the only `.plain` button in a scrolling pane,
+/// and the only dead one. So it is built the way the ones that work are built.
+private struct ChipButtonStyle: ButtonStyle {
+    let on: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        Chip(configuration: configuration, on: on)
+    }
+
+    /// Named `Chip`, not `Body`: `Body` is the protocol's own associated type
+    /// and a nested struct by that name satisfies it instead — the same trap
+    /// `InkButtonStyle` documents.
+    private struct Chip: View {
+        let configuration: ButtonStyleConfiguration
+        let on: Bool
+        /// Hover lives with the drawing rather than outside the button, so
+        /// nothing between the two can get out of step.
+        @State private var hovering = false
+
+        var body: some View {
+            configuration.label
+                .foregroundStyle(on ? DeikoStyle.mark : DeikoStyle.ink2)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 3)
+                .background {
+                    if on {
+                        Capsule().fill(DeikoStyle.accentSoft)
+                    } else {
+                        Capsule()
+                            .fill(hovering ? DeikoStyle.accentSoft.opacity(0.5) : .clear)
+                            .overlay(Capsule().strokeBorder(DeikoStyle.hairline, lineWidth: 1))
+                    }
+                }
+                // The whole capsule, not the letters.
+                .contentShape(Capsule())
+                .opacity(configuration.isPressed ? 0.7 : 1)
+                .animation(.easeOut(duration: 0.12), value: hovering)
+                .onHover { hovering = $0 }
+        }
+    }
+}
+
 private struct ChipButton: View {
     let name: String
     let count: Int
     let on: Bool
     let tap: () -> Void
-    @State private var hovering = false
 
     var body: some View {
         Button(action: tap) {
@@ -675,27 +722,9 @@ private struct ChipButton: View {
                     .font(.system(size: 11))
                     .opacity(0.65)
             }
-            .foregroundStyle(on ? DeikoStyle.mark : DeikoStyle.ink2)
-            .padding(.horizontal, 9).padding(.vertical, 3)
-            .background {
-                if on {
-                    Capsule().fill(DeikoStyle.accentSoft)
-                } else {
-                    Capsule()
-                        .fill(hovering ? DeikoStyle.accentSoft.opacity(0.5) : .clear)
-                        .overlay(Capsule().strokeBorder(DeikoStyle.hairline, lineWidth: 1))
-                }
-            }
-            // THE WHOLE CAPSULE, NOT THE LETTERS. A plain button's hit area
-            // is its label's content, so every click that landed on the
-            // padding — which is most of a chip — fell through. `SidebarRow`
-            // has declared this since it was written; this did not.
-            .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ChipButtonStyle(on: on))
         .deikoFocusRing(Capsule())
-        .animation(.easeOut(duration: 0.12), value: hovering)
-        .onHover { hovering = $0 }
     }
 }
 
