@@ -428,7 +428,7 @@ test("the relay builds the classifier request itself: pinned model, pinned quest
   candidates.push({ id: "none", date: "?", line: "not a session either" });
   await classify("dev_greedy", {
     model: "some-expensive-model",
-    questions: { steal: { type: "Choice", criteria: { a: "b" } } },
+    questions: { steal: { type: "choice", criteria: { a: "b" } } },
     narration: "same drag bug as last time on the board",
     titles: ["Orb.swift — Deiko"],
     collections: [{ id: "deiko", name: "Deiko", hint: "the mac app" }, { id: "Bad Id", name: "x" }, { id: "none", name: "x" }],
@@ -444,6 +444,15 @@ test("the relay builds the classifier request itself: pinned model, pinned quest
   assert.deepEqual(Object.keys(sent.questions.collection.criteria), ["deiko", "none"]);
   assert.equal(sent.questions.collection.criteria.deiko, "Deiko — the mac app");
   assert.equal(sent.questions.continues.criteria.none, "It stands on its own");
+  // Lowercase, and case-sensitive per docs.typesafe.ai/api — a capitalised
+  // `Choice` is a 400 on the first real call, which is the worst moment to
+  // find out.
+  assert.deepEqual(
+    [...new Set(Object.values(sent.questions).map((q) => q.type))].sort(),
+    ["choice", "noul", "score"],
+  );
+  assert.ok(Array.isArray(sent.questions.tier.criteria), "score levels are an ordered array");
+  assert.equal(typeof sent.questions.collection.criteria, "object", "choice options are a map");
   assert.equal(sent.state.brief.windowTitles[0], "Orb.swift — Deiko");
 });
 

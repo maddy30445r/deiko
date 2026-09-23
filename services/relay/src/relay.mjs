@@ -128,6 +128,9 @@ const MAX_SUMMARY_MESSAGES = 32;
 // capped, coerced body — a stranger with the URL cannot name a model, a
 // question count or a rubric. `classifyRequest` is exported so the shape is
 // testable without a network.
+// docs.typesafe.ai/api — the question `type` is LOWERCASE and case-sensitive.
+// A third-party write-up spells these `Choice`/`Score`/`Noul`; the vendor's own
+// reference does not, and the vendor is the one answering the request.
 const JEV_URL = "https://api.typesafe.ai/v1/systemone";
 /// Pinned: the floors in `scripts/lib/context.mjs` are tuned to this version.
 const JEV_MODEL = "jev-1.13.0";
@@ -192,7 +195,7 @@ export function classifyRequest(sent) {
 
   const questions = {
     tier: {
-      type: "Score",
+      type: "score",
       instructions: "How much work the brief asks of a coding agent",
       criteria: TIER_RUBRIC,
     },
@@ -201,7 +204,7 @@ export function classifyRequest(sent) {
   // question is not asked, and the client reads a missing answer as "none".
   if (collections.length) {
     questions.collection = {
-      type: "Choice",
+      type: "choice",
       instructions: "Which collection does this brief belong to",
       criteria: {
         ...Object.fromEntries(collections.map((c) => [c.id, c.hint ? `${c.name} — ${c.hint}` : c.name])),
@@ -211,7 +214,7 @@ export function classifyRequest(sent) {
   }
   if (candidates.length) {
     questions.continues = {
-      type: "Choice",
+      type: "choice",
       instructions: "Which earlier brief does this one continue, correct, or refer back to",
       criteria: {
         ...Object.fromEntries(candidates.map((c) => [c.id, `${c.date}: ${c.line}`])),
@@ -220,7 +223,7 @@ export function classifyRequest(sent) {
     };
     for (const c of candidates) {
       questions[`rel_${c.id}`] = {
-        type: "Noul",
+        type: "noul",
         instructions: `Earlier brief ${c.id} is useful background for the current brief`,
       };
     }
