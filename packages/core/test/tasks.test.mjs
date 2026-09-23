@@ -1,9 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   SHORTLIST, TASK_ID, groupTasks, parseOutcome, renderTaskNote, scoreTasks,
   stampTime, taskIdFor, taskState, taskText, titleFor, tokens,
+  readTasks, writeTaskNotes,
 } from "../lib/tasks.mjs";
 
 const brief = (id, line, extra = {}) => ({
@@ -110,4 +114,23 @@ test("app names and collections are redacted when they contain secrets", () => {
   const note = renderTaskNote({ id: "t-x", title: "Title", collection: "AKIAIOSFODNN7EXAMPLE", briefs: withSecret });
   assert.equal(note.includes("AKIAIOSFODNN7EXAMPLE"), false);
   assert.match(note, /REDACTED-AWS-KEY-ID/);
+});
+
+test("notes are written for tasks with two briefs or more, titled from tasks.json", () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-tasks-"));
+  const put = (id, narration, task) => {
+    mkdirSync(join(root, id));
+    writeFileSync(join(root, id, "brief.json"), JSON.stringify({ summary: { narration } }));
+    if (task) writeFileSync(join(root, id, "context.json"), JSON.stringify({ task }));
+  };
+  put("20260918-155836", "the price still shows 99 after I save it");
+  put("20260918-160606", "same price bug, it shows 99 again", "t-20260918-155836");
+  put("20260919-140923", "what is this sitemap xml thing");
+  writeFileSync(join(root, "tasks.json"), JSON.stringify([{ id: "t-20260918-155836", title: "The price bug" }]));
+  assert.equal(readTasks(root).get("t-20260918-155836"), "The price bug");
+  assert.equal(writeTaskNotes(root), 1);
+  const note = readFileSync(join(root, "tasks", "t-20260918-155836.md"), "utf8");
+  assert.match(note, /^# The price bug\nUnsorted · 2 briefs/);
+  assert.equal(existsSync(join(root, "tasks", "t-20260919-140923.md")), false, "a single brief gets no note");
+  assert.equal(writeTaskNotes(root), 0, "an unchanged note is not rewritten");
 });

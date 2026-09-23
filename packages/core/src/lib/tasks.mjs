@@ -157,3 +157,56 @@ export function renderTaskNote({ id, title, collection = null, briefs }) {
   if (n > CAP.briefs) out.push(`- … and ${n - CAP.briefs} earlier`);
   return out.join("\n") + "\n";
 }
+
+/** `tasks.json`: titles by id. Missing or unreadable is "no titles yet". */
+export function readTasks(root) {
+  try {
+    const list = JSON.parse(readFileSync(join(root, "tasks.json"), "utf8"));
+    return new Map((Array.isArray(list) ? list : [])
+      .filter((t) => t && TASK_ID.test(t.id) && typeof t.title === "string")
+      .map((t) => [t.id, t.title]));
+  } catch {
+    return new Map();
+  }
+}
+
+/** Every sibling under `root` as a `readBriefLine`, briefs with nothing said skipped. */
+export function readBoard(root) {
+  return readdirSync(root)
+    .filter((name) => STAMP.test(name))
+    .map((name) => readBriefLine(join(root, name)))
+    .filter((b) => b.line);
+}
+
+/**
+ * THE ONLY WRITER OF TASK NOTES. Compiles every task with two or more briefs
+ * and writes the ones whose text changed, so a note that lost a brief to a
+ * board move heals on the next render of anything. A single brief has
+ * nothing to carry, and hundreds of one-line notes would be clutter.
+ */
+export function writeTaskNotes(root) {
+  const titles = readTasks(root);
+  let names = new Map();
+  try {
+    names = new Map(JSON.parse(readFileSync(join(root, "collections.json"), "utf8")).map((c) => [c.id, c.name]));
+  } catch {
+    // No collections: the note says Unsorted.
+  }
+  const dir = join(root, "tasks");
+  let written = 0;
+  for (const [id, briefs] of groupTasks(readBoard(root))) {
+    if (briefs.length < 2) continue;
+    const text = renderTaskNote({
+      id,
+      title: titles.get(id) ?? titleFor(briefs.at(-1)),
+      collection: names.get(briefs[0].collection) ?? null,
+      briefs,
+    });
+    const path = join(dir, `${id}.md`);
+    if (existsSync(path) && readFileSync(path, "utf8") === text) continue;
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path, text);
+    written += 1;
+  }
+  return written;
+}

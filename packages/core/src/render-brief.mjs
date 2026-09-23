@@ -26,10 +26,11 @@ import { align, joinWords } from "../packages/alignment/dist/src/align.js";
 import { loadSession } from "../packages/alignment/dist/src/referents/session.js";
 import { toCandidates } from "../packages/alignment/dist/src/referents/candidates.js";
 import { loadEvents } from "./lib/session-io.mjs";
-import { carriesSecret, assertNoSecrets } from "./lib/redact.mjs";
+import { carriesSecret, assertNoSecrets, redact } from "./lib/redact.mjs";
 import { buildPrompt, quoteSurvives } from "./lib/prompt.mjs";
 import { degradedReason as cloudDegradedReason } from "./lib/cloud.mjs";
-import { STAMP, briefDate, readBriefLine, wantsQuickHint } from "./lib/context.mjs";
+import { wantsQuickHint } from "./lib/context.mjs";
+import { groupTasks, readBoard, readTasks, taskIdFor, taskState, titleFor, tokens, writeTaskNotes } from "./lib/tasks.mjs";
 
 // ── Repo identity ───────────────────────────────────────────────────────────
 
@@ -278,64 +279,34 @@ const personaPath = existsSync(personaPointer)
   ? readFileSync(personaPointer, "utf8").trim() || null
   : null;
 
-// What this brief remembers: the collection it landed in and the earlier
-// briefs it continues or draws on, as `classify.mjs` decided or the developer
-// corrected. Absent — no relay, a fresh board, a brief rendered from the
-// command line — and the prompt says nothing about earlier work, which is the
-// document it always was.
-//
-// Ids are resolved to sessions HERE, at render time, and a folder that has
-// gone is dropped: a path to a deleted session is an instruction the agent
-// cannot follow and may claim to have.
+// THE TASK THIS BRIEF BELONGS TO, as `classify.mjs` decided or the developer
+// corrected. None — no relay, a fresh board, a command-line render — is its
+// own task, and a task of one has nothing earlier to carry.
 const contextPath = join(dir, "context.json");
 let context = null;
 if (existsSync(contextPath)) {
   try {
     context = JSON.parse(readFileSync(contextPath, "utf8"));
   } catch {
-    console.error(`  ⚠ ${basename(contextPath)} is unreadable — rendering without earlier work`);
+    console.error(`  ⚠ ${basename(contextPath)} is unreadable — rendering without its task`);
   }
 }
 const root = dirname(dir);
-let collectionNames = new Map();
-try {
-  collectionNames = new Map(
-    JSON.parse(readFileSync(join(root, "collections.json"), "utf8")).map((c) => [c.id, c.name]),
-  );
-} catch {
-  // No collections yet, or an unreadable file: an earlier brief is listed
-  // without its collection, which is a smaller thing than not listing it.
-}
-// The continued brief first, then the rest newest first.
-const earlierIds = context
-  ? [context.continues, ...[...(context.related ?? [])].sort().reverse()]
-  : [];
-const earlier = [];
-for (const id of new Set(earlierIds)) {
-  if (typeof id !== "string" || !STAMP.test(id) || id === basename(dir)) continue;
-  const sibling = join(root, id);
-  const line = readBriefLine(sibling);
-  if (!line.narration?.trim()) continue;
-  earlier.push({
-    id,
-    dir: sibling,
-    date: briefDate(id),
-    // CAPPED LIKE THE CLASSIFIER CAPS THEM. These are another session's
-    // narration and an agent's own write-up, and they now pass through
-    // `assertNoSecrets`, which THROWS — so an unbounded string from a
-    // neighbouring folder could make this brief permanently unrenderable.
-    // The same 200 and 120 `pickCandidates` uses.
-    line: line.narration.slice(0, 200),
-    outcome: line.outcome ? line.outcome.slice(0, 120) : null,
-    collection: collectionNames.get(line.collection) ?? null,
-  });
-}
-const continues = earlier.length > 0 && earlier[0].id === context?.continues;
+const myTask = context?.task ?? taskIdFor(basename(dir));
+const mates = groupTasks(readBoard(root).filter((b) => b.id !== basename(dir))).get(myTask) ?? [];
+const task = mates.length
+  ? {
+    title: readTasks(root).get(myTask) ?? titleFor(mates.at(-1)),
+    count: mates.length,
+    ...taskState(mates),
+    notePath: join(root, "tasks", `${myTask}.md`),
+  }
+  : null;
 const quickHint = wantsQuickHint(context, process.env.DEIKO_OPTIMIZE_COSTS === "1");
 const outcomePath = join(dir, "outcome.md");
 
 const { text, evidence } = buildPrompt({
-  narration, referents: released, personaPath, earlier, continues, outcomePath, quickHint,
+  narration, referents: released, personaPath, task, outcomePath, quickHint,
 });
 
 // The same message for a destination that cannot open a local path.
@@ -350,7 +321,7 @@ const { text, evidence } = buildPrompt({
 // until the developer throws it — and re-running the renderer at that moment
 // would put a Node spawn between letting go and the paste landing.
 const attached = buildPrompt({
-  narration, referents: released, attached: true, earlier, continues, outcomePath, quickHint,
+  narration, referents: released, attached: true, task, outcomePath, quickHint,
 });
 
 // Fail closed on the captured content, not on the assembled prompt. `text`
@@ -368,6 +339,19 @@ writeFileSync(outPath, text);
 // exactly the kind that quietly stops being true.
 assertNoSecrets(attached.evidence);
 writeFileSync(join(dir, "prompt-attached.txt"), attached.text);
+
+/** The most frequent words read off the screen, redacted. Local only. */
+function screenTerms(referents) {
+  const counts = new Map();
+  for (const r of referents) {
+    for (const line of [...(r.text?.ax ?? []), ...(r.text?.ocr ?? [])]) {
+      for (const w of tokens(redact(line))) {
+        if (w.length > 2 && !/^\d+$/.test(w)) counts.set(w, (counts.get(w) ?? 0) + 1);
+      }
+    }
+  }
+  return [...counts].sort((a, b) => b[1] - a[1]).slice(0, 60).map(([w]) => w);
+}
 
 const manifest = {
   sessionId: basename(dir),
@@ -396,6 +380,12 @@ const manifest = {
     // pointed at" over five of them.
     apps: [...new Set(kept.map((r) => r.app?.name).filter(Boolean))],
     repoHints: repoHints(kept.map((r) => r.window).filter(Boolean)),
+    // What this brief was ABOUT, for matching it to a task later. Titles
+    // travel to the classifier, redacted, as they already did; `screenTerms`
+    // NEVER leave the Mac — `classify.mjs` scores with them locally and sends
+    // none. Only kept referents: a removed screenshot's words are not evidence.
+    windows: [...new Set(kept.map((r) => r.window).filter(Boolean).map(redact))].slice(0, 5),
+    screenTerms: screenTerms(kept),
     referentCount: kept.length,
     wordCount: words.length,
     // COUNTED OVER `kept`, like `referentCount`. `align` runs over every
@@ -439,6 +429,8 @@ const manifest = {
 };
 const withheld = manifest.referents.filter((r) => r.cropWithheld).length;
 writeFileSync(join(dir, "brief.json"), JSON.stringify(manifest, null, 2) + "\n");
+// After brief.json, so this brief is in its own task's note.
+writeTaskNotes(root);
 
 const shots = manifest.referents.filter((r) => r.cropPath).length;
 console.error(
