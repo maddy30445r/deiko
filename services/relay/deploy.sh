@@ -205,8 +205,10 @@ DEIKO_USAGE_TABLE="$TABLE" node -e '
     // every brief without earlier work, which is the right default until a
     // TypeSafe account exists.
     "TYPESAFE_API_KEY",
-    // Or the same model through Workers AI, which needs no TypeSafe account.
-    // Both are optional and TypeSafe wins if both are set.
+    // Or the same model through a gateway. Vercel's is free on the Hobby plan
+    // and takes TypeSafe's own request shape; Cloudflare's wants a prepaid
+    // balance. All optional; the first one set wins, in this order.
+    "AI_GATEWAY_API_KEY",
     "CLOUDFLARE_ACCOUNT_ID",
     "CLOUDFLARE_AI_TOKEN",
     "DEIKO_CLASSIFIES_PER_DAY",

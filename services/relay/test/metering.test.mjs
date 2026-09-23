@@ -109,6 +109,12 @@ function stubFetch() {
         status: 200, headers: { "content-type": "application/json" },
       });
     }
+    if (href.includes("ai-gateway.vercel.sh")) {
+      // TypeSafe's own shape, straight through.
+      return new Response(JSON.stringify({ model: "typesafe-ai/jev", answers: { tier: { type: "score", score: 0 } } }), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    }
     if (href.includes("api.cloudflare.com")) {
       // Workers AI wraps the model's own answer in its envelope.
       return new Response(JSON.stringify({
@@ -503,6 +509,25 @@ test("Cloudflare serves the same model, and the caller cannot tell", async () =>
     process.env.TYPESAFE_API_KEY = key;
     delete process.env.CLOUDFLARE_ACCOUNT_ID;
     delete process.env.CLOUDFLARE_AI_TOKEN;
+  }
+});
+
+test("Vercel's gateway takes TypeSafe's dialect unchanged", async () => {
+  const key = process.env.TYPESAFE_API_KEY;
+  delete process.env.TYPESAFE_API_KEY;
+  process.env.AI_GATEWAY_API_KEY = "vc-key";
+  try {
+    const r = await classify("dev_vercel");
+    assert.equal(r.status, 200);
+    assert.ok(upstream.at(-1).includes("ai-gateway.vercel.sh/typesafe/v1/systemone"));
+    const sent = JSON.parse(upstreamBodies.at(-1));
+    assert.equal(sent.model, "typesafe-ai/jev", "Vercel names the model its own way");
+    assert.ok(sent.questions.tier, "and everything else is TypeSafe's request, unwrapped");
+    assert.equal(sent.input, undefined, "no Cloudflare envelope here");
+    assert.ok(JSON.parse(r.body).answers.tier, "the answers come back where the app looks");
+  } finally {
+    process.env.TYPESAFE_API_KEY = key;
+    delete process.env.AI_GATEWAY_API_KEY;
   }
 });
 

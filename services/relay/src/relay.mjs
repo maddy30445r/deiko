@@ -147,6 +147,12 @@ const MAX_SUMMARY_MESSAGES = 32;
 // reference does not, and the vendor is the one answering the request.
 const JEV_URL = "https://api.typesafe.ai/v1/systemone";
 const CLOUDFLARE_MODEL = "typesafe/jev";
+// Vercel's AI Gateway speaks TypeSafe's own dialect at this base — same
+// request, same response, only the model id is theirs. Free on the Hobby plan
+// out of a monthly credit, which is why it is here: TypeSafe paused signups
+// and Cloudflare wants ten dollars up front for a partner model.
+const VERCEL_URL = "https://ai-gateway.vercel.sh/typesafe/v1/systemone";
+const VERCEL_MODEL = "typesafe-ai/jev";
 /// Pinned: the floors in `scripts/lib/context.mjs` are tuned to this version.
 const JEV_MODEL = "jev-1.13.0";
 export const MAX_CLASSIFY_BYTES = 96 * 1024;
@@ -488,7 +494,9 @@ export async function handle({ method, path, query = "", token, contentType, bod
       transcription: Boolean(groqKey),
       summary: Boolean(groqKey),
       classify: Boolean(
-        typesafeKey || (process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_AI_TOKEN)
+        typesafeKey
+          || process.env.AI_GATEWAY_API_KEY
+          || (process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_AI_TOKEN)
       ),
       metering: await meteringHealthy(),
       table: USAGE_TABLE,
@@ -895,13 +903,14 @@ export async function handle({ method, path, query = "", token, contentType, bod
   }
 
   if (path === "/v1/classify") {
+    const vercelKey = process.env.AI_GATEWAY_API_KEY;
     const cloudflare = process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_AI_TOKEN
       ? {
           url: `https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/ai/run`,
           token: process.env.CLOUDFLARE_AI_TOKEN,
         }
       : null;
-    if (!typesafeKey && !cloudflare) {
+    if (!typesafeKey && !vercelKey && !cloudflare) {
       return json(503, { error: "relay has no classifier key configured" });
     }
     if (body && body.length > MAX_CLASSIFY_BYTES) {
@@ -931,15 +940,22 @@ export async function handle({ method, path, query = "", token, contentType, bod
       return json(503, { error: unavailable(err) });
     }
 
+    // The vendor first, then the gateway that speaks its dialect, then the
+    // one that wraps it. Whichever is configured; nobody sets all three.
     const out = typesafeKey
       ? await proxy(JEV_URL, {
           authorization: `Bearer ${typesafeKey}`,
           "content-type": "application/json",
         }, JSON.stringify({ model: JEV_MODEL, ...request }))
-      : unwrapJev(await proxy(cloudflare.url, {
-          authorization: `Bearer ${cloudflare.token}`,
-          "content-type": "application/json",
-        }, JSON.stringify({ model: CLOUDFLARE_MODEL, input: request })));
+      : vercelKey
+        ? await proxy(VERCEL_URL, {
+            authorization: `Bearer ${vercelKey}`,
+            "content-type": "application/json",
+          }, JSON.stringify({ model: VERCEL_MODEL, ...request }))
+        : unwrapJev(await proxy(cloudflare.url, {
+            authorization: `Bearer ${cloudflare.token}`,
+            "content-type": "application/json",
+          }, JSON.stringify({ model: CLOUDFLARE_MODEL, input: request })));
     if (out.status >= 500) await refundClassify().catch(() => {});
     return out;
   }
