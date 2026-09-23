@@ -294,7 +294,7 @@ struct SettingsView: View {
                     Text("Settings").deikoTitle(24)
                     Text("Keys, capture and what stays on this Mac.")
                         .font(.system(size: 12.5))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DeikoStyle.ink2)
                 }
                 .padding(.bottom, 2)
                 SectionLabel("Plan")
@@ -304,7 +304,7 @@ struct SettingsView: View {
                 keys
                 Text("Keys never leave the login keychain. Your recording is deleted as soon as the brief is made — what stays on this Mac is the brief and its screenshots.")
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DeikoStyle.ink2)
                     .fixedSize(horizontal: false, vertical: true)
                 SectionLabel("Capturing")
                 capturing
@@ -354,7 +354,7 @@ struct SettingsView: View {
                 Text("Double-tap to start, tap to stop. Right Option is AltGr on many "
                     + "layouts — if typing brackets keeps starting a session, pick another key.")
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DeikoStyle.ink2)
                     .fixedSize(horizontal: false, vertical: true)
 
                 Divider()
@@ -387,7 +387,7 @@ struct SettingsView: View {
 
                 Text("Applies to every Deiko window, including the orb over your editor. The capturing pill stays red in both — it has one job and one colour.")
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DeikoStyle.ink2)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(14)
@@ -407,7 +407,7 @@ struct SettingsView: View {
                     ? "Sessions older than \(Sessions.retentionDays) days are removed when Deiko starts. Your recordings were already deleted as each brief was made — this is the screenshots."
                     : "Nothing is removed automatically.")
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DeikoStyle.ink2)
                     .fixedSize(horizontal: false, vertical: true)
 
                 HStack {
@@ -456,7 +456,7 @@ struct SettingsView: View {
                         Image(systemName: "arrow.clockwise")
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DeikoStyle.ink2)
                     .disabled(model.checking)
                     .help("Ask Deiko again how much is left")
                 }
@@ -499,7 +499,7 @@ struct SettingsView: View {
                             ? "\(quota.usedSentence) · \(License.Quota.proResetSentence)"
                             : "\(quota.usedSentence) · one-time trial, then this Mac transcribes")
                             .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(DeikoStyle.ink2)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -524,7 +524,7 @@ struct SettingsView: View {
                             Image(systemName: "doc.on.doc")
                         }
                         .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DeikoStyle.ink2)
                         .help("Copy the key — to put it on another Mac")
                     }
                 }
@@ -532,11 +532,10 @@ struct SettingsView: View {
                 HStack {
                     Text("No account, no password. The key is the whole thing.")
                         .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DeikoStyle.ink2)
                     Spacer()
                     Button("Apply") { Task { await model.saveLicense() } }
                         .disabled(model.checking)
-                        .tint(DeikoStyle.accent)
                 }
                 .padding(.top, 2)
 
@@ -566,7 +565,7 @@ struct SettingsView: View {
                     if model.isProNow {
                         Text("Manage or cancel from the link in your purchase email.")
                             .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(DeikoStyle.ink2)
                     }
                     Spacer()
                     if License.key != nil {
@@ -575,7 +574,7 @@ struct SettingsView: View {
                             Task { await model.saveLicense() }
                         }
                         .buttonStyle(.link)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DeikoStyle.ink2)
                         .help("Forgets the key and its cached plan. Nothing is cancelled — "
                             + "your subscription is between you and Polar.")
                     }
@@ -609,7 +608,7 @@ struct SettingsView: View {
                     ? "Whatever you speak, the brief is written in English — the language your agent works in. Mixing languages in one sentence is fine."
                     : "The brief is written in the language you spoke, with Whisper's own word timing. Agents read Chinese, Japanese, Spanish and the rest just fine.")
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DeikoStyle.ink2)
                     .fixedSize(horizontal: false, vertical: true)
 
                 Divider()
@@ -632,7 +631,7 @@ struct SettingsView: View {
                 }
                 Text("Apple's on-device recogniser for this language runs when the cloud is not used — after the free minutes, or offline. Only languages this Mac can recognise without the network are listed; nothing is ever sent to Apple.")
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DeikoStyle.ink2)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(14)
@@ -644,7 +643,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text(model.whereAudioGoes)
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DeikoStyle.ink2)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.bottom, 2)
 
@@ -658,11 +657,10 @@ struct SettingsView: View {
                     // transcribes, which the sentence above already explains.
                     Text(model.keySources)
                         .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DeikoStyle.ink2)
                     Spacer()
                     Button("Save") { model.saveKeys() }
                         .keyboardShortcut(.defaultAction)
-                        .tint(DeikoStyle.accent)
                 }
                 .padding(.top, 2)
             }
@@ -675,7 +673,7 @@ struct SettingsView: View {
         HStack(spacing: 10) {
             Text("Deiko \(DeikoVersion.current) (\(DeikoVersion.build))")
                 .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DeikoStyle.ink2)
                 .textSelection(.enabled)
             Spacer()
             Button(copied ? "Copied" : "Copy diagnostics") {
@@ -705,7 +703,7 @@ struct SettingsView: View {
     ) -> some View {
         HStack(spacing: 10) {
             (Text(label).font(.system(size: 13))
-                + Text("  \(tag)").font(.system(size: 11)).foregroundStyle(.secondary))
+                + Text("  \(tag)").font(.system(size: 11)).foregroundStyle(DeikoStyle.ink2))
                 .frame(width: 96, alignment: .leading)
             SecureField(prompt, text: text)
                 .font(.system(size: 12, design: .monospaced))
@@ -765,14 +763,18 @@ struct InkButtonStyle: ButtonStyle {
         var body: some View {
             configuration.label
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(DeikoStyle.buttonInkText)
+                .foregroundStyle(enabled ? DeikoStyle.buttonInkText : DeikoStyle.ink2)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 6)
+                // DISABLED IS ITS OWN PAIR, NOT AN OPACITY MULTIPLIER. At 35%
+                // the label measured 1.37:1 against its own fill — the worst
+                // contrast in the app, on the button a first run stares at
+                // while it waits for permissions.
                 .background(
                     RoundedRectangle(cornerRadius: DeikoStyle.controlRadius)
-                        .fill(DeikoStyle.buttonInk)
+                        .fill(enabled ? DeikoStyle.buttonInk : DeikoStyle.hairline)
                 )
-                .opacity(enabled ? (configuration.isPressed ? 0.82 : 1) : 0.35)
+                .opacity(configuration.isPressed && enabled ? 0.82 : 1)
         }
     }
 }

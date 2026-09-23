@@ -61,6 +61,8 @@ final class MainWindowController: NSObject, NSWindowDelegate {
 
     func present(_ section: MainSection = .dashboard) {
         MainNav.shared.section = section
+        // Every time, not only on the first open.
+        Task { await SessionsStore.shared.load(root: sessionRoot) }
         if let window {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -94,7 +96,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
 
 struct MainWindowView: View {
     @ObservedObject private var nav = MainNav.shared
-    @StateObject private var sessions = SessionsStore()
+    @ObservedObject private var sessions = SessionsStore.shared
     let openSessionDir: (() -> String?)?
     let sessionRoot: String
 
@@ -114,7 +116,12 @@ struct MainWindowView: View {
             Divider()
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .background(DeikoStyle.card)
+                // PAPER, NOT CARD. This was `card`, which is also what every
+                // `InsetCard` inside it is filled with — white on white,
+                // measured at 1.00:1, with the whole grouping carried by one
+                // hairline at 1.17:1. Cards sit ON paper; that is the entire
+                // reason paper exists as a token.
+                .background(DeikoStyle.paper)
         }
         .task { await sessions.load(root: sessionRoot) }
     }
@@ -125,7 +132,10 @@ struct MainWindowView: View {
                 CoinView(kind: .ready, diameter: 24)
                 Text("Deiko").deikoTitle(17)
             }
-            .padding(.horizontal, 12)
+            // 9, not 12: the rows below inset their label by 6 (row padding)
+            // + 9 (content padding) = 15, and the wordmark sat 4pt right of
+            // every one of them.
+            .padding(.horizontal, 9)
             // CLEAR OF THE TRAFFIC LIGHTS. The title bar is transparent and
             // its title hidden, so the window's own buttons are drawn over
             // this column — they finish around 32pt down, and the brand row
@@ -153,7 +163,7 @@ struct MainWindowView: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text(quota.usedSentence)
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DeikoStyle.ink2)
                 GeometryReader { bar in
                     ZStack(alignment: .leading) {
                         Capsule().fill(DeikoStyle.hairline)
@@ -226,6 +236,13 @@ private struct SidebarRow: View {
 @MainActor
 final class SessionsStore: ObservableObject {
 
+    /// Shared, so `MainWindowController.present()` can refresh it. The window
+    /// is kept alive between openings (`isReleasedWhenClosed = false`), so a
+    /// `.task` on the view runs exactly once per launch — and the pane whose
+    /// lede is "what Deiko has heard on this Mac" was showing what it had
+    /// heard by the time you first opened the window.
+    static let shared = SessionsStore()
+
     struct Item: Identifiable, Sendable {
         let id: String
         let dir: String
@@ -234,6 +251,15 @@ final class SessionsStore: ObservableObject {
         /// by. A session whose brief never rendered has none — it is listed
         /// anyway, because it is still theirs and still on the disk.
         let line: String?
+
+        /// What to call this when the narration is missing or says nothing
+        /// ("Thank you." is a real transcript, and a real board is full of
+        /// them). The app it was captured from beats an apology.
+        var title: String {
+            if let line, line.count > 12 { return line }
+            if let app = apps.first { return "Something in \(app)" }
+            return crops.isEmpty ? "A session with nothing saved" : "\(crops.count) screenshots, no words"
+        }
         let crops: [String]
         let apps: [String]
         let repo: String?
@@ -285,22 +311,31 @@ final class SessionsStore: ObservableObject {
 
 private struct DashboardPane: View {
     @ObservedObject var sessions: SessionsStore
+    @State private var copied: String?
 
     var body: some View {
         PaneScroll(title: "Dashboard", lede: "What Deiko has heard on this Mac.") {
-            HStack(spacing: 12) {
-                stat("\(sessions.items.count)", "sessions kept", Sessions.retentionDays > 0
-                    ? "older than \(Sessions.retentionDays) days are swept"
-                    : "nothing is swept automatically")
-                stat("\(sessions.thisWeek)", "this week", sessions.thisWeek == 0
-                    ? "nothing yet — double-tap \(SessionKey.selected.name)"
-                    : "double-tap \(SessionKey.selected.name) to add one")
-                stat("\(sessions.items.reduce(0) { $0 + $1.crops.count })", "screenshots drawn",
-                     "the crops that travelled with your briefs")
-            }
+            if sessions.items.isEmpty {
+                // NO ZEROES. Three 28pt noughts were the first thing a new
+                // install showed, with the one sentence that tells you what to
+                // do pushed underneath them. Nothing recorded is not a
+                // statistic, it is an invitation.
+                EmptyPane(
+                    title: sessions.loaded ? "Nothing on the desk yet" : "Reading your sessions…",
+                    line: "Double-tap \(SessionKey.selected.name), point at something, and say what should change. Whatever you say lands here — and nowhere else."
+                )
+            } else {
+                latest
+                HStack(spacing: 12) {
+                    stat("\(sessions.items.count)", "briefs kept", Sessions.retentionDays > 0
+                        ? "older than \(Sessions.retentionDays) days are swept"
+                        : "nothing is swept automatically")
+                    stat("\(sessions.thisWeek)", "this week", "double-tap \(SessionKey.selected.name) to add one")
+                    stat("\(sessions.items.reduce(0) { $0 + $1.crops.count })", "screenshots drawn",
+                         "the crops that travelled with your briefs")
+                }
 
-            if !sessions.topApps.isEmpty {
-                Group {
+                if !sessions.topApps.isEmpty {
                     SectionLabel("Where you point")
                     InsetCard {
                         ForEach(Array(sessions.topApps.enumerated()), id: \.element.name) { index, app in
@@ -310,29 +345,108 @@ private struct DashboardPane: View {
                                 Spacer()
                                 Text("\(app.count) session\(app.count == 1 ? "" : "s")")
                                     .font(.system(size: 12))
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(DeikoStyle.ink2)
                             }
                             .padding(.horizontal, 14)
                             .padding(.vertical, 10)
                         }
                     }
                 }
-            }
 
-            SectionLabel("Latest")
-            if sessions.items.isEmpty {
-                EmptyPane(
-                    title: sessions.loaded ? "Nothing recorded yet" : "Reading your sessions…",
-                    line: "Double-tap \(SessionKey.selected.name), point at something and say what should change. It lands here."
-                )
-            } else {
-                InsetCard {
-                    ForEach(Array(sessions.items.prefix(5).enumerated()), id: \.element.id) { index, item in
-                        if index > 0 { Divider().padding(.horizontal, 14) }
-                        SessionRow(item: item)
+                if sessions.items.count > 1 {
+                    SectionLabel("Before that")
+                    InsetCard {
+                        ForEach(Array(sessions.items.dropFirst().prefix(4).enumerated()), id: \.element.id) { index, item in
+                            if index > 0 { Divider().padding(.horizontal, 14) }
+                            SessionRow(item: item)
+                        }
                     }
                 }
             }
+        }
+    }
+
+    /// THE LAST BRIEF, NOT A COUNT OF THEM. What somebody wants from this pane
+    /// ninety seconds after talking to their screen is the thing they just
+    /// made — and the one action that was missing everywhere: take it with you.
+    private var latest: some View {
+        let item = sessions.items[0]
+        return VStack(alignment: .leading, spacing: 11) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("The last thing you said").deikoTitle(15)
+                Spacer()
+                Text(BoardCard.stamp(item.date))
+                    .font(.system(size: 11))
+                    .foregroundStyle(DeikoStyle.ink2)
+            }
+            Text(item.title)
+                .font(.system(size: 14))
+                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(3)
+
+            if !item.crops.isEmpty {
+                HStack(spacing: 8) {
+                    ForEach(item.crops.prefix(4), id: \.self) { path in
+                        if let image = NSImage(contentsOfFile: path) {
+                            Image(nsImage: image)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(width: 96, height: 58)
+                                .clipped()
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .strokeBorder(DeikoStyle.hairline, lineWidth: 1)
+                                )
+                        }
+                    }
+                    if item.crops.count > 4 {
+                        Text("+\(item.crops.count - 4)")
+                            .font(.system(size: 11))
+                            .foregroundStyle(DeikoStyle.ink2)
+                    }
+                }
+            }
+
+            HStack(spacing: 10) {
+                Button(copied == item.id ? "Copied" : "Copy the brief") { copy(item) }
+                    .buttonStyle(InkButtonStyle())
+                    .disabled(copied == item.id)
+                Button("Open folder") { NSWorkspace.shared.open(URL(fileURLWithPath: item.dir)) }
+                Spacer()
+                if let repo = item.repo {
+                    Text(repo)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(DeikoStyle.mark)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(DeikoStyle.accentSoft, in: Capsule())
+                }
+            }
+            .padding(.top, 2)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: DeikoStyle.insetRadius)
+                .fill(DeikoStyle.wall)
+                .overlay(
+                    RoundedRectangle(cornerRadius: DeikoStyle.insetRadius)
+                        .strokeBorder(DeikoStyle.hairline, lineWidth: 1)
+                )
+                .shadow(color: DeikoStyle.shadow, radius: 13, x: 0, y: 7)
+        )
+    }
+
+    /// The same text the fling would paste. Read from disk, because the review
+    /// window may have rewritten it since.
+    private func copy(_ item: SessionsStore.Item) {
+        guard let prompt = try? BriefPipeline.prompt(sessionDir: item.dir) else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(prompt.text, forType: .string)
+        copied = item.id
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            if copied == item.id { copied = nil }
         }
     }
 
@@ -342,7 +456,7 @@ private struct DashboardPane: View {
             Text(label).font(.system(size: 12, weight: .medium))
             Text(note)
                 .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DeikoStyle.ink2)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -382,7 +496,10 @@ private struct BoardPane: View {
                         : "Try an app name, a repo, or a word you said."
                 )
             } else {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), spacing: 14)], spacing: 14) {
+                // `.top`, because the default is `.center`: cards of unequal
+                // height were being centred in their row, which staggered the
+                // top edge and read as a rendering fault rather than masonry.
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), spacing: 14, alignment: .top)], spacing: 14) {
                     ForEach(shown) { item in BoardCard(item: item) }
                 }
                 .padding(.top, 2)
@@ -409,13 +526,13 @@ private struct BoardCard: View {
                             .strokeBorder(DeikoStyle.hairline, lineWidth: 1)
                     )
             }
-            Text(item.line ?? "No words were saved for this one.")
+            Text(item.title)
                 .font(.system(size: 12.5))
-                .foregroundStyle(item.line == nil ? .secondary : .primary)
+                .foregroundStyle(item.line == nil ? DeikoStyle.ink2 : .primary)
                 .lineLimit(3)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 6) {
-                Text(Self.when.string(from: item.date))
+                Text(Self.stamp(item.date))
                 if !item.crops.isEmpty {
                     Text("·")
                     Text("\(item.crops.count) crop\(item.crops.count == 1 ? "" : "s")")
@@ -423,7 +540,7 @@ private struct BoardCard: View {
                 if let repo = item.repo { Text("·"); Text(repo) }
             }
             .font(.system(size: 11))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(DeikoStyle.ink2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(11)
@@ -432,7 +549,7 @@ private struct BoardCard: View {
                 .fill(DeikoStyle.card)
                 .overlay(
                     RoundedRectangle(cornerRadius: DeikoStyle.insetRadius)
-                        .strokeBorder(hovering ? Color.primary.opacity(0.22) : DeikoStyle.hairline, lineWidth: 1)
+                        .strokeBorder(hovering ? DeikoStyle.accent : DeikoStyle.hairline, lineWidth: 1)
                 )
                 .shadow(color: DeikoStyle.shadow, radius: hovering ? 16 : 10, x: 0, y: hovering ? 9 : 5)
         )
@@ -443,11 +560,26 @@ private struct BoardCard: View {
         .help("Double-click to open this session's folder")
     }
 
+    /// Day and time, because six sessions from one afternoon were
+    /// typographically identical; the year appears only when it is not this
+    /// one, so the common case stays short.
     static let when: DateFormatter = {
         let f = DateFormatter()
-        f.dateFormat = "EEE d MMM"
+        f.setLocalizedDateFormatFromTemplate("EEE d MMM HH:mm")
         return f
     }()
+
+    static let whenOlder: DateFormatter = {
+        let f = DateFormatter()
+        f.setLocalizedDateFormatFromTemplate("d MMM yyyy")
+        return f
+    }()
+
+    static func stamp(_ date: Date) -> String {
+        let thisYear = Calendar.current.component(.year, from: Date())
+        let year = Calendar.current.component(.year, from: date)
+        return year == thisYear ? when.string(from: date) : whenOlder.string(from: date)
+    }
 }
 
 private struct SessionRow: View {
@@ -456,19 +588,19 @@ private struct SessionRow: View {
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(item.line ?? "No words were saved for this one.")
+                Text(item.title)
                     .font(.system(size: 13))
-                    .foregroundStyle(item.line == nil ? .secondary : .primary)
+                    .foregroundStyle(item.line == nil ? DeikoStyle.ink2 : .primary)
                     .lineLimit(1)
                 HStack(spacing: 6) {
-                    Text(BoardCard.when.string(from: item.date))
+                    Text(BoardCard.stamp(item.date))
                     if !item.crops.isEmpty {
                         Text("·"); Text("\(item.crops.count) crop\(item.crops.count == 1 ? "" : "s")")
                     }
                     if let repo = item.repo { Text("·"); Text(repo) }
                 }
                 .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DeikoStyle.ink2)
             }
             Spacer()
             Button("Open folder") { NSWorkspace.shared.open(URL(fileURLWithPath: item.dir)) }
@@ -509,7 +641,7 @@ struct PaneScroll<Content: View, Trailing: View>: View {
                         Text(title).deikoTitle(24)
                         Text(lede)
                             .font(.system(size: 12.5))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(DeikoStyle.ink2)
                     }
                     Spacer()
                     trailing
@@ -538,7 +670,7 @@ struct EmptyPane: View {
             Text(title).deikoTitle(16)
             Text(line)
                 .font(.system(size: 12.5))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DeikoStyle.ink2)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

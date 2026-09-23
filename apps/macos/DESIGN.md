@@ -6,6 +6,7 @@ colors:
   accent-mark: "#4050a0"
   accent-wash: "#eef1ff"
   ink: "#161618"
+  ink-2: "#64646b"
   ink-on-ink: "#ffffff"
   paper: "#fafafb"
   card: "#ffffff"
@@ -154,6 +155,7 @@ A near-monochrome studio palette with one indigo, three state colours and a lave
 - **Card** (`#ffffff`, dark `#26272f`): the grouping surface every window is built from.
 - **Hairline** (`#ececef`, dark white at 9%): 1px, and never more. The entire border vocabulary.
 - **Ink** (`#161618`, dark `#92a6f1`): the primary button. In the dark it inverts to the accent.
+- **Ink 2** (`#64646b`, dark `#acacb6`): the second voice — notes under a control, metadata, the sentence that explains a number. **Not** AppKit's `.secondary`, which is black at 50% and composites to a hard ceiling of 4.00:1 on a card and 3.94:1 on paper; every explanatory line in the app sat under that ceiling at 11pt until this token replaced it. Ink 2 clears 4.5:1 on card, on paper and on the wall, in its own appearance.
 
 ### Wall
 - **Lavender Wall** (`#dfe4ff` to `#f5f6ff`, dark `#343a63` to `#262838`): the one place colour fills an area. It goes behind a header, a gesture strip or an empty state — never behind a control, which is how it stays a backdrop instead of a theme.
@@ -263,6 +265,7 @@ An empty pane sits on the lavender wall with a 16px title and one line that says
 - **Do** write section headings in sentence case.
 - **Do** scale a component by its own size parameter, never by wrapping a fixed drawing in a smaller frame.
 - **Do** answer the pointer: rows and cards that can be opened carry a hover state.
+- **Do** use `ink-2` for secondary text, never the system `.secondary`: it cannot pass AA on these surfaces, and it is one colour used everywhere, so nothing local can fix it.
 - **Do** write like a developer friend who is funny about the problem: plain, specific, a little quirky, never corporate. "Nothing heard you — Deiko needs the microphone" beats "Audio input unavailable".
 - **Do** spend personality on the moments that repeat — the empty state, the thing you drag, the sentence under a number — where it compounds instead of decorating.
 

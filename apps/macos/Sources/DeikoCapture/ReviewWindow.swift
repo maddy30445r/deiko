@@ -501,7 +501,7 @@ struct ReviewView: View {
     private func progress(_ what: String) -> some View {
         VStack(spacing: 12) {
             ProgressView()
-            Text(what).foregroundStyle(.secondary)
+            Text(what).foregroundStyle(DeikoStyle.ink2)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -663,12 +663,12 @@ struct ReviewView: View {
 
     private func bindingLine(_ d: BriefDigest) -> some View {
         var line = Text("\(d.summary.boundCount) of \(d.summary.referentCount) bound to what you said")
-            .foregroundStyle(.secondary)
+            .foregroundStyle(DeikoStyle.ink2)
         // Surfaced because it is the one number that says "check this" — the
         // aligner had two equally plausible referents and picked one.
         if d.summary.needsReviewCount > 0 {
             line = line
-                + Text(" · ").foregroundStyle(.secondary)
+                + Text(" · ").foregroundStyle(DeikoStyle.ink2)
                 + Text("\(d.summary.needsReviewCount) worth checking")
                 .foregroundStyle(DeikoStyle.needsYou)
         }
@@ -719,7 +719,7 @@ struct ReviewView: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Label(sentence, systemImage: "waveform.badge.exclamationmark")
                     .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DeikoStyle.ink2)
                     .fixedSize(horizontal: false, vertical: true)
                 // Only where there is somewhere to send them. A build with no
                 // checkout URL stamped must not grow a button that 404s.
@@ -749,7 +749,7 @@ struct ReviewView: View {
             systemImage: "arrow.up.forward.square"
         )
         .font(.system(size: 11))
-        .foregroundStyle(.secondary)
+        .foregroundStyle(DeikoStyle.ink2)
         .fixedSize(horizontal: false, vertical: true)
     }
 
@@ -810,7 +810,7 @@ struct ReviewView: View {
                             .foregroundStyle(DeikoStyle.needsYou)
                         + Text("\(d.cropsReleased) \(d.cropsReleased == 1 ? "is" : "are") going.")
                             .font(.system(size: 12.5))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(DeikoStyle.ink2)
                     )
                 }
                 .padding(.horizontal, 10)
@@ -823,7 +823,7 @@ struct ReviewView: View {
                     systemImage: "photo.on.rectangle"
                 )
                 .font(.system(size: 13))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DeikoStyle.ink2)
             }
 
             if !d.cropPaths.isEmpty {
@@ -850,7 +850,7 @@ struct ReviewView: View {
                     ? "1 screenshot left out by you"
                     : "\(removed) screenshots left out by you")
                     .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DeikoStyle.ink2)
             }
 
             // Labels lost to a correction. Placed HERE, beside the screenshots
@@ -862,7 +862,7 @@ struct ReviewView: View {
                     ? "1 screenshot lost its caption — the sentence it quoted changed."
                     : "\(dropped) screenshots lost their captions — the sentences they quoted changed.")
                     .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DeikoStyle.ink2)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -959,7 +959,7 @@ struct ReviewView: View {
                     .background(DeikoStyle.accent.opacity(0.12), in: Capsule())
                 Text("from the windows you pointed at")
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DeikoStyle.ink2)
             }
             .padding(.top, 3)
         } else {
@@ -983,7 +983,7 @@ struct ReviewView: View {
                 if model.narrationEdited {
                     Text("edited")
                         .font(.system(size: 10.5, weight: .semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DeikoStyle.ink2)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 2)
                         .background(Color.primary.opacity(0.08), in: Capsule())
@@ -1004,7 +1004,7 @@ struct ReviewView: View {
                 )
             Text("This is the task, in your words — the one thing here you can edit. Fix anything it misheard.")
                 .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DeikoStyle.ink2)
         }
         .padding(.horizontal, 20)
         .padding(.top, 16)
@@ -1015,7 +1015,7 @@ struct ReviewView: View {
             switch model.phase {
             case .working(let what):
                 ProgressView().controlSize(.small)
-                Text(what).font(.system(size: 12)).foregroundStyle(.secondary)
+                Text(what).font(.system(size: 12)).foregroundStyle(DeikoStyle.ink2)
             case .sent:
                 Label(model.handedTo.map { "Handed to \($0)" } ?? "Handed over", systemImage: "checkmark.circle")
                     .font(.system(size: 12))
@@ -1037,7 +1037,7 @@ struct ReviewView: View {
                 // saying the one thing that is always true here.
                 Text("Nothing is sent until you throw the coin.")
                     .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DeikoStyle.ink2)
             }
             Spacer()
             // Furthest from the primary action, because it is the destructive

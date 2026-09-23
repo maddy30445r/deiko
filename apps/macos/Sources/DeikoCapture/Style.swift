@@ -161,6 +161,21 @@ enum DeikoStyle {
         dark: NSColor(srgbRed: 26 / 255, green: 27 / 255, blue: 34 / 255, alpha: 1)
     )
 
+    /// The second voice: notes under a control, metadata, the sentence that
+    /// explains a number.
+    ///
+    /// NOT `.secondary`. AppKit's secondary label is black at 50%, which
+    /// composites to rgb(127,127,127) on white — a hard ceiling of 4.00:1 on
+    /// a card and 3.94:1 on paper. Every explanatory line in the app sat under
+    /// that ceiling at 11pt, in the appearance most people use in daylight,
+    /// and no per-element fix could lift it because it is one system colour
+    /// used everywhere. These two clear 4.5:1 on card, on paper AND on the
+    /// lavender wall, in their own appearance.
+    static let ink2NS = dynamic(
+        light: NSColor(srgbRed: 100 / 255, green: 100 / 255, blue: 107 / 255, alpha: 1),
+        dark: NSColor(srgbRed: 172 / 255, green: 172 / 255, blue: 182 / 255, alpha: 1)
+    )
+
     /// Shadows are long, soft and tinted indigo — paper resting on a desk,
     /// never a hard offset.
     /// The site's card shadow is `0 24px 60px -28px` — a long fall with a
@@ -199,6 +214,7 @@ enum DeikoStyle {
     static var accentSoft: Color { Color(nsColor: accentSoftNS) }
     static var buttonInk: Color { Color(nsColor: buttonInkNS) }
     static var buttonInkText: Color { Color(nsColor: buttonInkTextNS) }
+    static var ink2: Color { Color(nsColor: ink2NS) }
     static var shadow: Color { Color(nsColor: shadowNS) }
     static var coinShine: Color { Color(nsColor: coinShineNS) }
     static var mark: Color { Color(nsColor: markNS) }

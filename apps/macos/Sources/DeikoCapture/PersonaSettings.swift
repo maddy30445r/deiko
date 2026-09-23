@@ -146,7 +146,7 @@ struct PersonasPane: View {
 
             Text("Each persona is a file in ~/Documents/Deiko/personas. Edit it here, or open it in your own editor — Deiko uses whatever the file says.")
                 .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DeikoStyle.ink2)
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack {
@@ -176,7 +176,7 @@ struct PersonasPane: View {
                 }
                 Text(persona.base.purpose)
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DeikoStyle.ink2)
             }
             Spacer()
             Menu {
@@ -203,10 +203,14 @@ struct PersonasPane: View {
         .padding(.vertical, 11)
         .background(
             RoundedRectangle(cornerRadius: DeikoStyle.insetRadius)
-                .fill(DeikoStyle.card)
+                // THE SAME SELECTION LANGUAGE AS THE SIDEBAR. This was a
+                // black outline in light mode, so the window taught "indigo
+                // wash = where I am" in one pane and contradicted it in the
+                // next.
+                .fill(isSelected ? DeikoStyle.accentSoft : DeikoStyle.card)
                 .overlay(
                     RoundedRectangle(cornerRadius: DeikoStyle.insetRadius)
-                        .strokeBorder(isSelected ? Color.primary.opacity(0.55) : DeikoStyle.hairline,
+                        .strokeBorder(isSelected ? DeikoStyle.accent : DeikoStyle.hairline,
                                       lineWidth: 1)
                 )
                 .shadow(color: DeikoStyle.shadow, radius: isSelected ? 13 : 8, x: 0, y: isSelected ? 7 : 4)
@@ -224,7 +228,7 @@ struct PersonasPane: View {
                 HStack {
                     Text(persona.overrideText == nil ? "What your agent will be asked" : "Your own wording, as written")
                         .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DeikoStyle.ink2)
                     Spacer()
                     Button("Edit…") { editing = persona }
                         .font(.system(size: 12))
@@ -322,7 +326,7 @@ private struct PersonaEditor: View {
                                 .deikoCard()
                             Text("Deiko adds nothing to this. It is handed to the agent exactly as written, under your brief.")
                                 .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(DeikoStyle.ink2)
                         }
                     } else {
                         ForEach(PersonaForm.groups(for: draft.base)) { group in
@@ -350,7 +354,7 @@ private struct PersonaEditor: View {
                         ? "The options above are ignored while this is on."
                         : "Write the whole prompt yourself instead of filling in the form.")
                         .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DeikoStyle.ink2)
                 }
                 .padding(.horizontal, 22)
                 .padding(.bottom, 18)
@@ -408,7 +412,7 @@ private struct PersonaEditor: View {
             if let help = field.help {
                 Text(help)
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DeikoStyle.ink2)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }

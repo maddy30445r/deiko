@@ -1041,7 +1041,7 @@ struct OrbRootView: View {
                         .background(Color.primary.opacity(0.07), in: Circle())
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DeikoStyle.ink2)
                 .padding(10)
                 .help("Put the orb away. The session stays on disk.")
             }
@@ -1144,7 +1144,7 @@ struct OrbRootView: View {
                 }
                 Text("the card stays behind while you aim — nothing sent yet")
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DeikoStyle.ink2)
             } else {
                 phaseReadout
             }
@@ -1201,7 +1201,7 @@ struct OrbRootView: View {
                     .frame(maxHeight: 90)
                 }
                 .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DeikoStyle.ink2)
             }
         }
     }
@@ -1249,7 +1249,7 @@ struct OrbRootView: View {
                     .background(DeikoStyle.accent.opacity(0.16), in: Capsule())
                 Text("drag the coin onto Claude Code · click it for more")
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DeikoStyle.ink2)
             }
             .padding(.top, 3)
         } else if model.digest != nil {
@@ -1258,7 +1258,7 @@ struct OrbRootView: View {
                 .foregroundStyle(DeikoStyle.needsYou)
             Text("drag the coin onto Claude Code · click it for more")
                 .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DeikoStyle.ink2)
         }
     }
 

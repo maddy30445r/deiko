@@ -228,7 +228,7 @@ struct WelcomeView: View {
                 Text("Show, don\u{2019}t type.").deikoTitle(24)
                 Text("Point at your screen and talk. What you said — and what you pointed at — becomes a brief for your coding agent.")
                     .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DeikoStyle.ink2)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -246,7 +246,7 @@ struct WelcomeView: View {
                         Text(row.id).font(.system(size: 13, weight: .semibold))
                         Text(row.purpose)
                             .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(DeikoStyle.ink2)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer()
@@ -295,7 +295,7 @@ struct WelcomeView: View {
                         ? "in your login keychain — Deiko's servers never see your narration"
                         : "optional — transcription works without one")
                         .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DeikoStyle.ink2)
                 }
                 Spacer()
                 if model.keyPresent {
@@ -331,7 +331,7 @@ struct WelcomeView: View {
             Spacer()
             Button("Finish later") { model.onDone?() }
                 .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DeikoStyle.ink2)
             // "Start pointing", not "Done" — the moment it enables, the next
             // action is the product itself. Half-lit until the app can
             // actually deliver on the promise.
@@ -376,7 +376,7 @@ struct WelcomeView: View {
                 )
             Text(meaning)
                 .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DeikoStyle.ink2)
         }
     }
 }
