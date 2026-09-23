@@ -139,7 +139,7 @@ export function renderTaskNote({ id, title, collection = null, briefs }) {
   const n = briefs.length;
   const out = [
     `# ${redact(title)}`,
-    `${collection ?? "Unsorted"} · ${n} brief${n === 1 ? "" : "s"} · ${first}${last !== first ? `–${last}` : ""} · updated from ${briefs[0].id}`,
+    `${redact(collection ?? "Unsorted")} · ${n} brief${n === 1 ? "" : "s"} · ${first}${last !== first ? `–${last}` : ""} · updated from ${briefs[0].id}`,
     "", "## Now", ...taskState(briefs).now,
   ];
   const decided = briefs
@@ -148,7 +148,7 @@ export function renderTaskNote({ id, title, collection = null, briefs }) {
   if (decided.length) out.push("", "## Decided", ...decided);
   out.push("", "## Briefs");
   for (const b of briefs.slice(0, CAP.briefs)) {
-    const apps = b.apps.length ? ` · ${b.apps.join(", ")}` : "";
+    const apps = b.apps.length ? ` · ${b.apps.map(redact).join(", ")}` : "";
     const windows = b.windows.length ? ` · ${b.windows.slice(0, 3).map(redact).join(" · ")}` : "";
     out.push(`- ${briefDate(b.id)}, "${redact(b.line)}"${apps}${windows}`);
     // TWO FILES BY NAME, NEVER THE FOLDER — see `prompt.mjs`.

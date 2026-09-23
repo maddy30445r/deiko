@@ -102,3 +102,12 @@ test("the note is deterministic, capped and names two files, never a folder", ()
   const fifty = Array.from({ length: 60 }, (_, i) => brief(`202609${String(10 + (i % 18)).padStart(2, "0")}-${String(100000 + i)}`, `brief ${i}`));
   assert.match(renderTaskNote({ id: "t-x", title: "big", briefs: fifty }), /- … and 10 earlier\n$/);
 });
+
+test("app names and collections are redacted when they contain secrets", () => {
+  const withSecret = [brief("20260918-155836", "A brief", {
+    apps: ["AKIAIOSFODNN7EXAMPLE"], collection: "AKIAIOSFODNN7EXAMPLE",
+  })];
+  const note = renderTaskNote({ id: "t-x", title: "Title", collection: "AKIAIOSFODNN7EXAMPLE", briefs: withSecret });
+  assert.equal(note.includes("AKIAIOSFODNN7EXAMPLE"), false);
+  assert.match(note, /REDACTED-AWS-KEY-ID/);
+});
