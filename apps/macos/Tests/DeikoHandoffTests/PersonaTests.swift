@@ -129,3 +129,43 @@ func codableRoundTrip() throws {
     #expect(back == p)
     #expect(back.markdown == p.markdown)
 }
+
+// ── What a browser chat gets ────────────────────────────────────────────────
+//
+// Measured, not assumed: Gemini pastes 839, 4,010 and 20,000 characters into
+// the composer as text and never folds any of them into a tile. So the browser
+// form has to be short by construction, and it still has to carry the rule
+// that keeps a persona an instruction about shape.
+
+@Test("the browser form is short, and still says use only what was said")
+func browserFormIsShortAndHonest() {
+    for persona in Persona.builtIns {
+        let summary = try! #require(persona.summary)
+        #expect(summary.count < 700, "\(persona.id) summary is \(summary.count) characters")
+        #expect(summary.count < persona.markdown.count)
+        #expect(summary.contains("not stated"))
+        #expect(summary.contains("only what I said"))
+        // No markdown scaffolding: it is pasted into a chat, not a file.
+        #expect(!summary.contains("##"))
+        #expect(!summary.contains("- **"))
+    }
+}
+
+@Test("the browser form carries the house style, not just the shape")
+func browserFormCarriesOptions() {
+    var p = Persona(id: "qa-ticket", name: "QA ticket", base: .qaTicket)
+    p.options["severity_scale"] = "p"
+    p.options["tone"] = "terse"
+    let summary = try! #require(p.summary)
+    #expect(summary.contains("P0, P1, P2 or P3"))
+    #expect(summary.contains("short and flat"))
+}
+
+@Test("a hand-written persona has no short form — its words travel whole")
+func handWrittenHasNoSummary() {
+    var p = Persona(id: "qa-ticket-v2", name: "QA ticket v2", base: .qaTicket)
+    p.overrideText = "# Mine\n\nDo it my way, and here is the long version of why.\n"
+    // Truncating somebody's own prompt would drop instructions silently; the
+    // length of a hand-written persona is its author's call.
+    #expect(p.summary == nil)
+}

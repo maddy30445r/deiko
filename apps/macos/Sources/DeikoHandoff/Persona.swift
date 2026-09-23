@@ -101,6 +101,23 @@ public struct Persona: Codable, Identifiable, Equatable, Sendable {
         overrideText ?? PersonaTemplate.render(self)
     }
 
+    /// The same instruction, in a few lines, for a chat that cannot open a
+    /// file and will not fold a long paste away.
+    ///
+    /// MEASURED, NOT ASSUMED. The plan for this feature said browsers fold a
+    /// long paste into a "pasted text" tile, so the whole file could travel.
+    /// Gemini does not: 839, 4,010 and 20,000 characters all went into the
+    /// composer as text. A brief is supposed to look like something a person
+    /// typed, so what travels to a browser is this — the shape, the house
+    /// style and the evidence rule, and none of the markdown scaffolding.
+    ///
+    /// A hand-written persona has no summary: those are somebody's own words
+    /// and truncating them would drop instructions silently, so the whole
+    /// thing travels and the length is their call.
+    public var summary: String? {
+        overrideText == nil ? PersonaTemplate.summarise(self) : nil
+    }
+
     /// The value in force for a field: what was set, else the field's default.
     public func value(_ fieldID: String) -> String {
         if let set = options[fieldID] { return set }
@@ -326,6 +343,23 @@ public enum PersonaForm {
 /// rule the author has to remember is a rule that goes missing.
 public enum PersonaTemplate {
 
+    /// The browser form: one instruction, the format as a single line, and
+    /// the evidence rule. Built from the same options as `render`, so a
+    /// persona cannot say one thing to Claude Code and another to a chat.
+    public static func summarise(_ p: Persona) -> String {
+        var out = [opening(p)]
+        let shape = self.shape(p)
+            .map { $0.replacingOccurrences(of: "- ", with: "")
+                     .replacingOccurrences(of: "**", with: "") }
+        if !shape.isEmpty {
+            out.append(p.base == .qaTicket || p.base == .bugReport
+                ? "Sections: " + shape.joined(separator: "; ")
+                : shape.joined(separator: " "))
+        }
+        out.append("Use only what I said and what the screenshots show — if something cannot be filled from that, write \"not stated\" rather than guessing.")
+        return out.joined(separator: "\n\n")
+    }
+
     public static func render(_ p: Persona) -> String {
         if let text = p.overrideText { return text }
 
@@ -346,7 +380,7 @@ public enum PersonaTemplate {
     /// addresses the agent in the third person ("the user wants…") reads as a
     /// system prompt, and the whole point is that this is the paragraph the
     /// developer would have typed themselves.
-    private static func opening(_ p: Persona) -> String {
+    static func opening(_ p: Persona) -> String {
         var line: String
         switch p.base {
         case .qaTicket:
@@ -373,7 +407,7 @@ public enum PersonaTemplate {
         return line
     }
 
-    private static func shape(_ p: Persona) -> [String] {
+    static func shape(_ p: Persona) -> [String] {
         switch p.base {
         case .qaTicket, .bugReport:
             let labels: [(String, String)] = p.base == .qaTicket

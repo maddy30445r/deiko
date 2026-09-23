@@ -114,6 +114,15 @@ enum Personas {
         // and a stale file would shape this one.
         guard let url = write(persona) else { return }
         try? url.path.write(to: pointer, atomically: true, encoding: .utf8)
+        // The browser form, beside it. Written here rather than derived at the
+        // moment of release: the fling has 250ms budgets in it and no business
+        // rendering a template.
+        let brief = URL(fileURLWithPath: sessionDir).appendingPathComponent("persona.brief.txt")
+        if let summary = persona.summary {
+            try? summary.write(to: brief, atomically: true, encoding: .utf8)
+        } else {
+            try? FileManager.default.removeItem(at: brief)
+        }
     }
 
     /// The file's contents, for a destination that cannot open a path.
@@ -123,6 +132,17 @@ enum Personas {
     /// `BriefPipeline.prompt` had to reach for `MainActor.assumeIsolated` to
     /// call it, which is a crash for the first caller that is not already
     /// there rather than a compile error.
+    /// WHAT A BROWSER GETS: the short form when there is one, the whole file
+    /// when the persona is hand-written (see `Persona.summary`).
+    nonisolated static func browserText(forSession sessionDir: String) -> String? {
+        let brief = URL(fileURLWithPath: sessionDir).appendingPathComponent("persona.brief.txt")
+        if let short = try? String(contentsOf: brief, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines), !short.isEmpty {
+            return short
+        }
+        return text(forSession: sessionDir)
+    }
+
     nonisolated static func text(forSession sessionDir: String) -> String? {
         let pointer = URL(fileURLWithPath: sessionDir).appendingPathComponent("persona.txt")
         guard let path = try? String(contentsOf: pointer, encoding: .utf8)

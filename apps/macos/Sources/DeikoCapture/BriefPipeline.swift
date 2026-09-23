@@ -485,7 +485,7 @@ enum BriefPipeline {
         // Read from disk beside the prompt, for the same reason the prompt is:
         // the review window may have changed which persona this brief is for
         // since the orb first appeared, and the files are what saw that.
-        let persona = Personas.text(forSession: sessionDir)
+        let persona = Personas.browserText(forSession: sessionDir)
         // THE TWO MUST FALL BACK TOGETHER, and they used to fall back
         // independently.
         //
