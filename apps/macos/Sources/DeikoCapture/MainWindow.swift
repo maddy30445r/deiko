@@ -597,87 +597,182 @@ private struct BoardPane: View {
         }
     }
 
-    /// THE FILTER IS A NATIVE SEGMENTED CONTROL, and that is a decision made
-    /// by evidence rather than taste. It was a row of custom chips — a plain
-    /// button, then a button with its own `ButtonStyle` — and in the real
-    /// window neither took a click or a hover, while the pointer reached the
-    /// cards beneath. Four fixes to the chip changed nothing. The controls
-    /// that DO work inside this app's scrolling panes are the ones AppKit
-    /// hit-tests itself: the ⋯ menus on the cards, and the Appearance picker
-    /// in Settings, which is this same control. So the filter is built from
-    /// that. Counts ride in the segment labels; the per-collection verbs
-    /// (describe, rename, delete) move to one ⋯ menu beside it, which is the
-    /// other control proven to work here.
+    /// The chips, in the order they are useful: everything, then the projects
+    /// with the most in them, then whatever has not been filed.
+    ///
+    /// These sit in the pane's fixed band, not in the scroll view with the
+    /// cards — see `body` for why that is the whole of the fix. They spent a
+    /// day being blamed for it: as a plain button, then as one with its own
+    /// `ButtonStyle`, neither took a click, and the cause was never the chip.
     @ViewBuilder private var filterRow: some View {
         if !sessions.collections.isEmpty {
-            HStack(spacing: 8) {
-                Picker("Show", selection: $filter) {
-                    Text("All \(sessions.items.count)").tag(Filter.all)
-                    ForEach(sessions.collections.sorted { sessions.count(of: $0.id) > sessions.count(of: $1.id) }) { collection in
-                        Text("\(collection.name) \(sessions.count(of: collection.id))")
-                            .tag(Filter.collection(collection.id))
-                    }
-                    if sessions.unsortedCount > 0 {
-                        Text("Unsorted \(sessions.unsortedCount)").tag(Filter.unsorted)
-                    }
+            HStack(spacing: 7) {
+                chip("All", count: sessions.items.count, filter: .all)
+                ForEach(sessions.collections.sorted { sessions.count(of: $0.id) > sessions.count(of: $1.id) }) { collection in
+                    chip(collection.name, count: sessions.count(of: collection.id),
+                         filter: .collection(collection.id))
+                        .contextMenu { CollectionMenu(collection: collection, store: sessions) }
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize()
-
-                if case .collection(let id) = filter,
-                   let collection = sessions.collections.first(where: { $0.id == id }) {
-                    Menu {
-                        CollectionMenu(collection: collection, store: sessions)
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                            .font(.system(size: 12))
-                    }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-                    .fixedSize()
-                    .tint(DeikoStyle.ink2)
-                    .help("Describe, rename or delete the \(collection.name) collection")
+                if sessions.unsortedCount > 0 {
+                    chip("Unsorted", count: sessions.unsortedCount, filter: .unsorted)
                 }
             }
-            .padding(.bottom, 2)
         }
     }
 
+    private func chip(_ name: String, count: Int, filter target: Filter) -> some View {
+        ChipButton(name: name, count: count, on: filter == target) {
+            filter = filter == target ? .all : target
+        }
+    }
+
+    /// CHROME ABOVE, CONTENT BELOW, AND NEVER IN THE SAME SCROLL VIEW.
+    ///
+    /// The other panes use `PaneScroll`, where the title scrolls away with
+    /// the content. The board does not, because it has a filter, and the
+    /// filter cannot share a scroll view with the cards it filters. Each card
+    /// carries four AppKit tracking areas — help, context menu, hover, tap —
+    /// and when a segment changed and the grid reflowed from two cards to
+    /// thirty-seven, the first card's stale tracking rect landed on the
+    /// filter: the segment stuck, and the pointer over it lit the card. Every
+    /// version of the filter as a chip died the same way, for the same
+    /// reason, before the cause was found.
+    ///
+    /// So the board is built the way a browser is: a fixed band holding the
+    /// title, the search and the filter, a hairline, and a scroll view holding
+    /// only the grid. The scroll view clips its content, so a card's tracking
+    /// area cannot exist above the hairline whatever the grid is doing.
     var body: some View {
-        PaneScroll(title: "Board", lede: "Every brief you have thrown, still on this Mac.", trailing: {
-            TextField("Search briefs", text: $query)
-                .textFieldStyle(.roundedBorder)
-                .font(.system(size: 12))
-                .frame(width: 190)
-                .focused($searching)
-                // ⌘F puts the cursor here. A search field nobody can reach
-                // from the keyboard is a search field for other people.
-                .overlay {
-                    Button("") { searching = true }
-                        .keyboardShortcut("f", modifiers: .command)
-                        .opacity(0)
-                        .accessibilityHidden(true)
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 16) {
+                PaneHeader(title: "Board", lede: "Every brief you have thrown, still on this Mac.") {
+                    searchField
                 }
-        }) {
-            filterRow
-            if shown.isEmpty {
-                EmptyPane(
-                    title: sessions.items.isEmpty ? "The board is empty" : "Nothing here yet",
-                    line: sessions.items.isEmpty
-                        ? "Briefs pin themselves here as you record them. Nothing is uploaded — this is the folder in your Documents."
-                        : "Try another collection, an app name, or a word you said."
-                )
-            } else {
-                // `.top`, because the default is `.center`: cards of unequal
-                // height were being centred in their row, which staggered the
-                // top edge and read as a rendering fault rather than masonry.
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), spacing: 14, alignment: .top)], spacing: 14) {
-                    ForEach(shown) { item in BoardCard(item: item, store: sessions) }
+                filterRow
+            }
+            .padding(.horizontal, 26)
+            .padding(.top, 44)
+            .padding(.bottom, 16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Divider()
+
+            ScrollView {
+                Group {
+                    if shown.isEmpty {
+                        EmptyPane(
+                            title: sessions.items.isEmpty ? "The board is empty" : "Nothing here yet",
+                            line: sessions.items.isEmpty
+                                ? "Briefs pin themselves here as you record them. Nothing is uploaded — this is the folder in your Documents."
+                                : "Try another collection, an app name, or a word you said."
+                        )
+                    } else {
+                        // `.top`, because the default is `.center`: cards of
+                        // unequal height were being centred in their row, which
+                        // staggered the top edge and read as a rendering fault
+                        // rather than masonry.
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), spacing: 14, alignment: .top)], spacing: 14) {
+                            ForEach(shown) { item in BoardCard(item: item, store: sessions) }
+                        }
+                    }
                 }
-                .padding(.top, 2)
+                .padding(.horizontal, 26)
+                .padding(.top, 18)
+                .padding(.bottom, 28)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+    }
+
+    private var searchField: some View {
+        TextField("Search briefs", text: $query)
+            .textFieldStyle(.roundedBorder)
+            .font(.system(size: 12))
+            .frame(width: 190)
+            .focused($searching)
+            // ⌘F puts the cursor here. A search field nobody can reach
+            // from the keyboard is a search field for other people.
+            .overlay {
+                Button("") { searching = true }
+                    .keyboardShortcut("f", modifiers: .command)
+                    .opacity(0)
+                    .accessibilityHidden(true)
+            }
+    }
+}
+
+/// One filter chip. The selected one is the wash chip the system already has
+/// (DESIGN.md §Chips); the rest are hairline outlines, so the row reads as one
+/// thing with one answer chosen rather than as a bank of buttons.
+///
+/// THE WHOLE LOOK LIVES IN A `ButtonStyle`, and that is the point rather than
+/// a tidying. This was built the way `SidebarRow` is — `.buttonStyle(.plain)`
+/// with the capsule drawn in the label's `.background` — and the sidebar works.
+/// In a pane it did not: the chips drew correctly and took neither a hover nor
+/// a click, while the pointer carried on to the cards. The sidebar is not
+/// inside a `ScrollView` and every pane is, and inside a pane every control
+/// that works is either a menu or a custom `ButtonStyle` (`InkButtonStyle` on
+/// the Dashboard). The chip was the only `.plain` button in a scrolling pane,
+/// and the only dead one. So it is built the way the ones that work are built.
+private struct ChipButtonStyle: ButtonStyle {
+    let on: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        Chip(configuration: configuration, on: on)
+    }
+
+    /// Named `Chip`, not `Body`: `Body` is the protocol's own associated type
+    /// and a nested struct by that name satisfies it instead — the same trap
+    /// `InkButtonStyle` documents.
+    private struct Chip: View {
+        let configuration: ButtonStyleConfiguration
+        let on: Bool
+        /// Hover lives with the drawing rather than outside the button, so
+        /// nothing between the two can get out of step.
+        @State private var hovering = false
+
+        var body: some View {
+            configuration.label
+                .foregroundStyle(on ? DeikoStyle.mark : DeikoStyle.ink2)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 3)
+                .background {
+                    if on {
+                        Capsule().fill(DeikoStyle.accentSoft)
+                    } else {
+                        Capsule()
+                            .fill(hovering ? DeikoStyle.accentSoft.opacity(0.5) : .clear)
+                            .overlay(Capsule().strokeBorder(DeikoStyle.hairline, lineWidth: 1))
+                    }
+                }
+                // The whole capsule, not the letters.
+                .contentShape(Capsule())
+                .opacity(configuration.isPressed ? 0.7 : 1)
+                .animation(.easeOut(duration: 0.12), value: hovering)
+                .onHover { hovering = $0 }
+        }
+    }
+}
+
+private struct ChipButton: View {
+    let name: String
+    let count: Int
+    let on: Bool
+    let tap: () -> Void
+
+    var body: some View {
+        Button(action: tap) {
+            HStack(spacing: 5) {
+                Text(name).font(.system(size: 11, weight: .medium))
+                // The count is the quiet half of the chip in both states —
+                // it is the reason to click, never the label.
+                Text("\(count)")
+                    .font(.system(size: 11))
+                    .opacity(0.65)
+            }
+        }
+        .buttonStyle(ChipButtonStyle(on: on))
+        .deikoFocusRing(Capsule())
     }
 }
 
@@ -983,17 +1078,7 @@ struct PaneScroll<Content: View, Trailing: View>: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(title).deikoTitle(24)
-                        Text(lede)
-                            .font(.system(size: 12.5))
-                            .foregroundStyle(DeikoStyle.ink2)
-                    }
-                    Spacer()
-                    trailing
-                }
-                .padding(.bottom, 2)
+                PaneHeader(title: title, lede: lede) { trailing }
                 content
             }
             .padding(.horizontal, 26)
@@ -1003,6 +1088,35 @@ struct PaneScroll<Content: View, Trailing: View>: View {
             .padding(.bottom, 28)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+}
+
+/// The title block every pane opens with. `PaneScroll` scrolls it away with
+/// the content; a pane whose chrome must stay put uses it directly, above a
+/// scroll view of its own.
+struct PaneHeader<Trailing: View>: View {
+    let title: String
+    let lede: String
+    @ViewBuilder var trailing: Trailing
+
+    init(title: String, lede: String, @ViewBuilder trailing: () -> Trailing = { EmptyView() }) {
+        self.title = title
+        self.lede = lede
+        self.trailing = trailing()
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).deikoTitle(24)
+                Text(lede)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(DeikoStyle.ink2)
+            }
+            Spacer()
+            trailing
+        }
+        .padding(.bottom, 2)
     }
 }
 
