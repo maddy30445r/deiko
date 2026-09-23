@@ -21,6 +21,9 @@ import DeikoHandoff
 final class PersonaStore: ObservableObject {
     @Published private(set) var list: [Persona] = []
     @Published var defaultID: String = Personas.defaultID
+    /// Which agents on this Mac name which trackers. Read off their MCP
+    /// configs; empty until the first scan lands.
+    @Published private(set) var connected: [Tracker: Set<AgentClient>] = AgentConfigs.connected
 
     init() { reload() }
 
@@ -29,6 +32,12 @@ final class PersonaStore: ObservableObject {
     func reload() {
         list = Personas.all()
         defaultID = Personas.defaultID
+        // Off the main actor: `~/.claude.json` carries per-project history and
+        // is routinely megabytes.
+        Task.detached(priority: .utility) {
+            let fresh = AgentConfigs.refresh()
+            await MainActor.run { self.connected = fresh }
+        }
         if !list.contains(where: { $0.id == defaultID }), let first = list.first {
             makeDefault(first)
         }
@@ -144,6 +153,8 @@ struct PersonasPane: View {
                     .frame(maxWidth: .infinity, alignment: .top)
             }
 
+            connectedTools
+
             Text("Each persona is a file in ~/Documents/Deiko/personas. Edit it here, or open it in your own editor — Deiko uses whatever the file says.")
                 .font(.system(size: 11))
                 .foregroundStyle(DeikoStyle.ink2)
@@ -155,7 +166,7 @@ struct PersonasPane: View {
             }
         }
         .sheet(item: $editing) { persona in
-            PersonaEditor(persona: persona) { saved in
+            PersonaEditor(persona: persona, connected: Set(store.connected.keys)) { saved in
                 store.update(saved)
                 editing = nil
             } onCancel: { editing = nil }
@@ -177,6 +188,14 @@ struct PersonasPane: View {
                 Text(persona.base.purpose)
                     .font(.system(size: 11))
                     .foregroundStyle(DeikoStyle.ink2)
+                if let t = persona.destination {
+                    // Where it goes, and whether anything here can take it. No
+                    // red or green: the accent is spent on the gesture, and not
+                    // having connected a tracker is not a failure.
+                    Text(filingLine(t))
+                        .font(.system(size: 11))
+                        .foregroundStyle(DeikoStyle.ink2)
+                }
             }
             Spacer()
             Menu {
@@ -238,7 +257,7 @@ struct PersonasPane: View {
                 .background(DeikoStyle.paper)
                 Divider()
                 ScrollView {
-                    Text(persona.markdown)
+                    Text(persona.markdown(connected: Set(store.connected.keys)))
                         .font(.system(size: 11.5, design: .monospaced))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -261,6 +280,63 @@ struct PersonasPane: View {
         }
     }
 
+    /// WHERE THE SETUP NUDGE LIVES.
+    ///
+    /// The persona file says nothing about connecting anything — a brief is
+    /// not the place to be sold a tool. So it lives here, next to the choice
+    /// it affects, where a command can be copied rather than read aloud to
+    /// somebody by their own agent.
+    private var connectedTools: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SectionLabel("Connected tools")
+            InsetCard {
+                ForEach(Array(Tracker.allCases.enumerated()), id: \.element) { index, t in
+                    if index > 0 { Divider().padding(.horizontal, 14) }
+                    HStack(spacing: 10) {
+                        Text(t.displayName)
+                            .font(.system(size: 13))
+                            .frame(width: 92, alignment: .leading)
+                        let agents = (store.connected[t] ?? []).map(\.displayName).sorted()
+                        if agents.isEmpty {
+                            Text("not connected")
+                                .font(.system(size: 12))
+                                .foregroundStyle(DeikoStyle.ink2)
+                            Spacer()
+                            Button("Copy setup command") { copySetup(t) }
+                                .font(.system(size: 12))
+                        } else {
+                            Text(agents.joined(separator: ", "))
+                                .font(.system(size: 12))
+                                .foregroundStyle(DeikoStyle.ink2)
+                            Spacer()
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                }
+            }
+            Text("Read from your agents' MCP configs on this Mac. Browser chats keep their connectors server-side, so those cannot be seen from here — a persona asks for them rather than assuming.")
+                .font(.system(size: 11))
+                .foregroundStyle(DeikoStyle.ink2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// Every agent's line at once: Deiko cannot know which one somebody is
+    /// about to paste into, and four short lines are cheaper than a guess.
+    private func copySetup(_ t: Tracker) {
+        let text = t.setup.map { "\($0.agent): \($0.how)" }.joined(separator: "\n")
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    /// "Files to Jira · connected in Claude Code, Codex".
+    private func filingLine(_ t: Tracker) -> String {
+        let agents = (store.connected[t] ?? []).map(\.displayName).sorted()
+        guard !agents.isEmpty else { return "Files to \(t.displayName) · not connected on this Mac" }
+        return "Files to \(t.displayName) · connected in " + agents.joined(separator: ", ")
+    }
+
     private func tag(_ word: String) -> some View {
         Text(word)
             .font(.system(size: 11, weight: .medium))
@@ -277,15 +353,21 @@ private struct PersonaEditor: View {
     @State private var draft: Persona
     @State private var overwriting: Bool
     @State private var text: String
+    /// What this Mac can reach, so the preview and the saved file agree.
+    private let connected: Set<Tracker>
     let onSave: (Persona) -> Void
     let onCancel: () -> Void
 
-    init(persona: Persona, onSave: @escaping (Persona) -> Void, onCancel: @escaping () -> Void) {
+    init(
+        persona: Persona, connected: Set<Tracker>,
+        onSave: @escaping (Persona) -> Void, onCancel: @escaping () -> Void
+    ) {
+        self.connected = connected
         _draft = State(initialValue: persona)
         _overwriting = State(initialValue: persona.overrideText != nil)
         // The form's own rendering, so turning the switch on hands somebody
         // the real thing to edit rather than an empty box.
-        _text = State(initialValue: persona.markdown)
+        _text = State(initialValue: persona.markdown(connected: connected))
         self.onSave = onSave
         self.onCancel = onCancel
     }
@@ -333,7 +415,11 @@ private struct PersonaEditor: View {
                             VStack(alignment: .leading, spacing: 8) {
                                 SectionLabel(group.title)
                                 InsetCard {
-                                    ForEach(Array(group.fields.enumerated()), id: \.element.id) { index, field in
+                                    // FILTERED BEFORE ENUMERATING, or the
+                                    // dividers count fields nobody can see and
+                                    // the card opens with a rule.
+                                    let shown = group.fields.filter { draft.shows($0) }
+                                    ForEach(Array(shown.enumerated()), id: \.element.id) { index, field in
                                         if index > 0 { Divider().padding(.horizontal, 14) }
                                         control(field).padding(.horizontal, 14).padding(.vertical, 9)
                                     }
@@ -345,12 +431,13 @@ private struct PersonaEditor: View {
                     Toggle("Overwrite this persona?", isOn: $overwriting)
                         .font(.system(size: 13))
                         .onChange(of: overwriting) { _, on in
-                            if on { text = draft.markdown; return }
+                            if on { text = draft.markdown(connected: connected); return }
                             // ASKED, BECAUSE IT IS A DELETION. Turning this off
                             // returns to the form, and the prompt somebody
                             // wrote by hand is gone with it — an 11pt caption
                             // underneath was not a warning, it was a label.
-                            guard draft.overrideText != nil || text != draft.markdown else {
+                            guard draft.overrideText != nil
+                                    || text != draft.markdown(connected: connected) else {
                                 draft.overrideText = nil
                                 return
                             }
@@ -364,7 +451,7 @@ private struct PersonaEditor: View {
                             alert.addButton(withTitle: "Keep editing")
                             if alert.runModal() == .alertFirstButtonReturn {
                                 draft.overrideText = nil
-                                text = draft.markdown
+                                text = draft.markdown(connected: connected)
                             } else {
                                 overwriting = true
                             }
@@ -426,6 +513,34 @@ private struct PersonaEditor: View {
                         set: { draft.options[field.id] = $0 }
                     ))
                     .font(.system(size: 13))
+                }
+            case .paragraph(let placeholder):
+                // Body font, not mono: the file that ships is a document, but
+                // this is a sentence somebody types.
+                TextEditor(text: Binding(
+                    get: { draft.value(field.id) },
+                    set: { draft.options[field.id] = $0 }
+                ))
+                .font(.system(size: 13))
+                .frame(minHeight: 76)
+                .scrollContentBackground(.hidden)
+                .padding(6)
+                .background(
+                    RoundedRectangle(cornerRadius: DeikoStyle.controlRadius)
+                        .fill(DeikoStyle.paper)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: DeikoStyle.controlRadius)
+                                .strokeBorder(DeikoStyle.hairline, lineWidth: 1)
+                        )
+                )
+                .overlay(alignment: .topLeading) {
+                    if draft.value(field.id).isEmpty {
+                        Text(placeholder)
+                            .font(.system(size: 13))
+                            .foregroundStyle(DeikoStyle.ink2)
+                            .padding(.top, 14).padding(.leading, 11)
+                            .allowsHitTesting(false)
+                    }
                 }
             }
             if let help = field.help {

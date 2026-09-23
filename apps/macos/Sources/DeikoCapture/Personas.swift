@@ -88,7 +88,9 @@ enum Personas {
             try FileManager.default.createDirectory(
                 at: url.deletingLastPathComponent(), withIntermediateDirectories: true
             )
-            let text = persona.markdown
+            // From the cache, never a fresh read: this runs on the path that
+            // renders a brief. See `AgentConfigs.connected`.
+            let text = persona.markdown(connected: AgentConfigs.connectedTrackers)
             try text.write(to: url, atomically: true, encoding: .utf8)
             setDigest(persona.id, digest(text))
             return url
@@ -118,7 +120,7 @@ enum Personas {
         // moment of release: the fling has 250ms budgets in it and no business
         // rendering a template.
         let brief = URL(fileURLWithPath: sessionDir).appendingPathComponent("persona.brief.txt")
-        if let summary = persona.summary {
+        if let summary = persona.summary(connected: AgentConfigs.connectedTrackers) {
             try? summary.write(to: brief, atomically: true, encoding: .utf8)
         } else {
             try? FileManager.default.removeItem(at: brief)

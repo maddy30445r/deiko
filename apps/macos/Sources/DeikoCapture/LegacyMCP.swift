@@ -50,7 +50,7 @@ enum LegacyMCP {
 
         let home = URL(fileURLWithPath: NSHomeDirectory())
         let json: [(URL, String)] = [
-            (configPathForClaude(), "mcpServers"),
+            (AgentConfigs.claudeConfig(), "mcpServers"),
             (home.appendingPathComponent(".cursor/mcp.json"), "mcpServers"),
             (home.appendingPathComponent(".gemini/config/mcp_config.json"), "mcpServers"),
         ]
@@ -62,7 +62,7 @@ enum LegacyMCP {
         for (url, containerKey) in json {
             allAlreadyClean = cleanJSON(url: url, containerKey: containerKey) && allAlreadyClean
         }
-        let toml = codexHome().appendingPathComponent("config.toml")
+        let toml = AgentConfigs.codexHome().appendingPathComponent("config.toml")
         allAlreadyClean = cleanTOML(url: toml) && allAlreadyClean
 
         if allAlreadyClean {
@@ -136,7 +136,7 @@ enum LegacyMCP {
         // return value: this pass found an entry, so it is not "already
         // clean" either way, and the flag stays unset regardless until a
         // later pass confirms it stuck.
-        let verifyServers = readJSON(url)?[containerKey] as? [String: Any]
+        let verifyServers = AgentConfigs.readJSON(url)?[containerKey] as? [String: Any]
         if looksLikeFoveaEntry(verifyServers?["fovea"]) {
             Emit.log("wrote \(url.path), but the fovea MCP entry was still there on read-back")
         } else {
@@ -245,24 +245,4 @@ enum LegacyMCP {
         try? FileManager.default.removeItem(at: backup)
     }
 
-    private static func readJSON(_ url: URL) -> [String: Any]? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-    }
-
-    /// Claude Code honours `CLAUDE_CONFIG_DIR`, and so did the entry we wrote —
-    /// so the cleanup has to look where the write went, not where it usually
-    /// goes.
-    private static func configPathForClaude() -> URL {
-        let dir = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"]
-            .map { URL(fileURLWithPath: $0) }
-            ?? URL(fileURLWithPath: NSHomeDirectory())
-        return dir.appendingPathComponent(".claude.json")
-    }
-
-    private static func codexHome() -> URL {
-        ProcessInfo.processInfo.environment["CODEX_HOME"]
-            .map { URL(fileURLWithPath: $0) }
-            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".codex")
-    }
 }

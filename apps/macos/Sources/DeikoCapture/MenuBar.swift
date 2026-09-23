@@ -273,6 +273,10 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Remove the MCP entry earlier versions wrote. Nothing registers
         // anything any more; this is only clearing up after what did.
         LegacyMCP.cleanUpOnce()
+        // And read what those configs DO say, so the first brief of the
+        // session already knows whether Jira is reachable. Off the main
+        // thread; a cold answer only ever renders the cautious wording.
+        AgentConfigs.warm()
 
         // OLD SESSIONS GO. Nothing ever removed one before, and a session is a
         // folder of full-resolution screenshots — the folder grew for as long
