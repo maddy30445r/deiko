@@ -255,11 +255,12 @@ final class SettingsModel: ObservableObject {
         if usingOwnKey {
             // NO LONGER "Deiko's servers never see it" — the owner decided
             // sorting runs through the relay for everyone, own-key users
-            // included, so a brief can still be placed into a task. Audio and
-            // the summary are untouched: both go straight to Groq with the
-            // user's own key, exactly as before, and never reach Deiko. Only
-            // the classifier, through its own `DEIKO_CLASSIFY_URL`, reaches
-            // Deiko's relay — which is what this sentence now has to admit.
+            // included, so a brief can still be placed into a task. Audio
+            // goes straight to Groq with the user's own key, exactly as
+            // before, and never reaches Deiko; the summary is produced there
+            // too, but a redacted copy of it still travels through the
+            // classifier — so this sentence has to admit that, not claim the
+            // summary never reaches Deiko either.
             //
             // THE SORTING CLAUSE IS CONDITIONAL, NOT ALWAYS TRUE. A build with
             // no relay stamped at all (`Credentials.relayURL == nil`) never
@@ -269,12 +270,12 @@ final class SettingsModel: ObservableObject {
             // this sentence exists to avoid, just moved one line down.
             let goesToGroq = "Your narration goes straight to Groq with your key. \(narration.comesBackAs)"
             guard Credentials.relayURL != nil else { return goesToGroq }
-            return goesToGroq + " To sort each brief into its task, what you said, a one-line summary and your window titles go to Deiko, which keeps nothing."
+            return goesToGroq + " To sort each brief into its task, what you said, a one-line summary, your window titles and notes on earlier work go to Deiko, which passes them to a sorting model and keeps nothing."
         }
         if Credentials.relayURL != nil {
             return isPro
-                ? "Your narration goes to Deiko, which passes it to a transcription service and keeps nothing. \(narration.comesBackAs) Add your own key below to skip Deiko entirely."
-                : "Your narration goes to Deiko, which passes it to a transcription service and keeps nothing. \(narration.comesBackAs) When your trial runs out, transcription continues on this Mac, in the offline language below. Add your own key below to skip Deiko entirely."
+                ? "Your narration goes to Deiko, which passes it to a transcription service and keeps nothing. \(narration.comesBackAs) Add your own key below and your audio and summary skip Deiko; sorting still goes through it."
+                : "Your narration goes to Deiko, which passes it to a transcription service and keeps nothing. \(narration.comesBackAs) When your trial runs out, transcription continues on this Mac, in the offline language below. Add your own key below and your audio and summary skip Deiko; sorting still goes through it."
         }
         return "Transcription runs on this Mac. Nothing is uploaded — accuracy is lower, especially for mixed-language speech."
     }
