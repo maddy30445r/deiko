@@ -4,10 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import {
-  CANDIDATE_LIMIT, FLOORS, RELATED_LIMIT, TIERS,
-  briefDate, decide, pickCandidates, readBriefLine, slug, wantsQuickHint,
-} from "../lib/context.mjs";
+import { FLOORS, TIERS, briefDate, decide, readBriefLine, slug, wantsQuickHint } from "../lib/context.mjs";
 
 // ── Names and dates ─────────────────────────────────────────────────────────
 
@@ -23,40 +20,6 @@ test("a brief's date comes from its stamp, with the year only when it is not thi
   assert.equal(briefDate("20260918-155717", now), "Sep 18");
   assert.equal(briefDate("20251102-090000", now), "Nov 2, 2025");
   assert.equal(briefDate("personas", now), "");
-});
-
-// ── Candidates ──────────────────────────────────────────────────────────────
-
-const session = (id, narration, extra = {}) => ({ id, narration, collection: null, outcome: null, ...extra });
-
-test("candidates are newest first, the current session left out, short narrations skipped", () => {
-  const picked = pickCandidates([
-    session("20260101-100000", "the oldest brief on the board"),
-    session("20260301-100000", "the newest brief on the board"),
-    session("20260201-100000", "Thanks."),
-    session("20260215-100000", "the current one, which must not see itself"),
-    { id: "personas", narration: "not a session at all" },
-  ], { exclude: "20260215-100000" });
-  assert.deepEqual(picked.map((c) => c.id), ["20260301-100000", "20260101-100000"]);
-});
-
-test("candidates carry the collection NAME, a redacted line and the outcome", () => {
-  const [c] = pickCandidates(
-    [session("20260301-100000", "the newest brief on the board", { collection: "deiko", outcome: "Fixed the drag.\nAdded a test." })],
-    { collections: [{ id: "deiko", name: "Deiko" }] },
-  );
-  assert.equal(c.collection, "Deiko");
-  assert.equal(c.date, briefDate("20260301-100000"));
-  assert.equal(c.line, "the newest brief on the board");
-  assert.equal(c.outcome, "Fixed the drag. Added a test.");
-});
-
-test("the candidate window is capped", () => {
-  const many = Array.from({ length: CANDIDATE_LIMIT + 40 }, (_, i) =>
-    session(`2026${String(100 + i).slice(1)}01-100000`.slice(0, 15), `brief number ${i} on the board`));
-  // Stamps above are synthetic and not all valid dates; only their shape matters here.
-  const picked = pickCandidates(many.filter((s) => /^\d{8}-\d{6}$/.test(s.id)));
-  assert.ok(picked.length <= CANDIDATE_LIMIT);
 });
 
 // ── Decisions ───────────────────────────────────────────────────────────────
@@ -88,31 +51,27 @@ test("an unknown collection id is never taken", () => {
   assert.equal(out.collection, null);
 });
 
-test("continues needs its floor and a real stamp", () => {
-  const yes = decide({ answers: { continues: { choice: "20260918-155717", confidence: 0.7 } } });
-  assert.equal(yes.continues, "20260918-155717");
-  const no = decide({ answers: { continues: { choice: "20260918-155717", confidence: 0.69 } } });
-  assert.equal(no.continues, null);
-  const none = decide({ answers: { continues: { choice: "none", confidence: 0.99 } } });
-  assert.equal(none.continues, null);
-  const bogus = decide({ answers: { continues: { choice: "../etc", confidence: 0.99 } } });
-  assert.equal(bogus.continues, null);
+test("a confident task inside the shortlist is joined", () => {
+  const args = { shortlist: ["t-20260918-155836"], sessionId: "20260920-100000", title: "Fix the price" };
+  const yes = decide({ ...args, answers: { task: { choice: "t-20260918-155836", confidence: 0.7 } } });
+  assert.equal(yes.task, "t-20260918-155836");
+  assert.equal(yes.newTask, null);
+  assert.equal(yes.confidence.task, 0.7);
 });
 
-test("related keeps the confident ones, ranked, capped, and never the continued brief", () => {
-  const answers = { continues: { choice: "20260918-155717", confidence: 0.9 } };
-  for (let i = 0; i < 10; i += 1) {
-    answers[`rel_202609${String(10 + i)}-100000`] = { noul: 0.5 + i * 0.05 };
+test("below the floor, new, or outside the shortlist starts a task named for this brief", () => {
+  const args = { shortlist: ["t-20260918-155836"], sessionId: "20260920-100000", title: "Fix the price" };
+  for (const task of [
+    { choice: "t-20260918-155836", confidence: 0.69 },
+    { choice: "new", confidence: 0.99 },
+    { choice: "t-20260101-000000", confidence: 0.99 },
+    undefined,
+  ]) {
+    const out = decide({ ...args, answers: { task } });
+    assert.equal(out.task, "t-20260920-100000");
+    assert.deepEqual(out.newTask, { id: "t-20260920-100000", title: "Fix the price" });
   }
-  answers["rel_20260918-155717"] = { noul: 0.99 };
-  answers["rel_../etc"] = { noul: 0.99 };
-  const out = decide({ answers });
-  assert.equal(out.related.length, RELATED_LIMIT);
-  assert.ok(!out.related.includes("20260918-155717"));
-  assert.ok(out.related.every((id) => /^\d{8}-\d{6}$/.test(id)));
-  assert.ok(out.related.every((id) => answers[`rel_${id}`].noul >= FLOORS.related));
-  // Highest probability first.
-  assert.equal(out.related[0], "20260919-100000");
+  assert.equal(FLOORS.task, 0.7);
 });
 
 test("the tier is the most likely level, or the rounded score without probabilities", () => {
@@ -140,9 +99,8 @@ test("score probabilities may arrive as an object keyed by level, as Vercel send
 
 test("a missing or partial answer is a quiet no", () => {
   assert.deepEqual(decide({}), {
-    collection: null, continues: null, related: [], tier: null, confidence: {}, newCollection: null,
+    collection: null, task: null, newTask: null, tier: null, confidence: {}, newCollection: null,
   });
-  assert.equal(decide({ answers: { collection: {}, continues: {}, tier: {} } }).tier, null);
 });
 
 test("the cost hint needs the toggle, a quick tier and a confident one", () => {
@@ -155,20 +113,35 @@ test("the cost hint needs the toggle, a quick tier and a confident one", () => {
 
 // ── Reading a sibling ───────────────────────────────────────────────────────
 
-test("a sibling session is read as its narration, collection and first three outcome lines", () => {
+test("a sibling is read with its summary line, task, windows, terms and outcome", () => {
   const root = mkdtempSync(join(tmpdir(), "deiko-context-"));
   const dir = join(root, "20260918-155717");
   mkdirSync(dir);
-  writeFileSync(join(dir, "brief.json"), JSON.stringify({ summary: { narration: "fix the drag on the board" } }));
-  writeFileSync(join(dir, "context.json"), JSON.stringify({ collection: "deiko" }));
-  writeFileSync(join(dir, "outcome.md"), "# Done\n\nMoved the drag threshold.\nAdded a test.\nUpdated the doc.\nA fourth line nobody reads.\n");
+  writeFileSync(join(dir, "brief.json"), JSON.stringify({ summary: {
+    narration: "hey so fix the drag on the board", apps: ["Deiko"], windows: ["Orb.swift — Deiko"], screenTerms: ["drag"],
+  } }));
+  writeFileSync(join(dir, "review-summary.txt"), "Fix the drag on the board.\nIt sticks.\n");
+  writeFileSync(join(dir, "context.json"), JSON.stringify({ collection: "deiko", task: "t-20260915-100000" }));
+  writeFileSync(join(dir, "outcome.md"), "## Did\nMoved the threshold.\n## Open\nTest on a trackpad.\n");
   assert.deepEqual(readBriefLine(dir), {
-    id: "20260918-155717",
-    narration: "fix the drag on the board",
-    collection: "deiko",
-    outcome: "Done Moved the drag threshold. Added a test.",
+    id: "20260918-155717", dir,
+    narration: "hey so fix the drag on the board",
+    summaryLine: "Fix the drag on the board.",
+    line: "Fix the drag on the board.",
+    collection: "deiko", task: "t-20260915-100000",
+    apps: ["Deiko"], windows: ["Orb.swift — Deiko"], screenTerms: ["drag"],
+    outcome: { did: ["Moved the threshold."], decided: [], open: ["Test on a trackpad."], files: [] },
   });
-  const bare = join(root, "20260101-000000");
-  mkdirSync(bare);
-  assert.deepEqual(readBriefLine(bare), { id: "20260101-000000", narration: null, collection: null, outcome: null });
+});
+
+test("a sibling whose summary could not tell falls back to what was said", () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-context-"));
+  const dir = join(root, "20260918-163821");
+  mkdirSync(dir);
+  writeFileSync(join(dir, "brief.json"), JSON.stringify({ summary: { narration: "Hello, hello, this is my testing second time." } }));
+  writeFileSync(join(dir, "review-summary.txt"), "The transcript is too short to determine a request.\n");
+  writeFileSync(join(dir, "context.json"), JSON.stringify({ task: "../etc" }));
+  const b = readBriefLine(dir);
+  assert.equal(b.line, "Hello, hello, this is my testing second time.");
+  assert.equal(b.task, null, "a malformed task id is no task");
 });

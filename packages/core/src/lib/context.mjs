@@ -14,17 +14,10 @@
  * says.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 
-import { redact } from "./redact.mjs";
-
-/// How many earlier briefs one classification call looks at. Newest first.
-///
-/// ponytail: 120 keeps a request near 10k tokens. Older briefs stay on disk
-/// and are simply not searched; when a board outgrows this, the upgrade is
-/// two calls — collection first, then relatedness over everything in it.
-export const CANDIDATE_LIMIT = 120;
+import { TASK_ID, parseOutcome } from "./tasks.mjs";
 
 /// Where a probability becomes a decision.
 ///
@@ -33,8 +26,7 @@ export const CANDIDATE_LIMIT = 120;
 /// because nothing here ever reads it.
 export const FLOORS = {
   collection: 0.6,
-  continues: 0.7,
-  related: 0.7,
+  task: 0.7,
   quickHint: 0.8,
 };
 
@@ -42,10 +34,6 @@ export const FLOORS = {
 /// `services/relay/relay.mjs` (`TIER_RUBRIC`): the relay names the levels to
 /// the model, this names them to the app. Change both.
 export const TIERS = ["quick", "medium", "complex", "reasoning"];
-
-/// How many related briefs ride along at most. Five paths is a reading list;
-/// twenty is a dump.
-export const RELATED_LIMIT = 5;
 
 /// A stamp Deiko minted: `yyyyMMdd-HHmmss`. The same gate `Sessions.swift`
 /// uses, because being shaped like a session is what makes a folder one.
@@ -80,54 +68,30 @@ export function briefDate(id, now = new Date()) {
 export const MIN_NARRATION = 12;
 
 /**
- * The earlier briefs one call is allowed to consider.
- *
- * `sessions` is `[{ id, narration, collection, outcome }]` in any order.
- * Returns newest first (the stamp sorts lexically), the current session
- * excluded, anything without a usable narration excluded, capped at `limit`.
- * Each entry is what the relay forwards: a date, the collection NAME the
- * model can read, one redacted line of narration, and the first line of the
- * outcome if an agent wrote one.
- */
-export function pickCandidates(sessions, { exclude = null, limit = CANDIDATE_LIMIT, collections = [] } = {}) {
-  const names = new Map(collections.map((c) => [c.id, c.name]));
-  return [...sessions]
-    .filter((s) => STAMP.test(s.id) && s.id !== exclude)
-    .filter((s) => (s.narration ?? "").trim().length >= MIN_NARRATION)
-    .sort((a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))
-    .slice(0, limit)
-    .map((s) => ({
-      id: s.id,
-      date: briefDate(s.id),
-      collection: names.get(s.collection) ?? null,
-      line: redact(s.narration).replace(/\s+/g, " ").trim().slice(0, 200),
-      outcome: s.outcome ? redact(s.outcome).replace(/\s+/g, " ").trim().slice(0, 120) : null,
-    }));
-}
-
-/**
  * The classifier's answers, turned into a `context.json`.
  *
- * Returns `{ collection, continues, related, tier, confidence, newCollection }`.
+ * Returns `{ collection, task, newTask, tier, confidence, newCollection }`.
  * `newCollection` is `{ id, name }` when the brief matched no collection but
- * carries a repo hint that is not one yet — the caller creates it. Never
- * throws on a partial answer: a missing question reads as "no".
+ * carries a repo hint that is not one yet — the caller creates it. `newTask`
+ * is `{ id, title }` when no shortlisted task was confidently chosen — the
+ * caller creates it. Never throws on a partial answer: a missing question
+ * reads as "no".
  */
-export function decide({ answers = {}, collections = [], repoHints = [] } = {}) {
+export function decide({ answers = {}, collections = [], repoHints = [], shortlist = [], sessionId = null, title = null } = {}) {
   const out = {
     collection: null,
-    continues: null,
-    related: [],
+    task: null,
+    newTask: null,
     tier: null,
     confidence: {},
     newCollection: null,
   };
 
   const known = new Set(collections.map((c) => c.id));
-  const pick = answers.collection;
-  if (pick && known.has(pick.choice) && (pick.confidence ?? 0) >= FLOORS.collection) {
-    out.collection = pick.choice;
-    out.confidence.collection = pick.confidence;
+  const chosen = answers.collection;
+  if (chosen && known.has(chosen.choice) && (chosen.confidence ?? 0) >= FLOORS.collection) {
+    out.collection = chosen.choice;
+    out.confidence.collection = chosen.confidence;
   } else {
     const hint = repoHints.find((h) => typeof h === "string" && h.trim());
     if (hint) {
@@ -143,20 +107,17 @@ export function decide({ answers = {}, collections = [], repoHints = [] } = {}) 
     }
   }
 
-  const cont = answers.continues;
-  if (cont && cont.choice !== "none" && STAMP.test(cont.choice ?? "")
-      && (cont.confidence ?? 0) >= FLOORS.continues) {
-    out.continues = cont.choice;
-    out.confidence.continues = cont.confidence;
+  // ONE TASK OR A NEW ONE. Only ids Deiko put on the shortlist can be
+  // chosen, so a model that invents an id starts a task rather than joining
+  // one that does not exist.
+  const pick = answers.task;
+  if (pick && shortlist.includes(pick.choice) && (pick.confidence ?? 0) >= FLOORS.task) {
+    out.task = pick.choice;
+    out.confidence.task = pick.confidence;
+  } else if (sessionId) {
+    out.task = `t-${sessionId}`;
+    out.newTask = { id: out.task, title: title ?? "A brief" };
   }
-
-  out.related = Object.entries(answers)
-    .filter(([key]) => key.startsWith("rel_"))
-    .map(([key, a]) => ({ id: key.slice(4), p: Number(a?.noul ?? 0) }))
-    .filter(({ id, p }) => STAMP.test(id) && id !== out.continues && p >= FLOORS.related)
-    .sort((a, b) => b.p - a.p)
-    .slice(0, RELATED_LIMIT)
-    .map(({ id }) => id);
 
   const tier = answers.tier;
   if (tier) {
@@ -193,35 +154,36 @@ export function wantsQuickHint(context, optimizeCosts) {
     && (context?.confidence?.tier ?? 0) >= FLOORS.quickHint;
 }
 
+const COULD_NOT_TELL = /too (short|garbled)/i;
+
 /**
- * What a sibling session says, read the one way both scripts read it.
- *
- * `{ narration, collection, outcome }` — `outcome` is the first three lines
- * of `outcome.md` joined by a space, or null. Missing pieces are null, never
- * a throw: the board is full of sessions whose brief never rendered.
+ * What a sibling session says, read the one way every script reads it.
+ * Missing pieces are null or empty, never a throw.
  */
 export function readBriefLine(sessionDir) {
-  let narration = null;
-  try {
-    narration = JSON.parse(readFileSync(join(sessionDir, "brief.json"), "utf8"))?.summary?.narration ?? null;
-  } catch {
-    narration = null;
-  }
-  let collection = null;
-  try {
-    collection = JSON.parse(readFileSync(join(sessionDir, "context.json"), "utf8"))?.collection ?? null;
-  } catch {
-    collection = null;
-  }
-  let outcome = null;
-  const outcomePath = join(sessionDir, "outcome.md");
-  if (existsSync(outcomePath)) {
-    const lines = readFileSync(outcomePath, "utf8")
-      .split("\n")
-      .map((l) => l.replace(/^#+\s*/, "").trim())
-      .filter(Boolean)
-      .slice(0, 3);
-    outcome = lines.length ? lines.join(" ") : null;
-  }
-  return { id: basename(sessionDir), narration, collection, outcome };
+  const json = (name) => {
+    try { return JSON.parse(readFileSync(join(sessionDir, name), "utf8")); } catch { return null; }
+  };
+  const text = (name) => {
+    try { return readFileSync(join(sessionDir, name), "utf8"); } catch { return null; }
+  };
+  const summary = json("brief.json")?.summary ?? {};
+  const context = json("context.json") ?? {};
+  const narration = typeof summary.narration === "string" ? summary.narration : null;
+  const summaryLine = (text("review-summary.txt") ?? "").split("\n").map((l) => l.trim()).find(Boolean) ?? null;
+  const said = (narration ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
+  const outcomeText = text("outcome.md");
+  return {
+    id: basename(sessionDir),
+    dir: sessionDir,
+    narration,
+    summaryLine,
+    line: summaryLine && !COULD_NOT_TELL.test(summaryLine) ? summaryLine : said,
+    collection: context.collection ?? null,
+    task: TASK_ID.test(context.task ?? "") ? context.task : null,
+    apps: Array.isArray(summary.apps) ? summary.apps : [],
+    windows: Array.isArray(summary.windows) ? summary.windows : [],
+    screenTerms: Array.isArray(summary.screenTerms) ? summary.screenTerms : [],
+    outcome: outcomeText?.trim() ? parseOutcome(outcomeText.slice(0, 8000)) : null,
+  };
 }
