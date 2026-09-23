@@ -43,7 +43,7 @@ enum Personas {
     /// Seeding is additive and never destructive: a built-in the user deleted
     /// from the list stays gone, but a built-in this VERSION added appears.
     static func all() -> [Persona] {
-        var list = stored()
+        var list = retireBugReport(stored())
         let known = Set(list.map(\.id))
         // Additive, and that is all it needs to be: `remove` refuses to delete
         // a built-in, so one can never go missing and come back. An earlier
@@ -55,6 +55,40 @@ enum Personas {
         list = list.map(adoptHandEdit)
         save(list)
         return list
+    }
+
+    /// "Bug report" was a built-in until it was cut — it wrote the same
+    /// document as a QA ticket in a second vocabulary. Removing it from the
+    /// code is not enough: it was already seeded into this list and onto the
+    /// disk, and `all()` would keep handing it back.
+    ///
+    /// UNLESS SOMEBODY WROTE IN IT. A persona whose file no longer matches the
+    /// digest Deiko stored is one its author has edited, and deleting that is
+    /// deleting their writing. Those survive as ordinary personas — renameable,
+    /// duplicable, and deletable when THEY decide.
+    ///
+    /// Runs once, then never again: the flag is what stops a persona somebody
+    /// deliberately recreated under the same name from vanishing a week later.
+    private static func retireBugReport(_ list: [Persona]) -> [Persona] {
+        let done = "DEIKO_BUG_REPORT_RETIRED"
+        guard !UserDefaults.standard.bool(forKey: done) else { return list }
+        UserDefaults.standard.set(true, forKey: done)
+
+        guard let leftover = list.first(where: { $0.id == "bug-report" }) else { return list }
+        let url = file(for: leftover.id)
+        let onDisk = try? String(contentsOf: url, encoding: .utf8)
+        let untouched = onDisk == nil || digest(onDisk!) == storedDigest(leftover.id)
+        guard untouched else {
+            Emit.log("persona: kept a hand-edited bug-report.md — it is yours to delete")
+            return list
+        }
+
+        try? FileManager.default.removeItem(at: url)
+        if defaultID == leftover.id { defaultID = Persona.Base.qaTicket.builtInID }
+        let kept = list.filter { $0.id != leftover.id }
+        save(kept)
+        Emit.log("persona: retired the built-in bug-report — a QA ticket writes the same document")
+        return kept
     }
 
     static var defaultID: String {
