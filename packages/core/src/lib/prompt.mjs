@@ -188,7 +188,7 @@ function markLabel(r, endpoints) {
  */
 export function buildPrompt({
   narration, referents, attached = false, personaPath = null,
-  earlier = [], continues = false, outcomePath = null, quickHint = false,
+  task = null, outcomePath = null, quickHint = false,
 }) {
   const narrationRedacted = redact(narration ?? "").trim();
   const out = [narrationRedacted, "", REPLY_LANGUAGE];
@@ -318,54 +318,32 @@ export function buildPrompt({
     out.push("", "Text from other things I pointed at:", "```", ...linesRedacted, "```");
   }
 
-  // EARLIER WORK this brief draws on — chosen by the classifier or by the
-  // developer on the review card, resolved to sessions by `render-brief.mjs`.
+  // THE TASK THIS BRIEF CARRIES ON, when it has earlier briefs. Where it
+  // stands, inline, because that is what the next step depends on; the
+  // history by path, because an agent can read it and a paragraph of it
+  // would bury the ask. A browser has no filesystem, so it gets what was
+  // done last instead of a path.
   //
-  // As PATHS for an agent that can open them: the earlier brief, what was done
-  // about it, and the screenshots from then, so it reads what it needs rather
-  // than being handed all of it. As two lines for a destination with no
-  // filesystem, for the same reason the crops are numbered there. The
-  // narrations and outcomes are speech and files an agent wrote, so they join
-  // `evidence` below; the paths do not, like every other path this renderer
-  // mints.
-  //
-  // The continued brief comes first, and the last line says so. Nothing here
-  // tells the agent what to do with any of it — that is the developer's line
-  // at the top, as always.
+  // The lines are agent-written and another session's words, so they join
+  // `evidence` below; the note path does not, like every path this mints.
   const earlierSpoken = [];
-  if (earlier.length) {
-    const rows = earlier.map((e) => {
-      const line = redact(e.line ?? "").replace(/\s+/g, " ").trim();
-      const outcome = e.outcome ? redact(e.outcome).replace(/\s+/g, " ").trim() : "";
-      earlierSpoken.push(line);
-      if (outcome) earlierSpoken.push(outcome);
-      if (attached) {
-        return `- ${e.date} I asked "${line}".${outcome ? ` Outcome: ${outcome}` : ""}`;
-      }
-      // TWO FILES BY NAME, NEVER THE FOLDER.
-      //
-      // This listed the session directory and `crops/`, which quietly undid
-      // every gate the earlier brief passed through. A crop is withheld — for
-      // a credential visible in the capture, for never having been OCR'd, or
-      // because the developer took it out by hand — by being left out of that
-      // brief; the PNG stays on disk. So "read this folder" handed an agent
-      // the images Deiko had refused to send, and `events.jsonl` beside them,
-      // which holds the raw unredacted OCR of everything that session saw.
-      //
-      // `prompt.txt` is the brief that already passed those gates, and it
-      // names its own released crops by path. `outcome.md` is what an agent
-      // wrote. Nothing else in a session directory is cleared to travel.
-      const where = e.collection ? ` (${e.collection})` : "";
-      const asked = `${e.dir}/prompt.txt`;
-      const happened = outcome ? ` · what happened: ${e.dir}/outcome.md` : "";
-      return `- ${e.date}, "${line}"${where}: ${asked}${happened}`;
-    });
-    out.push(
-      "",
-      attached ? "Earlier work this relates to:" : "Earlier work this relates to — read what you need:",
-      ...rows,
-    );
-    if (continues) out.push(rows.length === 1 ? "This continues it." : "This continues the first one.");
+  if (task) {
+    const clean = (s) => redact(s ?? "").replace(/\s+/g, " ").trim();
+    const title = clean(task.title);
+    const now = task.now.map(clean).filter(Boolean);
+    const did = task.lastDid.map(clean).filter(Boolean);
+    earlierSpoken.push(title, ...now, ...did);
+    if (attached) {
+      out.push("", `This carries on from "${title}". Where it stands: ${now.join(" ")}`
+        + (did.length ? ` Last time: ${did.join(" ")}` : ""));
+    } else {
+      out.push(
+        "",
+        `This carries on from "${title}" (${task.count} brief${task.count === 1 ? "" : "s"} so far). Where it stands:`,
+        ...now,
+        `The full history is in ${task.notePath} — read what you need.`,
+      );
+    }
   }
 
   // No headings, no paths — just the redacted content a secret could actually
@@ -413,11 +391,10 @@ export function buildPrompt({
     out.push("", "This looks like a quick one and a fast model is probably enough. Judge for yourself.");
   }
 
-  // THE WRITE-BACK. Three lines from the agent, beside the brief they answer,
-  // is what turns the board from a list of requests into a memory of what
-  // happened. A path, so only a destination that can write one is asked.
+  // THE WRITE-BACK, under four headings, because the task note is compiled
+  // from them: Open becomes where the task stands, Decided is kept dated.
   if (outcomePath && !attached) {
-    out.push("", `When you are done, write three lines on what you did to ${outcomePath}.`);
+    out.push("", `When you are done, write to ${outcomePath} under four headings — ## Did, ## Decided, ## Open, ## Files — a few lines each. Deiko folds it into this task's memory for the next brief.`);
   }
 
   return { text: out.join("\n") + "\n", evidence };

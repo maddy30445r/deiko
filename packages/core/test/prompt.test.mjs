@@ -607,97 +607,64 @@ test("the attached variant never names a path it cannot open", () => {
 // call without them renders the document it always did — the persona tests
 // above already pin that, and these pin what each addition adds and where.
 
-const earlierOne = () => [{
-  id: "20260918-155717",
-  dir: "/Users/dev/Documents/Deiko/20260918-155717",
-  date: "Sep 18",
-  line: "fix the drag on the board",
-  outcome: "Moved the drag threshold. Added a test.",
-  collection: "Deiko",
-}];
+const priceTask = () => ({
+  title: "Price display doesn't update after editing",
+  count: 3,
+  now: ["The listing page still caches the old price."],
+  lastDid: ["Synced the price after save."],
+  notePath: "/Users/dev/Documents/Deiko/tasks/t-20260918-155836.md",
+});
 
-test("earlier work lists paths for an agent that can open them", () => {
+test("a task gives an agent where it stands and the note's path", () => {
   const plain = buildPrompt(oneShot());
-  const withEarlier = buildPrompt({ ...oneShot(), earlier: earlierOne(), continues: true });
-  const added = withEarlier.text.slice(plain.text.length - 1);
+  const withTask = buildPrompt({ ...oneShot(), task: priceTask() });
   assert.equal(
-    added,
-    "\n\nEarlier work this relates to — read what you need:\n"
-      + "- Sep 18, \"fix the drag on the board\" (Deiko): /Users/dev/Documents/Deiko/20260918-155717/prompt.txt"
-      + " · what happened: /Users/dev/Documents/Deiko/20260918-155717/outcome.md\n"
-      + "This continues it.\n",
+    withTask.text.slice(plain.text.length - 1),
+    "\n\nThis carries on from \"Price display doesn't update after editing\" (3 briefs so far). Where it stands:\n"
+      + "The listing page still caches the old price.\n"
+      + "The full history is in /Users/dev/Documents/Deiko/tasks/t-20260918-155836.md — read what you need.\n",
   );
 });
 
-test("earlier narrations and outcomes are evidence; their paths are not", () => {
-  const plain = buildPrompt(oneShot());
-  const withEarlier = buildPrompt({ ...oneShot(), earlier: earlierOne() });
-  assert.equal(
-    withEarlier.evidence,
-    plain.evidence + "\nfix the drag on the board\nMoved the drag threshold. Added a test.",
-  );
-  assert.equal(withEarlier.evidence.includes("/Users/dev"), false);
-});
-
-test("a browser gets the earlier brief inline, never as a path", () => {
-  const attached = buildPrompt({ ...oneShot(), attached: true, earlier: earlierOne(), continues: true });
+test("a browser gets where it stands and what was done, inline, no path", () => {
+  const attached = buildPrompt({ ...oneShot(), attached: true, task: priceTask() });
   assert.ok(attached.text.endsWith(
-    "\n\nEarlier work this relates to:\n"
-      + "- Sep 18 I asked \"fix the drag on the board\". Outcome: Moved the drag threshold. Added a test.\n"
-      + "This continues it.\n",
+    "\n\nThis carries on from \"Price display doesn't update after editing\". "
+      + "Where it stands: The listing page still caches the old price. Last time: Synced the price after save.\n",
   ));
-  assert.equal(attached.text.includes("20260918-155717"), false);
+  assert.equal(attached.text.includes("/tasks/"), false);
 });
 
-test("two earlier briefs: the continued one is first and is named as such", () => {
-  const two = [...earlierOne(), { ...earlierOne()[0], id: "20260915-234940", dir: "/Users/dev/Documents/Deiko/20260915-234940", date: "Sep 15", line: "the board card hover looks wrong", outcome: null }];
-  const { text } = buildPrompt({ ...oneShot(), earlier: two, continues: true });
-  assert.match(text, /- Sep 18, .*\n- Sep 15, "the board card hover looks wrong" \(Deiko\): \/Users\/dev\/Documents\/Deiko\/20260915-234940\/prompt\.txt\nThis continues the first one\.\n$/);
-  assert.equal(earlierLines(text).join("\n").includes("crops/"), false,
-    "a folder is never handed over");
+test("the task's words are evidence; its path is not", () => {
+  const plain = buildPrompt(oneShot());
+  const withTask = buildPrompt({ ...oneShot(), task: priceTask() });
+  assert.equal(withTask.evidence, plain.evidence
+    + "\nPrice display doesn't update after editing\nThe listing page still caches the old price.\nSynced the price after save.");
+  assert.equal(withTask.evidence.includes("/Users/dev"), false);
 });
+
+const OUTCOME = "/Users/dev/Documents/Deiko/20260923-161205/outcome.md";
+const WRITE_BACK = `When you are done, write to ${OUTCOME} under four headings — ## Did, ## Decided, ## Open, ## Files — a few lines each. Deiko folds it into this task's memory for the next brief.`;
 
 test("the write-back asks only a destination that can write a file", () => {
   const plain = buildPrompt(oneShot());
-  const local = buildPrompt({ ...oneShot(), outcomePath: "/Users/dev/Documents/Deiko/20260923-161205/outcome.md" });
-  assert.equal(
-    local.text.slice(plain.text.length - 1),
-    "\n\nWhen you are done, write three lines on what you did to /Users/dev/Documents/Deiko/20260923-161205/outcome.md.\n",
-  );
+  const local = buildPrompt({ ...oneShot(), outcomePath: OUTCOME });
+  assert.equal(local.text.slice(plain.text.length - 1), `\n\n${WRITE_BACK}\n`);
   assert.equal(local.evidence, plain.evidence);
-  const attached = buildPrompt({ ...oneShot(), attached: true, outcomePath: "/Users/dev/Documents/Deiko/20260923-161205/outcome.md" });
+  const attached = buildPrompt({ ...oneShot(), attached: true, outcomePath: OUTCOME });
   assert.equal(attached.text, buildPrompt({ ...oneShot(), attached: true }).text);
 });
 
-test("the cost hint is one sentence, after the persona line, before the write-back", () => {
+test("order at the tail: task, persona, cost hint, write-back", () => {
   const { text } = buildPrompt({
-    ...oneShot(),
+    ...oneShot(), task: priceTask(),
     personaPath: "/Users/dev/Documents/Deiko/personas/qa-ticket.md",
-    quickHint: true,
-    outcomePath: "/Users/dev/Documents/Deiko/20260923-161205/outcome.md",
+    quickHint: true, outcomePath: OUTCOME,
   });
   assert.ok(text.endsWith(
-    "How I want this written up is in /Users/dev/Documents/Deiko/personas/qa-ticket.md — read that first.\n"
+    "read what you need.\n"
+      + "\nHow I want this written up is in /Users/dev/Documents/Deiko/personas/qa-ticket.md — read that first.\n"
       + "\nThis looks like a quick one and a fast model is probably enough. Judge for yourself.\n"
-      + "\nWhen you are done, write three lines on what you did to /Users/dev/Documents/Deiko/20260923-161205/outcome.md.\n",
+      + `\n${WRITE_BACK}\n`,
   ));
-});
-
-/** Just the "Earlier work" bullets — the current session's own crop paths are
- *  gated separately and legitimately appear elsewhere in the prompt. */
-const earlierLines = (text) => text.split("\n").filter((l) => l.startsWith("- Sep "));
-
-test("an earlier session's folder, crops and raw events are never named", () => {
-  // The gates a crop passes to reach a brief — credential visible, never
-  // OCR'd, taken out by hand — all work by leaving the PNG out of the text
-  // while it stays on disk. Naming the folder walked straight past them, and
-  // `events.jsonl` beside it holds the unredacted OCR of that whole session.
-  const { text } = buildPrompt({ ...oneShot(), earlier: earlierOne(), continues: true });
-  const lines = earlierLines(text).join("\n");
-  assert.equal(lines.includes("crops/"), false);
-  assert.equal(lines.includes("events.jsonl"), false);
-  assert.equal(
-    /20260918-155717(?!\/(prompt\.txt|outcome\.md))/.test(lines), false,
-    "the session id appears only as one of the two files cleared to travel",
-  );
 });
