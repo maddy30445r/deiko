@@ -267,7 +267,17 @@ const released = kept.map((r) => {
 });
 
 const narration = narrationOverride ?? utteranceText(words).replace(/\s*\n\s*/g, " ");
-const { text, evidence } = buildPrompt({ narration, referents: released });
+
+// Which persona this brief is being written for, as an absolute path the app
+// wrote beside the session — the same arrangement as `narration.override.txt`
+// above, and for the same reason: a brief rendered from the command line is
+// the document it always was, with no persona and no line about one.
+const personaPointer = join(dir, "persona.txt");
+const personaPath = existsSync(personaPointer)
+  ? readFileSync(personaPointer, "utf8").trim() || null
+  : null;
+
+const { text, evidence } = buildPrompt({ narration, referents: released, personaPath });
 
 // The same message for a destination that cannot open a local path.
 //

@@ -4,7 +4,7 @@ import ServiceManagement
 import SwiftUI
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SETTINGS — the one thing a fresh install needs
+// SETTINGS — a section of the Deiko window, not a window of its own
 //
 // A licence key, and a transcription key. Nothing else belongs here: every
 // other decision Deiko makes is either settled in the design or answered
@@ -16,57 +16,12 @@ import SwiftUI
 // to recover — the key IS the entitlement, and the window says so, because a
 // box that looks like a login makes people go looking for a password they were
 // never given.
+//
+// It had its own 520pt window until the board and personas arrived and made a
+// second, smaller window with its own chrome look like what it was: a settings
+// sheet bolted onto an app. `MainWindow` presents this view now; the sizing
+// note that used to live here belongs to that window.
 // ─────────────────────────────────────────────────────────────────────────────
-
-@MainActor
-final class SettingsWindowController: NSObject, NSWindowDelegate {
-
-    private var window: NSWindow?
-
-    /// The session being recorded right now, so "delete all past sessions"
-    /// cannot remove the folder being written to. Set by `MenuBar`, which owns
-    /// the recorder — this window has no reference to it and should not grow
-    /// one for a single guard.
-    var openSessionDir: (() -> String?)?
-
-    /// Which folder this run is actually using. `--out` moves it, and Settings
-    /// reading the default instead would count one folder while deleting
-    /// another — pointing "Delete all past sessions" at the user's real
-    /// sessions during a run that never touched them.
-    var sessionRoot: String = Sessions.defaultRoot
-
-    func present() {
-        if let window {
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-            return
-        }
-        let hosting = NSHostingController(
-            rootView: SettingsView(openSessionDir: openSessionDir, sessionRoot: sessionRoot)
-        )
-        // The window's size is the design's, not SwiftUI's — see `Orb.swift`'s
-        // `makeWindow` for what the default does to a fixed frame.
-        hosting.sizingOptions = []
-        let window = NSWindow(contentViewController: hosting)
-        window.title = "Deiko Settings"
-        window.styleMask = [.titled, .closable, .miniaturizable]
-        // Tall enough that Save is reachable without scrolling. 460 was right
-        // when this window held two key rows; the plan card added ~160pt and
-        // pushed the button below the fold, which makes a form look broken.
-        // The usage bar, the buy/remove row and the sessions card have each
-        // taken another slice since — same rule, same consequence.
-        window.setContentSize(NSSize(width: 520, height: 760))
-        window.center()
-        window.delegate = self
-        window.isReleasedWhenClosed = false
-        self.window = window
-
-        window.makeKeyAndOrderFront(nil)
-        // An accessory app's window opens behind whatever the developer was
-        // looking at unless it asks — the same reason the orb activates.
-        NSApp.activate(ignoringOtherApps: true)
-    }
-}
 
 // ── State ───────────────────────────────────────────────────────────────────
 

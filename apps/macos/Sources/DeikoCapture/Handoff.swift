@@ -160,7 +160,7 @@ enum Handoff {
     }
 
     static func deliver(
-        to target: HandoffTarget, text: String, images: [String]
+        to target: HandoffTarget, text: String, images: [String], persona: String? = nil
     ) async throws {
         // Read every crop BEFORE anything is activated, clicked or pasted.
         //
@@ -532,6 +532,25 @@ enum Handoff {
             // missing silently relabels 3 as 2 — every caption after the gap
             // now names the wrong picture, which is worse than sending none.
             // Slow and right beats fast and quietly wrong.
+            try await Task.sleep(for: .seconds(pasteboardRestoreDelay))
+        }
+
+        // THE PERSONA GOES IN FIRST, AS ITS OWN PASTE.
+        //
+        // A browser chat cannot open the file `text` would otherwise name, so
+        // the instructions have to travel as content — and a thousand words of
+        // them pasted INTO the message would bury what the developer actually
+        // said. Both major composers fold a long paste into an attachment tile
+        // of its own, which is exactly the shape this wants: the persona as an
+        // attachment, the brief as the message.
+        //
+        // Same delay as between images, for the same reason: nothing can
+        // observe that a paste has landed, so the next `clearContents()` is a
+        // hazard until the composer has taken this one.
+        if let persona, !persona.isEmpty {
+            try stillFocused("the persona was pasted")
+            note("pasting the persona (\(persona.count) characters) into \(target.appName)")
+            try paste(persona)
             try await Task.sleep(for: .seconds(pasteboardRestoreDelay))
         }
 

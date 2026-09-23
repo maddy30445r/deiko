@@ -1,0 +1,512 @@
+import AppKit
+import SwiftUI
+import DeikoGesture
+import DeikoHandoff
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE DEIKO WINDOW
+//
+// Everything that is not the orb: what you have recorded, how briefs get
+// written, and every setting. Deiko stays an accessory app — the orb over your
+// editor is still the product — but "where do my briefs go?" and "how do I
+// make it write tickets my way?" are questions a menu cannot answer, and a
+// 520pt settings sheet was never going to hold a board of sessions.
+//
+// ONE WINDOW, one sidebar, four places. Adding a fifth means adding a case and
+// a view, which is the point: the board, personas and the dashboard were three
+// separate designs before this, and each would have grown its own chrome.
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum MainSection: String, CaseIterable, Identifiable {
+    case dashboard, board, personas, settings
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .dashboard: return "Dashboard"
+        case .board: return "Board"
+        case .personas: return "Personas"
+        case .settings: return "Settings"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .dashboard: return "square.grid.2x2"
+        case .board: return "rectangle.3.group"
+        case .personas: return "person.crop.square"
+        case .settings: return "gearshape"
+        }
+    }
+}
+
+/// Which section is showing, so the menu bar can open the window straight at
+/// one rather than opening it and making somebody click.
+@MainActor
+final class MainNav: ObservableObject {
+    static let shared = MainNav()
+    @Published var section: MainSection = .dashboard
+}
+
+@MainActor
+final class MainWindowController: NSObject, NSWindowDelegate {
+
+    private var window: NSWindow?
+    /// Handed in rather than read from a global: "Delete all past sessions"
+    /// must be able to spare the session being recorded right now, and this
+    /// window has no recorder of its own.
+    var openSessionDir: (() -> String?)?
+    var sessionRoot: String = Sessions.defaultRoot
+
+    func present(_ section: MainSection = .dashboard) {
+        MainNav.shared.section = section
+        if let window {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        let hosting = NSHostingController(
+            rootView: MainWindowView(openSessionDir: openSessionDir, sessionRoot: sessionRoot)
+        )
+        hosting.sizingOptions = []
+        let window = NSWindow(contentViewController: hosting)
+        window.title = "Deiko"
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+        // The sidebar runs under the title bar, the way every Mac app with one
+        // does. Without `fullSizeContentView` the material stops at the bar and
+        // the window reads as a dialog wearing a sidebar.
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.setContentSize(NSSize(width: 980, height: 660))
+        window.minSize = NSSize(width: 860, height: 560)
+        window.center()
+        window.delegate = self
+        window.isReleasedWhenClosed = false
+        window.setFrameAutosaveName("DeikoMainWindow")
+        self.window = window
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
+// ── The window ──────────────────────────────────────────────────────────────
+
+struct MainWindowView: View {
+    @ObservedObject private var nav = MainNav.shared
+    @StateObject private var sessions = SessionsStore()
+    let openSessionDir: (() -> String?)?
+    let sessionRoot: String
+
+    var body: some View {
+        // AN EXPLICIT SPLIT, NOT `NavigationSplitView`.
+        //
+        // The sidebar here is fixed furniture: four places, always visible,
+        // 198pt, on paper. `NavigationSplitView` brings a collapsible column,
+        // a toolbar toggle and a translucent material to match — none of which
+        // this design wants, all of which would have to be argued back out.
+        // It also declines to lay out at all outside a real window scene,
+        // which made every shot of this window a blank column.
+        HStack(spacing: 0) {
+            sidebar
+                .frame(width: 198)
+                .background(DeikoStyle.paper)
+            Divider()
+            detail
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .background(DeikoStyle.card)
+        }
+        .task { await sessions.load(root: sessionRoot) }
+    }
+
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 9) {
+                CoinView(kind: .ready)
+                    .frame(width: 26, height: 26)
+                Text("Deiko").deikoTitle(17)
+            }
+            .padding(.horizontal, 12)
+            // Clear of the traffic lights: the title bar is transparent and
+            // hidden, so this row sits under them unless it is pushed down.
+            .padding(.top, 30)
+            .padding(.bottom, 14)
+
+            ForEach(MainSection.allCases) { section in
+                Button { nav.section = section } label: {
+                    HStack(spacing: 9) {
+                        Image(systemName: section.symbol)
+                            .font(.system(size: 13))
+                            .frame(width: 17)
+                            .foregroundStyle(nav.section == section ? DeikoStyle.accent : .secondary)
+                        Text(section.title)
+                            .font(.system(size: 13, weight: nav.section == section ? .semibold : .regular))
+                        Spacer()
+                    }
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 7)
+                    .background(
+                        RoundedRectangle(cornerRadius: DeikoStyle.controlRadius)
+                            .fill(nav.section == section ? DeikoStyle.accentSoft : .clear)
+                    )
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 6)
+            }
+
+            Spacer()
+            quotaStrip
+        }
+        .padding(.vertical, 10)
+    }
+
+    /// What is left, where it is always visible. The trial was knowable only
+    /// from a sentence in a window nobody opened; this is the same number the
+    /// Settings card draws, in the place people actually look.
+    @ViewBuilder private var quotaStrip: some View {
+        if let quota = License.cachedQuota, quota.capSeconds > 0 {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(quota.usedSentence)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                GeometryReader { bar in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(DeikoStyle.hairline)
+                        Capsule()
+                            .fill(quota.isSpent ? DeikoStyle.needsYou : DeikoStyle.accent)
+                            .frame(width: bar.size.width * min(max(quota.usedFraction, 0), 1))
+                    }
+                }
+                .frame(height: 5)
+            }
+            .padding(.horizontal, 15)
+            .padding(.bottom, 4)
+            .accessibilityElement()
+            .accessibilityLabel("Transcription minutes used")
+            .accessibilityValue(quota.usedSentence)
+        }
+    }
+
+    @ViewBuilder private var detail: some View {
+        switch nav.section {
+        case .dashboard: DashboardPane(sessions: sessions)
+        case .board: BoardPane(sessions: sessions)
+        case .personas: PersonasPane()
+        case .settings:
+            SettingsView(openSessionDir: openSessionDir, sessionRoot: sessionRoot)
+        }
+    }
+}
+
+// ── What has been recorded ──────────────────────────────────────────────────
+
+@MainActor
+final class SessionsStore: ObservableObject {
+
+    struct Item: Identifiable, Sendable {
+        let id: String
+        let dir: String
+        let date: Date
+        /// The narration, which is the only line anybody recognises a session
+        /// by. A session whose brief never rendered has none — it is listed
+        /// anyway, because it is still theirs and still on the disk.
+        let line: String?
+        let crops: [String]
+        let apps: [String]
+        let repo: String?
+    }
+
+    @Published private(set) var items: [Item] = []
+    @Published private(set) var loaded = false
+
+    var thisWeek: Int {
+        let since = Date().addingTimeInterval(-7 * 24 * 3600)
+        return items.filter { $0.date > since }.count
+    }
+
+    /// The apps that appear in the most sessions — "where you have been
+    /// pointing", which is a fact the manifests already carry.
+    var topApps: [(name: String, count: Int)] {
+        var tally: [String: Int] = [:]
+        for item in items { for app in Set(item.apps) { tally[app, default: 0] += 1 } }
+        return tally.sorted { $0.value > $1.value }.prefix(4).map { ($0.key, $0.value) }
+    }
+
+    func load(root: String) async {
+        let names = Sessions.list(root: root)
+        // Manifests are small but there can be hundreds; read them off the main
+        // actor so opening the window never stutters.
+        let read = await Task.detached(priority: .userInitiated) { () -> [Item] in
+            names.compactMap { name in
+                let dir = (root as NSString).appendingPathComponent(name)
+                guard let date = Sessions.stamp(name) else { return nil }
+                let digest = try? BriefPipeline.digest(sessionDir: dir)
+                let narration = digest?.summary.narration.trimmingCharacters(in: .whitespacesAndNewlines)
+                return Item(
+                    id: name,
+                    dir: dir,
+                    date: date,
+                    line: (narration?.isEmpty == false) ? narration : nil,
+                    crops: digest?.cropPaths ?? [],
+                    apps: digest?.summary.apps ?? [],
+                    repo: digest?.summary.repoHints.first
+                )
+            }
+        }.value
+        items = read
+        loaded = true
+    }
+}
+
+// ── Dashboard ───────────────────────────────────────────────────────────────
+
+private struct DashboardPane: View {
+    @ObservedObject var sessions: SessionsStore
+
+    var body: some View {
+        PaneScroll(title: "Dashboard", lede: "What Deiko has heard on this Mac.") {
+            HStack(spacing: 12) {
+                stat("\(sessions.items.count)", "sessions kept", Sessions.retentionDays > 0
+                    ? "older than \(Sessions.retentionDays) days are swept"
+                    : "nothing is swept automatically")
+                stat("\(sessions.thisWeek)", "this week", sessions.thisWeek == 0
+                    ? "nothing yet — double-tap \(SessionKey.selected.name)"
+                    : "double-tap \(SessionKey.selected.name) to add one")
+                stat("\(sessions.items.reduce(0) { $0 + $1.crops.count })", "screenshots drawn",
+                     "the crops that travelled with your briefs")
+            }
+
+            if !sessions.topApps.isEmpty {
+                Group {
+                    SectionLabel("Where you point")
+                    InsetCard {
+                        ForEach(Array(sessions.topApps.enumerated()), id: \.element.name) { index, app in
+                            if index > 0 { Divider().padding(.horizontal, 14) }
+                            HStack {
+                                Text(app.name).font(.system(size: 13))
+                                Spacer()
+                                Text("\(app.count) session\(app.count == 1 ? "" : "s")")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                        }
+                    }
+                }
+            }
+
+            SectionLabel("Latest")
+            if sessions.items.isEmpty {
+                EmptyPane(
+                    title: sessions.loaded ? "Nothing recorded yet" : "Reading your sessions…",
+                    line: "Double-tap \(SessionKey.selected.name), point at something and say what should change. It lands here."
+                )
+            } else {
+                InsetCard {
+                    ForEach(Array(sessions.items.prefix(5).enumerated()), id: \.element.id) { index, item in
+                        if index > 0 { Divider().padding(.horizontal, 14) }
+                        SessionRow(item: item)
+                    }
+                }
+            }
+        }
+    }
+
+    private func stat(_ value: String, _ label: String, _ note: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(value).deikoTitle(28)
+            Text(label).font(.system(size: 12, weight: .medium))
+            Text(note)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .deikoCard()
+    }
+}
+
+// ── Board ───────────────────────────────────────────────────────────────────
+
+private struct BoardPane: View {
+    @ObservedObject var sessions: SessionsStore
+    @State private var query = ""
+
+    private var shown: [SessionsStore.Item] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return sessions.items }
+        return sessions.items.filter {
+            ($0.line ?? "").lowercased().contains(q)
+                || ($0.repo ?? "").lowercased().contains(q)
+                || $0.apps.contains { $0.lowercased().contains(q) }
+        }
+    }
+
+    var body: some View {
+        PaneScroll(title: "Board", lede: "Every brief you have thrown, still on this Mac.", trailing: {
+            TextField("Search briefs", text: $query)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 12))
+                .frame(width: 190)
+        }) {
+            if shown.isEmpty {
+                EmptyPane(
+                    title: sessions.items.isEmpty ? "The board is empty" : "Nothing matches “\(query)”",
+                    line: sessions.items.isEmpty
+                        ? "Briefs pin themselves here as you record them. Nothing is uploaded — this is the folder in your Documents."
+                        : "Try an app name, a repo, or a word you said."
+                )
+            } else {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), spacing: 14)], spacing: 14) {
+                    ForEach(shown) { item in BoardCard(item: item) }
+                }
+                .padding(.top, 2)
+            }
+        }
+    }
+}
+
+private struct BoardCard: View {
+    let item: SessionsStore.Item
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            if let first = item.crops.first, let image = NSImage(contentsOfFile: first) {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(height: 74)
+                    .clipped()
+                    .clipShape(RoundedRectangle(cornerRadius: 9))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 9)
+                            .strokeBorder(DeikoStyle.hairline, lineWidth: 1)
+                    )
+            }
+            Text(item.line ?? "No words were saved for this one.")
+                .font(.system(size: 12.5))
+                .foregroundStyle(item.line == nil ? .secondary : .primary)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 6) {
+                Text(Self.when.string(from: item.date))
+                if !item.crops.isEmpty {
+                    Text("·")
+                    Text("\(item.crops.count) crop\(item.crops.count == 1 ? "" : "s")")
+                }
+                if let repo = item.repo { Text("·"); Text(repo) }
+            }
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(11)
+        .deikoCard()
+        .onTapGesture(count: 2) { NSWorkspace.shared.open(URL(fileURLWithPath: item.dir)) }
+        .help("Double-click to open this session's folder")
+    }
+
+    static let when: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "EEE d MMM"
+        return f
+    }()
+}
+
+private struct SessionRow: View {
+    let item: SessionsStore.Item
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.line ?? "No words were saved for this one.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(item.line == nil ? .secondary : .primary)
+                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(BoardCard.when.string(from: item.date))
+                    if !item.crops.isEmpty {
+                        Text("·"); Text("\(item.crops.count) crop\(item.crops.count == 1 ? "" : "s")")
+                    }
+                    if let repo = item.repo { Text("·"); Text(repo) }
+                }
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Open folder") { NSWorkspace.shared.open(URL(fileURLWithPath: item.dir)) }
+                .font(.system(size: 12))
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+}
+
+// ── Shared pane furniture ───────────────────────────────────────────────────
+
+/// Every pane opens the same way: a title, a line under it, and room. The
+/// window has no toolbar, so this IS the header — and being one view rather
+/// than four means a new section cannot invent its own.
+struct PaneScroll<Content: View, Trailing: View>: View {
+    let title: String
+    let lede: String
+    @ViewBuilder var trailing: Trailing
+    @ViewBuilder var content: Content
+
+    init(
+        title: String, lede: String,
+        @ViewBuilder trailing: () -> Trailing = { EmptyView() },
+        @ViewBuilder content: () -> Content
+    ) {
+        self.title = title
+        self.lede = lede
+        self.trailing = trailing()
+        self.content = content()
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(title).deikoTitle(24)
+                        Text(lede)
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    trailing
+                }
+                .padding(.bottom, 2)
+                content
+            }
+            .padding(.horizontal, 26)
+            .padding(.top, 26)
+            .padding(.bottom, 28)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// An empty state is an invitation, so it says what to do next and never
+/// apologises for having nothing in it.
+struct EmptyPane: View {
+    let title: String
+    let line: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).deikoTitle(16)
+            Text(line)
+                .font(.system(size: 12.5))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18)
+        .background(DeikoStyle.wall, in: RoundedRectangle(cornerRadius: DeikoStyle.insetRadius))
+    }
+}

@@ -260,6 +260,7 @@ enum BriefPipeline {
             .trimmingCharacters(in: .whitespaces) {
             Emit.log("transcribe: \(line)")
         }
+        await MainActor.run { Personas.point(session: sessionDir, to: Personas.current()) }
         try await run(.brief, sessionDir: sessionDir)
         mark("render")
         let brief = try digest(sessionDir: sessionDir)
@@ -417,6 +418,7 @@ enum BriefPipeline {
     /// Re-render only. Used after the narration is edited: the transcript has not
     /// changed, so there is nothing to recognise again.
     static func rerender(sessionDir: String) async throws -> BriefDigest {
+        await MainActor.run { Personas.point(session: sessionDir, to: Personas.current()) }
         try await run(.brief, sessionDir: sessionDir)
         return try digest(sessionDir: sessionDir)
     }
@@ -460,6 +462,11 @@ enum BriefPipeline {
         /// Only the released ones — a withheld crop has no path in the
         /// manifest, so it cannot be pasted by accident here either.
         let images: [String]
+        /// The persona file's contents, for a browser chat. `text` names the
+        /// file by path, which a local agent opens; a browser cannot, so the
+        /// handoff pastes this beside the brief instead. Nil when the session
+        /// was rendered without a persona.
+        let personaText: String?
     }
 
     /// Read from disk rather than held in memory: the review window may have
@@ -471,6 +478,10 @@ enum BriefPipeline {
         guard let text = try? String(contentsOf: path, encoding: .utf8) else {
             throw BriefPipelineError.noPrompt(path.path)
         }
+        // Read from disk beside the prompt, for the same reason the prompt is:
+        // the review window may have changed which persona this brief is for
+        // since the orb first appeared, and the files are what saw that.
+        let persona = MainActor.assumeIsolated { Personas.text(forSession: sessionDir) }
         // THE TWO MUST FALL BACK TOGETHER, and they used to fall back
         // independently.
         //
@@ -490,7 +501,7 @@ enum BriefPipeline {
         guard let attached = try? String(
             contentsOf: dir.appendingPathComponent("prompt-attached.txt"), encoding: .utf8
         ) else {
-            return Prompt(text: text, attachedText: text, images: [])
+            return Prompt(text: text, attachedText: text, images: [], personaText: persona)
         }
         let images = (try? digest(sessionDir: sessionDir).cropPaths) ?? []
         // Same rule from the other side: an attached text that numbers
@@ -498,7 +509,8 @@ enum BriefPipeline {
         return Prompt(
             text: text,
             attachedText: images.isEmpty ? text : attached,
-            images: images
+            images: images,
+            personaText: persona
         )
     }
 
@@ -541,7 +553,10 @@ enum BriefPipeline {
 
     // ── Plumbing ────────────────────────────────────────────────────────────
 
-    private static func digest(sessionDir: String) throws -> BriefDigest {
+    /// Read a finished session's manifest. Internal because the main window
+    /// lists sessions from exactly this, and a second reader of the same file
+    /// would be a second opinion about what a session is.
+    static func digest(sessionDir: String) throws -> BriefDigest {
         let manifestPath = URL(fileURLWithPath: sessionDir).appendingPathComponent("brief.json")
         guard let data = try? Data(contentsOf: manifestPath) else {
             throw BriefPipelineError.noManifest(manifestPath.path)

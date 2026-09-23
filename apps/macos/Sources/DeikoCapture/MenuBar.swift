@@ -199,7 +199,11 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Held for the app's lifetime, not created per session: a second session
     /// while the orb is still up reuses it rather than stacking orbs.
     private let review = OrbController()
-    private let settings = SettingsWindowController()
+    /// THE app window: the board, personas and every setting, in one place.
+    /// Settings used to be its own 520pt sheet; it is a section in here now,
+    /// because "where are my briefs" and "how do I change the hotkey" are the
+    /// same window in every Mac app anybody already uses.
+    private let main = MainWindowController()
     private let welcome = WelcomeWindowController()
 
     /// Whether Screen Recording was still ungranted when this process came up.
@@ -257,11 +261,11 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         recorder.onStartGestureWhileIdle = { [weak self] in
             self?.review.extendPresentedSession() ?? false
         }
-        review.onOpenSettings = { [weak self] in self?.settings.present() }
+        review.onOpenSettings = { [weak self] in self?.main.present(.settings) }
         // "Delete all past sessions" must never remove the one being recorded.
         // Settings has no recorder of its own and should not grow one.
-        settings.openSessionDir = { [weak self] in self?.recorder.sessionDir }
-        settings.sessionRoot = recorder.sessionRoot
+        main.openSessionDir = { [weak self] in self?.recorder.sessionDir }
+        main.sessionRoot = recorder.sessionRoot
         // Remove the MCP entry earlier versions wrote. Nothing registers
         // anything any more; this is only clearing up after what did.
         LegacyMCP.cleanUpOnce()
@@ -316,7 +320,7 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // First run says something. Before this, a new install put an eye in
         // the menu bar and waited — and the hotkey did nothing, because no tap
         // is installed until every grant is in.
-        welcome.onOpenSettings = { [weak self] in self?.settings.present() }
+        welcome.onOpenSettings = { [weak self] in self?.main.present(.settings) }
         welcome.presentIfNeeded()
 
         // Detached, and nothing waits for it: the menu is already usable, and a
@@ -490,6 +494,11 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
             title: "Open sessions folder",
             action: #selector(openSessionRoot),
             keyEquivalent: ""
+        ))
+        menu.addItem(NSMenuItem(
+            title: "Open Deiko",
+            action: #selector(openMain),
+            keyEquivalent: "d"
         ))
         menu.addItem(NSMenuItem(
             title: "Settings…",
@@ -766,12 +775,16 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Relauncher.relaunch()
     }
 
+    @objc private func openMain() {
+        main.present(.dashboard)
+    }
+
     @objc private func openSettings() {
-        settings.present()
+        main.present(.settings)
     }
 
     @objc private func openWelcome() {
-        welcome.onOpenSettings = { [weak self] in self?.settings.present() }
+        welcome.onOpenSettings = { [weak self] in self?.main.present(.settings) }
         welcome.present()
     }
 

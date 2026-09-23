@@ -615,7 +615,12 @@ final class OrbController: NSObject {
                 try await Handoff.deliver(
                     to: target,
                     text: attach ? prompt.attachedText : prompt.text,
-                    images: attach ? prompt.images : []
+                    images: attach ? prompt.images : [],
+                    // Only where a path is useless. A local agent was already
+                    // told where the persona file is and reads it itself;
+                    // pasting its contents there too would put the same
+                    // instructions in the chat twice.
+                    persona: attach ? prompt.personaText : nil
                 )
                 await MainActor.run {
                     Handoff.lastReport.outcome = .delivered

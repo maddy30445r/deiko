@@ -27,11 +27,20 @@ enum UIShot {
             guard let look = NSAppearance(named: appearance) else { continue }
             shoot(WelcomeView(model: WelcomeModel()),
                   size: NSSize(width: 540, height: 720), look: look, to: "\(out)-welcome-\(name).png")
-            shoot(SettingsView(openSessionDir: nil, sessionRoot: Sessions.defaultRoot),
-                  size: NSSize(width: 520, height: 760), look: look, to: "\(out)-settings-\(name).png")
+            // The app window, one shot per section — the sidebar is part of
+            // each, which is the point: a section that only looks right on its
+            // own is a section that does not belong in this window.
+            for section in MainSection.allCases {
+                MainNav.shared.section = section
+                shoot(
+                    MainWindowView(openSessionDir: nil, sessionRoot: Sessions.defaultRoot),
+                    size: NSSize(width: 980, height: 660), look: look,
+                    to: "\(out)-\(section.rawValue)-\(name).png"
+                )
+            }
             shoot(orbCard(), size: NSSize(width: 400, height: 130), look: look, to: "\(out)-orb-\(name).png")
         }
-        Emit.log("wrote \(out)-{welcome,settings,orb}-{light,dark}.png")
+        Emit.log("wrote \(out)-{welcome,orb,dashboard,board,personas,settings}-{light,dark}.png")
     }
 
     /// The collapsed card, mid-session: the state the orb spends most of its

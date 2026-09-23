@@ -556,3 +556,47 @@ test("editing one identifier drops only the label that named it", () => {
   assert.equal(quoteSurvives("the padding is too big", corrected), true);
   assert.equal(quoteSurvives("the fetchUsr call returns null", corrected), false);
 });
+
+// ── The persona pointer ─────────────────────────────────────────────────────
+//
+// A persona adds ONE line to the prompt, and only to the variant a
+// file-reading agent gets. Everything about a brief rendered without one has
+// to stay exactly as it was — sessions re-render, and a byte that moves here
+// moves in every transcript anybody has ever kept.
+
+const oneShot = () => ({
+  narration: "make the save button the same indigo as the header",
+  referents: [
+    { cropPath: "/Users/dev/Documents/Deiko/20260101-101010/crops/h01-r002.png",
+      said: "the save button", mark: { number: 1, kind: "point" } },
+  ],
+});
+
+test("no persona renders the document it always was", () => {
+  const before = buildPrompt(oneShot());
+  const after = buildPrompt({ ...oneShot(), personaPath: null });
+  assert.equal(after.text, before.text);
+  assert.equal(after.evidence, before.evidence);
+  assert.equal(before.text.includes("written up"), false);
+});
+
+test("a persona adds one line naming the file, and nothing else", () => {
+  const plain = buildPrompt(oneShot());
+  const withPersona = buildPrompt({ ...oneShot(), personaPath: "/Users/dev/Documents/Deiko/personas/qa-ticket.md" });
+  const added = withPersona.text.slice(plain.text.length - 1);
+  assert.equal(
+    added,
+    "\n\nHow I want this written up is in /Users/dev/Documents/Deiko/personas/qa-ticket.md — read that first.\n",
+  );
+  // The guard's subject is captured screen content. A path Deiko minted is not
+  // that, and must not start tripping the long-opaque-string rule.
+  assert.equal(withPersona.evidence, plain.evidence);
+});
+
+test("the attached variant never names a path it cannot open", () => {
+  const attached = buildPrompt({
+    ...oneShot(), attached: true, personaPath: "/Users/dev/Documents/Deiko/personas/qa-ticket.md",
+  });
+  assert.equal(attached.text.includes("personas/qa-ticket.md"), false);
+  assert.equal(attached.text, buildPrompt({ ...oneShot(), attached: true }).text);
+});

@@ -186,7 +186,7 @@ function markLabel(r, endpoints) {
  * Both variants are rendered up front because the renderer runs long before
  * anybody knows where the coin will land.
  */
-export function buildPrompt({ narration, referents, attached = false }) {
+export function buildPrompt({ narration, referents, attached = false, personaPath = null }) {
   const narrationRedacted = redact(narration ?? "").trim();
   const out = [narrationRedacted, "", REPLY_LANGUAGE];
 
@@ -334,6 +334,23 @@ export function buildPrompt({ narration, referents, attached = false }) {
   const evidence = screenText.length
     ? [...spoken, "```", ...screenText, "```"].join("\n")
     : spoken.join("\n");
+
+  // HOW I WANT IT WRITTEN UP, as a path rather than as a wall of prose.
+  //
+  // The persona file is the paragraph the developer would otherwise retype at
+  // the bottom of every brief. An agent that can open files reads it there,
+  // which keeps their chat the length of what they actually said; the paths
+  // this renderer mints are the same kind of string as a crop path, so this
+  // rides in `text` beside them and stays out of `evidence` for the same
+  // reason they do.
+  //
+  // NOT in the `attached` variant. That one is for a destination with no
+  // filesystem — a path it cannot open is worse than nothing, because it looks
+  // like an instruction it has followed. `Handoff` pastes the file's contents
+  // there instead.
+  if (personaPath && !attached) {
+    out.push("", `How I want this written up is in ${personaPath} — read that first.`);
+  }
 
   return { text: out.join("\n") + "\n", evidence };
 }
