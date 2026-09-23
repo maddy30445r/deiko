@@ -576,7 +576,7 @@ private struct BoardPane: View {
     /// Which slice of the board is on screen. Unsorted is its own answer
     /// rather than an empty collection: "nothing filed this yet" is a thing
     /// somebody looks for on purpose.
-    private enum Filter: Equatable {
+    private enum Filter: Hashable {
         case all, unsorted, collection(String)
     }
 
@@ -597,35 +597,50 @@ private struct BoardPane: View {
         }
     }
 
-    /// The chips, in the order they are useful: everything, then the projects
-    /// with the most in them, then whatever has not been filed.
-    @ViewBuilder private var chips: some View {
+    /// THE FILTER IS A NATIVE SEGMENTED CONTROL, and that is a decision made
+    /// by evidence rather than taste. It was a row of custom chips — a plain
+    /// button, then a button with its own `ButtonStyle` — and in the real
+    /// window neither took a click or a hover, while the pointer reached the
+    /// cards beneath. Four fixes to the chip changed nothing. The controls
+    /// that DO work inside this app's scrolling panes are the ones AppKit
+    /// hit-tests itself: the ⋯ menus on the cards, and the Appearance picker
+    /// in Settings, which is this same control. So the filter is built from
+    /// that. Counts ride in the segment labels; the per-collection verbs
+    /// (describe, rename, delete) move to one ⋯ menu beside it, which is the
+    /// other control proven to work here.
+    @ViewBuilder private var filterRow: some View {
         if !sessions.collections.isEmpty {
-            // A PLAIN ROW, NOT A SCROLL VIEW. This was a horizontal
-            // `ScrollView` inside the pane's vertical one, and a scroll view
-            // nested across axes takes the mouse for itself: the chips drew
-            // correctly and neither hovered nor clicked, while the pointer
-            // reached the cards underneath. Four short words do not need to
-            // scroll, and `.fixedSize` keeps them from being squeezed if a
-            // board ever grows more collections than the pane is wide.
-            HStack(spacing: 7) {
-                chip("All", count: sessions.items.count, filter: .all)
-                ForEach(sessions.collections.sorted { sessions.count(of: $0.id) > sessions.count(of: $1.id) }) { collection in
-                    chip(collection.name, count: sessions.count(of: collection.id),
-                         filter: .collection(collection.id))
-                        .contextMenu { CollectionMenu(collection: collection, store: sessions) }
+            HStack(spacing: 8) {
+                Picker("Show", selection: $filter) {
+                    Text("All \(sessions.items.count)").tag(Filter.all)
+                    ForEach(sessions.collections.sorted { sessions.count(of: $0.id) > sessions.count(of: $1.id) }) { collection in
+                        Text("\(collection.name) \(sessions.count(of: collection.id))")
+                            .tag(Filter.collection(collection.id))
+                    }
+                    if sessions.unsortedCount > 0 {
+                        Text("Unsorted \(sessions.unsortedCount)").tag(Filter.unsorted)
+                    }
                 }
-                if sessions.unsortedCount > 0 {
-                    chip("Unsorted", count: sessions.unsortedCount, filter: .unsorted)
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+
+                if case .collection(let id) = filter,
+                   let collection = sessions.collections.first(where: { $0.id == id }) {
+                    Menu {
+                        CollectionMenu(collection: collection, store: sessions)
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .font(.system(size: 12))
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .tint(DeikoStyle.ink2)
+                    .help("Describe, rename or delete the \(collection.name) collection")
                 }
             }
             .padding(.bottom, 2)
-        }
-    }
-
-    private func chip(_ name: String, count: Int, filter target: Filter) -> some View {
-        ChipButton(name: name, count: count, on: filter == target) {
-            filter = filter == target ? .all : target
         }
     }
 
@@ -645,7 +660,7 @@ private struct BoardPane: View {
                         .accessibilityHidden(true)
                 }
         }) {
-            chips
+            filterRow
             if shown.isEmpty {
                 EmptyPane(
                     title: sessions.items.isEmpty ? "The board is empty" : "Nothing here yet",
@@ -663,81 +678,6 @@ private struct BoardPane: View {
                 .padding(.top, 2)
             }
         }
-    }
-}
-
-/// One filter chip. The selected one is the wash chip the system already has
-/// (DESIGN.md §Chips); the rest are hairline outlines, so the row reads as one
-/// thing with one answer chosen rather than as a bank of buttons.
-///
-/// THE WHOLE LOOK LIVES IN A `ButtonStyle`, and that is the point rather than
-/// a tidying. This was built the way `SidebarRow` is — `.buttonStyle(.plain)`
-/// with the capsule drawn in the label's `.background` — and the sidebar works.
-/// In a pane it did not: the chips drew correctly and took neither a hover nor
-/// a click, while the pointer carried on to the cards. The sidebar is not
-/// inside a `ScrollView` and every pane is, and inside a pane every control
-/// that works is either a menu or a custom `ButtonStyle` (`InkButtonStyle` on
-/// the Dashboard). The chip was the only `.plain` button in a scrolling pane,
-/// and the only dead one. So it is built the way the ones that work are built.
-private struct ChipButtonStyle: ButtonStyle {
-    let on: Bool
-
-    func makeBody(configuration: Configuration) -> some View {
-        Chip(configuration: configuration, on: on)
-    }
-
-    /// Named `Chip`, not `Body`: `Body` is the protocol's own associated type
-    /// and a nested struct by that name satisfies it instead — the same trap
-    /// `InkButtonStyle` documents.
-    private struct Chip: View {
-        let configuration: ButtonStyleConfiguration
-        let on: Bool
-        /// Hover lives with the drawing rather than outside the button, so
-        /// nothing between the two can get out of step.
-        @State private var hovering = false
-
-        var body: some View {
-            configuration.label
-                .foregroundStyle(on ? DeikoStyle.mark : DeikoStyle.ink2)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 3)
-                .background {
-                    if on {
-                        Capsule().fill(DeikoStyle.accentSoft)
-                    } else {
-                        Capsule()
-                            .fill(hovering ? DeikoStyle.accentSoft.opacity(0.5) : .clear)
-                            .overlay(Capsule().strokeBorder(DeikoStyle.hairline, lineWidth: 1))
-                    }
-                }
-                // The whole capsule, not the letters.
-                .contentShape(Capsule())
-                .opacity(configuration.isPressed ? 0.7 : 1)
-                .animation(.easeOut(duration: 0.12), value: hovering)
-                .onHover { hovering = $0 }
-        }
-    }
-}
-
-private struct ChipButton: View {
-    let name: String
-    let count: Int
-    let on: Bool
-    let tap: () -> Void
-
-    var body: some View {
-        Button(action: tap) {
-            HStack(spacing: 5) {
-                Text(name).font(.system(size: 11, weight: .medium))
-                // The count is the quiet half of the chip in both states —
-                // it is the reason to click, never the label.
-                Text("\(count)")
-                    .font(.system(size: 11))
-                    .opacity(0.65)
-            }
-        }
-        .buttonStyle(ChipButtonStyle(on: on))
-        .deikoFocusRing(Capsule())
     }
 }
 
