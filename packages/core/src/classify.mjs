@@ -122,19 +122,30 @@ async function main() {
     candidates,
   };
 
+  const post = () => fetch(`${relay.replace(/\/+$/, "")}/v1/classify`, {
+    method: "POST",
+    headers: {
+      ...(process.env.DEIKO_RELAY_TOKEN
+        ? { Authorization: `Bearer ${process.env.DEIKO_RELAY_TOKEN}` }
+        : {}),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(15_000),
+  });
+
   let answer;
   try {
-    const response = await fetch(`${relay.replace(/\/+$/, "")}/v1/classify`, {
-      method: "POST",
-      headers: {
-        ...(process.env.DEIKO_RELAY_TOKEN
-          ? { Authorization: `Bearer ${process.env.DEIKO_RELAY_TOKEN}` }
-          : {}),
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(15_000),
-    });
+    let response = await post();
+    // ONE RETRY, ON A 5XX ONLY. Measured live: about one call in ten came
+    // back 503 from the model's side while its neighbours succeeded, and a
+    // brief that loses its earlier work to a hiccup is the feature not
+    // working. The relay refunds its meter on an upstream 5xx, so this costs
+    // nothing extra; a 4xx is a real answer and is not retried.
+    if (response.status >= 500) {
+      await new Promise((r) => setTimeout(r, 1000));
+      response = await post();
+    }
     if (!response.ok) {
       // THE REASON TRAVELS WITH THE STATUS. A bare "503" was all this printed
       // while one call in three was failing, and the relay's body — which

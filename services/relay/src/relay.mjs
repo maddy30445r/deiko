@@ -1011,6 +1011,11 @@ async function proxy(url, headers, body) {
   }
   const text = await upstream.text();
   if (!upstream.ok) {
+    // STATUS AND HOST, NEVER THE BODY. Two 503s on /v1/classify left no line
+    // but the request log's own, because this branch was silent: a passed-
+    // through upstream failure looked identical to one of ours. The body can
+    // echo the caller's input, so it stays out of the log.
+    console.error(`upstream ${new URL(url).host} answered ${upstream.status}`);
     // The provider's message is passed through so the app's failure taxonomy
     // can still classify it — TRUNCATED, because a provider that echoes its
     // input back in an error must not turn this into a content log.
