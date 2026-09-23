@@ -209,6 +209,7 @@ DEIKO_USAGE_TABLE="$TABLE" node -e '
     // and takes TypeSafe's own request shape; Cloudflare's wants a prepaid
     // balance. All optional; the first one set wins, in this order.
     "AI_GATEWAY_API_KEY",
+    "OPENROUTER_API_KEY",
     "CLOUDFLARE_ACCOUNT_ID",
     "CLOUDFLARE_AI_TOKEN",
     "DEIKO_CLASSIFIES_PER_DAY",

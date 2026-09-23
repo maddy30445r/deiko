@@ -146,15 +146,53 @@ const MAX_SUMMARY_MESSAGES = 32;
 // A third-party write-up spells these `Choice`/`Score`/`Noul`; the vendor's own
 // reference does not, and the vendor is the one answering the request.
 const JEV_URL = "https://api.typesafe.ai/v1/systemone";
-const CLOUDFLARE_MODEL = "typesafe/jev";
-// Vercel's AI Gateway speaks TypeSafe's own dialect at this base — same
-// request, same response, only the model id is theirs. Free on the Hobby plan
-// out of a monthly credit, which is why it is here: TypeSafe paused signups
-// and Cloudflare wants ten dollars up front for a partner model.
-const VERCEL_URL = "https://ai-gateway.vercel.sh/typesafe/v1/systemone";
-const VERCEL_MODEL = "typesafe-ai/jev";
 /// Pinned: the floors in `scripts/lib/context.mjs` are tuned to this version.
 const JEV_MODEL = "jev-1.13.0";
+
+/// WHO CAN ANSWER, in the order they are tried. The first with a key wins;
+/// nobody sets more than one.
+///
+/// Three of these speak TypeSafe's own dialect — the request and the answers
+/// are byte-identical, only the URL and the model id differ — so they are a
+/// table rather than code. Cloudflare is the odd one out below: it wraps the
+/// request in `{model, input}` and the answer in `{result}`.
+///
+/// Why there are four: TypeSafe paused new signups two days after opening
+/// them, Cloudflare wants ten dollars up front for a partner model, Vercel
+/// pays for it out of a monthly credit on the free plan, and OpenRouter hands
+/// every new account a small allowance with no card. A solo developer should
+/// be able to try this for nothing, and today only the last two let them.
+const JEV_SPEAKERS = [
+  { name: "typesafe", env: "TYPESAFE_API_KEY", url: JEV_URL, model: JEV_MODEL },
+  {
+    name: "vercel",
+    env: "AI_GATEWAY_API_KEY",
+    url: "https://ai-gateway.vercel.sh/typesafe/v1/systemone",
+    model: "typesafe-ai/jev",
+  },
+  {
+    name: "openrouter",
+    env: "OPENROUTER_API_KEY",
+    url: "https://openrouter.ai/api/alpha/decisions",
+    model: "typesafe/jev-1.13",
+  },
+];
+const CLOUDFLARE_MODEL = "typesafe/jev";
+
+function jevSpeaker() {
+  const direct = JEV_SPEAKERS.find((p) => process.env[p.env]);
+  if (direct) return { ...direct, key: process.env[direct.env] };
+  if (process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_AI_TOKEN) {
+    return {
+      name: "cloudflare",
+      url: `https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/ai/run`,
+      key: process.env.CLOUDFLARE_AI_TOKEN,
+      model: CLOUDFLARE_MODEL,
+      wrapped: true,
+    };
+  }
+  return null;
+}
 export const MAX_CLASSIFY_BYTES = 96 * 1024;
 const CLASSIFY_LIMITS = {
   narration: 2000,
@@ -471,7 +509,6 @@ function corsHeaders(origin) {
  */
 export async function handle({ method, path, query = "", token, contentType, body, origin = "", ip = "" }) {
   const groqKey = process.env.GROQ_API_KEY;
-  const typesafeKey = process.env.TYPESAFE_API_KEY;
 
   const json = (status, obj) => ({
     status,
@@ -493,11 +530,7 @@ export async function handle({ method, path, query = "", token, contentType, bod
       ok: true,
       transcription: Boolean(groqKey),
       summary: Boolean(groqKey),
-      classify: Boolean(
-        typesafeKey
-          || process.env.AI_GATEWAY_API_KEY
-          || (process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_AI_TOKEN)
-      ),
+      classify: Boolean(jevSpeaker()),
       metering: await meteringHealthy(),
       table: USAGE_TABLE,
     });
@@ -903,16 +936,8 @@ export async function handle({ method, path, query = "", token, contentType, bod
   }
 
   if (path === "/v1/classify") {
-    const vercelKey = process.env.AI_GATEWAY_API_KEY;
-    const cloudflare = process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_AI_TOKEN
-      ? {
-          url: `https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/ai/run`,
-          token: process.env.CLOUDFLARE_AI_TOKEN,
-        }
-      : null;
-    if (!typesafeKey && !vercelKey && !cloudflare) {
-      return json(503, { error: "relay has no classifier key configured" });
-    }
+    const speaker = jevSpeaker();
+    if (!speaker) return json(503, { error: "relay has no classifier key configured" });
     if (body && body.length > MAX_CLASSIFY_BYTES) {
       return json(413, { error: "body too large" });
     }
@@ -940,22 +965,10 @@ export async function handle({ method, path, query = "", token, contentType, bod
       return json(503, { error: unavailable(err) });
     }
 
-    // The vendor first, then the gateway that speaks its dialect, then the
-    // one that wraps it. Whichever is configured; nobody sets all three.
-    const out = typesafeKey
-      ? await proxy(JEV_URL, {
-          authorization: `Bearer ${typesafeKey}`,
-          "content-type": "application/json",
-        }, JSON.stringify({ model: JEV_MODEL, ...request }))
-      : vercelKey
-        ? await proxy(VERCEL_URL, {
-            authorization: `Bearer ${vercelKey}`,
-            "content-type": "application/json",
-          }, JSON.stringify({ model: VERCEL_MODEL, ...request }))
-        : unwrapJev(await proxy(cloudflare.url, {
-            authorization: `Bearer ${cloudflare.token}`,
-            "content-type": "application/json",
-          }, JSON.stringify({ model: CLOUDFLARE_MODEL, input: request })));
+    const headers = { authorization: `Bearer ${speaker.key}`, "content-type": "application/json" };
+    const out = speaker.wrapped
+      ? unwrapJev(await proxy(speaker.url, headers, JSON.stringify({ model: speaker.model, input: request })))
+      : await proxy(speaker.url, headers, JSON.stringify({ model: speaker.model, ...request }));
     if (out.status >= 500) await refundClassify().catch(() => {});
     return out;
   }

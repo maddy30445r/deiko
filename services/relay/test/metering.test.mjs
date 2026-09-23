@@ -109,6 +109,11 @@ function stubFetch() {
         status: 200, headers: { "content-type": "application/json" },
       });
     }
+    if (href.includes("openrouter.ai/api/alpha/decisions")) {
+      return new Response(JSON.stringify({ model: "typesafe/jev-1.13", answers: { tier: { type: "score", score: 0 } } }), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    }
     if (href.includes("ai-gateway.vercel.sh")) {
       // TypeSafe's own shape, straight through.
       return new Response(JSON.stringify({ model: "typesafe-ai/jev", answers: { tier: { type: "score", score: 0 } } }), {
@@ -527,6 +532,35 @@ test("Vercel's gateway takes TypeSafe's dialect unchanged", async () => {
     assert.ok(JSON.parse(r.body).answers.tier, "the answers come back where the app looks");
   } finally {
     process.env.TYPESAFE_API_KEY = key;
+    delete process.env.AI_GATEWAY_API_KEY;
+  }
+});
+
+test("OpenRouter's decisions endpoint takes TypeSafe's dialect unchanged", async () => {
+  const key = process.env.TYPESAFE_API_KEY;
+  delete process.env.TYPESAFE_API_KEY;
+  process.env.OPENROUTER_API_KEY = "or-key";
+  try {
+    const r = await classify("dev_openrouter");
+    assert.equal(r.status, 200);
+    assert.ok(upstream.at(-1).includes("openrouter.ai/api/alpha/decisions"));
+    const sent = JSON.parse(upstreamBodies.at(-1));
+    assert.equal(sent.model, "typesafe/jev-1.13");
+    assert.ok(sent.questions.tier);
+    assert.equal(sent.input, undefined);
+    assert.ok(JSON.parse(r.body).answers.tier);
+  } finally {
+    process.env.TYPESAFE_API_KEY = key;
+    delete process.env.OPENROUTER_API_KEY;
+  }
+});
+
+test("the vendor outranks every gateway when both are configured", async () => {
+  process.env.AI_GATEWAY_API_KEY = "vc-key";
+  try {
+    await classify("dev_both");
+    assert.ok(upstream.at(-1).includes("api.typesafe.ai"), "a TypeSafe key is used when present");
+  } finally {
     delete process.env.AI_GATEWAY_API_KEY;
   }
 });
