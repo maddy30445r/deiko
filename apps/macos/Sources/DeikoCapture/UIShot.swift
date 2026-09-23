@@ -22,6 +22,7 @@ enum UIShot {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
         let out = args.string("out") ?? "/tmp/deiko-ui"
+        titled = args.has("titled")
 
         for (name, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
             guard let look = NSAppearance(named: appearance) else { continue }
@@ -150,13 +151,25 @@ enum UIShot {
     /// A real window, briefly on screen. SwiftUI lays out against a window and
     /// a run loop; rendering a detached hosting view gives back an empty
     /// bitmap, which looks exactly like a broken design and is not one.
+    /// `--titled`: build the shot window the way `MainWindowController` builds
+    /// the real one — titled, full-size content, transparent hidden title bar
+    /// — instead of borderless. The two are not the same picture: the real
+    /// style hands the content a title-bar safe area, and a design reviewed
+    /// only in the borderless shot never saw it.
+    static var titled = false
+
     private static func shoot<V: View>(_ view: V, size: NSSize, look: NSAppearance, to path: String) {
         let host = NSHostingView(rootView: view)
         host.frame = NSRect(origin: .zero, size: size)
         let window = NSWindow(
             contentRect: NSRect(origin: NSPoint(x: 80, y: 80), size: size),
-            styleMask: [.borderless], backing: .buffered, defer: false
+            styleMask: titled ? [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView] : [.borderless],
+            backing: .buffered, defer: false
         )
+        if titled {
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+        }
         window.appearance = look
         window.contentView = host
         window.isOpaque = false

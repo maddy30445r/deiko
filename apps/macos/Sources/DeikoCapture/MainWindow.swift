@@ -124,6 +124,19 @@ struct MainWindowView: View {
                 .background(DeikoStyle.paper)
         }
         .task { await sessions.load(root: sessionRoot) }
+        // NO SAFE-AREA INSET. The window is `fullSizeContentView` with a hidden,
+        // transparent title bar, and under that style the pane's scroll view is
+        // handed a title-bar inset on top of the 44pt `PaneScroll` already pads
+        // by hand. Two things went wrong with that. The real window drew every
+        // pane lower than the design it was reviewed against, which was only
+        // ever rendered borderless. And inside the scroll view SwiftUI's own
+        // hit-testing did not agree with the drawing by that same inset: the
+        // board's filter chips drew in one place and took clicks in another,
+        // hovering them lit the card beneath, while the ⋯ menus — AppKit
+        // controls, hit-tested by AppKit — kept working, and the sidebar,
+        // outside any scroll view, was never affected. One coordinate space
+        // for both, and the 44pt is the whole of the title-bar allowance.
+        .ignoresSafeArea(.container, edges: .top)
         // THE CONTROLS DEIKO DID NOT DRAW still have to carry the palette.
         //
         // A Toggle, a segmented Picker, a text field's caret and selection,
