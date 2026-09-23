@@ -434,7 +434,7 @@ final class SessionsStore: ObservableObject {
                     .map { $0.trimmingCharacters(in: .whitespaces) }
                     .filter { !$0.hasPrefix("#") }
                     .map { $0.replacingOccurrences(
-                        of: "^-\\s*", with: "", options: .regularExpression) }
+                        of: "^[-*]\\s*", with: "", options: .regularExpression) }
                     .first { !$0.isEmpty }
                 return Item(
                     id: name,
