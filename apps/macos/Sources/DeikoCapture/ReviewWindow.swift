@@ -631,6 +631,10 @@ struct ReviewView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(DeikoStyle.paper)
+        // The controls Deiko did not draw take the SYSTEM accent — whatever
+        // colour the person set in System Settings. One line puts them on
+        // the palette instead; see `MainWindowView` for the long version.
+        .tint(DeikoStyle.accent)
     }
 
     // ── States ──────────────────────────────────────────────────────────────
@@ -1195,6 +1199,7 @@ struct ReviewView: View {
                                 .foregroundStyle(.white, DeikoStyle.needsYou)
                         }
                         .buttonStyle(.plain)
+                        .deikoFocusRing(Circle())
                         .offset(x: 5, y: -5)
                         .help("Leave this screenshot out of the brief")
                     }

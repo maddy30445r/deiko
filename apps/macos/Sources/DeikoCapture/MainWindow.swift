@@ -124,6 +124,16 @@ struct MainWindowView: View {
                 .background(DeikoStyle.paper)
         }
         .task { await sessions.load(root: sessionRoot) }
+        // THE CONTROLS DEIKO DID NOT DRAW still have to carry the palette.
+        //
+        // A Toggle, a segmented Picker, a text field's caret and selection,
+        // and a standard button's focus ring all take the SYSTEM accent —
+        // whatever blue (or graphite, or pink) the person set in System
+        // Settings. So half this window is Deiko's indigo and the other half
+        // is a colour chosen by somebody who has never seen it. One line
+        // moves the lot onto the palette, and `DESIGN.md` already says which
+        // colour: indigo marks selecting and focusing.
+        .tint(DeikoStyle.accent)
     }
 
     private var sidebar: some View {
@@ -232,6 +242,9 @@ private struct SidebarRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // Before the outer padding, so the ring lands on the row's own
+        // background rather than on the gap between it and the sidebar edge.
+        .deikoFocusRing()
         .keyboardShortcut(shortcut, modifiers: .command)
         .padding(.horizontal, 6)
         .onHover { hovering = $0 }
@@ -645,6 +658,7 @@ private struct ChipButton: View {
             }
         }
         .buttonStyle(.plain)
+        .deikoFocusRing(Capsule())
         .animation(.easeOut(duration: 0.12), value: hovering)
         .onHover { hovering = $0 }
     }

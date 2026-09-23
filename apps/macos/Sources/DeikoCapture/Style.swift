@@ -417,6 +417,73 @@ extension DeikoStyle {
 
 // ── The Deiko mark ──────────────────────────────────────────────────────────
 
+// ── Keyboard focus ──────────────────────────────────────────────────────────
+
+/// THE ONE PIECE OF CHROME THAT IGNORED THE DESIGN SYSTEM.
+///
+/// macOS draws its own focus ring: a system blue, at a system radius, with a
+/// system inset — over a control whose colour, shape and corner this app
+/// chose itself. On a sidebar row it lands as a rounded rectangle of the
+/// wrong blue at the wrong radius, sitting a pixel outside the indigo wash
+/// underneath it. Two shapes for one control, in two accent colours, on the
+/// surface people look at first.
+///
+/// So the system effect is switched off and the ring is redrawn from the
+/// palette, in the shape the control actually has. `DESIGN.md` already
+/// assigns this colour: indigo marks what Deiko does, and focusing is on its
+/// list.
+///
+/// THE RING IS NOT DELETED, which is the tempting one-line version and an
+/// accessibility regression. Somebody driving this app from the keyboard —
+/// Full Keyboard Access, or a switch device — has nothing but this ring to
+/// tell them where they are. Deleting it would make the app look tidier in a
+/// screenshot and unusable without a mouse.
+///
+/// 2pt, where every other border in this system is a 1pt hairline: a focus
+/// ring is not a border. It has to be findable at a glance from across a
+/// desk, and the hairline rule is about the edges of things at rest.
+///
+/// `.focused` binds to whatever focusability the control already had — this
+/// never makes something focusable that was not, so the tab order is exactly
+/// what it was before.
+struct DeikoFocusRing<S: InsettableShape>: ViewModifier {
+    let shape: S
+    @FocusState private var focused: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .focused($focused)
+            .focusEffectDisabled()
+            .overlay(
+                shape
+                    .strokeBorder(DeikoStyle.mark, lineWidth: 2)
+                    .opacity(focused ? 1 : 0)
+                    .allowsHitTesting(false)
+            )
+    }
+}
+
+extension View {
+    /// The app's own focus ring, in the shape this control draws.
+    func deikoFocusRing<S: InsettableShape>(_ shape: S) -> some View {
+        modifier(DeikoFocusRing(shape: shape))
+    }
+
+    /// The common case: a control with the standard corner.
+    func deikoFocusRing(radius: CGFloat = DeikoStyle.controlRadius) -> some View {
+        deikoFocusRing(RoundedRectangle(cornerRadius: radius))
+    }
+
+    /// A bare glyph or word with no background of its own. The ring needs a
+    /// little room around the letterforms or it reads as a box drawn on top
+    /// of them rather than around them.
+    func deikoFocusRingLoose(radius: CGFloat = 6, inset: CGFloat = -4) -> some View {
+        padding(-inset)
+            .deikoFocusRing(RoundedRectangle(cornerRadius: radius))
+            .padding(inset)
+    }
+}
+
 /// A ring with a centred dot — the mark IS the product: "I'm pointing at
 /// this." Two strokes,
 /// scalable, and the same mark the menu bar will wear so the coin and the

@@ -1082,6 +1082,10 @@ struct OrbRootView: View {
                 measured { card }
             }
         }
+        // The controls Deiko did not draw take the SYSTEM accent — whatever
+        // colour the person set in System Settings. One line puts them on
+        // the palette instead; see `MainWindowView` for the long version.
+        .tint(DeikoStyle.accent)
     }
 
     /// Report how tall this is, so the window can be exactly that. Measured on
@@ -1152,6 +1156,7 @@ struct OrbRootView: View {
                         .background(Color.primary.opacity(0.07), in: Circle())
                 }
                 .buttonStyle(.plain)
+                .deikoFocusRing(Circle())
                 .foregroundStyle(DeikoStyle.ink2)
                 .padding(10)
                 .help("Put the orb away. The session stays on disk.")
@@ -1438,6 +1443,7 @@ struct OrbRootView: View {
                         .foregroundStyle(DeikoStyle.mark)
                 }
                 .buttonStyle(.plain)
+                .deikoFocusRingLoose()
                 Spacer()
                 Button {
                     actions.onDismiss()
@@ -1446,6 +1452,7 @@ struct OrbRootView: View {
                         .font(.system(size: 11, weight: .bold))
                 }
                 .buttonStyle(.plain)
+                .deikoFocusRingLoose(radius: 10)
                 .foregroundStyle(.tertiary)
                 .help("Put the orb away. The session stays on disk.")
             }

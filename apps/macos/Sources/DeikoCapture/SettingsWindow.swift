@@ -482,6 +482,7 @@ struct SettingsView: View {
                         Image(systemName: "arrow.clockwise")
                     }
                     .buttonStyle(.plain)
+                    .deikoFocusRingLoose()
                     .foregroundStyle(DeikoStyle.ink2)
                     .disabled(model.checking)
                     .help("Ask Deiko again how much is left")
@@ -553,6 +554,7 @@ struct SettingsView: View {
                             Image(systemName: "doc.on.doc")
                         }
                         .buttonStyle(.plain)
+                        .deikoFocusRingLoose()
                         .foregroundStyle(DeikoStyle.ink2)
                         .help("Copy the key — to put it on another Mac")
                     }

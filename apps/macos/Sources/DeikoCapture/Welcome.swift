@@ -207,6 +207,10 @@ struct WelcomeView: View {
             model.startWatching()
         }
         .onDisappear { model.stopWatching() }
+        // The controls Deiko did not draw take the SYSTEM accent — whatever
+        // colour the person set in System Settings. One line puts them on
+        // the palette instead; see `MainWindowView` for the long version.
+        .tint(DeikoStyle.accent)
     }
 
     /// The header sits on the lavender wall — the one surface in the app that
@@ -332,6 +336,7 @@ struct WelcomeView: View {
             Button("Finish later") { model.onDone?() }
                 .buttonStyle(.plain)
                 .foregroundStyle(DeikoStyle.ink2)
+                .deikoFocusRingLoose()
             // "Start pointing", not "Done" — the moment it enables, the next
             // action is the product itself. Half-lit until the app can
             // actually deliver on the promise.
