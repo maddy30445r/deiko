@@ -429,8 +429,14 @@ const manifest = {
 };
 const withheld = manifest.referents.filter((r) => r.cropWithheld).length;
 writeFileSync(join(dir, "brief.json"), JSON.stringify(manifest, null, 2) + "\n");
-// After brief.json, so this brief is in its own task's note.
-writeTaskNotes(root);
+// After brief.json, so this brief is in its own task's note. One unwritable
+// note (a full disk, a permissions error, `tasks` existing as a plain file)
+// must not fail a render that already wrote prompt.txt and brief.json.
+try {
+  writeTaskNotes(root);
+} catch (err) {
+  console.error(`  ⚠ task notes not written — ${String(err?.message ?? err).slice(0, 80)}`);
+}
 
 const shots = manifest.referents.filter((r) => r.cropPath).length;
 console.error(
