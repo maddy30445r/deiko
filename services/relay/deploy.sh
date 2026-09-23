@@ -205,6 +205,10 @@ DEIKO_USAGE_TABLE="$TABLE" node -e '
     // every brief without earlier work, which is the right default until a
     // TypeSafe account exists.
     "TYPESAFE_API_KEY",
+    // Or the same model through Workers AI, which needs no TypeSafe account.
+    // Both are optional and TypeSafe wins if both are set.
+    "CLOUDFLARE_ACCOUNT_ID",
+    "CLOUDFLARE_AI_TOKEN",
     "DEIKO_CLASSIFIES_PER_DAY",
     "DEIKO_PRO_BENEFIT_IDS",
     "POLAR_API_BASE",

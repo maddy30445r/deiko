@@ -128,10 +128,25 @@ const MAX_SUMMARY_MESSAGES = 32;
 // capped, coerced body — a stranger with the URL cannot name a model, a
 // question count or a rubric. `classifyRequest` is exported so the shape is
 // testable without a network.
+// WHO ANSWERS THE QUESTIONS, and why there are two of them.
+//
+// TypeSafe paused new signups two days after opening them, so a key from them
+// is not something anybody can just get. The same model is served by
+// Cloudflare Workers AI as `typesafe/jev`, at TypeSafe's own price, on an
+// account Deiko already has for the site, the downloads bucket and the
+// waitlist — so the classifier can ship without a second vendor or a second
+// bill. Set whichever pair of variables you have; TypeSafe wins if both.
+//
+// The questions and the state are byte-identical either way. Cloudflare wraps
+// them in `{model, input}` and wraps its answer in `{result}`; that wrapper is
+// the whole of the difference, and `unwrapJev` takes it back off so the app
+// sees one shape.
+//
 // docs.typesafe.ai/api — the question `type` is LOWERCASE and case-sensitive.
 // A third-party write-up spells these `Choice`/`Score`/`Noul`; the vendor's own
 // reference does not, and the vendor is the one answering the request.
 const JEV_URL = "https://api.typesafe.ai/v1/systemone";
+const CLOUDFLARE_MODEL = "typesafe/jev";
 /// Pinned: the floors in `scripts/lib/context.mjs` are tuned to this version.
 const JEV_MODEL = "jev-1.13.0";
 export const MAX_CLASSIFY_BYTES = 96 * 1024;
@@ -472,7 +487,9 @@ export async function handle({ method, path, query = "", token, contentType, bod
       ok: true,
       transcription: Boolean(groqKey),
       summary: Boolean(groqKey),
-      classify: Boolean(typesafeKey),
+      classify: Boolean(
+        typesafeKey || (process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_AI_TOKEN)
+      ),
       metering: await meteringHealthy(),
       table: USAGE_TABLE,
     });
@@ -878,7 +895,15 @@ export async function handle({ method, path, query = "", token, contentType, bod
   }
 
   if (path === "/v1/classify") {
-    if (!typesafeKey) return json(503, { error: "relay has no classifier key configured" });
+    const cloudflare = process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_AI_TOKEN
+      ? {
+          url: `https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/ai/run`,
+          token: process.env.CLOUDFLARE_AI_TOKEN,
+        }
+      : null;
+    if (!typesafeKey && !cloudflare) {
+      return json(503, { error: "relay has no classifier key configured" });
+    }
     if (body && body.length > MAX_CLASSIFY_BYTES) {
       return json(413, { error: "body too large" });
     }
@@ -906,10 +931,15 @@ export async function handle({ method, path, query = "", token, contentType, bod
       return json(503, { error: unavailable(err) });
     }
 
-    const out = await proxy(JEV_URL, {
-      authorization: `Bearer ${typesafeKey}`,
-      "content-type": "application/json",
-    }, JSON.stringify({ model: JEV_MODEL, ...request }));
+    const out = typesafeKey
+      ? await proxy(JEV_URL, {
+          authorization: `Bearer ${typesafeKey}`,
+          "content-type": "application/json",
+        }, JSON.stringify({ model: JEV_MODEL, ...request }))
+      : unwrapJev(await proxy(cloudflare.url, {
+          authorization: `Bearer ${cloudflare.token}`,
+          "content-type": "application/json",
+        }, JSON.stringify({ model: CLOUDFLARE_MODEL, input: request })));
     if (out.status >= 500) await refundClassify().catch(() => {});
     return out;
   }
@@ -962,6 +992,24 @@ async function proxy(url, headers, body) {
     };
   }
   return { status: 200, body: text, contentType: "application/json" };
+}
+
+/// Cloudflare answers `{result, success, errors}`; the app reads `{model,
+/// answers}`. Unwrapping here rather than in the client keeps the two
+/// providers indistinguishable from outside this file. A body that is not
+/// shaped that way is passed through untouched — better a client that reads
+/// no answers than a relay that invents some.
+function unwrapJev(out) {
+  if (out.status !== 200) return out;
+  try {
+    const parsed = JSON.parse(out.body);
+    if (parsed?.result?.answers) {
+      return { ...out, body: JSON.stringify(parsed.result) };
+    }
+  } catch {
+    // Not JSON: leave it exactly as it came.
+  }
+  return out;
 }
 
 /// A token FINGERPRINT, a path, a status and a duration. Never a body, never a

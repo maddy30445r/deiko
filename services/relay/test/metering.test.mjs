@@ -109,6 +109,13 @@ function stubFetch() {
         status: 200, headers: { "content-type": "application/json" },
       });
     }
+    if (href.includes("api.cloudflare.com")) {
+      // Workers AI wraps the model's own answer in its envelope.
+      return new Response(JSON.stringify({
+        result: { model: "jev-1.13.0", answers: { tier: { type: "score", score: 0 } } },
+        success: true, errors: [], messages: [],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
     throw new Error(`unexpected upstream: ${href}`);
   };
 }
@@ -473,6 +480,40 @@ test("an upstream failure refunds the classification", async () => {
   const r = await classify("dev_unlucky");
   assert.equal(r.status, 502);
   assert.equal(rows.get(classifyDay())?.audioSeconds ?? 0, 0);
+});
+
+test("Cloudflare serves the same model, and the caller cannot tell", async () => {
+  // TypeSafe paused signups; the same model on Workers AI is the way in for
+  // anybody without a key. The app must see one shape either way.
+  const key = process.env.TYPESAFE_API_KEY;
+  delete process.env.TYPESAFE_API_KEY;
+  process.env.CLOUDFLARE_ACCOUNT_ID = "acct";
+  process.env.CLOUDFLARE_AI_TOKEN = "cf-token";
+  try {
+    const r = await classify("dev_cf");
+    assert.equal(r.status, 200);
+    assert.ok(upstream.at(-1).includes("api.cloudflare.com/client/v4/accounts/acct/ai/run"));
+    const sent = JSON.parse(upstreamBodies.at(-1));
+    assert.equal(sent.model, "typesafe/jev", "Cloudflare names the model its own way");
+    assert.ok(sent.input.questions.tier, "the questions are the same ones, wrapped");
+    const back = JSON.parse(r.body);
+    assert.equal(back.result, undefined, "the envelope is taken off");
+    assert.ok(back.answers.tier, "and the answers are where the app looks for them");
+  } finally {
+    process.env.TYPESAFE_API_KEY = key;
+    delete process.env.CLOUDFLARE_ACCOUNT_ID;
+    delete process.env.CLOUDFLARE_AI_TOKEN;
+  }
+});
+
+test("with no classifier configured at all the route says so", async () => {
+  const key = process.env.TYPESAFE_API_KEY;
+  delete process.env.TYPESAFE_API_KEY;
+  try {
+    assert.equal((await classify("dev_none")).status, 503);
+  } finally {
+    process.env.TYPESAFE_API_KEY = key;
+  }
 });
 
 test("an oversized classification body is refused before it is parsed", async () => {
