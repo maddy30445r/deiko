@@ -291,9 +291,21 @@ final class SessionsStore: ObservableObject {
         /// ("Thank you." is a real transcript, and a real board is full of
         /// them). The app it was captured from beats an apology.
         var title: String {
-            if let line, line.count > 12 { return line }
+            if let line, line.count > 12 { return Self.trimmedTitle(line) }
             if let app = apps.first { return "Something in \(app)" }
             return crops.isEmpty ? "A session with nothing saved" : "\(crops.count) screenshots, no words"
+        }
+
+        /// Drops the trailing full stop a sentence naturally ends on and caps
+        /// at a word boundary — mirrors `tasks.mjs`'s `trimTitle`, so a title
+        /// never runs to paragraph length.
+        private static func trimmedTitle(_ text: String) -> String {
+            var trimmed = text
+            while let last = trimmed.last, ".!? ".contains(last) { trimmed.removeLast() }
+            guard trimmed.count > 80 else { return trimmed }
+            let cut = String(trimmed.prefix(80))
+            guard let boundary = cut.lastIndex(of: " "), boundary > cut.startIndex else { return cut + "…" }
+            return String(cut[..<boundary]) + "…"
         }
         let crops: [String]
         let apps: [String]

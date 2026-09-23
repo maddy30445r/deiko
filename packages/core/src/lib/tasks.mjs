@@ -53,10 +53,24 @@ export function parseOutcome(text) {
 /// What `summarize.mjs` tells Groq to say when it cannot tell.
 const COULD_NOT_TELL = /too (short|garbled)/i;
 
+const TITLE_CAP = 80;
+
+/// A title Groq or the user wrote, not one Deiko composed: strips the
+/// trailing full stop a sentence naturally ends on (so quoting it in a
+/// prompt never doubles up, e.g. `…stays old."."`) and caps it at a word
+/// boundary rather than mid-word.
+function trimTitle(text) {
+  const stripped = text.trim().replace(/[.!?\s]+$/, "");
+  if (stripped.length <= TITLE_CAP) return stripped;
+  const cut = stripped.slice(0, TITLE_CAP);
+  const boundary = cut.lastIndexOf(" ");
+  return `${boundary > 0 ? cut.slice(0, boundary) : cut}…`;
+}
+
 export function titleFor({ summaryLine, narration, apps } = {}) {
-  if (summaryLine && !COULD_NOT_TELL.test(summaryLine)) return summaryLine.trim();
+  if (summaryLine && !COULD_NOT_TELL.test(summaryLine)) return trimTitle(summaryLine);
   const said = String(narration ?? "").replace(/\s+/g, " ").trim();
-  if (said.length > 12) return said.slice(0, 60);
+  if (said.length > 12) return trimTitle(said);
   if (apps?.[0]) return `Something in ${apps[0]}`;
   return "A brief";
 }

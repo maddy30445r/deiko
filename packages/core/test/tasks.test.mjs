@@ -53,6 +53,13 @@ test("a title is the summary, never Groq saying it could not tell", () => {
   assert.equal(titleFor({}), "A brief");
 });
 
+test("a title drops its trailing full stop and caps at a word boundary", () => {
+  assert.equal(titleFor({ summaryLine: "Fix the price." }), "Fix the price");
+  assert.equal(
+    titleFor({ summaryLine: "Price display doesn't update after editing – toast shows new value but UI stays old." }),
+    "Price display doesn't update after editing – toast shows new value but UI stays…");
+});
+
 test("a brief with no task is its own task; members are newest first", () => {
   const groups = groupTasks([...price, ...chart]);
   assert.deepEqual([...groups.keys()].sort(), ["t-20260918-155836", "t-20260918-163139"]);
