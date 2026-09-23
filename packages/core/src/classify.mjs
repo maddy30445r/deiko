@@ -12,8 +12,9 @@
  * `render-brief.mjs` reads both and the board and review card show them.
  *
  * RUNS FOR OWN-KEY USERS TOO. Sorting is not transcription: somebody who
- * brought their own Groq key keeps their audio and narration off Deiko's
- * servers, but their briefs are still placed through the relay, so this reads
+ * brought their own Groq key keeps their audio and its transcription off
+ * Deiko's servers — both go straight to Groq — but what they said still
+ * reaches the relay, redacted, to place the brief, so this reads
  * `DEIKO_CLASSIFY_URL`/`DEIKO_CLASSIFY_TOKEN` — its own pair, set whenever a
  * relay exists regardless of keys — falling back to `DEIKO_RELAY_URL`/
  * `DEIKO_RELAY_TOKEN` for a build or test that only sets those.
@@ -145,7 +146,7 @@ async function main() {
       title: redact(taskTitles.get(s.id) ?? titleFor(bs.at(-1))),
       now: taskState(bs).now.join("\n"),
       decided: bs.flatMap((b) => b.outcome?.decided ?? []).slice(0, 5).map(redact).join("\n"),
-      windows: [...new Set(bs.flatMap((b) => b.windows))].slice(0, 5),
+      windows: [...new Set(bs.flatMap((b) => b.windows))].slice(0, 5).map(redact),
       apps: [...new Set(bs.flatMap((b) => b.apps))].slice(0, 5).map(redact),
       files: [...new Set(bs.flatMap((b) => b.outcome?.files ?? []))].slice(0, 10).map(redact),
       outcome: last ? redact([...last.did, ...last.open].join(" ")).slice(0, 600) : "",
@@ -189,7 +190,7 @@ async function main() {
     let response = await post();
     // ONE RETRY, ON A 5XX ONLY. Measured live: about one call in ten came
     // back 503 from the model's side while its neighbours succeeded, and a
-    // brief that loses its earlier work to a hiccup is the feature not
+    // brief that loses its task's memory to a hiccup is the feature not
     // working. The relay refunds its meter on an upstream 5xx, so this costs
     // nothing extra; a 4xx is a real answer and is not retried.
     if (response.status >= 500) {
