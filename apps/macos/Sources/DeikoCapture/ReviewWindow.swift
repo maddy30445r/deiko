@@ -53,6 +53,14 @@ final class ReviewModel: ObservableObject {
     @Published var digest: BriefDigest?
     @Published var narration: String = ""
 
+    /// The persona this brief was written for, for the one line on the card
+    /// that says so. Read when the digest lands, not in a view body: it is a
+    /// file read, and the card re-renders on every keystroke of a correction.
+    /// Not `private(set)`: `UIShot` poses this card to check that the chip
+    /// still fits beside the title at 400pt, and every other display value on
+    /// this model is settable for the same reason.
+    @Published var personaName: String?
+
     /// Crop thumbnails, keyed by the path in `digest.cropPaths`, loaded once
     /// here rather than in the view body.
     ///
@@ -234,6 +242,7 @@ final class ReviewModel: ObservableObject {
                 let digest = try await BriefPipeline.run(sessionDir: sessionDir)
                 guard stillCurrent(sessionDir) else { return }
                 self.digest = digest
+                self.personaName = Personas.name(forSession: sessionDir)
                 await self.loadCropThumbnails(digest, sessionDir: sessionDir)
                 guard stillCurrent(sessionDir) else { return }
                 self.narration = digest.summary.narration
@@ -336,6 +345,7 @@ final class ReviewModel: ObservableObject {
                     // this one self-healing in the same way.
                     rerenderPending = false
                     self.digest = rerendered
+                    self.personaName = Personas.name(forSession: sessionDir)
                     await self.loadCropThumbnails(rerendered, sessionDir: sessionDir)
                     guard stillCurrent(sessionDir) else { return }
                 }
@@ -431,6 +441,7 @@ final class ReviewModel: ObservableObject {
                 }
 
                 self.digest = digest
+                self.personaName = Personas.name(forSession: sessionDir)
                 await self.loadCropThumbnails(digest, sessionDir: sessionDir)
                 guard stillCurrent(sessionDir) else { return }
                 self.narration = digest.summary.narration

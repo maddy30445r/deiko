@@ -230,7 +230,8 @@ Circles belong to the mark. The Deiko mark is a ring with a centred dot drawn at
 - **Everything else** is a system button. The app does not restyle secondary buttons; macOS already draws them better than a custom one would.
 
 ### Chips
-- **Wash chip:** indigo wash, mark-indigo 11px label, pill radius, 3px × 8px. Marks a default, a crop count, an agent name or "your own text".
+- **Wash chip:** indigo wash, mark-indigo 11px label, pill radius, 3px × 8px. Marks a default, a crop count, a persona name, an agent name or "your own text". Always a capsule — the orb card briefly had a rounded-rectangle chip beside a capsule one, which is two shapes for one idea on the surface people see most.
+- **Glyph tile:** the square exception, and not a chip: a 26×26 wash tile at 8px radius holding one accent symbol. A permission row, not a label.
 
 ### Cards / Containers
 - **Corner Style:** 14px (`InsetCard`).

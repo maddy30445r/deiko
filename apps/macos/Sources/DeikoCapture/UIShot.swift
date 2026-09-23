@@ -39,6 +39,7 @@ enum UIShot {
                 )
             }
             shoot(orbCard(), size: NSSize(width: 400, height: 130), look: look, to: "\(out)-orb-\(name).png")
+            shoot(orbReady(), size: NSSize(width: 400, height: 190), look: look, to: "\(out)-orbready-\(name).png")
         }
         // The status item, at the size it is actually drawn — 1x and 2x — so a
         // mark that looks wrong in the menu bar can be looked at without
@@ -72,6 +73,24 @@ enum UIShot {
     private static func orbCard() -> some View {
         let model = ReviewModel()
         model.phase = .working("Reading what you pointed at…")
+        return OrbRootView(
+            model: model,
+            state: OrbState(),
+            actions: OrbActions(
+                onPress: {}, onDrag: { _ in }, onRelease: {}, onDismiss: {},
+                onExtend: {}, onSetMode: { _ in }, onOpenSettings: {},
+                onDelete: {}, onHeightChange: { _ in }
+            )
+        )
+    }
+
+    /// The card as it looks the moment before somebody throws the coin: the
+    /// state that carries the verdict, the crop counts and the persona chip.
+    private static func orbReady() -> some View {
+        let model = ReviewModel()
+        model.phase = .ready
+        model.summary = "Make the Save button use the header indigo, and give it more padding."
+        model.personaName = "QA ticket"
         return OrbRootView(
             model: model,
             state: OrbState(),

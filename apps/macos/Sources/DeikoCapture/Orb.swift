@@ -1162,7 +1162,7 @@ struct OrbRootView: View {
                     .foregroundStyle(DeikoStyle.mark)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
-                    .background(DeikoStyle.accentSoft, in: RoundedRectangle(cornerRadius: DeikoStyle.controlRadius))
+                    .background(DeikoStyle.accentSoft, in: Capsule())
             }
         case .failed(let problem):
             failureReadout(problem)
@@ -1211,7 +1211,22 @@ struct OrbRootView: View {
     @ViewBuilder private var summaryLines: some View {
         // One title line, so the card says what STATE it is in before it says
         // what it heard. Everything under it stays in the system face.
-        Text("Ready to hand over").deikoTitle(15)
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text("Ready to hand over").deikoTitle(15)
+            // WHICH PERSONA IS ABOUT TO SHAPE THIS. The one moment somebody
+            // would want to know is the moment before they throw the coin,
+            // and until now nothing on this card said it — the answer lived
+            // two windows away in Settings.
+            if let persona = model.personaName {
+                Text(persona)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(DeikoStyle.mark)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(DeikoStyle.accentSoft, in: Capsule())
+                    .help("Your brief will be written up as a \(persona). Change it in Deiko's Personas.")
+            }
+        }
         if let summary = model.summary {
             Text(summary)
                 .font(.system(size: 13))

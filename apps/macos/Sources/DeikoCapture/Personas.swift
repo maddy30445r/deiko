@@ -133,6 +133,23 @@ enum Personas {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    /// Which persona THIS session will be written up as, read from the
+    /// pointer beside it rather than from the current default — change the
+    /// default while a brief is rendering and those are two different answers,
+    /// and only one of them is what the agent is about to be told.
+    ///
+    /// The name comes out of the file's own `# Heading`, so a hand-edited
+    /// persona is called whatever its author called it.
+    nonisolated static func name(forSession sessionDir: String) -> String? {
+        let pointer = URL(fileURLWithPath: sessionDir).appendingPathComponent("persona.txt")
+        guard let path = try? String(contentsOf: pointer, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty,
+            let text = try? String(contentsOf: URL(fileURLWithPath: path), encoding: .utf8),
+            let heading = text.split(separator: "\n").first(where: { $0.hasPrefix("# ") })
+        else { return nil }
+        return String(heading.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+    }
+
     // ── Hand edits ──────────────────────────────────────────────────────────
 
     /// Adopt whatever is on disk when it is not what we put there.
