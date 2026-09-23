@@ -127,7 +127,7 @@ async function main() {
       now: taskState(bs).now.join("\n"),
       decided: bs.flatMap((b) => b.outcome?.decided ?? []).slice(0, 5).map(redact).join("\n"),
       windows: [...new Set(bs.flatMap((b) => b.windows))].slice(0, 5),
-      apps: [...new Set(bs.flatMap((b) => b.apps))].slice(0, 5),
+      apps: [...new Set(bs.flatMap((b) => b.apps))].slice(0, 5).map(redact),
       files: [...new Set(bs.flatMap((b) => b.outcome?.files ?? []))].slice(0, 10).map(redact),
       outcome: last ? redact([...last.did, ...last.open].join(" ")).slice(0, 600) : "",
       lastActive: ago(stampTime(bs[0].id)),
