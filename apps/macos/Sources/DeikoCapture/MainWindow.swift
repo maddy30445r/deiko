@@ -433,7 +433,7 @@ private struct DashboardPane: View {
                     InsetCard {
                         ForEach(Array(sessions.items.dropFirst().prefix(4).enumerated()), id: \.element.id) { index, item in
                             if index > 0 { Divider().padding(.horizontal, 14) }
-                            SessionRow(item: item)
+                            SessionRow(item: item, store: sessions)
                         }
                     }
                 }
@@ -674,11 +674,43 @@ private struct BoardCard: View {
             if let first = item.crops.first {
                 CropThumbnail(path: first, height: 74)
             }
-            Text(item.title)
-                .font(.system(size: 12.5))
-                .foregroundStyle(item.line == nil ? DeikoStyle.ink2 : .primary)
-                .lineLimit(3)
-                .fixedSize(horizontal: false, vertical: true)
+            // EVERYTHING THIS CARD CAN DO, VISIBLE AT REST.
+            //
+            // The verbs were reachable only by right-click, a gesture you
+            // have to already suspect is there. Nothing on the card said so,
+            // so copying a brief or filing it in a collection was a feature
+            // you found by accident or never found.
+            //
+            // The same `ellipsis.circle` the Personas pane uses, not a second
+            // affordance invented for this one. Beside the title rather than
+            // on the metadata line, which it crowded into wrapping a date
+            // mid-string; and not over the thumbnail, because a crop is
+            // somebody else's pixels and this app does not paint its own
+            // colours onto those.
+            HStack(alignment: .top, spacing: 6) {
+                Text(item.title)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(item.line == nil ? DeikoStyle.ink2 : .primary)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                Menu {
+                    SessionMenu(item: item, store: store)
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.system(size: 12))
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                // TINT, NOT `foregroundStyle`. A menu label takes its colour
+                // from the tint, so the window-wide accent won and every card
+                // wore a full-strength indigo dot — a grid of buttons with the
+                // briefs arranged around them. Quiet until the card is under
+                // the cursor.
+                .tint(hovering ? DeikoStyle.mark : DeikoStyle.ink2)
+                .help("Copy, open, file or delete this brief")
+            }
             // WHAT CAME OF IT, in the agent's own words, when one wrote back.
             //
             // Labelled rather than dropped in bare: an unmarked second
@@ -728,8 +760,10 @@ private struct BoardCard: View {
         .animation(.easeOut(duration: 0.14), value: hovering)
         .onHover { hovering = $0 }
         .onTapGesture(count: 2) { NSWorkspace.shared.open(URL(fileURLWithPath: item.dir)) }
+        // Kept beside the button: somebody who already reaches for a
+        // right-click should not have to learn a new way to do it.
         .contextMenu { SessionMenu(item: item, store: store) }
-        .help("Double-click to open this session's folder · right-click for more")
+        .help("Double-click to open this session's folder · ⋯ for everything else")
     }
 
     /// Day and time, because six sessions from one afternoon were
@@ -865,6 +899,7 @@ private struct CollectionMenu: View {
 
 private struct SessionRow: View {
     let item: SessionsStore.Item
+    let store: SessionsStore
 
     var body: some View {
         HStack(spacing: 12) {
@@ -884,11 +919,25 @@ private struct SessionRow: View {
                 .foregroundStyle(DeikoStyle.ink2)
             }
             Spacer()
-            Button("Open folder") { NSWorkspace.shared.open(URL(fileURLWithPath: item.dir)) }
-                .font(.system(size: 12))
+            // `SessionMenu`'s own note says the board card and this row must
+            // not drift apart. A lone "Open folder" here against a full menu
+            // there was exactly that drift: the same object, two different
+            // ideas of what you can do to it.
+            Menu {
+                SessionMenu(item: item, store: store)
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.system(size: 12))
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .tint(DeikoStyle.ink2)
+            .help("Copy, open, file or delete this brief")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
+        .contextMenu { SessionMenu(item: item, store: store) }
     }
 }
 
