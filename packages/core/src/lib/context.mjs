@@ -1,6 +1,6 @@
 /**
- * THE MEMORY — which collection a brief belongs to, which earlier briefs it
- * continues or draws on, and how much work it looks like.
+ * THE MEMORY — which collection a brief belongs to, which task it joins or
+ * starts, and how much work it looks like.
  *
  * Everything here is arithmetic over what the classifier answered. The
  * classifier is Jev (TypeSafe AI's "System One" model), reached through the
@@ -9,8 +9,8 @@
  * tuned against `jev-1.13.0`, which the relay pins — see `JEV_MODEL` there.
  *
  * Pure, except `readBriefLine`, which is the one way a sibling session is
- * read so that `classify.mjs` (building candidates) and `render-brief.mjs`
- * (resolving the ones that were chosen) cannot disagree about what a session
+ * read so that `classify.mjs` (building the shortlist) and `render-brief.mjs`
+ * (resolving the task that was chosen) cannot disagree about what a session
  * says.
  */
 

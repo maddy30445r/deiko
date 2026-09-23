@@ -181,8 +181,11 @@ export function readBoard(root) {
 /**
  * THE ONLY WRITER OF TASK NOTES. Compiles every task with two or more briefs
  * and writes the ones whose text changed, so a note that lost a brief to a
- * board move heals on the next render of anything. A single brief has
- * nothing to carry, and hundreds of one-line notes would be clutter.
+ * board move but still has two or more left heals on the next render of
+ * anything. A single brief has nothing to carry, and hundreds of one-line
+ * notes would be clutter — but that also means a task a board move drops
+ * back below two briefs keeps its last note exactly as it was, stale,
+ * rather than losing or updating it.
  */
 export function writeTaskNotes(root) {
   const titles = readTasks(root);

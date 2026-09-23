@@ -23,8 +23,9 @@ enum Credentials {
     ///
     /// ONE KEY. It was two — Sarvam for the words, Groq for the summary — until
     /// Whisper replaced Sarvam and took over both. A single name is what makes
-    /// "bring your own key and Deiko's servers see nothing" a statement with no
-    /// half-configured state hiding inside it.
+    /// "bring your own key and your audio and its transcription skip Deiko"
+    /// a statement with no half-configured state hiding inside it — sorting
+    /// still goes through the relay regardless of a key.
     static let names = ["GROQ_API_KEY"]
 
     /// The environment for a spawned pipeline script.
@@ -40,8 +41,10 @@ enum Credentials {
         // gate existed to keep heavy users inside Pro, and at Groq's price a
         // licence pinning the whole monthly cap still earns more than it costs,
         // so there was nothing left for it to protect. A key also never reaches
-        // the relay — the URL below is withheld while one is in use — so a free
-        // caller who brings one spends no quota of ours either.
+        // the relay for transcription — DEIKO_RELAY_URL below is withheld
+        // while one is in use, though DEIKO_CLASSIFY_URL still goes out for
+        // sorting — so a free caller who brings one spends no TRANSCRIPTION
+        // quota of ours.
         //
         // Nobody without a key pays a keychain DECRYPT here: `willUse` asks an
         // attributes-only question, so there is no password prompt for the

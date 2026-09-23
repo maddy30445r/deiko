@@ -853,9 +853,11 @@ export async function handle({ method, path, query = "", token, contentType, bod
     }
 
     // ONE VENDOR NOW. Transcription and the summary both spend the Groq key,
-    // which is why the client's BYO field is a single key and the promise it
-    // makes — bring one and Deiko's servers see nothing at all — is finally
-    // true rather than true-if-you-brought-both.
+    // which is why the client's BYO field is a single key — and why this
+    // endpoint never runs at all for somebody who brought one, since
+    // DEIKO_RELAY_URL is withheld client-side while a key is in use. Sorting
+    // is a separate promise: `/v1/classify` still sees what it needs to
+    // place the brief, key or no key.
     const native = new URLSearchParams(query).get("task") === "transcribe";
     const out = await proxy(native ? GROQ_TRANSCRIBE_URL : GROQ_STT_URL, {
       // The client's own multipart body and boundary, forwarded verbatim.

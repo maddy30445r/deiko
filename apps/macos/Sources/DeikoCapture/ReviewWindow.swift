@@ -472,7 +472,7 @@ final class ReviewModel: ObservableObject {
     /// Its own task beside the summary's, for the same reason: a network round
     /// trip must not stand in front of a finished brief. The re-render is what
     /// makes it real — `prompt.txt` is written before the classifier answers,
-    /// so the earlier-work section only exists after this second pass.
+    /// so the task section only exists after this second pass.
     ///
     /// A brief thrown while this is in flight does not miss it: `approve`
     /// waits on this task for up to a second before reading the prompt.
@@ -999,7 +999,7 @@ struct ReviewView: View {
                 // Already its own task: there is nothing to start fresh from.
                 Button("Nothing — it starts fresh") { model.setTask(own) }
                     .disabled((context.task ?? own) == own)
-                Button("Name this task…") {
+                Button("New task…") {
                     guard let title = Collections.askText(
                         title: "Name this task",
                         informative: "The next brief about the same work joins it.",

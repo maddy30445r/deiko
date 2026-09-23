@@ -121,8 +121,8 @@ export const SUMMARIES_PER_DAY =
 /// SIZED FROM THE BIGGEST REQUEST, NOT THE AVERAGE. The first number here was
 /// 4000, justified as "a Jev decision costs a tenth of a summary" — which is
 /// true of a decision about an empty board and false of the one this client
-/// actually sends. A full request carries 120 earlier briefs, about 10k input
-/// tokens against a summary's 2k, so it costs a few times a summary rather
+/// actually sends. A full request carries eight shortlisted tasks, about 10k
+/// input tokens against a summary's 2k, so it costs a few times a summary rather
 /// than a tenth of one. At Jev's $0.042 per million that is ~$0.0004 each, so
 /// this ceiling is the day's worst case in money: about 40 cents.
 ///
