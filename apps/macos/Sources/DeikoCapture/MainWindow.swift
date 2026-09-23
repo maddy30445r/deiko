@@ -624,7 +624,8 @@ private struct BoardPane: View {
     /// A section in a grid always starts a new row, so a section per lone
     /// brief stacked most of the board into one column. Lone briefs next to
     /// each other share one headerless section; a task of two or more gets
-    /// its own.
+    /// its own, alone — so a run is headed exactly when its first group is
+    /// a task, and a headerless run only ever follows a headed one.
     static func sections(_ groups: [SessionsStore.Group]) -> [[SessionsStore.Group]] {
         groups.reduce(into: []) { out, group in
             if group.items.count == 1, let last = out.last, last[0].items.count == 1 {
@@ -732,11 +733,18 @@ private struct BoardPane: View {
                             // which is most of any board. No pinned headers:
                             // a pinned view fights the scroll view for the
                             // same tracking areas the fixed band escaped.
-                            ForEach(Self.sections(sessions.groups(of: shown)), id: \.[0].id) { run in
+                            ForEach(Array(Self.sections(sessions.groups(of: shown)).enumerated()), id: \.element[0].id) { index, run in
                                 Section {
                                     ForEach(run.flatMap(\.items)) { item in BoardCard(item: item, store: sessions) }
                                 } header: {
-                                    if run.count == 1, run[0].items.count > 1 { TaskHeader(group: run[0], store: sessions) }
+                                    if run[0].items.count > 1 {
+                                        TaskHeader(group: run[0], store: sessions)
+                                    } else if index > 0 {
+                                        // Lone briefs after a task. Without a
+                                        // break they read as more of it, under
+                                        // a header that counts fewer.
+                                        Rectangle().fill(DeikoStyle.hairline).frame(height: 1).padding(.top, 12)
+                                    }
                                 }
                             }
                         }
@@ -1028,7 +1036,10 @@ struct SessionMenu: View {
             Button("New collection…") { newCollection() }
         }
         Menu("Move to task") {
+            // The brief that started its task is already on its own task:
+            // moving it there would change nothing.
             Button("On its own") { store.move(item, toTask: Tasks.own(item.id)) }
+                .disabled(item.task == Tasks.own(item.id))
             let others = store.recentTasks(excluding: item.task)
             if !others.isEmpty { Divider() }
             ForEach(others) { group in

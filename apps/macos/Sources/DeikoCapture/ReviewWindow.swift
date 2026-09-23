@@ -128,6 +128,10 @@ final class ReviewModel: ObservableObject {
                 guard stillCurrent(sessionDir) else { return }
                 digest = rerendered
             }
+            // The board groups by task and counts by collection, and it may
+            // be open. Outside the render lane: a folder walk must not hold up
+            // the next render.
+            await SessionsStore.shared.load(root: (sessionDir as NSString).deletingLastPathComponent)
         }
     }
 
@@ -505,9 +509,11 @@ final class ReviewModel: ObservableObject {
                 guard stillCurrent(sessionDir) else { return }
                 if let rerendered { digest = rerendered }
                 context = SessionContext.read(sessionDir: sessionDir)
-                await SessionsStore.shared.load(root: (sessionDir as NSString).deletingLastPathComponent)
                 collections = Collections.all()
             }
+            // So the menu and the board see the task this brief just joined
+            // or started. After the render lane, not inside it.
+            await SessionsStore.shared.load(root: (sessionDir as NSString).deletingLastPathComponent)
             placing = false
         }
     }
@@ -990,7 +996,9 @@ struct ReviewView: View {
     ) -> some View {
         Menu {
             if let own = model.ownTask {
+                // Already its own task: there is nothing to start fresh from.
                 Button("Nothing — it starts fresh") { model.setTask(own) }
+                    .disabled((context.task ?? own) == own)
                 Button("Name this task…") {
                     guard let title = Collections.askText(
                         title: "Name this task",
