@@ -8,11 +8,23 @@
 ///   release on the orb → cancelled
 ///   Escape             → cancelled
 ///
-/// **This is deliberately not an `NSDraggingSession`.** A real drag needs the
-/// destination to accept a pasteboard type, and a terminal accepts none — the
-/// cursor would show a rejection badge over the exact window we mean to hit. A
-/// fling asks the destination for nothing; it is a way of *pointing*, and the
-/// app underneath never learns it happened.
+/// **This is deliberately not an `NSDraggingSession`** — with one measured
+/// exception, added later and gated to it.
+///
+/// A real drag needs the destination to accept a pasteboard type, and a
+/// terminal accepts none: the cursor would show a rejection badge over the
+/// exact window we mean to hit. A fling asks the destination for nothing; it
+/// is a way of *pointing*, and the app underneath never learns it happened.
+/// That is still how every fling begins, and the only way one ever ends
+/// anywhere but a browser.
+///
+/// THE EXCEPTION: a chat composer attaches a file that is DROPPED on it and
+/// ignores the same file pasted (measured on Gemini; a drop works on Claude.ai,
+/// ChatGPT and Gemini alike). So when — and only when — a fling is over a
+/// BROWSER and the session has a persona file, `OrbController` upgrades it to
+/// a real drag mid-flight, which is precisely the case where the destination
+/// does accept the type and no rejection badge appears. Everything else keeps
+/// the pointing gesture this file describes. See `upgradeToSystemDrag`.
 ///
 /// Lives apart from the orb for the same reason `SessionGesture` lives apart
 /// from `Hotkey`: everything that resolves what is under the cursor needs a

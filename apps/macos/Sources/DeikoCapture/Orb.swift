@@ -121,6 +121,17 @@ final class OrbController: NSObject {
     /// cursor can travel tens of points past the last position we actually
     /// resolved an app at. That made the named target and the clicked pixel two
     /// different questions. Now they are the same one.
+    /// The system drag the fling is upgraded to over a browser, and whether
+    /// the destination took the file. See `upgradeToSystemDrag`.
+    private let dragSource = CoinDragSource()
+    private var dragAttempted = false
+    private var personaDroppedOnTarget = false
+    private var releasing = false
+    /// The last travel the coin reported, so the aim keeps updating while a
+    /// system drag is running — the gesture's own `translation` stops arriving
+    /// the moment AppKit takes the mouse.
+    private var lastTranslation = CGSize.zero
+
     private var aimPoint: CGPoint?
 
     // ── Presenting ──────────────────────────────────────────────────────────
@@ -498,6 +509,15 @@ final class OrbController: NSObject {
     // ── The fling ───────────────────────────────────────────────────────────
 
     private func flingPressed() {
+        dragAttempted = false
+        personaDroppedOnTarget = false
+        releasing = false
+        // STALE TRAVEL IS A FLING NOBODY MADE. The first update of a press can
+        // carry a zero translation, and `flingDragged` falls back to the last
+        // one when it does — so without this, a click after a long throw
+        // measured as a throw and sent the brief to whatever was behind the
+        // orb, which is the exact failure `travelThreshold` exists to prevent.
+        lastTranslation = .zero
         // Armed whenever a throw can still mean something — which now includes
         // BEFORE the brief exists. `.working` with no digest is the pipeline
         // still rendering; the throw is held and delivered the moment it
@@ -530,14 +550,70 @@ final class OrbController: NSObject {
         _ = fling.press()
     }
 
+    /// Upgrade the fling to a real system drag, once, the first time it is
+    /// over a browser and there is a persona file to hand over.
+    ///
+    /// Not at press: a system drag delivers to whatever is under the cursor
+    /// when it ends, and a `.md` dropped on a terminal types its path into the
+    /// prompt. Browsers are the only destination that gains anything here —
+    /// they attach a dropped file and ignore a pasted one.
+    private func upgradeToSystemDrag(target: HandoffTarget) {
+        guard UserDefaults.standard.object(forKey: "DEIKO_DRAG_HANDOFF") as? Bool ?? true,
+              !dragSource.isDragging, !dragAttempted,
+              Handoff.needsAttachedImages(target),
+              let file = model.currentSessionDir.flatMap({ Personas.file(forSession: $0) }),
+              let anchor = coinCursor.dragAnchor,
+              let image = coinCursor.snapshot(kind: coinKindForDrag)
+        else { return }
+        dragAttempted = true
+
+        dragSource.onMoved = { [weak self] _ in
+            // AppKit owns the mouse now, but the aim label and the target
+            // highlight are still ours to draw. `.zero` means "no fresh
+            // translation" — `flingDragged` falls back to the last one so the
+            // gesture does not read this as a coin that never travelled.
+            self?.flingDragged(.zero)
+        }
+        dragSource.onEnded = { [weak self] _, operation in
+            guard let self else { return }
+            // `.none` means nothing took it — the paste path still has to carry
+            // the persona, exactly as it did before any of this existed.
+            self.personaDroppedOnTarget = operation != []
+            Handoff.trace?(operation != []
+                           ? "fling: the persona file was accepted by the drop"
+                           : "fling: the drop was refused — the persona travels as text")
+            self.flingReleased()
+        }
+        let started = dragSource.begin(
+            from: anchor.view,
+            file: URL(fileURLWithPath: file),
+            image: image,
+            at: anchor.pointInWindow
+        )
+        if started {
+            // Two coins otherwise: AppKit draws its own drag image from here on.
+            coinCursor.hide()
+        }
+        Handoff.trace?(started
+                       ? "fling: upgraded to a system drag over \(target.appName)"
+                       : "fling: could not start a system drag — keeping the paste path")
+    }
+
+    /// What the coin looks like for the drag image.
+    private var coinKindForDrag: CoinView.Kind {
+        state.isOverTarget ? .ready : .overNothing
+    }
+
     private func flingDragged(_ translation: CGSize) {
+        if translation != .zero { lastTranslation = translation }
+        let travel = translation == .zero ? lastTranslation : translation
         let mouse = NSEvent.mouseLocation
         let cgPoint = cocoaToCG(mouse)
         let overOrb = window?.frame.contains(mouse) ?? false
         let resolved = overOrb ? nil : Handoff.targetUnder(point: cgPoint, excluding: window)
 
         let decision = fling.drag(
-            distance: hypot(translation.width, translation.height),
+            distance: hypot(travel.width, travel.height),
             overOrb: overOrb,
             target: resolved?.target
         )
@@ -554,13 +630,21 @@ final class OrbController: NSObject {
             } else {
                 highlight.hide()
             }
+            if let target { upgradeToSystemDrag(target: target) }
         }
     }
 
     private func flingReleased() {
+        // ONE RELEASE PER FLING. While a system drag runs, AppKit owns the
+        // mouse and the drag session reports the end; the coin's own gesture
+        // may report it too. Sending twice would deliver two briefs.
+        guard !releasing else { return }
+        guard !dragSource.isDragging else { return }   // the session will call us
+        releasing = true
         highlight.hide()
         coinCursor.hide()
         state.aim = .idle
+        dragAttempted = false
         switch fling.release() {
         case .openOptions:
             // The gesture still calls a travel-free release `openOptions` —
@@ -596,6 +680,8 @@ final class OrbController: NSObject {
         highlight.hide()
         coinCursor.hide()
         state.aim = .idle
+        dragAttempted = false
+        personaDroppedOnTarget = false
     }
 
     /// The drop pastes and submits. If either half misses, `prompt.txt` is
@@ -603,6 +689,9 @@ final class OrbController: NSObject {
     /// than a command form, because there is no longer a command to type.
     private func send(to target: HandoffTarget) {
         let sessionDir = model.currentSessionDir
+        // Read HERE, not inside the closure: `approve` queues the handoff when
+        // the brief is still rendering, and a press in the meantime resets it.
+        let dropped = personaDroppedOnTarget
         model.approve(handingTo: target.appName) { prompt in
             do {
                 // Decided HERE, at the release, from the app actually under the
@@ -612,6 +701,9 @@ final class OrbController: NSObject {
                 // path on this Mac; everything else gets the paths, which is
                 // what Claude Code reads with its own tools.
                 let attach = Handoff.needsAttachedImages(target)
+                // Already dropped as a file, so it must not be pasted again —
+                // and the short text is what the paste path sends INSTEAD of
+                // the file, so that goes too.
                 try await Handoff.deliver(
                     to: target,
                     text: attach ? prompt.attachedText : prompt.text,
@@ -620,8 +712,8 @@ final class OrbController: NSObject {
                     // told where the persona file is and reads it itself;
                     // pasting its contents there too would put the same
                     // instructions in the chat twice.
-                    persona: attach ? prompt.personaText : nil,
-                    personaFile: attach ? prompt.personaFile : nil
+                    persona: (attach && !dropped) ? prompt.personaText : nil,
+                    personaFile: (attach && !dropped) ? prompt.personaFile : nil
                 )
                 await MainActor.run {
                     Handoff.lastReport.outcome = .delivered
@@ -731,6 +823,24 @@ final class CoinCursor {
 
     func hide() {
         window?.orderOut(nil)
+    }
+
+    /// The view a system drag is begun from, and where the coin sits inside
+    /// it — so the drag image starts where the coin already is rather than
+    /// jumping to the cursor.
+    var dragAnchor: (view: NSView, pointInWindow: NSPoint)? {
+        guard let window, let view = window.contentView else { return nil }
+        return (view, NSPoint(x: Self.panelSize.width / 2,
+                              y: Self.panelSize.height - Self.coinCenterFromTop))
+    }
+
+    /// The coin as it looks right now, for the drag image. A default document
+    /// icon would make the gesture read as moving a file; what leaves the card
+    /// has to be what lands.
+    func snapshot(kind: CoinView.Kind) -> NSImage? {
+        let renderer = ImageRenderer(content: CoinView(kind: kind).frame(width: 56, height: 56))
+        renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
+        return renderer.nsImage
     }
 
     private func make() -> NSPanel {
