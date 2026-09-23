@@ -151,8 +151,23 @@ async function main() {
     repoHints: summary.repoHints ?? [],
   });
   if (decision.newCollection) {
-    collections.push({ ...decision.newCollection, hint: "" });
-    writeFileSync(join(root, "collections.json"), JSON.stringify(collections, null, 2) + "\n");
+    // RE-READ, AND CHECK THE ID. Two things happen between the read at the
+    // top of this script and here: a network call, and a user who may have
+    // made a collection from the review card while it was in flight. Writing
+    // the list we read minutes ago would drop theirs.
+    //
+    // The id check mirrors `Collections.add` in the app, which has always had
+    // it. Without it `decide` — which dedupes on NAME — creates a second
+    // `acme-portal` when the list already holds one called `Acme Portal`, and
+    // two rows with one id give the board two identical chips, a rename that
+    // moves one of them and a delete that takes both.
+    const current = readCollections(root);
+    if (!current.some((c) => c.id === decision.newCollection.id)) {
+      current.push({ ...decision.newCollection, hint: "" });
+      writeFileSync(join(root, "collections.json"), JSON.stringify(current, null, 2) + "\n");
+    } else {
+      decision.collection = decision.newCollection.id;
+    }
   }
 
   // CHECKED AGAIN, NOW. The check at the top of this script happened before a

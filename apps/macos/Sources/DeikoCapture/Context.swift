@@ -90,8 +90,15 @@ struct Collection: Codable, Identifiable, Equatable {
 
 enum Collections {
 
+    /// Where the sessions are. `--out` moves them, and the scripts resolve
+    /// `collections.json` from the session's own parent — so pinning this to
+    /// the default root meant the classifier's collections and the app's were
+    /// two different files, and the card showed "Unsorted" for a brief that
+    /// had been filed. Set once at launch beside the recorder's root.
+    nonisolated(unsafe) static var root = Sessions.defaultRoot
+
     static var file: URL {
-        URL(fileURLWithPath: Sessions.defaultRoot).appendingPathComponent("collections.json")
+        URL(fileURLWithPath: root).appendingPathComponent("collections.json")
     }
 
     static func all() -> [Collection] {
@@ -155,7 +162,10 @@ enum Collections {
     }
 
     /// Forget a collection. Sessions that pointed at it keep their
-    /// `context.json` and read as Unsorted; nothing else on disk is touched.
+    /// `context.json` and read as Unsorted — see `SessionsStore.load`, which
+    /// resolves an id no collection claims back to nil so those briefs stay
+    /// reachable from a chip rather than from the All list alone. Nothing
+    /// else on disk is touched.
     static func delete(id: String) {
         save(all().filter { $0.id != id })
     }

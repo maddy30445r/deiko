@@ -320,8 +320,13 @@ for (const id of new Set(earlierIds)) {
     id,
     dir: sibling,
     date: briefDate(id),
-    line: line.narration,
-    outcome: line.outcome,
+    // CAPPED LIKE THE CLASSIFIER CAPS THEM. These are another session's
+    // narration and an agent's own write-up, and they now pass through
+    // `assertNoSecrets`, which THROWS — so an unbounded string from a
+    // neighbouring folder could make this brief permanently unrenderable.
+    // The same 200 and 120 `pickCandidates` uses.
+    line: line.narration.slice(0, 200),
+    outcome: line.outcome ? line.outcome.slice(0, 120) : null,
     collection: collectionNames.get(line.collection) ?? null,
   });
 }

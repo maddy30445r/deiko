@@ -60,17 +60,19 @@ final class ReviewModel: ObservableObject {
         guard let sessionDir else { return }
         Personas.point(session: sessionDir, to: persona)
         personaName = persona.name
-        task?.cancel()
-        task = Task {
-            do {
-                let rerendered = try await BriefPipeline.rerender(sessionDir: sessionDir)
+        task = Task { [self] in
+            await exclusively { [self] in
+                guard let rerendered = try? await BriefPipeline.rerender(sessionDir: sessionDir) else {
+                    guard stillCurrent(sessionDir) else { return }
+                    // The brief on disk is still the last good one; say so
+                    // rather than leaving the window claiming a persona it
+                    // did not apply.
+                    personaName = Personas.name(forSession: sessionDir)
+                    rerenderPending = true
+                    return
+                }
                 guard stillCurrent(sessionDir) else { return }
                 digest = rerendered
-            } catch {
-                guard stillCurrent(sessionDir) else { return }
-                // The brief on disk is still the last good one; say so rather
-                // than leaving the window claiming a persona it did not apply.
-                personaName = Personas.name(forSession: sessionDir)
             }
         }
     }
@@ -112,17 +114,20 @@ final class ReviewModel: ObservableObject {
         guard let sessionDir else { return }
         context = next
         try? next.write(sessionDir: sessionDir)
-        task?.cancel()
-        task = Task {
-            do {
-                let rerendered = try await BriefPipeline.rerender(sessionDir: sessionDir)
+        task = Task { [self] in
+            await exclusively { [self] in
+                guard let rerendered = try? await BriefPipeline.rerender(sessionDir: sessionDir) else {
+                    guard stillCurrent(sessionDir) else { return }
+                    // The placement is on disk but the brief does not carry it
+                    // yet. Left silent, the card showed the link while the
+                    // next fling — which only re-renders for a correction —
+                    // shipped a brief without it. This makes the next send
+                    // rebuild, the way an excluded screenshot does.
+                    rerenderPending = true
+                    return
+                }
                 guard stillCurrent(sessionDir) else { return }
                 digest = rerendered
-            } catch {
-                guard stillCurrent(sessionDir) else { return }
-                // The brief on disk is still the last good one; show what it
-                // actually says rather than the change we failed to apply.
-                context = SessionContext.read(sessionDir: sessionDir)
             }
         }
     }
@@ -399,17 +404,15 @@ final class ReviewModel: ObservableObject {
         task?.cancel()
         task = Task {
             do {
-                // THE PLACING GETS A MOMENT, AND ONLY A MOMENT.
-                //
-                // `fetchContext` re-renders when the classifier answers, and
-                // this reads `prompt.txt`. Without a wait the two race, and
-                // the loser is whichever wrote last — so a brief thrown two
-                // seconds after the card appeared could carry the version
-                // without its earlier work, or a re-render could land on top
-                // of a correction. One second is long enough for a call that
-                // takes 70–500ms and short enough that nobody waits on a
-                // classifier that is not coming.
-                await Self.settle(classifyTask, within: .seconds(1))
+                // A brief thrown the instant the card appears should still
+                // carry where it belongs, if that is about to arrive. A
+                // second is long past a call that takes 70–500ms, and short
+                // enough that nobody waits on a classifier that is not
+                // coming.
+                await waitForPlacing()
+                var failure: Error?
+                await exclusively { [self] in
+                do {
                 if narrationEdited || rerenderPending {
                     phase = .working(narrationEdited
                         ? "Applying your correction…"
@@ -451,6 +454,9 @@ final class ReviewModel: ObservableObject {
                 guard stillCurrent(sessionDir) else { return }
                 handedTo = appName
                 phase = .sent
+                } catch { failure = error }
+                }
+                if let failure { throw failure }
             } catch {
                 guard stillCurrent(sessionDir) else { return }
                 phase = .failed(describe(error))
@@ -469,7 +475,8 @@ final class ReviewModel: ObservableObject {
     /// waits on this task for up to a second before reading the prompt.
     private func fetchContext(sessionDir: String) {
         classifyTask?.cancel()
-        classifyTask = Task {
+        placing = true
+        classifyTask = Task { [self] in
             // THE BOARD IS WHAT "carries on from" CHOOSES FROM, and until now
             // only the main window ever loaded it. Record a session without
             // opening that window — which is the ordinary way to use Deiko —
@@ -482,14 +489,20 @@ final class ReviewModel: ObservableObject {
                     root: (sessionDir as NSString).deletingLastPathComponent
                 )
             }
-            guard stillCurrent(sessionDir) else { return }
-            guard await BriefPipeline.classify(sessionDir: sessionDir) != nil else { return }
-            guard stillCurrent(sessionDir) else { return }
-            let rerendered = try? await BriefPipeline.rerender(sessionDir: sessionDir)
-            guard stillCurrent(sessionDir) else { return }
-            if let rerendered { self.digest = rerendered }
-            self.context = SessionContext.read(sessionDir: sessionDir)
-            self.collections = Collections.all()
+            guard stillCurrent(sessionDir) else { placing = false; return }
+            guard await BriefPipeline.classify(sessionDir: sessionDir) != nil else {
+                placing = false
+                return
+            }
+            guard stillCurrent(sessionDir) else { placing = false; return }
+            await exclusively { [self] in
+                let rerendered = try? await BriefPipeline.rerender(sessionDir: sessionDir)
+                guard stillCurrent(sessionDir) else { return }
+                if let rerendered { digest = rerendered }
+                context = SessionContext.read(sessionDir: sessionDir)
+                collections = Collections.all()
+            }
+            placing = false
         }
     }
 
@@ -507,17 +520,57 @@ final class ReviewModel: ObservableObject {
         }
     }
 
-    /// Wait for a task, but not indefinitely. Whichever finishes first wins
-    /// and the other is abandoned — the task itself is not cancelled, because
-    /// a classification that arrives late is still worth having on the card.
-    private static func settle(_ work: Task<Void, Never>?, within limit: Duration) async {
-        guard let work else { return }
-        await withTaskGroup(of: Void.self) { group in
-            group.addTask { await work.value }
-            group.addTask { try? await Task.sleep(for: limit) }
-            await group.next()
-            group.cancelAll()
+    /// Set while the classifier and its re-render are in flight, so a throw
+    /// can wait a moment for them without waiting on them.
+    private var placing = false
+
+    /// Give the placing a moment, and only a moment.
+    ///
+    /// THE OBVIOUS VERSION OF THIS DOES NOT TIME OUT. It was a task group
+    /// racing `await work.value` against a sleeper, which reads like a
+    /// deadline and is not one: `value` on a `Task<Void, Never>` cannot be
+    /// cancelled, and a task group awaits every child before it returns. So
+    /// the sleeper won the race and the group waited for the loser anyway —
+    /// measured at 5.33s for a one-second limit. Every fling thrown while the
+    /// classifier was running sat there until a node spawn, a network call
+    /// with a fifteen-second deadline and a whole re-render had finished,
+    /// with the orb still reading "Ready to hand over".
+    ///
+    /// Polling a flag is the shape `Handoff` already uses to wait for an app
+    /// to activate, and unlike the group it is honest about being a deadline.
+    /// `Task.sleep` is cancellable, so a session switch still ends it.
+    private func waitForPlacing(upTo ticks: Int = 40) async {
+        for _ in 0..<ticks where placing {
+            try? await Task.sleep(for: .milliseconds(25))
         }
+    }
+
+    /// ONE RENDERER PER SESSION, AND THE ONE WHO SENDS HOLDS THE LANE.
+    ///
+    /// Four paths rewrite a session's files — a correction, a screenshot
+    /// taken out, a persona, a placement — and the classifier is a fifth.
+    /// They used to share one `task` variable and cancel each other, which
+    /// bought nothing: `BriefPipeline` shells out to `make brief`, and
+    /// cancelling a Swift task neither kills that process nor stops it
+    /// writing. Two renders of one session could overlap, and the one that
+    /// finished last won — so excluding a second screenshot while the first
+    /// exclusion was still rendering could put the first screenshot's path,
+    /// caption and image bytes back, after the user had removed them.
+    ///
+    /// Everything that writes now queues behind whatever is already writing.
+    /// `approve` holds the lane across its read of `prompt.txt` and the paste
+    /// as well, so nothing can rewrite the brief between deciding what to
+    /// send and sending it.
+    private var renderChain: Task<Void, Never>?
+
+    private func exclusively(_ body: @escaping @MainActor () async -> Void) async {
+        let previous = renderChain
+        let mine = Task { @MainActor in
+            _ = await previous?.value
+            await body()
+        }
+        renderChain = mine
+        await mine.value
     }
 
     /// What the developer had in the narration box, and which holds already
@@ -527,6 +580,11 @@ final class ReviewModel: ObservableObject {
     private var holdsBeforeExtending: Set<Int> = []
 
     /// Called just before the window hands control back to the recorder.
+    ///
+    /// The classifier and its re-render must stop here, not in `reload` a few
+    /// seconds later: in between, the recorder is appending to `events.jsonl`
+    /// and `make brief` would read it mid-append and overwrite `brief.json`
+    /// and `prompt.txt` from a partial session.
     func prepareToExtend() {
         guard let sessionDir else { return }
         // Only an ACTUAL edit is carried. Carrying the untouched transcript would
@@ -585,6 +643,11 @@ final class ReviewModel: ObservableObject {
                 self.originalNarration = digest.summary.narration
                 self.phase = .ready
                 self.fetchSummary(sessionDir: sessionDir)
+                // The words changed, so where this belongs may have changed
+                // with them. `load` places a brief and this path never did,
+                // leaving the placement computed from the narration as it
+                // stood before the addition.
+                self.fetchContext(sessionDir: sessionDir)
             } catch {
                 guard stillCurrent(sessionDir) else { return }
                 self.phase = .failed(describe(error))
@@ -605,6 +668,8 @@ final class ReviewModel: ObservableObject {
         summaryTask = nil
         classifyTask?.cancel()
         classifyTask = nil
+        // Nothing is placing any more, so a throw must not wait for it.
+        placing = false
         // A held throw belongs to the session it was thrown at, and nothing
         // else. `load` calls this on entry, so without it a fling queued
         // against one session would fire the moment the NEXT session finished

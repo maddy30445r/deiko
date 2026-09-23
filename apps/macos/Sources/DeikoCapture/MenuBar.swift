@@ -270,6 +270,9 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Settings has no recorder of its own and should not grow one.
         main.openSessionDir = { [weak self] in self?.recorder.sessionDir }
         main.sessionRoot = recorder.sessionRoot
+        // Collections sit beside the sessions, wherever `--out` put them —
+        // the scripts resolve the same file from a session's own parent.
+        Collections.root = recorder.sessionRoot
         // Remove the MCP entry earlier versions wrote. Nothing registers
         // anything any more; this is only clearing up after what did.
         LegacyMCP.cleanUpOnce()

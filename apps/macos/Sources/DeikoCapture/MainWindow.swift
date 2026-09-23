@@ -350,7 +350,14 @@ final class SessionsStore: ObservableObject {
         items.removeAll { $0.id == item.id }
     }
 
+    /// The root these sessions were read from, so a reload after a rename
+    /// goes back to the same place rather than to the default one.
+    private(set) var root = Sessions.defaultRoot
+
     func load(root: String) async {
+        self.root = root
+        Collections.root = root
+        let known = Set(Collections.all().map(\.id))
         let names = Sessions.list(root: root)
         // Manifests are small but there can be hundreds; read them off the main
         // actor so opening the window never stutters.
@@ -360,7 +367,12 @@ final class SessionsStore: ObservableObject {
                 guard let date = Sessions.stamp(name) else { return nil }
                 let digest = try? BriefPipeline.digest(sessionDir: dir)
                 let narration = digest?.summary.narration.trimmingCharacters(in: .whitespacesAndNewlines)
-                let context = SessionContext.read(sessionDir: dir)
+                // An id no collection claims any more — its collection was
+                // deleted — reads as Unsorted, which is what the confirmation
+                // promised and what the card says. Left as-is, those briefs
+                // answered to no chip at all.
+                let stored = SessionContext.read(sessionDir: dir)
+                let context = known.contains(stored?.collection ?? "") ? stored : nil
                 let outcome = (try? String(
                     contentsOf: URL(fileURLWithPath: dir).appendingPathComponent("outcome.md"),
                     encoding: .utf8
@@ -840,7 +852,7 @@ struct SessionMenu: View {
             informative: "Briefs about the same project, kept together."
         ) else { return }
         store.move(item, to: made.id)
-        Task { await store.load(root: Sessions.defaultRoot) }
+        Task { await store.load(root: store.root) }
     }
 
     /// ASKED, ALWAYS. The screenshots are the only copy, and "Delete all past
@@ -905,7 +917,7 @@ private struct CollectionMenu: View {
     }
 
     private func reload() {
-        Task { await store.load(root: Sessions.defaultRoot) }
+        Task { await store.load(root: store.root) }
     }
 }
 
