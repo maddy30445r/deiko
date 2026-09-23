@@ -143,8 +143,14 @@ struct MainWindowView: View {
             .padding(.top, 44)
             .padding(.bottom, 14)
 
-            ForEach(MainSection.allCases) { section in
-                SidebarRow(section: section, selected: nav.section == section) {
+            ForEach(Array(MainSection.allCases.enumerated()), id: \.element) { index, section in
+                SidebarRow(
+                    section: section,
+                    selected: nav.section == section,
+                    // ⌘1…⌘4. This is a menu-bar app for developers; the second
+                    // thing they try after opening a window is a number key.
+                    shortcut: KeyEquivalent(Character("\(index + 1)"))
+                ) {
                     nav.section = section
                 }
             }
@@ -201,6 +207,7 @@ struct MainWindowView: View {
 private struct SidebarRow: View {
     let section: MainSection
     let selected: Bool
+    let shortcut: KeyEquivalent
     let go: () -> Void
     @State private var hovering = false
 
@@ -225,9 +232,11 @@ private struct SidebarRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .keyboardShortcut(shortcut, modifiers: .command)
         .padding(.horizontal, 6)
         .onHover { hovering = $0 }
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+        .help("\(section.title) (⌘\(String(describing: shortcut.character)))")
     }
 }
 
@@ -279,6 +288,13 @@ final class SessionsStore: ObservableObject {
         var tally: [String: Int] = [:]
         for item in items { for app in Set(item.apps) { tally[app, default: 0] += 1 } }
         return tally.sorted { $0.value > $1.value }.prefix(4).map { ($0.key, $0.value) }
+    }
+
+    /// Forget one session, on disk and here. The confirmation lives with the
+    /// caller — this is the part that cannot be undone.
+    func delete(_ item: Item) {
+        guard Sessions.delete(dir: item.dir) else { return }
+        items.removeAll { $0.id == item.id }
     }
 
     func load(root: String) async {
@@ -387,18 +403,7 @@ private struct DashboardPane: View {
             if !item.crops.isEmpty {
                 HStack(spacing: 8) {
                     ForEach(item.crops.prefix(4), id: \.self) { path in
-                        if let image = NSImage(contentsOfFile: path) {
-                            Image(nsImage: image)
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .frame(width: 96, height: 58)
-                                .clipped()
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .strokeBorder(DeikoStyle.hairline, lineWidth: 1)
-                                )
-                        }
+                        CropThumbnail(path: path, width: 96, height: 58, radius: 8)
                     }
                     if item.crops.count > 4 {
                         Text("+\(item.crops.count - 4)")
@@ -470,6 +475,7 @@ private struct DashboardPane: View {
 private struct BoardPane: View {
     @ObservedObject var sessions: SessionsStore
     @State private var query = ""
+    @FocusState private var searching: Bool
 
     private var shown: [SessionsStore.Item] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
@@ -487,6 +493,15 @@ private struct BoardPane: View {
                 .textFieldStyle(.roundedBorder)
                 .font(.system(size: 12))
                 .frame(width: 190)
+                .focused($searching)
+                // ⌘F puts the cursor here. A search field nobody can reach
+                // from the keyboard is a search field for other people.
+                .overlay {
+                    Button("") { searching = true }
+                        .keyboardShortcut("f", modifiers: .command)
+                        .opacity(0)
+                        .accessibilityHidden(true)
+                }
         }) {
             if shown.isEmpty {
                 EmptyPane(
@@ -500,7 +515,7 @@ private struct BoardPane: View {
                 // height were being centred in their row, which staggered the
                 // top edge and read as a rendering fault rather than masonry.
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), spacing: 14, alignment: .top)], spacing: 14) {
-                    ForEach(shown) { item in BoardCard(item: item) }
+                    ForEach(shown) { item in BoardCard(item: item, store: sessions) }
                 }
                 .padding(.top, 2)
             }
@@ -510,21 +525,13 @@ private struct BoardPane: View {
 
 private struct BoardCard: View {
     let item: SessionsStore.Item
+    let store: SessionsStore
     @State private var hovering = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
-            if let first = item.crops.first, let image = NSImage(contentsOfFile: first) {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(height: 74)
-                    .clipped()
-                    .clipShape(RoundedRectangle(cornerRadius: 9))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 9)
-                            .strokeBorder(DeikoStyle.hairline, lineWidth: 1)
-                    )
+            if let first = item.crops.first {
+                CropThumbnail(path: first, height: 74)
             }
             Text(item.title)
                 .font(.system(size: 12.5))
@@ -557,7 +564,8 @@ private struct BoardCard: View {
         .animation(.easeOut(duration: 0.14), value: hovering)
         .onHover { hovering = $0 }
         .onTapGesture(count: 2) { NSWorkspace.shared.open(URL(fileURLWithPath: item.dir)) }
-        .help("Double-click to open this session's folder")
+        .contextMenu { SessionMenu(item: item, store: store) }
+        .help("Double-click to open this session's folder · right-click for more")
     }
 
     /// Day and time, because six sessions from one afternoon were
@@ -579,6 +587,42 @@ private struct BoardCard: View {
         let thisYear = Calendar.current.component(.year, from: Date())
         let year = Calendar.current.component(.year, from: date)
         return year == thisYear ? when.string(from: date) : whenOlder.string(from: date)
+    }
+}
+
+/// Every verb a recorded session has, in one place, so the board card and the
+/// dashboard row cannot drift apart.
+struct SessionMenu: View {
+    let item: SessionsStore.Item
+    let store: SessionsStore
+
+    var body: some View {
+        Button("Copy the brief") {
+            guard let prompt = try? BriefPipeline.prompt(sessionDir: item.dir) else { return }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(prompt.text, forType: .string)
+        }
+        Button("Open folder") { NSWorkspace.shared.open(URL(fileURLWithPath: item.dir)) }
+        Button("Show in Finder") {
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.dir)])
+        }
+        Divider()
+        Button("Delete…", role: .destructive) { confirmDelete() }
+    }
+
+    /// ASKED, ALWAYS. The screenshots are the only copy, and "Delete all past
+    /// sessions" in Settings already sets the house rule that removing
+    /// somebody's captures is a question, not a click.
+    private func confirmDelete() {
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "Delete this session?"
+        alert.informativeText = "\(item.title)\n\nRemoves the brief and its "
+            + "\(item.crops.count) screenshot\(item.crops.count == 1 ? "" : "s"). This cannot be undone."
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        store.delete(item)
     }
 }
 

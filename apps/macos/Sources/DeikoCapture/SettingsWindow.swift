@@ -511,6 +511,9 @@ struct SettingsView: View {
                     TextField("paste the key from your email…", text: $model.licenseKey)
                         .font(.system(size: 12, design: .monospaced))
                         .textFieldStyle(.roundedBorder)
+                        // Return in this field applies THIS field. Pasting a
+                        // key and pressing Return is the whole interaction.
+                        .onSubmit { Task { await model.saveLicense() } }
                     // A licence is meant to live on more than one Mac — the
                     // hours are per licence — and it gets to the next one by
                     // being copied off this one. The STORED key, not the
@@ -650,7 +653,8 @@ struct SettingsView: View {
                 keyRow(label: "Groq", tag: model.tag(for: "GROQ_API_KEY"),
                        text: $model.groqKey,
                        touched: $model.groqTouched,
-                       prompt: model.groqStored ? model.placeholder(stored: true) : "gsk_…")
+                       prompt: model.groqStored ? model.placeholder(stored: true) : "gsk_…",
+                       onSubmit: { model.saveKeys() })
                 HStack {
                     // No longer a warning. A missing key used to mean briefs
                     // stopped at "Transcribing…"; now it means somebody else
@@ -659,8 +663,12 @@ struct SettingsView: View {
                         .font(.system(size: 11))
                         .foregroundStyle(DeikoStyle.ink2)
                     Spacer()
+                    // NOT `.defaultAction`. It was the only one in the pane,
+                    // so Return anywhere in Settings — including in the licence
+                    // field two cards up — saved transcription keys and left
+                    // the licence unapplied, silently. Each field submits
+                    // itself now (see `keyRow` and the licence row).
                     Button("Save") { model.saveKeys() }
-                        .keyboardShortcut(.defaultAction)
                 }
                 .padding(.top, 2)
             }
@@ -699,7 +707,8 @@ struct SettingsView: View {
 
     private func keyRow(
         label: String, tag: String, text: Binding<String>,
-        touched: Binding<Bool>, prompt: String
+        touched: Binding<Bool>, prompt: String,
+        onSubmit: @escaping () -> Void = {}
     ) -> some View {
         HStack(spacing: 10) {
             (Text(label).font(.system(size: 13))
@@ -709,6 +718,7 @@ struct SettingsView: View {
                 .font(.system(size: 12, design: .monospaced))
                 .textFieldStyle(.roundedBorder)
                 .onChange(of: text.wrappedValue) { touched.wrappedValue = true }
+                .onSubmit { onSubmit() }
         }
     }
 }

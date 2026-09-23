@@ -169,6 +169,17 @@ enum Sessions {
         return removed
     }
 
+    /// Remove ONE session. Named by its folder, and only if that folder is
+    /// shaped like a session (`stamp` is strict for exactly this reason): this
+    /// deletes a directory inside somebody's Documents, and the only thing
+    /// standing between it and an arbitrary path is that check.
+    @discardableResult
+    static func delete(dir: String) -> Bool {
+        let name = (dir as NSString).lastPathComponent
+        guard stamp(name) != nil else { return false }
+        return (try? FileManager.default.removeItem(atPath: dir)) != nil
+    }
+
     /// Remove every past session. The open one, if any, survives.
     @discardableResult
     static func deleteAll(root: String = defaultRoot, keeping open: String? = nil) -> Int {
