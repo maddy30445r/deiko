@@ -53,6 +53,28 @@ final class ReviewModel: ObservableObject {
     @Published var digest: BriefDigest?
     @Published var narration: String = ""
 
+    /// Write this brief up as a different persona, and re-render it now.
+    /// The pointer beside the session is what the renderer reads, so this is
+    /// the whole change — and it lasts for this brief only.
+    func setPersona(_ persona: Persona) {
+        guard let sessionDir else { return }
+        Personas.point(session: sessionDir, to: persona)
+        personaName = persona.name
+        task?.cancel()
+        task = Task {
+            do {
+                let rerendered = try await BriefPipeline.rerender(sessionDir: sessionDir)
+                guard stillCurrent(sessionDir) else { return }
+                digest = rerendered
+            } catch {
+                guard stillCurrent(sessionDir) else { return }
+                // The brief on disk is still the last good one; say so rather
+                // than leaving the window claiming a persona it did not apply.
+                personaName = Personas.name(forSession: sessionDir)
+            }
+        }
+    }
+
     /// The persona this brief was written for, for the one line on the card
     /// that says so. Read when the digest lands, not in a view body: it is a
     /// file read, and the card re-renders on every keystroke of a correction.
@@ -652,11 +674,45 @@ struct ReviewView: View {
                 degradedRow(d)
                 trustRow(d)
                 repoRow(d)
+                personaRow
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 20)
         .padding(.top, 16)
+    }
+
+    /// How this brief will be written up, and the one place to change it for
+    /// this brief alone. A menu rather than a segmented control: there are
+    /// four personas today and no ceiling on how many somebody makes.
+    @ViewBuilder private var personaRow: some View {
+        if let current = model.personaName {
+            HStack(spacing: 6) {
+                Text("Written up as")
+                    .font(.system(size: 11))
+                    .foregroundStyle(DeikoStyle.ink2)
+                Menu {
+                    ForEach(Personas.all()) { persona in
+                        Button {
+                            guard persona.name != current else { return }
+                            model.setPersona(persona)
+                        } label: {
+                            // A checkmark, because this is a choice with a
+                            // current answer, not a list of commands.
+                            Text(persona.name == current ? "✓ \(persona.name)" : "   \(persona.name)")
+                        }
+                    }
+                } label: {
+                    Text(current)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(DeikoStyle.mark)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Write this brief up as a different persona. Only this one — your default does not change.")
+            }
+            .padding(.top, 1)
+        }
     }
 
     /// `43s · 6 things pointed at · Code` — the app name in mono, because it

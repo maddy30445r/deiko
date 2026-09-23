@@ -504,6 +504,7 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
             action: #selector(openMain),
             keyEquivalent: "d"
         ))
+        menu.addItem(personaItem())
         menu.addItem(NSMenuItem(
             title: "Settings…",
             action: #selector(openSettings),
@@ -777,6 +778,44 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func relaunch() {
         Relauncher.relaunch()
+    }
+
+    /// "Next brief as ▸", with the current answer ticked.
+    ///
+    /// The menu is where somebody already is when they decide how the next
+    /// brief should read — a window away is one window too many for a choice
+    /// made this often. It sets the DEFAULT; a brief already on screen changes
+    /// itself from the review window instead.
+    private func personaItem() -> NSMenuItem {
+        let item = NSMenuItem(title: "Next brief as", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        let current = Personas.defaultID
+        for persona in Personas.all() {
+            let entry = NSMenuItem(
+                title: persona.name,
+                action: #selector(pickPersona(_:)),
+                keyEquivalent: ""
+            )
+            entry.representedObject = persona.id
+            entry.state = persona.id == current ? .on : .off
+            entry.target = self
+            submenu.addItem(entry)
+        }
+        submenu.addItem(.separator())
+        let manage = NSMenuItem(title: "Personas…", action: #selector(openPersonas), keyEquivalent: "")
+        manage.target = self
+        submenu.addItem(manage)
+        item.submenu = submenu
+        return item
+    }
+
+    @objc private func pickPersona(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        Personas.defaultID = id
+    }
+
+    @objc private func openPersonas() {
+        main.present(.personas)
     }
 
     @objc private func openMain() {

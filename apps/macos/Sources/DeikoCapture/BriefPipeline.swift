@@ -417,8 +417,12 @@ enum BriefPipeline {
 
     /// Re-render only. Used after the narration is edited: the transcript has not
     /// changed, so there is nothing to recognise again.
+    ///
+    /// IT DOES NOT RE-POINT THE PERSONA. The first render picks the default;
+    /// after that the session owns its own answer, because the review window
+    /// can change it for this brief alone. Re-pointing here would have quietly
+    /// reverted that choice the next time somebody fixed a misheard word.
     static func rerender(sessionDir: String) async throws -> BriefDigest {
-        await MainActor.run { Personas.point(session: sessionDir, to: Personas.current()) }
         try await run(.brief, sessionDir: sessionDir)
         return try digest(sessionDir: sessionDir)
     }
