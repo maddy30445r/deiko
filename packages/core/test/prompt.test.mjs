@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { buildPrompt, quoteSurvives } from "../lib/prompt.mjs";
-import { assertNoSecrets, carriesSecret } from "../lib/redact.mjs";
+import { assertNoSecrets, carriesSecret, redact } from "../lib/redact.mjs";
 
 /** A referent nobody was talking through: no screenshot, no bound speech. */
 const bare = { cropPath: null, cropWithheld: null, said: null, text: { ax: [], ocr: [] } };
@@ -266,6 +266,19 @@ test("assertNoSecrets(evidence) catches a marker-adjacent opaque token only when
   const line = "password: aB3xY9kLm2Qz77";
   assert.doesNotThrow(() => assertNoSecrets(`fix this\n${line}`));
   assert.throws(() => assertNoSecrets(`fix this\n\`\`\`\n${line}\n\`\`\``));
+});
+
+// Regression: a keybinding or phone number under redact()'s 12-char opaque
+// floor used to sail through untouched, then trip assertNoSecrets's own
+// base64-run rule, which rejects a "+" followed by 8+ opaque characters at
+// any length — making the brief that carried it unrenderable.
+test("redact drops a short plus-run so assertNoSecrets no longer chokes on it", () => {
+  assert.doesNotThrow(() => assertNoSecrets(redact("- Bound the palette to ⌘+Shift+Tab")));
+  assert.doesNotThrow(() => assertNoSecrets(redact("(+919876543)")));
+});
+
+test("a real base64 secret is still redacted", () => {
+  assert.doesNotMatch(redact("Storage account key: MQULF+AStdFr/lA=="), /MQULF\+AStdFr\/lA==/);
 });
 
 test("evidence fences the screen text exactly when there is any, and not otherwise", () => {
@@ -601,7 +614,7 @@ test("the attached variant never names a path it cannot open", () => {
   assert.equal(attached.text, buildPrompt({ ...oneShot(), attached: true }).text);
 });
 
-// ── Earlier work, the write-back and the cost hint ──────────────────────────
+// ── The task, the write-back and the cost hint ───────────────────────────────
 //
 // Memory rides inside the prompt. Every one of these is off by default, so a
 // call without them renders the document it always did — the persona tests

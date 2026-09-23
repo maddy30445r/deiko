@@ -74,10 +74,21 @@ const TOKEN_SPLIT = /([\s;,=<>"'`()[\]{}]+)/;
  */
 const UNMARKED_MIN = 24;
 
+/**
+ * A "+" followed by 8+ opaque-alphabet characters. `looksOpaque` only judges
+ * a token past 12 characters, but `assertNoSecrets`'s base64-run rule rejects
+ * this shape at any length — so a short one (a keybinding like "⌘+Shift+Tab",
+ * a phone number like "+919876543") survived redaction and then made a brief
+ * unrenderable when it later hit the guard. Caught here too, regardless of
+ * length, so nothing redact() leaves standing can trip that guard downstream.
+ */
+const PLUS_RUN = /\+[A-Za-z0-9+/Ѐ-ӿ]{8,}/;
+
 function redactTokens(line, suspect) {
   return line
     .split(TOKEN_SPLIT)
     .map((part) => {
+      if (PLUS_RUN.test(part)) return "<REDACTED>";
       if (!looksOpaque(part)) return part;
       if (suspect) return "<REDACTED>";
       // Unmarked: only drop base64-shaped or very long runs.
