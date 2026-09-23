@@ -108,13 +108,14 @@ public enum SessionClaims {
                 : "your narration, for the summary")
         }
 
-        // SORTING IS NOT TRANSCRIPTION. Own-key users keep their audio and
-        // summary off Deiko's servers, but a brief the classifier attempted
-        // to place still sent what you said, its summary and your window
-        // titles, through the relay — so the card has to admit that too, or
-        // the line understates what left this Mac.
+        // SORTING IS NOT TRANSCRIPTION. Own-key users keep their audio off
+        // Deiko's servers — narration and its summary are produced by Groq
+        // directly — but a brief the classifier attempted to place still
+        // sent what you said, its summary, your window titles and notes on
+        // earlier work, through the relay — so the card has to admit that
+        // too, or the line understates what left this Mac.
         if filed {
-            parts.append("what you said, its summary and your window titles, to file it")
+            parts.append("what you said, its summary, your window titles and notes on earlier work, to Deiko to file it")
         }
 
         return parts.isEmpty

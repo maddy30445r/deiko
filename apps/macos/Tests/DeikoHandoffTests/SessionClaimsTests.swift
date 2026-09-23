@@ -80,7 +80,7 @@ func filedAddsTheSortingClaim() {
         transcriber: "deiko", degradedReason: nil,
         seconds: 30, uploadedChunks: 2, hasSummary: true, ownGroqKey: false, filed: true
     )
-    #expect(line.contains("what you said, its summary and your window titles, to file it"))
+    #expect(line.contains("what you said, its summary, your window titles and notes on earlier work, to Deiko to file it"))
 }
 
 @Test("an own-key session that was still sent to the classifier names both — Groq for the words, Deiko for sorting")
@@ -95,7 +95,7 @@ func ownKeySessionCanStillBeFiled() {
     )
     #expect(line.contains("~12s of audio to Groq, with your key"))
     #expect(line.contains("your narration to Groq, with your key"))
-    #expect(line.contains("what you said, its summary and your window titles, to file it"))
+    #expect(line.contains("what you said, its summary, your window titles and notes on earlier work, to Deiko to file it"))
     #expect(!line.contains("Deiko's transcription"))
 }
 
