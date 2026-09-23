@@ -26,7 +26,7 @@ import { align, joinWords } from "../packages/alignment/dist/src/align.js";
 import { loadSession } from "../packages/alignment/dist/src/referents/session.js";
 import { toCandidates } from "../packages/alignment/dist/src/referents/candidates.js";
 import { loadEvents } from "./lib/session-io.mjs";
-import { carriesSecret, assertNoSecrets, redact } from "./lib/redact.mjs";
+import { carriesSecret, assertNoSecrets, redact, redactBlock } from "./lib/redact.mjs";
 import { buildPrompt, quoteSurvives } from "./lib/prompt.mjs";
 import { degradedReason as cloudDegradedReason } from "./lib/cloud.mjs";
 import { wantsQuickHint } from "./lib/context.mjs";
@@ -344,8 +344,12 @@ writeFileSync(join(dir, "prompt-attached.txt"), attached.text);
 function screenTerms(referents) {
   const counts = new Map();
   for (const r of referents) {
-    for (const line of [...(r.text?.ax ?? []), ...(r.text?.ocr ?? [])]) {
-      for (const w of tokens(redact(line))) {
+    // Redacted as ONE block, like `redactBlock`'s own doc explains: a marker
+    // and the value it announces can land on different OCR lines, so judging
+    // "suspect" line by line let an unmarked credential fragment (no marker
+    // on ITS line) survive under the weaker unmarked threshold.
+    for (const line of redactBlock([...(r.text?.ax ?? []), ...(r.text?.ocr ?? [])])) {
+      for (const w of tokens(line)) {
         if (w.length > 2 && !/^\d+$/.test(w)) counts.set(w, (counts.get(w) ?? 0) + 1);
       }
     }
