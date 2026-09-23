@@ -588,20 +588,26 @@ private struct BoardPane: View {
     /// with the most in them, then whatever has not been filed.
     @ViewBuilder private var chips: some View {
         if !sessions.collections.isEmpty {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 7) {
-                    chip("All", count: sessions.items.count, filter: .all)
-                    ForEach(sessions.collections.sorted { sessions.count(of: $0.id) > sessions.count(of: $1.id) }) { collection in
-                        chip(collection.name, count: sessions.count(of: collection.id),
-                             filter: .collection(collection.id))
-                            .contextMenu { CollectionMenu(collection: collection, store: sessions) }
-                    }
-                    if sessions.unsortedCount > 0 {
-                        chip("Unsorted", count: sessions.unsortedCount, filter: .unsorted)
-                    }
+            // A PLAIN ROW, NOT A SCROLL VIEW. This was a horizontal
+            // `ScrollView` inside the pane's vertical one, and a scroll view
+            // nested across axes takes the mouse for itself: the chips drew
+            // correctly and neither hovered nor clicked, while the pointer
+            // reached the cards underneath. Four short words do not need to
+            // scroll, and `.fixedSize` keeps them from being squeezed if a
+            // board ever grows more collections than the pane is wide.
+            HStack(spacing: 7) {
+                chip("All", count: sessions.items.count, filter: .all)
+                ForEach(sessions.collections.sorted { sessions.count(of: $0.id) > sessions.count(of: $1.id) }) { collection in
+                    chip(collection.name, count: sessions.count(of: collection.id),
+                         filter: .collection(collection.id))
+                        .contextMenu { CollectionMenu(collection: collection, store: sessions) }
                 }
-                .padding(.vertical, 1)
+                if sessions.unsortedCount > 0 {
+                    chip("Unsorted", count: sessions.unsortedCount, filter: .unsorted)
+                }
+                Spacer(minLength: 0)
             }
+            .fixedSize(horizontal: false, vertical: true)
             .padding(.bottom, 2)
         }
     }
@@ -680,6 +686,11 @@ private struct ChipButton: View {
                         .overlay(Capsule().strokeBorder(DeikoStyle.hairline, lineWidth: 1))
                 }
             }
+            // THE WHOLE CAPSULE, NOT THE LETTERS. A plain button's hit area
+            // is its label's content, so every click that landed on the
+            // padding — which is most of a chip — fell through. `SidebarRow`
+            // has declared this since it was written; this did not.
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .deikoFocusRing(Capsule())
