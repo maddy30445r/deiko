@@ -291,10 +291,11 @@ function groqTranscriber(apiKey, model = "whisper-large-v3", { translate = !NATI
  * one Settings field away from their own key, which skips this entirely.
  */
 function relayTranscriber(endpoint, token) {
-  // The relay picks the Groq endpoint from this query. It rebuilds the
-  // multipart body from an allowlist of fields before forwarding it, so a
-  // form field could not carry the choice — and nothing but the audio and
-  // the model name reaches Groq.
+  // The relay picks the Groq endpoint from this query, not from a form field:
+  // it rebuilds the multipart body from an allowlist and refuses anything
+  // else. What reaches Groq is exactly what `sttForm` sends — the audio, the
+  // model, `response_format`, and for "Same as I speak" the timestamp
+  // granularities and the language.
   const url = `${endpoint.replace(/\/+$/, "")}/v1/transcribe${NATIVE ? "?task=transcribe" : ""}`;
 
   // SOME REFUSALS ANSWER FOR THE WHOLE SESSION, AND SOME ARE WORTH RETRYING.

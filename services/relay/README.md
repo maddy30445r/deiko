@@ -62,7 +62,9 @@ before changing anything (`DEIKO_ALLOW_ENV_DROP=1` to drop one on purpose), and
 `/health` must report every route configured afterwards. The function URL is the
 only way in: `lambda:InvokeFunction` is granted only with
 `lambda:InvokedViaFunctionUrl`, so nobody can invoke it directly with a forged
-source address. The DynamoDB SDK is installed with `npm ci` from this
+source address — and the deploy re-reads the policy afterwards and fails if any
+statement still lets `*` invoke it another way (the deployer needs
+`lambda:GetPolicy`). The DynamoDB SDK is installed with `npm ci` from this
 directory's `package-lock.json`, at the versions the tests run against.
 
 **Lambda specifically because this service is idle most of the day by design** —
@@ -211,8 +213,13 @@ exactly `sttForm`'s fields — one `file`, `model=whisper-large-v3`, `response_f
 I speak" `timestamp_granularities[]` and `language` — and refuses anything else with a 400 before a
 second is counted. It used to forward the body verbatim, which let a caller add Groq's `url` field
 (Groq then fetches audio of any length itself, off the meter) or a billed `prompt`. The file must be
-the app's own WAV — PCM, 16 kHz, mono, 16-bit — which pins bytes to seconds, so the meter reads the
-audio's real duration. The audio's bytes are forwarded untouched; only the envelope is rebuilt.
+the app's own WAV — PCM, 16 kHz, mono, 16-bit, at most 40 seconds — which pins bytes to seconds, so
+the meter reads the audio's real duration. The audio's bytes are forwarded untouched; only the
+envelope is rebuilt.
+
+The playground's clip is rebuilt the same way: its bytes travel as the only file in a body the relay
+builds, beside the pinned model, under a filename and type the relay picks from the clip's first
+bytes (WebM, Ogg, MP4 or WAV — anything else is a 400). Nothing the page sends can name a `url`.
 
 `/v1/summarize` takes `{ narration, mode: "hinglish" | "native" }` and holds the two system prompts
 itself (mirrored from `scripts/summarize.mjs`, and a test keeps them word for word). A body in the
@@ -242,8 +249,9 @@ In order, cheapest first:
    only one of them has — and **both rows or neither**: a subject write that
    fails while the global one lands is compensated before the error surfaces.
    **No request meters below 5 seconds** (`MIN_SECONDS_PER_REQUEST`), and the
-   audio must be 16 kHz mono 16-bit PCM WAV, so its length is its duration — a
-   caller sending 8 kbps MP3 used to buy thirty seconds of Groq for one.
+   audio must be 16 kHz mono 16-bit PCM WAV of at most 40 seconds, so its
+   length is its duration — a caller sending 8 kbps MP3 used to buy thirty
+   seconds of Groq for one.
    **The id after the prefix is `[A-Za-z0-9_-]{1,128}`** — it is interpolated
    into row keys, and `lic_<key>#2026-09` used to spell a paying customer's
    monthly usage row as a verdict row that `PutItem` then replaced.
@@ -261,11 +269,13 @@ In order, cheapest first:
    calls cannot close the expensive route, and **per-caller rows in front of
    them** — per bearer, and per hashed address — mean one script cannot spend
    the whole day's text calls for everybody.
-   **A row found over its cap is remembered** for the rest of its day in that
-   container, so refusals stop costing a write and a refund each — a stream
-   of them no longer throttles the table under paying requests. A licence key
-   not shaped like Polar's (a prefix and a UUID) is refused without a Polar
-   call or a write at all.
+   **A row found over its cap is remembered** for a minute in that container,
+   so refusals stop costing a write and a refund each — a stream of them no
+   longer throttles the table under paying requests. A minute, not the day,
+   because a counter can read full for an instant while refused requests are
+   still being refunded. A licence key not shaped like Polar's (a prefix and a
+   UUID) is refused without a Polar call or a write at all, and logged by its
+   `tok:` fingerprint so a real key of another shape is visible.
 5. **Reserved concurrency** — 5 by intent. **Not applied on a default account:**
    AWS's per-account limit is 10 and it keeps 10 unreserved, so the deploy warns
    and the account-wide cap applies instead. Ask AWS to raise the quota.
