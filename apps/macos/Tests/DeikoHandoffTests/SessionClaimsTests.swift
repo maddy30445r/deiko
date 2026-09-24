@@ -83,6 +83,18 @@ func filedAddsTheSortingClaim() {
     #expect(line.contains("what you said, its summary, your window titles and notes on earlier work, to Deiko to file it"))
 }
 
+@Test("a filed brief with no summary does not claim one went to Deiko")
+func filedWithoutSummaryNamesNoSummary() {
+    // The classifier sends the summary only when one was made; a summary that
+    // failed or was never asked for leaves nothing to send.
+    let line = SessionClaims.trustLine(
+        transcriber: "deiko", degradedReason: nil,
+        seconds: 30, uploadedChunks: 2, hasSummary: false, ownGroqKey: false, filed: true
+    )
+    #expect(line.contains("what you said, your window titles and notes on earlier work, to Deiko to file it"))
+    #expect(!line.contains("summary"))
+}
+
 @Test("an own-key session that was still sent to the classifier names both — Groq for the words, Deiko for sorting")
 func ownKeySessionCanStillBeFiled() {
     // The owner's decision this task implements: bringing your own key keeps

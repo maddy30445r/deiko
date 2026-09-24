@@ -114,8 +114,12 @@ public enum SessionClaims {
         // sent what you said, its summary, your window titles and notes on
         // earlier work, through the relay — so the card has to admit that
         // too, or the line understates what left this Mac.
+        // "Its summary" only when there was one: a summary that failed sent
+        // nothing to the classifier either.
         if filed {
-            parts.append("what you said, its summary, your window titles and notes on earlier work, to Deiko to file it")
+            parts.append(hasSummary
+                ? "what you said, its summary, your window titles and notes on earlier work, to Deiko to file it"
+                : "what you said, your window titles and notes on earlier work, to Deiko to file it")
         }
 
         return parts.isEmpty

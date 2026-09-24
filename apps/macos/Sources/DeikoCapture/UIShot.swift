@@ -103,7 +103,9 @@ enum UIShot {
         model.collections = Collections.all()
         model.context = SessionContext(
             collection: Collections.all().first?.id,
-            task: SessionsStore.shared.items.first?.task,
+            // A task with more than one brief, so the card's placement line
+            // reads "Carries on from" the way a joined brief's does.
+            task: SessionsStore.shared.groups(of: SessionsStore.shared.items).first { $0.items.count > 1 }?.id,
             tier: "quick",
             confidence: .init(collection: 0.72, task: 0.88, tier: 0.91),
             decidedBy: "jev",

@@ -1066,6 +1066,8 @@ private struct CardHeightKey: PreferenceKey {
 struct OrbRootView: View {
     @ObservedObject var model: ReviewModel
     @ObservedObject var state: OrbState
+    /// The placement line names tasks by title, and titles live on the board.
+    @ObservedObject private var store = SessionsStore.shared
     let actions: OrbActions
 
     /// Whether a press is in flight, so the first drag update — whatever its
@@ -1354,6 +1356,16 @@ struct OrbRootView: View {
                 ProgressView().controlSize(.small)
             }
         }
+        // WHERE IT IS BEING FILED, on the card most throws leave from. The
+        // panel has the menus; this is one line so nobody has to open it to
+        // know whether the brief joined its task.
+        if let placement = placementLine {
+            Text(placement)
+                .font(.system(size: 11))
+                .foregroundStyle(DeikoStyle.ink2)
+                .lineLimit(1)
+                .help(model.notFiled ? ReviewView.notFiledHelp : "")
+        }
         // WHY THIS ONE READS WORSE, on the card somebody actually looks at.
         //
         // The expanded panel carries this too, but most sessions never open it
@@ -1526,6 +1538,14 @@ struct OrbRootView: View {
 
     private var sentLine: String {
         model.handedTo.map { "Handed to \($0)" } ?? "Handed over"
+    }
+
+    /// Nothing when there is no relay: no sorter, nothing to report.
+    private var placementLine: String? {
+        if model.placing { return "Filing…" }
+        if model.notFiled { return "Not filed" }
+        if !model.openCandidates.isEmpty { return "Which task? Open the card to choose" }
+        return model.joinedTask.map { "Carries on from \($0)" }
     }
 
     private var accessibilitySummary: String {

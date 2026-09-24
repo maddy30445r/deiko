@@ -109,6 +109,42 @@ final class ReviewModel: ObservableObject {
     var sessionID: String? { sessionDir.map { ($0 as NSString).lastPathComponent } }
     var ownTask: String? { sessionID.map(Tasks.own) }
 
+    /// The earlier task this brief carries on, by title. Nil while it is a
+    /// new task — including a "joined" task no other brief on the board is in.
+    /// Here rather than in a view because the collapsed card says it too.
+    var joinedTask: String? {
+        let store = SessionsStore.shared
+        guard let id = context?.task, id != ownTask,
+              store.items.contains(where: { $0.task == id && $0.id != sessionID })
+        else { return nil }
+        return store.title(ofTask: id)
+    }
+
+    /// What this brief's own task is called, once anybody named it.
+    var ownTaskTitle: String? { ownTask.flatMap { SessionsStore.shared.taskTitles[$0] } }
+
+    /// The tasks Deiko could not choose between, while the brief is still a
+    /// new task, and only those the board still has — a candidate deleted or
+    /// merged away since has nothing to carry on from.
+    var openCandidates: [String] {
+        guard let context, context.task == nil || context.task == ownTask else { return [] }
+        let store = SessionsStore.shared
+        return (context.candidates ?? []).filter { id in
+            id != ownTask && store.items.contains { $0.task == id }
+        }
+    }
+
+    /// Set while the classifier and its re-render are in flight, so a throw
+    /// can wait a moment for them without waiting on them — and so the
+    /// collapsed card can say "Filing…".
+    @Published private(set) var placing = false
+    /// Whether the classifier's request went out for this session. Published
+    /// when it returns, answer or not, so the trust line never has to read
+    /// the marker inside a view body — where a failure changed nothing that
+    /// would re-draw it.
+    @Published private(set) var filed = false
+    /// The request went out and no placement came back.
+    @Published private(set) var notFiled = false
     /// The throw went before the filing finished, so the brief it pasted
     /// carries no task. Said on the sent pill. Settable so `UIShot` can pose
     /// that pill.
@@ -230,7 +266,10 @@ final class ReviewModel: ObservableObject {
     private var sessionDir: String?
     private var task: Task<Void, Never>?
     private var summaryTask: Task<Void, Never>?
-    private var classifyTask: Task<Void, Never>?
+    /// Which filing is the newest for this model. The classifier is never
+    /// cancelled — a brief whose card closed still gets filed — so this is
+    /// what keeps an older run from clearing a newer one's `placing`.
+    private var placingRun = 0
     /// Bumped whenever a send in flight is called off: by a newer send, or by
     /// the card going away. Checked at the last moment, inside the render
     /// lane, where `Task.isCancelled` answers for the lane's own task and not
@@ -331,8 +370,16 @@ final class ReviewModel: ObservableObject {
     func load(sessionDir: String) {
         cancelPendingWork()
         self.sessionDir = sessionDir
-        context = nil
-        collections = []
+        // A brief opened again after it was filed keeps its row on screen and
+        // its place: sorting it a second time could move it, and blanked the
+        // row for the second or two that took.
+        let settled = Self.settledContext(sessionDir: sessionDir)
+        context = settled
+        collections = settled == nil ? [] : Collections.all()
+        filed = ClassifyRequest.wasSent(sessionDir: sessionDir)
+        notFiled = false
+        sentUnfiled = false
+        summary = nil
         handedTo = nil
         phase = .working("Transcribing…")
         task = Task {
@@ -347,7 +394,12 @@ final class ReviewModel: ObservableObject {
                 self.originalNarration = digest.summary.narration
                 self.phase = .ready
                 self.fetchSummary(sessionDir: sessionDir)
-                self.fetchContext(sessionDir: sessionDir)
+                if settled == nil {
+                    self.fetchContext(sessionDir: sessionDir)
+                } else if !SessionsStore.shared.loaded {
+                    // The row names tasks by title, and titles come from the board.
+                    Task { await SessionsStore.shared.load(root: (sessionDir as NSString).deletingLastPathComponent) }
+                }
                 self.runQueuedHandoff()
             } catch {
                 guard stillCurrent(sessionDir) else { return }
@@ -372,6 +424,23 @@ final class ReviewModel: ObservableObject {
     /// Throwing it IS the decision. Holding the throw until there is something
     /// to send honours it, rather than discarding it for being early.
     private var queuedHandoff: (appName: String?, deliver: @MainActor (BriefPipeline.Prompt) async throws -> Void)?
+
+    /// The placement a re-opened brief already has, when there is nothing to
+    /// sort again: a person placed it (`classify.mjs` never re-sorts that), or
+    /// Deiko answered and nobody has corrected the narration since.
+    private static func settledContext(sessionDir: String) -> SessionContext? {
+        guard let context = SessionContext.read(sessionDir: sessionDir) else { return nil }
+        if context.decidedBy == "you" { return context }
+        guard context.model != nil else { return nil }
+        let dir = URL(fileURLWithPath: sessionDir)
+        func modified(_ name: String) -> Date? {
+            try? dir.appendingPathComponent(name)
+                .resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        }
+        guard let edited = modified("narration.override.txt"),
+              let sorted = modified("context.json") else { return context }
+        return edited > sorted ? nil : context
+    }
 
     private func runQueuedHandoff() {
         guard let queued = queuedHandoff else { return }
@@ -516,17 +585,25 @@ final class ReviewModel: ObservableObject {
     /// so the task section only exists after this second pass.
     ///
     /// A brief thrown while this is in flight does not miss it: `approve`
-    /// waits on this task for up to a second before reading the prompt.
+    /// waits on it for up to three seconds before reading the prompt.
+    ///
+    /// FILED WHETHER OR NOT ANYBODY IS STILL LOOKING. Nothing cancels this:
+    /// closing the orb used to kill it while it waited on the summary, and a
+    /// brief whose card closed was never filed at all. Only what it shows is
+    /// held back when the card has moved on.
     private func fetchContext(sessionDir: String) {
-        classifyTask?.cancel()
+        // No relay, no sorter: nothing to wait for and nothing to say.
+        guard Credentials.relayURL != nil else { return }
+        placingRun += 1
+        let run = placingRun
+        let summary = summaryTask
+        let root = (sessionDir as NSString).deletingLastPathComponent
         placing = true
-        classifyTask = Task { [self] in
+        Task { [self] in
             // THE SUMMARY IS THE BRIEF'S BEST LINE — it names the task and
             // matches it — and it is written by a call that starts at the
             // same moment. Wait for it; it has its own fifteen-second cap.
-            // ponytail: a throw inside that window ships without its task,
-            // as a throw before placement always has.
-            await summaryTask?.value
+            await summary?.value
             // THE BOARD IS WHAT "carries on from" CHOOSES FROM, and until now
             // only the main window ever loaded it. Record a session without
             // opening that window — which is the ordinary way to use Deiko —
@@ -535,26 +612,24 @@ final class ReviewModel: ObservableObject {
             // because no title could be found for it. Loaded once per launch;
             // `load` is already a detached read.
             if !SessionsStore.shared.loaded {
-                await SessionsStore.shared.load(
-                    root: (sessionDir as NSString).deletingLastPathComponent
-                )
+                await SessionsStore.shared.load(root: root)
             }
-            guard stillCurrent(sessionDir) else { placing = false; return }
-            guard await BriefPipeline.classify(sessionDir: sessionDir) != nil else {
-                placing = false
-                return
+            let placed = await BriefPipeline.classify(sessionDir: sessionDir)
+            if placed != nil {
+                await exclusively { [self] in
+                    let rerendered = try? await BriefPipeline.rerender(sessionDir: sessionDir)
+                    guard stillCurrent(sessionDir) else { return }
+                    if let rerendered { digest = rerendered }
+                    context = SessionContext.read(sessionDir: sessionDir)
+                    collections = Collections.all()
+                }
+                // So the menu and the board see the task this brief just joined
+                // or started. After the render lane, not inside it.
+                await SessionsStore.shared.load(root: root)
             }
-            guard stillCurrent(sessionDir) else { placing = false; return }
-            await exclusively { [self] in
-                let rerendered = try? await BriefPipeline.rerender(sessionDir: sessionDir)
-                guard stillCurrent(sessionDir) else { return }
-                if let rerendered { digest = rerendered }
-                context = SessionContext.read(sessionDir: sessionDir)
-                collections = Collections.all()
-            }
-            // So the menu and the board see the task this brief just joined
-            // or started. After the render lane, not inside it.
-            await SessionsStore.shared.load(root: (sessionDir as NSString).deletingLastPathComponent)
+            guard run == placingRun, stillCurrent(sessionDir) else { return }
+            filed = ClassifyRequest.wasSent(sessionDir: sessionDir)
+            notFiled = placed == nil && filed
             placing = false
         }
     }
@@ -564,6 +639,11 @@ final class ReviewModel: ObservableObject {
     /// slow round trip cannot delay Good to go.
     private func fetchSummary(sessionDir: String) {
         summaryTask?.cancel()
+        // The classifier reads this file. Left in place, a summary that fails
+        // after "Point at more" filed the longer brief on the shorter one's.
+        try? FileManager.default.removeItem(
+            at: URL(fileURLWithPath: sessionDir).appendingPathComponent("review-summary.txt")
+        )
         summaryPending = true
         summaryTask = Task {
             let text = await BriefPipeline.summary(sessionDir: sessionDir)
@@ -572,10 +652,6 @@ final class ReviewModel: ObservableObject {
             self.summaryPending = false
         }
     }
-
-    /// Set while the classifier and its re-render are in flight, so a throw
-    /// can wait a moment for them without waiting on them.
-    private var placing = false
 
     /// Give the placing a moment, and only a moment.
     ///
@@ -665,6 +741,7 @@ final class ReviewModel: ObservableObject {
         cancelPendingWork()
         self.sessionDir = sessionDir
         summary = nil
+        notFiled = false
         phase = .working("Transcribing what you added…")
         task = Task {
             do {
@@ -721,9 +798,8 @@ final class ReviewModel: ObservableObject {
         sendTicket += 1
         summaryTask?.cancel()
         summaryTask = nil
-        classifyTask?.cancel()
-        classifyTask = nil
-        // Nothing is placing any more, so a throw must not wait for it.
+        // NOT the filing — see `fetchContext`. Nobody is waiting on it now,
+        // so a throw must not either.
         placing = false
         // A held throw belongs to the session it was thrown at, and nothing
         // else. `load` calls this on entry, so without it a fling queued
@@ -1032,8 +1108,17 @@ struct ReviewView: View {
                 }
             }
             .padding(.top, 1)
+        } else if model.notFiled {
+            Text("Not filed")
+                .font(.system(size: 11))
+                .foregroundStyle(DeikoStyle.ink2)
+                .help(Self.notFiledHelp)
+                .padding(.top, 1)
         }
     }
+
+    /// Shared with the collapsed card, which says "Not filed" too.
+    static let notFiledHelp = "Deiko couldn't reach its sorter, so this brief starts a new task."
 
     @ViewBuilder private func taskMenu(
         _ context: SessionContext, label: String, linked: Bool
@@ -1246,7 +1331,7 @@ struct ReviewView: View {
                 d,
                 hasSummary: model.summary != nil,
                 ownGroqKey: Credentials.willUse("GROQ_API_KEY"),
-                filed: model.currentSessionDir.map(ClassifyRequest.wasSent(sessionDir:)) ?? false
+                filed: model.filed
             ),
             systemImage: "arrow.up.forward.square"
         )
