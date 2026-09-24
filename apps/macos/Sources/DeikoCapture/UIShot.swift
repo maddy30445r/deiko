@@ -47,6 +47,8 @@ enum UIShot {
             // reads before a brief leaves the Mac — and it had no capture.
             shoot(reviewPanel(), size: NSSize(width: 620, height: 640), look: look,
                   to: "\(out)-review-\(name).png")
+            shoot(reviewPanel(odds: true), size: NSSize(width: 620, height: 640), look: look,
+                  to: "\(out)-review-odds-\(name).png")
         }
         // The status item, at the size it is actually drawn — 1x and 2x — so a
         // mark that looks wrong in the menu bar can be looked at without
@@ -143,7 +145,8 @@ enum UIShot {
     /// The review panel as somebody meets it: rendered, placed, and about to
     /// be thrown. Posed from the newest real session on this Mac so the
     /// narration, the crops and the counts are the ones the app would draw.
-    private static func reviewPanel() -> some View {
+    /// `odds`: posed in odds and ends instead, as `classify.mjs` writes it.
+    private static func reviewPanel(odds: Bool = false) -> some View {
         let model = ReviewModel()
         model.phase = .ready
         model.summary = "Make the Save button use the header indigo, and give it more padding."
@@ -158,7 +161,7 @@ enum UIShot {
         // is in the shot: the brief is a new task and the row offers the
         // likely ones.
         let others = SessionsStore.shared.groups(of: items).map(\.id).filter { $0 != items.first?.task }
-        model.context = SessionContext(
+        model.context = odds ? SessionContext(decidedBy: "local", pile: "odds") : SessionContext(
             collection: Collections.all().first?.id,
             // Three, the most `classify.mjs` leaves: the widest the row gets.
             candidates: Array(others.prefix(3)),

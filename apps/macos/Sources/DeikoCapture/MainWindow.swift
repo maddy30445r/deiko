@@ -316,6 +316,8 @@ final class SessionsStore: ObservableObject {
         let collection: String?
         /// The task this brief belongs to; its own when nobody moved it.
         let task: String
+        /// In odds and ends: in no task, shown together at the board's end.
+        let odds: Bool
         /// The first line an agent wrote back about what it did, if one did.
         let outcome: String?
     }
@@ -347,9 +349,10 @@ final class SessionsStore: ObservableObject {
 
     /// Briefs by task, each task's newest first, tasks ordered by their
     /// newest brief — so a task sits where its latest work is rather than
-    /// jumping to the top of the board.
+    /// jumping to the top of the board. Odds and ends are in no task, so
+    /// none of these, and never a task to move a brief into.
     func groups(of items: [Item]) -> [Group] {
-        Dictionary(grouping: items, by: \.task)
+        Dictionary(grouping: items.filter { !$0.odds }, by: \.task)
             .map { Group(id: $0.key, items: $0.value.sorted { $0.date > $1.date }) }
             .sorted { $0.items[0].date > $1.items[0].date }
     }
@@ -389,7 +392,7 @@ final class SessionsStore: ObservableObject {
         items[index] = Item(
             id: item.id, dir: item.dir, date: item.date, line: item.line,
             crops: item.crops, apps: item.apps, repo: item.repo,
-            collection: collection, task: item.task, outcome: item.outcome
+            collection: collection, task: item.task, odds: item.odds, outcome: item.outcome
         )
     }
 
@@ -456,6 +459,7 @@ final class SessionsStore: ObservableObject {
                     repo: digest?.summary.repoHints.first,
                     collection: context?.collection,
                     task: stored?.task ?? Tasks.own(name),
+                    odds: stored?.isOdds == true,
                     outcome: outcome
                 )
             }
@@ -767,6 +771,25 @@ private struct BoardPane: View {
                                     }
                                 }
                             }
+                            // ODDS AND ENDS, LAST AND TOGETHER, headed even
+                            // for one: briefs too short or unclear to file.
+                            let odds = shown.filter(\.odds).sorted { $0.date > $1.date }
+                            if !odds.isEmpty {
+                                Section {
+                                    ForEach(odds) { item in BoardCard(item: item, store: sessions) }
+                                } header: {
+                                    HStack(spacing: 6) {
+                                        Text("Odds and ends")
+                                            .font(.system(size: 13, weight: .medium))
+                                        Text("· \(odds.count)")
+                                            .font(.system(size: 11))
+                                            .foregroundStyle(DeikoStyle.ink2)
+                                        Spacer(minLength: 0)
+                                    }
+                                    .padding(.top, 10)
+                                    .help("Briefs too short or unclear to file. Move one to a task from its menu.")
+                                }
+                            }
                         }
                     }
                 }
@@ -1076,9 +1099,10 @@ struct SessionMenu: View {
         }
         Menu("Move to task") {
             // The brief that started its task is already on its own task:
-            // moving it there would change nothing.
+            // moving it there would change nothing — unless it is in odds
+            // and ends, which this takes it out of.
             Button("Start a new task") { store.move(item, toTask: Tasks.own(item.id)) }
-                .disabled(item.task == Tasks.own(item.id))
+                .disabled(item.task == Tasks.own(item.id) && !item.odds)
             let others = store.recentTasks(excluding: item.task)
             if !others.isEmpty { Divider() }
             ForEach(others) { group in

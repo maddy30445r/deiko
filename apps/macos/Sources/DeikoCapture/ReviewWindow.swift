@@ -1115,7 +1115,18 @@ struct ReviewView: View {
     /// persona line above: a correction here is an ordinary thing to do, not
     /// an error being fixed.
     @ViewBuilder private var contextRow: some View {
-        if let context = model.context {
+        if let context = model.context, context.isOdds {
+            // No project and no task to name: where it is, and the way out.
+            // "In" as text, like "Filed in", so the row lines up with the
+            // ones above; the menu's own inset is the space after it.
+            HStack(spacing: 0) {
+                Text("In")
+                    .font(.system(size: 11))
+                    .foregroundStyle(DeikoStyle.ink2)
+                taskMenu(context, label: "odds and ends", linked: false)
+            }
+            .padding(.top, 1)
+        } else if let context = model.context {
             HStack(spacing: 6) {
                 // THE UNCERTAINTY IS IN THE WORD, not in a mark beside it.
                 //
@@ -1197,9 +1208,10 @@ struct ReviewView: View {
     ) -> some View {
         Menu {
             if let own = model.ownTask {
-                // Already its own task: there is nothing new to start.
+                // Already its own task: there is nothing new to start —
+                // unless it is in odds and ends, which this takes it out of.
                 Button("Start a new task") { model.setTask(own) }
-                    .disabled((context.task ?? own) == own)
+                    .disabled(!context.isOdds && (context.task ?? own) == own)
                 Button("Start a new task and name it…") {
                     guard let title = Collections.askText(
                         title: "Name this task",

@@ -49,8 +49,9 @@ struct SessionContext: Codable, Equatable {
     /// `scripts/lib/context.mjs`.
     var tier: String?
     var confidence = Confidence()
-    /// `"jev"` or `"you"`. A person's answer is final: the classifier never
-    /// re-sorts a brief somebody placed, task or project.
+    /// `"jev"`, `"local"` (decided on this Mac, nothing sent — odds and ends
+    /// or a short follow-up) or `"you"`. A person's answer is final: the
+    /// classifier never re-sorts a brief somebody placed, task or project.
     var decidedBy: String = "you"
     var model: String?
     /// `"you"` once somebody picked the project by hand, `"jev"` once a
@@ -59,6 +60,11 @@ struct SessionContext: Codable, Equatable {
     /// placement too, and it must not turn a guessed project into a stated
     /// one. Absent on contexts from before it existed — see `isGuess`.
     var collectionBy: String?
+    /// `"odds"` for odds and ends: too little said, or nothing Groq could
+    /// make sense of, so no task. Gone once somebody moves it to one.
+    var pile: String?
+
+    var isOdds: Bool { pile == "odds" }
 
     /// Put the brief in a project by hand.
     mutating func placeCollection(_ id: String?) {
@@ -76,6 +82,7 @@ struct SessionContext: Codable, Equatable {
         task = id
         decidedBy = "you"
         candidates = nil
+        pile = nil
     }
 
     static func path(sessionDir: String) -> URL {
@@ -118,6 +125,25 @@ struct SessionContext: Codable, Equatable {
         case "reasoning": return "Needs a thinker"
         default: return nil
         }
+    }
+}
+
+/// EVERY KEY MAY BE MISSING. Odds and ends are written as `{ pile, decidedBy }`
+/// alone, and a synthesized decoder fails the whole file over one absent
+/// `confidence`, losing the task and project with it. In an extension, so the
+/// memberwise initializer stays.
+extension SessionContext {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        collection = try c.decodeIfPresent(String.self, forKey: .collection)
+        task = try c.decodeIfPresent(String.self, forKey: .task)
+        candidates = try c.decodeIfPresent([String].self, forKey: .candidates)
+        tier = try c.decodeIfPresent(String.self, forKey: .tier)
+        confidence = try c.decodeIfPresent(Confidence.self, forKey: .confidence) ?? Confidence()
+        decidedBy = try c.decodeIfPresent(String.self, forKey: .decidedBy) ?? "you"
+        model = try c.decodeIfPresent(String.self, forKey: .model)
+        collectionBy = try c.decodeIfPresent(String.self, forKey: .collectionBy)
+        pile = try c.decodeIfPresent(String.self, forKey: .pile)
     }
 }
 
