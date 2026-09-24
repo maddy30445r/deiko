@@ -6,7 +6,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -75,4 +76,59 @@ test("repo hints keep names that merely contain an app's name", async () => {
   await render(dir);
   const { repoHints } = JSON.parse(readFileSync(join(dir, "brief.json"), "utf8")).summary;
   assert.deepEqual(repoHints.sort(), ["acme-portal", "research", "search-api"]);
+});
+
+// ── classify ────────────────────────────────────────────────────────────────
+
+/** A sibling as `render-brief.mjs` leaves it: `brief.json`, and whatever else it has. */
+function filed(root, id, { narration, summary, windows = [], repoHints = [], screenTerms = [], context, outcome } = {}) {
+  const dir = join(root, id);
+  mkdirSync(dir);
+  writeFileSync(join(dir, "brief.json"), JSON.stringify({ summary: { narration, apps: [], windows, repoHints, screenTerms } }));
+  if (summary) writeFileSync(join(dir, "review-summary.txt"), `${summary}\n`);
+  if (context) writeFileSync(join(dir, "context.json"), JSON.stringify(context));
+  if (outcome) writeFileSync(join(dir, "outcome.md"), outcome);
+  return dir;
+}
+
+/** A relay on a free local port that records each body and answers `respond(body)`. */
+async function relay(respond = () => [200, { model: "stub", answers: {} }]) {
+  const bodies = [];
+  const server = http.createServer((req, res) => {
+    let raw = "";
+    req.on("data", (c) => { raw += c; });
+    req.on("end", () => {
+      bodies.push(JSON.parse(raw));
+      const [status, json] = respond(bodies.at(-1));
+      res.writeHead(status, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(json));
+    });
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  server.unref(); // a failed assertion before `close` must not hold the run open
+  return { url: `http://127.0.0.1:${server.address().port}`, bodies, close: () => server.close() };
+}
+
+/** Only the relay URL: never a token from the environment running the tests. */
+const classify = (dir, url) => run(process.execPath, [join(scripts, "classify.mjs"), dir], {
+  env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("DEIKO_"))), DEIKO_CLASSIFY_URL: url },
+});
+const json = (path) => JSON.parse(readFileSync(path, "utf8"));
+const join1 = (task) => () => [200, { model: "stub", answers: { task: { choice: task, confidence: 0.9 } } }];
+
+test("a task is described by its most frequent windows, and same repo is an exact hint", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
+  const task = "t-20260918-090000";
+  filed(root, "20260918-090000", { narration: "the price still shows 99 after I save", windows: ["Price.tsx — acme-portal"], repoHints: ["acme-portal"] });
+  filed(root, "20260918-091000", { narration: "same price bug on the listing page", windows: ["Price.tsx — acme-portal"], context: { task } });
+  filed(root, "20260918-092000", { narration: "why does the signup chart drop in week 32", windows: ["Chart.tsx — analytics"], context: { task } });
+  filed(root, "20260918-093000", { narration: "the sitemap xml has the wrong urls in it", screenTerms: ["acme-portal"] });
+  const dir = filed(root, "20260918-100000", { narration: "the price bug is back on the listing", repoHints: ["Acme-Portal"] });
+  const stub = await relay();
+  await classify(dir, stub.url);
+  stub.close();
+  const sent = Object.fromEntries(stub.bodies[0].tasks.map((t) => [t.id, t]));
+  assert.deepEqual(sent[task].windows, ["Price.tsx — acme-portal", "Chart.tsx — analytics"]);
+  assert.equal(sent[task].sameRepo, true);
+  assert.equal(sent["t-20260918-093000"].sameRepo, false, "a screen word is not a repo");
 });

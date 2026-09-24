@@ -48,6 +48,13 @@ import {
 /// Titles are the widest thing sent; thirty distinct ones cover any session.
 const MAX_TITLES = 30;
 
+/** Most frequent first; ties keep first-seen order, newest first for a task's briefs. */
+function byCount(items) {
+  const counts = new Map();
+  for (const x of items) counts.set(x, (counts.get(x) ?? 0) + 1);
+  return [...counts].sort((a, b) => b[1] - a[1]).map(([x]) => x);
+}
+
 function readCollections(root) {
   try {
     const list = JSON.parse(readFileSync(join(root, "collections.json"), "utf8"));
@@ -152,7 +159,9 @@ async function main() {
       title: redact(title),
       now: taskState(bs, title).now.join("\n"),
       decided: bs.flatMap((b) => b.outcome?.decided ?? []).slice(0, 5).map(redact).join("\n"),
-      windows: [...new Set(bs.flatMap((b) => b.windows))].slice(0, 5).map(redact),
+      // Its most frequent windows, not its newest: one brief filed here by
+      // mistake must not become the face the classifier matches against.
+      windows: byCount(bs.flatMap((b) => b.windows)).slice(0, 5).map(redact),
       apps: [...new Set(bs.flatMap((b) => b.apps))].slice(0, 5).map(redact),
       files: [...new Set(bs.flatMap((b) => b.outcome?.files ?? []))].slice(0, 10).map(redact),
       outcome: last ? redact([...last.did, ...last.open].join(" ")).slice(0, 600) : "",
