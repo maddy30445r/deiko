@@ -132,11 +132,20 @@ struct SessionContext: Codable, Equatable {
 /// whose words already left — exactly the understatement `SessionClaims`
 /// exists to prevent. `classify.mjs` writes `classify.sent` immediately
 /// before its first POST for that reason; this only checks it exists.
+///
+/// The marker also says whether the request carried a summary, because the
+/// card's summary can arrive after the request left without one. A marker
+/// from before that was recorded is a bare timestamp, read as "it did" — the
+/// line may overstate by two words, never understate.
 enum ClassifyRequest {
-    static func wasSent(sessionDir: String) -> Bool {
-        FileManager.default.fileExists(
-            atPath: URL(fileURLWithPath: sessionDir).appendingPathComponent("classify.sent").path
-        )
+    /// Nil when nothing went. Otherwise whether a summary went with it — or
+    /// with an earlier request for the same brief.
+    static func sentSummary(sessionDir: String) -> Bool? {
+        struct Record: Decodable { let summary: Bool }
+        guard let data = try? Data(
+            contentsOf: URL(fileURLWithPath: sessionDir).appendingPathComponent("classify.sent")
+        ) else { return nil }
+        return (try? JSONDecoder().decode(Record.self, from: data))?.summary ?? true
     }
 }
 

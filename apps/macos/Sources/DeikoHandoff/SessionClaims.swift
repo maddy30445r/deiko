@@ -47,6 +47,9 @@ public enum SessionClaims {
     ///     rather than through Deiko.
     ///   - uploadedChunks: how many requests actually reached the network this
     ///     run. Nil for a brief rendered before this was recorded.
+    ///   - filedSummary: whether that request carried the summary. Not
+    ///     `hasSummary`: a summary can land on the card after the request
+    ///     left without one. `classify.mjs` records it in the same marker.
     ///   - filed: whether the classifier's request went out to the relay for
     ///     this session — true once the words left, whether or not an answer
     ///     ever came back, and true for own-key users too, since sorting runs
@@ -61,7 +64,8 @@ public enum SessionClaims {
         uploadedChunks: Int?,
         hasSummary: Bool,
         ownGroqKey: Bool,
-        filed: Bool
+        filed: Bool,
+        filedSummary: Bool
     ) -> String {
         var parts: [String] = []
 
@@ -114,10 +118,9 @@ public enum SessionClaims {
         // sent what you said, its summary, your window titles and notes on
         // earlier work, through the relay — so the card has to admit that
         // too, or the line understates what left this Mac.
-        // "Its summary" only when there was one: a summary that failed sent
-        // nothing to the classifier either.
+        // "Its summary" only when the request carried one.
         if filed {
-            parts.append(hasSummary
+            parts.append(filedSummary
                 ? "what you said, its summary, your window titles and notes on earlier work, to Deiko to file it"
                 : "what you said, your window titles and notes on earlier work, to Deiko to file it")
         }

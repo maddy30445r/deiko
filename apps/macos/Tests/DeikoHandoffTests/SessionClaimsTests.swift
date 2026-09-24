@@ -11,7 +11,7 @@ import Testing
 func nothingLeft() {
     let line = SessionClaims.trustLine(
         transcriber: "on-device", degradedReason: nil,
-        seconds: 43, uploadedChunks: 0, hasSummary: false, ownGroqKey: false, filed: false
+        seconds: 43, uploadedChunks: 0, hasSummary: false, ownGroqKey: false, filed: false, filedSummary: false
     )
     #expect(line == "Nothing left this Mac — everything here was made on it.")
 }
@@ -29,7 +29,7 @@ func refusalDoesNotMeanNothingWasSent() {
     for reason in ["trial", "monthly", "ceiling", "rejected"] {
         let line = SessionClaims.trustLine(
             transcriber: "deiko", degradedReason: reason,
-            seconds: 90, uploadedChunks: 1, hasSummary: false, ownGroqKey: false, filed: false
+            seconds: 90, uploadedChunks: 1, hasSummary: false, ownGroqKey: false, filed: false, filedSummary: false
         )
         #expect(!line.contains("Nothing left"), "\(reason) uploaded a chunk before being refused")
         #expect(line.contains("Deiko's transcription"))
@@ -44,7 +44,7 @@ func unavailableStillSentMostOfIt() {
     // many — most of the audio went, and saying so is the honest reading.
     let line = SessionClaims.trustLine(
         transcriber: "deiko", degradedReason: "unavailable",
-        seconds: 90, uploadedChunks: 4, hasSummary: false, ownGroqKey: false, filed: false
+        seconds: 90, uploadedChunks: 4, hasSummary: false, ownGroqKey: false, filed: false, filedSummary: false
     )
     #expect(line.contains("~90s of audio to Deiko's transcription"))
 }
@@ -53,7 +53,7 @@ func unavailableStillSentMostOfIt() {
 func ownKeyNamesSarvam() {
     let line = SessionClaims.trustLine(
         transcriber: "sarvam", degradedReason: nil,
-        seconds: 12, uploadedChunks: 1, hasSummary: true, ownGroqKey: true, filed: false
+        seconds: 12, uploadedChunks: 1, hasSummary: true, ownGroqKey: true, filed: false, filedSummary: true
     )
     #expect(line.contains("~12s of audio to Sarvam, with your key"))
     #expect(line.contains("your narration to Groq, with your key"))
@@ -65,7 +65,7 @@ func ownKeyNamesSarvam() {
 func summaryThroughRelay() {
     let line = SessionClaims.trustLine(
         transcriber: "deiko", degradedReason: nil,
-        seconds: 30, uploadedChunks: 2, hasSummary: true, ownGroqKey: false, filed: false
+        seconds: 30, uploadedChunks: 2, hasSummary: true, ownGroqKey: false, filed: false, filedSummary: true
     )
     #expect(line.contains("your narration, for the summary"))
 }
@@ -78,21 +78,22 @@ func filedAddsTheSortingClaim() {
     // the caller actually gets this boolean from.
     let line = SessionClaims.trustLine(
         transcriber: "deiko", degradedReason: nil,
-        seconds: 30, uploadedChunks: 2, hasSummary: true, ownGroqKey: false, filed: true
+        seconds: 30, uploadedChunks: 2, hasSummary: true, ownGroqKey: false, filed: true, filedSummary: true
     )
     #expect(line.contains("what you said, its summary, your window titles and notes on earlier work, to Deiko to file it"))
 }
 
-@Test("a filed brief with no summary does not claim one went to Deiko")
+@Test("a brief filed before its summary existed does not claim the summary went to be filed")
 func filedWithoutSummaryNamesNoSummary() {
-    // The classifier sends the summary only when one was made; a summary that
-    // failed or was never asked for leaves nothing to send.
+    // The summary is on the card now, but the classifier's request left
+    // without it — so it is named for the summary call and not for filing.
     let line = SessionClaims.trustLine(
         transcriber: "deiko", degradedReason: nil,
-        seconds: 30, uploadedChunks: 2, hasSummary: false, ownGroqKey: false, filed: true
+        seconds: 30, uploadedChunks: 2, hasSummary: true, ownGroqKey: false, filed: true, filedSummary: false
     )
+    #expect(line.contains("your narration, for the summary"))
     #expect(line.contains("what you said, your window titles and notes on earlier work, to Deiko to file it"))
-    #expect(!line.contains("summary"))
+    #expect(!line.contains("its summary"))
 }
 
 @Test("an own-key session that was still sent to the classifier names both — Groq for the words, Deiko for sorting")
@@ -103,7 +104,7 @@ func ownKeySessionCanStillBeFiled() {
     // anything.
     let line = SessionClaims.trustLine(
         transcriber: "groq:whisper-large-v3", degradedReason: nil,
-        seconds: 12, uploadedChunks: 1, hasSummary: true, ownGroqKey: true, filed: true
+        seconds: 12, uploadedChunks: 1, hasSummary: true, ownGroqKey: true, filed: true, filedSummary: true
     )
     #expect(line.contains("~12s of audio to Groq, with your key"))
     #expect(line.contains("your narration to Groq, with your key"))
@@ -123,7 +124,7 @@ func screenContentIsNeverClaimedToLeave() {
             for hasSummary in [true, false] {
                 let line = SessionClaims.trustLine(
                     transcriber: transcriber, degradedReason: reason,
-                    seconds: 30, uploadedChunks: 3, hasSummary: hasSummary, ownGroqKey: false, filed: false
+                    seconds: 30, uploadedChunks: 3, hasSummary: hasSummary, ownGroqKey: false, filed: false, filedSummary: hasSummary
                 ).lowercased()
                 #expect(!line.contains("screenshot"))
                 #expect(!line.contains("screen text"))
@@ -139,7 +140,7 @@ func unknownTranscriberClaimsNothing() {
     // silence: this line is only worth anything if it never overstates.
     let line = SessionClaims.trustLine(
         transcriber: nil, degradedReason: nil,
-        seconds: 30, uploadedChunks: nil, hasSummary: false, ownGroqKey: false, filed: false
+        seconds: 30, uploadedChunks: nil, hasSummary: false, ownGroqKey: false, filed: false, filedSummary: false
     )
     #expect(line.contains("Nothing left"))
 }
@@ -205,7 +206,7 @@ func nothingUploadedClaimsNothing() {
     // relay at all.
     let line = SessionClaims.trustLine(
         transcriber: "deiko", degradedReason: "unavailable",
-        seconds: 62, uploadedChunks: 0, hasSummary: false, ownGroqKey: false, filed: false
+        seconds: 62, uploadedChunks: 0, hasSummary: false, ownGroqKey: false, filed: false, filedSummary: false
     )
     #expect(line.contains("Nothing left"))
     #expect(!line.contains("62s"))
@@ -248,7 +249,7 @@ func onDeviceStaysLocal() {
     // degradation is called.
     let line = SessionClaims.trustLine(
         transcriber: "on-device", degradedReason: "on-device",
-        seconds: 80, uploadedChunks: 0, hasSummary: false, ownGroqKey: false, filed: false
+        seconds: 80, uploadedChunks: 0, hasSummary: false, ownGroqKey: false, filed: false, filedSummary: false
     )
     #expect(line.contains("Nothing left this Mac"))
 }

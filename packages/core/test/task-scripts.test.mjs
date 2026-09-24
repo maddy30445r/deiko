@@ -6,7 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -226,4 +226,22 @@ test("a request that never connected leaves no sent marker; one that got an answ
   failing.close();
   assert.equal(failing.bodies.length, 2, "one retry on a 5xx");
   assert.equal(existsSync(join(answered, "classify.sent")), true);
+});
+
+test("the sent marker says whether a summary went with the request", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
+  const stub = await relay();
+  const without = filed(root, "20260918-090000", { narration: "the price still shows 99 after I save it" });
+  const withOne = filed(root, "20260918-100000", { narration: "same price bug on the listing page", summary: "Fix the stale price on the listing page." });
+  await classify(without, stub.url);
+  await classify(withOne, stub.url);
+  stub.close();
+  assert.equal(json(join(without, "classify.sent")).summary, false);
+  assert.equal(json(join(withOne, "classify.sent")).summary, true);
+  // Asked again with no summary, it still says the earlier one went.
+  rmSync(join(withOne, "review-summary.txt"));
+  const again = await relay();
+  await classify(withOne, again.url);
+  again.close();
+  assert.equal(json(join(withOne, "classify.sent")).summary, true);
 });

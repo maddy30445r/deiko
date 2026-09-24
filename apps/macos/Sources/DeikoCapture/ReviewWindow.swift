@@ -145,6 +145,9 @@ final class ReviewModel: ObservableObject {
     /// the marker inside a view body — where a failure changed nothing that
     /// would re-draw it.
     @Published private(set) var filed = false
+    /// Whether that request carried the summary — which the card may have
+    /// now even though the request left without it.
+    @Published private(set) var filedSummary = false
     /// The request went out and no placement came back.
     @Published private(set) var notFiled = false
     /// The throw went before the filing finished, so the brief it pasted
@@ -390,7 +393,9 @@ final class ReviewModel: ObservableObject {
         let settled = Self.settledContext(sessionDir: sessionDir)
         context = settled
         collections = settled == nil ? [] : Collections.all()
-        filed = ClassifyRequest.wasSent(sessionDir: sessionDir)
+        let sent = ClassifyRequest.sentSummary(sessionDir: sessionDir)
+        filed = sent != nil
+        filedSummary = sent == true
         notFiled = false
         sentUnfiled = false
         summary = nil
@@ -642,7 +647,9 @@ final class ReviewModel: ObservableObject {
                 await SessionsStore.shared.load(root: root)
             }
             guard run == placingRun, stillCurrent(sessionDir) else { return }
-            filed = ClassifyRequest.wasSent(sessionDir: sessionDir)
+            let sent = ClassifyRequest.sentSummary(sessionDir: sessionDir)
+            filed = sent != nil
+            filedSummary = sent == true
             notFiled = placed == nil && filed
             placing = false
         }
@@ -1347,7 +1354,8 @@ struct ReviewView: View {
                 d,
                 hasSummary: model.summary != nil,
                 ownGroqKey: Credentials.willUse("GROQ_API_KEY"),
-                filed: model.filed
+                filed: model.filed,
+                filedSummary: model.filedSummary
             ),
             systemImage: "arrow.up.forward.square"
         )
@@ -1359,7 +1367,9 @@ struct ReviewView: View {
     /// What left this Mac, for this session. The claim itself lives in
     /// `SessionClaims` (DeikoHandoff), which is testable; this only supplies
     /// the digest's fields.
-    static func trustLine(_ d: BriefDigest, hasSummary: Bool, ownGroqKey: Bool, filed: Bool) -> String {
+    static func trustLine(
+        _ d: BriefDigest, hasSummary: Bool, ownGroqKey: Bool, filed: Bool, filedSummary: Bool
+    ) -> String {
         SessionClaims.trustLine(
             transcriber: d.summary.transcriber,
             degradedReason: d.summary.degradedReason,
@@ -1367,7 +1377,8 @@ struct ReviewView: View {
             uploadedChunks: d.summary.uploadedChunks,
             hasSummary: hasSummary,
             ownGroqKey: ownGroqKey,
-            filed: filed
+            filed: filed,
+            filedSummary: filedSummary
         )
     }
 

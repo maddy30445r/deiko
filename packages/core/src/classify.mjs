@@ -101,9 +101,10 @@ async function main() {
   // already carried the narration and window titles out. `SessionClaims`
   // exists precisely so a card never understates what left; this marker is
   // its input for the classifier the same way `uploadedChunks` is for audio.
-  // Read by the app as `filed` — see `ClassifyRequest.wasSent` in
-  // `Context.swift` — not by anything else here, and it carries no content:
-  // an ISO timestamp is for a human debugging on disk, nothing more.
+  // Read by the app as `filed` — see `ClassifyRequest.sentSummary` in
+  // `Context.swift`. It carries no content: when it went, and whether a
+  // summary went with it — the card can show a summary that landed after the
+  // request left without one.
   const sentMarker = join(dir, "classify.sent");
 
   if (existsSync(contextPath)) {
@@ -218,13 +219,30 @@ async function main() {
     signal: AbortSignal.timeout(15_000),
   });
 
+  // What an earlier request for this brief left: a summary it carried stays
+  // said — the marker answers what went for this brief, not for this request
+  // alone.
+  let previous = null;
+  try {
+    previous = readFileSync(sentMarker, "utf8");
+  } catch {
+    // None yet.
+  }
+  const summaryWentBefore = previous !== null && (() => {
+    try {
+      return JSON.parse(previous)?.summary !== false;
+    } catch {
+      return true; // a bare timestamp from before `summary`: assume it went
+    }
+  })();
+  const mine = { at: new Date().toISOString(), summary: Boolean(me.summaryLine) || summaryWentBefore };
   let answer;
   let answered = false;
   try {
     // Before the network call, not after: everything below can fail or
     // never resolve, and by the time any of them do, the body — narration,
     // summary, window titles — has already gone out.
-    writeFileSync(sentMarker, new Date().toISOString() + "\n");
+    writeFileSync(sentMarker, JSON.stringify(mine) + "\n");
     let response = await post();
     answered = true;
     // ONE RETRY, ON A 5XX ONLY. Measured live: about one call in ten came
