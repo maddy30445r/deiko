@@ -435,7 +435,7 @@ struct SettingsView: View {
                     set: { model.setSortBriefs($0) }
                 ))
                 .font(.system(size: 13))
-                Text("Files each brief with the earlier work it belongs to. To do that, what you said, a one-line summary, your window titles and notes on earlier work go to Deiko's relay, which keeps nothing. Off: briefs work the same but don't remember earlier work.")
+                Text("Files each brief with the earlier work it belongs to. To do that, what you said, a one-line summary, your window titles and notes on earlier work go to Deiko's relay, which keeps nothing. Off: nothing is sent to file them, and a new brief joins earlier work only when you move it there or it's a short follow-up on the same window.")
                     .font(.system(size: 11))
                     .foregroundStyle(DeikoStyle.ink2)
                     .fixedSize(horizontal: false, vertical: true)

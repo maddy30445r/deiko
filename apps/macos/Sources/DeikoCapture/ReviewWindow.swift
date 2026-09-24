@@ -427,9 +427,13 @@ final class ReviewModel: ObservableObject {
                 self.narration = digest.summary.narration
                 self.originalNarration = digest.summary.narration
                 self.phase = .ready
-                self.sortingNotice = Sorting.noticeDue(
-                    ownKey: Credentials.willUse("GROQ_API_KEY"), files: Credentials.filesBriefs
-                )
+                // Not on a card a waiting throw is about to turn into the
+                // sent pill — nobody would read it there. The next card has it.
+                if self.queuedHandoff == nil {
+                    self.sortingNotice = Sorting.noticeDue(
+                        ownKey: Credentials.willUse("GROQ_API_KEY"), files: Credentials.filesBriefs
+                    )
+                }
                 self.fetchSummary(sessionDir: sessionDir)
                 if settled == nil {
                     self.fetchContext(sessionDir: sessionDir)

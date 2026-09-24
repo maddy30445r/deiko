@@ -1370,7 +1370,7 @@ struct OrbRootView: View {
         // said to the relay. Here because every brief passes this card, and
         // the next one never shows it again — nothing to dismiss.
         if model.sortingNotice {
-            Text("Deiko can now sort briefs into tasks. To do that it sends what you said and your window titles to its relay, which keeps nothing. You can turn this off in Settings.")
+            Text("Deiko can now sort briefs into tasks. To do that it sends what you said, a one-line summary, your window titles and notes on earlier work to its relay, which keeps nothing. You can turn this off in Settings.")
                 .font(.system(size: 11))
                 .foregroundStyle(DeikoStyle.ink2)
                 .fixedSize(horizontal: false, vertical: true)
