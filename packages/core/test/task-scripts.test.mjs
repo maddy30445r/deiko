@@ -120,9 +120,9 @@ async function relay(respond = () => [200, { model: "stub", answers: {} }]) {
   return { url: `http://127.0.0.1:${server.address().port}`, bodies, close: () => new Promise((r) => server.close(r)) };
 }
 
-/** Only the relay URL, or none: never a token from the environment running the tests. */
-const classify = (dir, url) => run(process.execPath, [join(scripts, "classify.mjs"), dir], {
-  env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("DEIKO_"))), ...(url && { DEIKO_CLASSIFY_URL: url }) },
+/** Only the relay URL, or none, and `env`: never a token from the environment running the tests. */
+const classify = (dir, url, env = {}) => run(process.execPath, [join(scripts, "classify.mjs"), dir], {
+  env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("DEIKO_"))), ...(url && { DEIKO_CLASSIFY_URL: url }), ...env },
 });
 const json = (path) => JSON.parse(readFileSync(path, "utf8"));
 const join1 = (task) => () => [200, { model: "stub", answers: { task: { choice: task, confidence: 0.9 } } }];
@@ -346,7 +346,25 @@ test("an answer that lands after a newer request for the same brief went out is 
   assert.match(stderr, /asked again since/);
 });
 
-// ── decisions that land while one is being made ─────────────────────────────
+// ── the sorting switch, and decisions that land while one is being made ─────
+
+test("with sorting off nothing is sent, whichever relay is named, and what needs none is still decided", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
+  const stub = await relay();
+  filed(root, "20260918-090000", { narration: "the price still shows 99 after I save it" });
+  const dir = filed(root, "20260918-100000", { narration: "same price bug on the listing page" });
+  const odds = filed(root, "20260918-110000", { narration: "Thank you." });
+  // The transcription relay a keyless install carries is named too.
+  const off = { DEIKO_SORT_BRIEFS: "0", DEIKO_RELAY_URL: stub.url };
+  const { stderr } = await classify(dir, stub.url, off);
+  await classify(odds, stub.url, off);
+  stub.close();
+  assert.equal(stub.bodies.length, 0);
+  assert.match(stderr, /sorting is off/);
+  assert.equal(existsSync(join(dir, "classify.sent")), false);
+  assert.equal(existsSync(join(dir, "context.json")), false);
+  assert.deepEqual(json(join(odds, "context.json")), ODDS);
+});
 
 test("a hand placement made while the board is read stands over a decision made here", async () => {
   const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));

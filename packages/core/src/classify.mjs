@@ -19,6 +19,11 @@
  * relay exists regardless of keys — falling back to `DEIKO_RELAY_URL`/
  * `DEIKO_RELAY_TOKEN` for a build or test that only sets those.
  *
+ * AND IT CAN BE TURNED OFF. "Sort briefs into tasks" off in Settings arrives
+ * as `DEIKO_SORT_BRIEFS=0`, and then nothing is sent whatever relay the
+ * environment names — the `DEIKO_RELAY_URL` fallback too, which a keyless
+ * install carries for its audio. What needs no relay is still decided below.
+ *
  * WHAT LEAVES THIS MACHINE: what the developer said, the Groq summary line,
  * the app names, the repo hints, the window titles, the collection names and
  * hints, and for up to eight shortlisted tasks their title, where they stand,
@@ -100,7 +105,8 @@ async function main() {
     console.error("usage: node scripts/classify.mjs <session-dir>");
     process.exit(2);
   }
-  const relay = process.env.DEIKO_CLASSIFY_URL || process.env.DEIKO_RELAY_URL;
+  const sorting = process.env.DEIKO_SORT_BRIEFS !== "0";
+  const relay = sorting && (process.env.DEIKO_CLASSIFY_URL || process.env.DEIKO_RELAY_URL);
 
   const dir = resolve(sessionArg.replace(/^~/, homedir()));
   const id = basename(dir);
@@ -154,7 +160,7 @@ async function main() {
   const why = unplaceable(me);
   // Only a relay needs the rest; a brief with nothing to ask decides without one.
   if (!why && !relay) {
-    console.error("· no relay configured — skipping the classification");
+    console.error(`· ${sorting ? "no relay configured" : "sorting is off"} — skipping the classification`);
     return;
   }
 
