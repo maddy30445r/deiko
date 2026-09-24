@@ -455,11 +455,12 @@ final class ReviewModel: ObservableObject {
 
     /// The placement a re-opened brief already has, when there is nothing to
     /// sort again: a person placed it (`classify.mjs` never re-sorts that), or
-    /// Deiko answered and nobody has corrected the narration since.
+    /// Deiko answered — through Jev or on this Mac — and nobody has corrected
+    /// the narration since.
     private static func settledContext(sessionDir: String) -> SessionContext? {
         guard let context = SessionContext.read(sessionDir: sessionDir) else { return nil }
         if context.decidedBy == "you" { return context }
-        guard context.model != nil else { return nil }
+        guard context.model != nil || context.decidedBy == "local" else { return nil }
         let dir = URL(fileURLWithPath: sessionDir)
         func modified(_ name: String) -> Date? {
             try? dir.appendingPathComponent(name)
@@ -622,12 +623,13 @@ final class ReviewModel: ObservableObject {
     /// brief whose card closed was never filed at all. Only what it shows is
     /// held back when the card has moved on.
     private func fetchContext(sessionDir: String) {
-        // No relay, no sorter: nothing to wait for and nothing to say.
-        guard Credentials.relayURL != nil else { return }
         let run = startFiling(sessionDir)
         let summary = summaryTask
         let root = (sessionDir as NSString).deletingLastPathComponent
-        placing = true
+        // NO RELAY STILL PLACES WHAT NEEDS NO RELAY — odds and ends, a short
+        // follow-up on its task's window — but nothing is filed, so nothing
+        // says "Filing…" and nothing waits on it.
+        placing = Credentials.relayURL != nil
         Task { [self] in
             // THE SUMMARY IS THE BRIEF'S BEST LINE — it names the task and
             // matches it — and it is written by a call that starts at the
