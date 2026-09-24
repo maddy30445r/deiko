@@ -334,11 +334,12 @@ export function buildPrompt({
     const did = task.lastDid.map(clean).filter(Boolean);
     earlierSpoken.push(title, ...now, ...did);
     if (attached) {
-      // "Last done: X" already said X; say only what it did besides.
-      const more = did.filter((d) => !now.some((n) => n.includes(d)));
+      // "Last done" already named the last round of work; "Last time" would
+      // name the same round again.
+      const doneAlready = now.some((n) => did.some((d) => n === `Last done: ${d}`));
       out.push("", `This carries on from "${title}".`
         + (now.length ? ` Where it stands: ${now.join(" ")}` : "")
-        + (more.length ? ` Last time: ${more.join(" ")}` : ""));
+        + (did.length && !doneAlready ? ` Last time: ${did.join(" ")}` : ""));
     } else {
       out.push(
         "",

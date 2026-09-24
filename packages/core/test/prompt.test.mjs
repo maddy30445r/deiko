@@ -663,13 +663,16 @@ test("a task with nothing new to say where it stands keeps both forms grammatica
   );
 });
 
-test("a browser is not told the same thing done twice", () => {
+test("a browser is not told about the same round of work twice", () => {
   const finished = { ...priceTask(), now: ["Last done: Synced the price after save."], lastDid: ["Synced the price after save.", "Added a test."] };
   const attached = buildPrompt({ ...oneShot(), attached: true, task: finished });
   assert.ok(attached.text.endsWith(
     "\n\nThis carries on from \"Price display doesn't update after editing\". "
-      + "Where it stands: Last done: Synced the price after save. Last time: Added a test.\n",
+      + "Where it stands: Last done: Synced the price after save.\n",
   ));
+  // Only the exact line counts: an Open line that merely contains a Did line is not "Last done".
+  const open = { ...priceTask(), now: ["Synced the price after save. Still slow on mobile."], lastDid: ["Synced the price after save."] };
+  assert.match(buildPrompt({ ...oneShot(), attached: true, task: open }).text, / Last time: Synced the price after save\.\n$/);
 });
 
 test("the task's words are evidence; its path is not", () => {
