@@ -28,8 +28,10 @@ export async function handler(event) {
   const contentType = headers["content-type"] ?? headers["Content-Type"] ?? "";
   const token = bearerFrom(authorization);
   const origin = headers.origin ?? headers.Origin ?? "";
-  // Function URLs put the caller here. Only the playground uses it, and only
-  // as a salted hash, to ration how many tickets one caller may mint.
+  // Function URLs put the caller here, and only the URL may invoke this
+  // function (deploy-aws.sh scopes the grant), so it is the real peer rather
+  // than a field a direct invoker wrote. Used only as a salted hash, to ration
+  // playground tickets and text calls per caller.
   const ip = event?.requestContext?.http?.sourceIp ?? "";
 
   // Binary bodies arrive base64-encoded. The audio is binary, so getting this

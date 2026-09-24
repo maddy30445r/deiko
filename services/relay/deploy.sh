@@ -54,8 +54,23 @@ fi
 say "account $ACCOUNT · region $REGION"
 
 # Refuse rather than deploy a relay that answers /health and 503s every real
-# request — the failure that looks healthy and is not.
+# request — the failure that looks healthy and is not. The classifier and the
+# playground are part of the product too, so their keys are required as well.
 : "${GROQ_API_KEY:?set GROQ_API_KEY (transcription AND summaries 503 without it)}"
+: "${DEIKO_PLAYGROUND_SECRET:?set DEIKO_PLAYGROUND_SECRET (every /v1/playground route 503s without it)}"
+if [ -z "${TYPESAFE_API_KEY:-}${AI_GATEWAY_API_KEY:-}${OPENROUTER_API_KEY:-}" ] \
+  && { [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ] || [ -z "${CLOUDFLARE_AI_TOKEN:-}" ]; }; then
+  echo "✗ no classifier key: set TYPESAFE_API_KEY, AI_GATEWAY_API_KEY or OPENROUTER_API_KEY,"
+  echo "  or both CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_AI_TOKEN (/v1/classify 503s without one)"
+  exit 1
+fi
+
+# LAUNCH STEP: `localhost` in DEIKO_PLAYGROUND_ORIGINS lets any page served from
+# a visitor's own machine call the playground. It is there for testing the
+# site locally; take it out of .env before the playground goes public.
+case ",${DEIKO_PLAYGROUND_ORIGINS:-}," in
+  *localhost*) say "⚠ DEIKO_PLAYGROUND_ORIGINS still allows localhost — remove it before launch" ;;
+esac
 
 # ── The usage table ─────────────────────────────────────────────────────────
 #
@@ -115,19 +130,24 @@ fi
 # tempting in a service with no other dependencies, and the wrong place to save,
 # because a signing bug is a security bug and this is three API calls.
 #
-# `--omit=dev --no-package-lock` into a scratch directory: nothing is written
-# into the repo, so a deploy cannot leave the working tree dirty.
+# `npm ci` FROM THE RELAY'S OWN LOCKFILE, into a scratch directory. It used to
+# install whatever `@aws-sdk/client-dynamodb` was newest on the day, so two
+# deploys of the same commit could ship different SDKs, and neither was the one
+# the tests had run against. `package-lock.json` here pins the SDK and every
+# package under it to the versions in the repo's root lockfile — the ones
+# `npm test` exercises. Scripts are not run: nothing in the tree needs one.
+# Nothing is written into the repo, so a deploy cannot leave it dirty.
 
 BUILD="$(mktemp -d)"
 ZIP="$BUILD/relay.zip"
 PKG="$BUILD/pkg"
 mkdir -p "$PKG"
-cp "$here"/relay.mjs "$here"/lambda.mjs "$here"/quota.mjs "$here"/usage.mjs "$PKG/"
+cp "$here"/relay.mjs "$here"/lambda.mjs "$here"/quota.mjs "$here"/usage.mjs \
+  "$here"/package.json "$here"/package-lock.json "$PKG/"
 
-say "installing @aws-sdk/client-dynamodb"
-( cd "$PKG" && npm install --silent --omit=dev --no-package-lock --no-audit --no-fund \
-    @aws-sdk/client-dynamodb >/dev/null 2>&1 ) \
-  || { echo "✗ npm install failed — the deploy needs network and a working npm"; exit 1; }
+say "installing @aws-sdk/client-dynamodb (locked)"
+( cd "$PKG" && npm ci --omit=dev --ignore-scripts --no-audit --no-fund >/dev/null 2>&1 ) \
+  || { echo "✗ npm ci failed — the deploy needs network and a working npm"; exit 1; }
 
 ( cd "$PKG" && zip -qr "$ZIP" . )
 say "bundle $(du -h "$ZIP" | cut -f1)"
@@ -201,6 +221,9 @@ DEIKO_USAGE_TABLE="$TABLE" node -e '
     // in code, so each is passed only when it has been chosen deliberately.
     "DEIKO_GLOBAL_DAILY_SECONDS",
     "DEIKO_SUMMARIES_PER_DAY",
+    "DEIKO_SUMMARIES_PER_CALLER_PER_DAY",
+    "DEIKO_CLASSIFIES_PER_CALLER_PER_DAY",
+    "DEIKO_TEXT_CALLS_PER_IP_PER_DAY",
     // The classifier. Without the key /v1/classify 503s and the app renders
     // every brief without earlier work, which is the right default until a
     // TypeSafe account exists.
@@ -237,6 +260,24 @@ DEIKO_USAGE_TABLE="$TABLE" node -e '
 ' > "$ENV_FILE"
 
 if aws lambda get-function --function-name "$FUNCTION" --region "$REGION" >/dev/null 2>&1; then
+  # NEVER SHIP FEWER SETTINGS THAN ARE LIVE. `--environment` replaces the whole
+  # set, so a shell that is missing one variable used to strip it from the
+  # function and report success — a classifier key gone, a daily ceiling back
+  # to its default. NAMES only: `keys()` is evaluated by the CLI, so no value
+  # is ever fetched. Checked before anything is changed.
+  LIVE_NAMES=$(aws lambda get-function-configuration --function-name "$FUNCTION" --region "$REGION" \
+    --query 'keys(Environment.Variables || `{}`)' --output text)
+  DROPPED=$(LIVE_NAMES="$LIVE_NAMES" node -e '
+    const next = Object.keys(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).Variables);
+    const live = (process.env.LIVE_NAMES || "").split(/\s+/).filter((n) => n && n !== "None");
+    process.stdout.write(live.filter((n) => !next.includes(n)).join(" "));
+  ' "$ENV_FILE")
+  if [ -n "$DROPPED" ] && [ -z "${DEIKO_ALLOW_ENV_DROP:-}" ]; then
+    echo "✗ this deploy would remove settings the live relay has: $DROPPED"
+    echo "  set them (in .env for make relay-deploy) and run again, or"
+    echo "  DEIKO_ALLOW_ENV_DROP=1 to remove them on purpose. Nothing was changed."
+    exit 1
+  fi
   say "updating code"
   aws lambda update-function-code --function-name "$FUNCTION" --region "$REGION" \
     --zip-file "fileb://$ZIP" --query LastUpdateStatus --output text >/dev/null
@@ -261,11 +302,18 @@ fi
 # Log retention. Lambda creates the group on first invocation and leaves it on
 # "Never expire", so without this every status line the relay has ever written
 # is kept and billed forever. Thirty days outlives any support conversation.
-# `|| true` because the group does not exist until the function has run once —
-# the next deploy sets it, and nothing depends on it having worked today.
-aws logs put-retention-policy --region "$REGION" \
-  --log-group-name "/aws/lambda/$FUNCTION" --retention-in-days 30 >/dev/null 2>&1 \
-  && say "log retention 30 days" || true
+# The group is CREATED here first: it does not exist until the function has
+# run once, so on a first deploy the retention call used to fail quietly and
+# the group Lambda made later kept everything. `|| true` on the create because
+# it already exists on every deploy after the first.
+aws logs create-log-group --region "$REGION" \
+  --log-group-name "/aws/lambda/$FUNCTION" >/dev/null 2>&1 || true
+if aws logs put-retention-policy --region "$REGION" \
+  --log-group-name "/aws/lambda/$FUNCTION" --retention-in-days 30 >/dev/null 2>&1; then
+  say "log retention 30 days"
+else
+  say "⚠ could not set log retention on /aws/lambda/$FUNCTION — it keeps everything until fixed"
+fi
 
 # BEST-EFFORT, deliberately. Reserving concurrency requires the account to
 # keep 10 slots unreserved, and a fresh AWS account's TOTAL limit is often
@@ -297,69 +345,98 @@ if ! URL=$(aws lambda get-function-url-config --function-name "$FUNCTION" --regi
     --auth-type NONE --query FunctionUrl --output text)
 fi
 
-# BOTH permission statements, ensured on every run rather than only when the
-# URL is first created — and the second one is the hard-won part.
+# TWO STATEMENTS, AND BOTH OPEN THE URL ONLY. Since October 2025 a function
+# URL with AuthType NONE needs `lambda:InvokeFunctionUrl` AND
+# `lambda:InvokeFunction` in the resource policy — that, not a public-access
+# block, is what "direct invoke 200, URL 403" on this account was. AWS's own
+# policy for it scopes the second statement with `lambda:InvokedViaFunctionUrl`
+# (docs.aws.amazon.com/lambda/latest/dg/urls-auth.html), and so does this.
 #
-# The textbook policy (`lambda:InvokeFunctionUrl`, principal *, AuthType NONE)
-# is NOT sufficient on recent AWS accounts: they ship with Lambda's public
-# access block enabled, which rejects URL-based public grants and returns
-# Forbidden with a perfectly correct-looking policy in place. A plain
-# `lambda:InvokeFunction` for * is what actually opens the door. Diagnosed on
-# this very account: direct invoke 200, URL 403, until this statement landed.
+# IT USED TO BE AN UNCONDITIONED InvokeFunction FOR *, which let any AWS
+# account invoke the function directly — with a hand-built event whose
+# `requestContext.http.sourceIp` is whatever it likes, walking straight past
+# the per-address caps, or asynchronously, which Lambda retries for hours.
+# That statement (`AllowPublicInvoke`) is removed on every deploy, AFTER its
+# replacement is in place so the URL never goes a moment without a grant.
 #
-# That grant also makes DIRECT invoke public, which sounds broader than the
-# URL — but is not, for this service: the only guard either way is the bearer
-# check inside the handler, so a caller crafting a direct-invoke event gets
-# exactly what a caller of the public URL gets. `|| true` because
-# add-permission errors when the statement already exists, which is the normal
-# case on a redeploy.
+# The replacement is (re)written only when the live policy lacks it with its
+# condition: removing and re-adding it every run would 403 the URL for that
+# instant, and the app reads a 403 as "your token was revoked" for the rest
+# of the session. Added WITHOUT `|| true`, so an AWS CLI too old to know
+# `--invoked-via-function-url` stops the deploy while the old grant still
+# stands. The first statement keeps its `|| true`: add-permission errors when
+# a statement exists, which is the normal case on a redeploy.
 aws lambda add-permission --function-name "$FUNCTION" --region "$REGION" \
   --statement-id FunctionURLAllowPublicAccess --action lambda:InvokeFunctionUrl \
   --principal '*' --function-url-auth-type NONE >/dev/null 2>&1 || true
-aws lambda add-permission --function-name "$FUNCTION" --region "$REGION" \
-  --statement-id AllowPublicInvoke --action lambda:InvokeFunction \
-  --principal '*' >/dev/null 2>&1 || true
+POLICY=$(aws lambda get-policy --function-name "$FUNCTION" --region "$REGION" \
+  --query Policy --output text 2>/dev/null) || POLICY='{}'
+if ! POLICY="$POLICY" node -e '
+  const s = (JSON.parse(process.env.POLICY).Statement || [])
+    .find((x) => x.Sid === "FunctionURLInvokeAllowPublicAccess");
+  process.exit(String(s?.Condition?.Bool?.["lambda:InvokedViaFunctionUrl"]) === "true" ? 0 : 1);
+'; then
+  aws lambda remove-permission --function-name "$FUNCTION" --region "$REGION" \
+    --statement-id FunctionURLInvokeAllowPublicAccess >/dev/null 2>&1 || true
+  aws lambda add-permission --function-name "$FUNCTION" --region "$REGION" \
+    --statement-id FunctionURLInvokeAllowPublicAccess --action lambda:InvokeFunction \
+    --principal '*' --invoked-via-function-url >/dev/null
+  say "function URL grant scoped to the URL"
+fi
+aws lambda remove-permission --function-name "$FUNCTION" --region "$REGION" \
+  --statement-id AllowPublicInvoke >/dev/null 2>&1 || true
 
 URL="${URL%/}"
 
 # ── Verify the deploy, rather than asking the user to ──────────────────────
 #
-# A relay with no key answers ok:true happily and then 503s every real
-# request, so `transcription` is the field that matters — and since metering
-# exists, so is `metering`. That one is a live DescribeTable from inside the
-# function, which makes it the ONLY thing here that proves the table and the
-# role's policy actually line up; both are created above, and both can be
-# created wrong. A relay reporting metering:false 503s every transcription by
-# design, so shipping past it would hand out a URL that cannot work.
+# A relay with no key answers ok:true happily and then 503s the route it
+# cannot serve, so EVERY route's flag must be true — transcription, summary,
+# classify and the playground — and so must `metering`. That one is a live
+# DescribeTable from inside the function, which makes it the ONLY thing here
+# that proves the table and the role's policy actually line up; both are
+# created above, and both can be created wrong. Any flag false means a route
+# that 503s by design, and the deploy FAILS rather than hand out that URL.
 #
-# Cold start plus IAM propagation can take a few seconds on a fresh function;
-# retry briefly before declaring failure.
+# Cold start plus IAM propagation can take a while on a fresh function, and the
+# relay caches its DescribeTable answer for a minute — so a `false` seen while
+# IAM propagates stands for up to sixty seconds. Retry for ninety.
 say "verifying /health…"
 HEALTH=""
-healthy() {
-  case "$1" in
-    *'"transcription":true'*) case "$1" in *'"metering":true'*) return 0 ;; esac ;;
-  esac
-  return 1
+unhealthy() {  # the flags that are not true; nothing printed means healthy
+  node -e '
+    let h = {};
+    try { h = JSON.parse(process.argv[1]); } catch {}
+    const flags = ["transcription", "summary", "classify", "playground", "metering"];
+    process.stdout.write(flags.filter((k) => h[k] !== true).join(" "));
+  ' "$1"
 }
-for _ in 1 2 3 4 5 6; do
+for _ in $(seq 18); do
   HEALTH=$(curl -s --max-time 10 "$URL/health" 2>/dev/null) || HEALTH=""
-  healthy "$HEALTH" && break
+  [ -z "$(unhealthy "$HEALTH")" ] && break
   sleep 5
 done
-if ! healthy "$HEALTH"; then
+MISSING=$(unhealthy "$HEALTH")
+if [ -n "$MISSING" ]; then
   echo
   echo "✗ deploy finished but /health is not fully healthy"
   echo "  got: ${HEALTH:-no response}"
-  case "$HEALTH" in
-    *'"transcription":false'*)
-      echo "  transcription:false — the function has no GROQ_API_KEY." ;;
-    *'"metering":false'*)
-      echo "  metering:false — the function cannot reach table '$TABLE'."
-      echo "  Check the ${FUNCTION}-usage policy on role $ROLE_NAME, and that the"
-      echo "  table exists in $REGION. IAM can also take a minute to propagate." ;;
-  esac
-  echo "  every real request would fail — fix before releasing."
+  for flag in $MISSING; do
+    case "$flag" in
+      transcription|summary)
+        echo "  $flag:false — the function has no GROQ_API_KEY." ;;
+      classify)
+        echo "  classify:false — the function has no classifier key (TYPESAFE_API_KEY,"
+        echo "  AI_GATEWAY_API_KEY, OPENROUTER_API_KEY, or the CLOUDFLARE pair)." ;;
+      playground)
+        echo "  playground:false — the function has no DEIKO_PLAYGROUND_SECRET." ;;
+      metering)
+        echo "  metering:false — the function cannot reach table '$TABLE'."
+        echo "  Check the ${FUNCTION}-usage policy on role $ROLE_NAME, and that the"
+        echo "  table exists in $REGION. IAM can also take a minute to propagate." ;;
+    esac
+  done
+  echo "  some real requests would fail — fix before releasing."
   exit 1
 fi
 

@@ -1,0 +1,8 @@
+{
+  "name": "deiko-relay",
+  "private": true,
+  "description": "What deploy-aws.sh installs into the Lambda bundle. Pinned exactly; package-lock.json pins the rest.",
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "3.1106.0"
+  }
+}
