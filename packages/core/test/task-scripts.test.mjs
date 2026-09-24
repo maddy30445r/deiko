@@ -67,6 +67,15 @@ test("candidates are listed whenever the task was not placed, even with the coll
   assert.match(prompt(d), /This might carry on from earlier work, one of these:\n- "Fix the price display after saving"\. History: /);
 });
 
+test("a brief in odds and ends carries on from nothing", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-render-"));
+  // An older brief moved by hand into the odds brief's own task id.
+  session(root, "20260918-100000", { said: "the price still shows 99 after I save", summary: "Fix the price display after saving.", context: { task: "t-20260918-110000" } });
+  const odds = session(root, "20260918-110000", { said: "Thank you.", context: { pile: "odds", decidedBy: "local" } });
+  await render(odds);
+  assert.doesNotMatch(prompt(odds), /carries on|might carry on/);
+});
+
 test("repo hints keep names that merely contain an app's name", async () => {
   const root = mkdtempSync(join(tmpdir(), "deiko-render-"));
   const dir = session(root, "20260918-100000", {
@@ -109,9 +118,9 @@ async function relay(respond = () => [200, { model: "stub", answers: {} }]) {
   return { url: `http://127.0.0.1:${server.address().port}`, bodies, close: () => new Promise((r) => server.close(r)) };
 }
 
-/** Only the relay URL: never a token from the environment running the tests. */
+/** Only the relay URL, or none: never a token from the environment running the tests. */
 const classify = (dir, url) => run(process.execPath, [join(scripts, "classify.mjs"), dir], {
-  env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("DEIKO_"))), DEIKO_CLASSIFY_URL: url },
+  env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("DEIKO_"))), ...(url && { DEIKO_CLASSIFY_URL: url }) },
 });
 const json = (path) => JSON.parse(readFileSync(path, "utf8"));
 const join1 = (task) => () => [200, { model: "stub", answers: { task: { choice: task, confidence: 0.9 } } }];
@@ -166,15 +175,84 @@ test("a joined brief nothing else placed takes its task's collection", async () 
   assert.equal(context.collection, "shop");
 });
 
-test("a brief the summary could not tell is not sent", async () => {
+const ODDS = { pile: "odds", decidedBy: "local" };
+
+test("a brief the summary could not tell goes to odds and ends, sending nothing, relay or none", async () => {
   const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
-  const dir = filed(root, "20260918-100000", { narration: "hello hello can you hear me now", summary: "The transcript is too short to determine a request." });
   const stub = await relay();
-  const { stderr } = await classify(dir, stub.url);
+  for (const [id, url] of [["20260918-100000", stub.url], ["20260918-110000", undefined]]) {
+    const dir = filed(root, id, { narration: "hello hello can you hear me now", summary: "The transcript is too short to determine a request." });
+    const { stderr } = await classify(dir, url);
+    assert.deepEqual(json(join(dir, "context.json")), ODDS);
+    assert.equal(existsSync(join(dir, "classify.sent")), false);
+    assert.match(stderr, /could not tell .* odds and ends/);
+  }
+  stub.close();
+  assert.equal(stub.bodies.length, 0);
+});
+
+// The Catalogue page as a brief's screen reads it: its window and its words.
+const catalogue = {
+  windows: ["Catalogue — shop"],
+  screenTerms: ["catalogue", "price", "scarf", "oxford", "leather", "stock", "sku", "wool", "cover", "shirt", "edit", "save"],
+};
+
+test("a short follow-up on its task's window joins it here, and nothing is sent", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
+  writeFileSync(join(root, "collections.json"), JSON.stringify([{ id: "shop", name: "Shop", hint: "" }]));
+  const task = "t-20260918-090000";
+  filed(root, "20260918-090000", { narration: "the price still shows 99 after I save", ...catalogue, context: { collection: "shop" } });
+  filed(root, "20260918-091000", { narration: "same price bug on the listing page", ...catalogue, context: { task } });
+  filed(root, "20260918-092000", { narration: "why does the signup chart drop in week 32", windows: ["Signups — shop"], screenTerms: ["signups", "chart", "week"] });
+  const dir = filed(root, "20260918-100000", { narration: "fix this", ...catalogue });
+  // No relay at all, and the same with one: a short brief is never sent.
+  await classify(dir);
+  assert.deepEqual(json(join(dir, "context.json")), {
+    collection: "shop", task, tier: null, confidence: { task: null }, decidedBy: "local", model: null,
+  });
+  const stub = await relay(join1("t-20260918-092000"));
+  await classify(dir, stub.url);
   stub.close();
   assert.equal(stub.bodies.length, 0);
   assert.equal(existsSync(join(dir, "classify.sent")), false);
-  assert.match(stderr, /could not tell .* skipping/);
+  assert.equal(json(join(dir, "context.json")).task, task);
+});
+
+test("a short brief with no clear match on its window goes to odds and ends", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
+  const stub = await relay();
+  filed(root, "20260918-090000", { narration: "the price still shows 99 after I save", ...catalogue });
+  filed(root, "20260918-091000", { narration: "why does the signup chart drop in week 32", windows: ["Signups — shop"], screenTerms: ["signups", "chart", "week"] });
+  // Nothing on screen that any task has.
+  const weak = filed(root, "20260918-100000", { narration: "Thank you.", windows: ["Mail — Inbox"], screenTerms: ["inbox", "drafts"] });
+  // The same words as a task, read off a window that task never had.
+  const elsewhere = filed(root, "20260918-101000", { narration: "fix this", windows: ["Catalogue copy — Notes"], screenTerms: catalogue.screenTerms });
+  for (const dir of [weak, elsewhere]) {
+    await classify(dir, stub.url);
+    assert.deepEqual(json(join(dir, "context.json")), ODDS, dir);
+    assert.equal(existsSync(join(dir, "classify.sent")), false);
+  }
+  // Two tasks on the same page, neither ahead: which one is a guess.
+  filed(root, "20260918-102000", { narration: "the stock count is wrong after an edit", ...catalogue });
+  const torn = filed(root, "20260918-103000", { narration: "and this", ...catalogue });
+  await classify(torn, stub.url);
+  assert.deepEqual(json(join(torn, "context.json")), ODDS);
+  stub.close();
+  assert.equal(stub.bodies.length, 0);
+});
+
+test("odds and ends are never shortlisted, and a brief filed by Deiko here is filed again", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
+  filed(root, "20260918-090000", { narration: "the price still shows 99 after I save", context: ODDS });
+  filed(root, "20260918-091000", { narration: "why does the signup chart drop in week 32" });
+  // Said more since ("Point at more"): a local decision is not a hand placement.
+  const dir = filed(root, "20260918-100000", { narration: "the price bug is back on the listing", context: ODDS });
+  const stub = await relay();
+  await classify(dir, stub.url);
+  stub.close();
+  assert.deepEqual(stub.bodies[0].tasks.map((t) => t.id), ["t-20260918-091000"]);
+  assert.equal(json(join(dir, "context.json")).decidedBy, "jev");
+  assert.equal(json(join(dir, "context.json")).pile, undefined);
 });
 
 test("briefs with nothing to place are never a shortlisted task", async () => {

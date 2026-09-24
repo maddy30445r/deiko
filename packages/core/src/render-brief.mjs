@@ -281,8 +281,8 @@ const personaPath = existsSync(personaPointer)
   : null;
 
 // THE TASK THIS BRIEF BELONGS TO, as `classify.mjs` decided or the developer
-// corrected. None — no relay, a fresh board, a command-line render — is its
-// own task, and a task of one has nothing earlier to carry.
+// corrected. None — no relay, a fresh board, a command-line render, odds and
+// ends — is its own task, and a task of one has nothing earlier to carry.
 const contextPath = join(dir, "context.json");
 let context = null;
 if (existsSync(contextPath)) {
@@ -298,7 +298,8 @@ const myTask = context?.task ?? taskIdFor(basename(dir));
 // brief must not hand its agent work that happened after it.
 const groups = groupTasks(readBoard(root).filter((b) => b.id < basename(dir)));
 const taskTitles = readTasks(root);
-const mates = groups.get(myTask) ?? [];
+// Odds and ends carry on from nothing, whatever else claims their id.
+const mates = context?.pile === "odds" ? [] : groups.get(myTask) ?? [];
 // Every mate is older, so the oldest of them is the oldest brief of the task
 // counting this one — the brief `writeTaskNotes` titles an untitled task by.
 const myTitle = mates.length ? taskTitles.get(myTask) ?? titleFor(mates.at(-1)) : null;

@@ -250,12 +250,13 @@ export function readTasks(root) {
   }
 }
 
-/** Every sibling under `root` as a `readBriefLine`, briefs with nothing said skipped. */
+/** Every sibling under `root` as a `readBriefLine`, briefs with nothing said
+ *  skipped, and odds and ends too: never shortlisted, never in a note. */
 export function readBoard(root) {
   return readdirSync(root)
     .filter((name) => STAMP.test(name))
     .map((name) => readBriefLine(join(root, name)))
-    .filter((b) => b.line);
+    .filter((b) => b.line && !b.odds);
 }
 
 /**

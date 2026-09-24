@@ -185,7 +185,7 @@ test("a sibling is read with its summary line, task, windows, terms and outcome"
     narration: "hey so fix the drag on the board",
     summaryLine: "Fix the drag on the board.",
     line: "Fix the drag on the board.",
-    collection: "deiko", task: "t-20260915-100000",
+    collection: "deiko", task: "t-20260915-100000", odds: false,
     apps: ["Deiko"], windows: ["Orb.swift — Deiko"], screenTerms: ["drag"], repoHints: ["Deiko"],
     outcome: { did: ["Moved the threshold."], decided: [], open: ["Test on a trackpad."], files: [] },
   });

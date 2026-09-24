@@ -7,7 +7,7 @@ import { join } from "node:path";
 import {
   SHORTLIST, TASK_ID, groupTasks, parseOutcome, renderTaskNote, scoreTasks,
   stampTime, taskIdFor, taskState, taskText, titleFor, tokens,
-  readTasks, writeTaskNotes,
+  readBoard, readTasks, writeTaskNotes,
 } from "../lib/tasks.mjs";
 
 const brief = (id, line, extra = {}) => ({
@@ -218,6 +218,16 @@ test("app names and collections are redacted when they contain secrets", () => {
   const note = renderTaskNote({ id: "t-x", title: "Title", collection: "AKIAIOSFODNN7EXAMPLE", briefs: withSecret });
   assert.equal(note.includes("AKIAIOSFODNN7EXAMPLE"), false);
   assert.match(note, /REDACTED-AWS-KEY-ID/);
+});
+
+test("odds and ends are not on the board tasks are read from, so never in a task or its note", () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-tasks-"));
+  for (const [id, context] of [["20260918-155836", null], ["20260918-160606", { pile: "odds", decidedBy: "local" }]]) {
+    mkdirSync(join(root, id));
+    writeFileSync(join(root, id, "brief.json"), JSON.stringify({ summary: { narration: "the price still shows 99 after I save it" } }));
+    if (context) writeFileSync(join(root, id, "context.json"), JSON.stringify(context));
+  }
+  assert.deepEqual(readBoard(root).map((b) => b.id), ["20260918-155836"]);
 });
 
 test("notes are written for tasks with two briefs or more, titled from tasks.json", () => {

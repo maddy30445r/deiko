@@ -70,14 +70,15 @@ export function briefDate(id, now = new Date()) {
 
 /// The shortest narration worth classifying. "Thank you." is a real
 /// transcript, and a board is full of them; asking what project it belongs to
-/// is a question with no answer.
+/// is a question with no answer. Shorter joins its task only on a clear local
+/// match, else odds and ends — see `classify.mjs`.
 export const MIN_NARRATION = 12;
 
 /// What `summarize.mjs` tells Groq to say when it cannot tell ("too garbled
 /// or too short to tell"), as Groq words it: "The transcript is too short to
 /// determine a request." Narrow on purpose — it drops briefs from the board
-/// and skips filing, so a real summary saying a timeout is "too short for
-/// large uploads" must not match.
+/// and sends them to odds and ends, so a real summary saying a timeout is
+/// "too short for large uploads" must not match.
 export const COULD_NOT_TELL = /\btoo (short|garbled) to (tell|determine|understand)\b/i;
 
 /** Why a brief has nothing to place — too little said, or a summary that
@@ -246,6 +247,9 @@ export function readBriefLine(sessionDir) {
     line: summaryLine && !COULD_NOT_TELL.test(summaryLine) ? summaryLine : said,
     collection: context.collection ?? null,
     task: TASK_ID.test(context.task ?? "") ? context.task : null,
+    // In odds and ends: too little said, or nothing Groq could make sense
+    // of, and no task — see `classify.mjs`.
+    odds: context.pile === "odds",
     apps: Array.isArray(summary.apps) ? summary.apps : [],
     windows: Array.isArray(summary.windows) ? summary.windows : [],
     screenTerms: Array.isArray(summary.screenTerms) ? summary.screenTerms : [],

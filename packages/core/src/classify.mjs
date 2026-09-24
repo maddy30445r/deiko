@@ -29,9 +29,16 @@
  * (`summarize.mjs`), taken deliberately: a title names a file, a repo or a
  * ticket, and that is what places a brief.
  *
+ * NOTHING LEAVES FOR A BRIEF THERE IS NOTHING TO ASK ABOUT. Too little said,
+ * or a summary that could not tell what was asked, is decided here, relay or
+ * none: a short follow-up on a window its task already has joins that task,
+ * and anything else goes to odds and ends (`pile: "odds"`, no task). Either
+ * is `decidedBy: "local"`, sends no request and leaves no `classify.sent`.
+ *
  * Failure is not fatal, ever. No relay, no network, a bad answer — the file
  * is simply absent and the brief ships as it always did. And a brief the
- * developer placed by hand (`decidedBy: "you"`) is never re-guessed.
+ * developer placed by hand (`decidedBy: "you"`) is never re-guessed; one
+ * decided here or by Jev is, when there is more to go on.
  */
 
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -40,13 +47,23 @@ import { homedir } from "node:os";
 
 import { loadEvents } from "./lib/session-io.mjs";
 import { redact } from "./lib/redact.mjs";
-import { decide, readBriefLine, unplaceable } from "./lib/context.mjs";
+import { COULD_NOT_TELL, decide, readBriefLine, unplaceable } from "./lib/context.mjs";
 import {
   groupTasks, readBoard, readTasks, scoreTasks, stampTime, taskState, taskText, titleFor,
 } from "./lib/tasks.mjs";
 
 /// Titles are the widest thing sent; thirty distinct ones cover any session.
 const MAX_TITLES = 30;
+
+/// When a short brief's best local match is clear enough to join without
+/// asking: at least `min`, at least `ratio` times the runner-up, and on a
+/// window that task's briefs already had.
+/// ponytail: eyeballed on one real 38-brief board, each brief scored with its
+/// words dropped: min/ratio alone joined 3 of 16 briefs that opened a new
+/// page to an older task in the same app, and no setting stopped that without
+/// losing true joins; the shared window stopped all 3 and kept 13 of 14.
+/// Upgrade: tune on real filing misses once odds and ends has some.
+const SHORT_JOIN = { min: 8, ratio: 2 };
 
 /// Failures that happen before a connection exists, so nothing was sent.
 const NEVER_CONNECTED = new Set(["ENOTFOUND", "ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "EAI_AGAIN"]);
@@ -84,10 +101,6 @@ async function main() {
     process.exit(2);
   }
   const relay = process.env.DEIKO_CLASSIFY_URL || process.env.DEIKO_RELAY_URL;
-  if (!relay) {
-    console.error("· no relay configured — skipping the classification");
-    return;
-  }
 
   const dir = resolve(sessionArg.replace(/^~/, homedir()));
   const id = basename(dir);
@@ -136,8 +149,9 @@ async function main() {
   const narration = (summary?.narration ?? "").trim();
   const me = readBriefLine(dir);
   const why = unplaceable(me);
-  if (why) {
-    console.error(`· ${why} — skipping`);
+  // Only a relay needs the rest; a brief with nothing to ask decides without one.
+  if (!why && !relay) {
+    console.error("· no relay configured — skipping the classification");
     return;
   }
 
@@ -175,6 +189,29 @@ async function main() {
     repoHints: summary.repoHints ?? [],
     now,
   });
+
+  if (why) {
+    const [top, next] = scored;
+    const mine = new Set(me.windows);
+    const joins = !COULD_NOT_TELL.test(me.summaryLine ?? "") && top
+      && top.score >= SHORT_JOIN.min && top.score >= SHORT_JOIN.ratio * (next?.score ?? 0)
+      && groups.get(top.id).some((b) => b.windows.some((w) => mine.has(w)));
+    const inherited = joins && groups.get(top.id).find((b) => b.collection)?.collection;
+    const context = joins
+      ? {
+        collection: collections.some((c) => c.id === inherited) ? inherited : null,
+        task: top.id,
+        tier: null,
+        confidence: { task: null },
+        decidedBy: "local",
+        model: null,
+      }
+      : { pile: "odds", decidedBy: "local" };
+    writeFileSync(contextPath, JSON.stringify(context, null, 2) + "\n");
+    console.error(joins ? `✓ context → joins ${top.id} here (${why})` : `· ${why} — odds and ends`);
+    return;
+  }
+
   const shortlist = scored.map((s) => {
     const bs = groups.get(s.id);
     const last = bs.find((b) => b.outcome)?.outcome;
