@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
-  COMMON_LABEL, FIRM_SAME, RRF_K, SEAT_KINDS, SHORTLIST, TASK_ID, TIME_SEATS, bm25, cosine, firm, groupTasks,
+  COMMON_LABEL, RRF_K, SEAT_KINDS, SHORTLIST, TASK_ID, TIME_SEATS, bm25, cosine, firm, groupTasks,
   parseOutcome, renderTaskNote, rrf, shortlist, stampTime, taskIdFor, taskLabels, taskState, terms,
   timeWindow, titleFor, tokens, readBoard, readTasks, writeTaskNotes,
 } from "../lib/tasks.mjs";
@@ -144,7 +144,6 @@ test("the starting values are the ones the owner agreed", () => {
   assert.equal(TIME_SEATS, 5);
   assert.equal(COMMON_LABEL, 5);
   assert.equal(RRF_K, 60);
-  assert.equal(FIRM_SAME, 0.9);
 });
 
 test("terms add 3-grams so a speech-to-text slip still meets its word", () => {

@@ -165,11 +165,6 @@ export const COMMON_LABEL = 5;
 /// weighted 0.5–0.7 towards meaning on the eval before changing these.
 export const RRF_K = 60;
 export const RRF_WEIGHTS = { words: 1, meaning: 1 };
-/// The pre-recalibration join-confidence line the owner agreed (round-2
-/// "same", back when JOIN gated on that). Kept as the number they agreed;
-/// `firm` no longer reads it — JOIN's own thresholds in context.mjs decide
-/// what counts as a join now, and `firm` only asks whether one happened.
-export const FIRM_SAME = 0.9;
 /// The labels that hand out seats. Sites and code projects do not: one site
 /// or one repo holds most of a board, so they say nothing about WHICH task.
 export const SEAT_KINDS = ["pages", "files", "urls", "errors", "tickets"];
