@@ -182,6 +182,10 @@ enum Sessions {
     }
 
     /// Remove every past session. The open one, if any, survives.
+    ///
+    /// The task notes and titles go too: they are made from what those
+    /// briefs said and what came of them, so keeping them kept the words.
+    /// The projects stay — a name and a line somebody typed, not a session.
     @discardableResult
     static func deleteAll(root: String = defaultRoot, keeping open: String? = nil) -> Int {
         let openName = open.map { ($0 as NSString).lastPathComponent }
@@ -190,6 +194,9 @@ enum Sessions {
             if (try? FileManager.default.removeItem(atPath: "\(root)/\(name)")) != nil {
                 removed += 1
             }
+        }
+        for memory in ["tasks", "tasks.json"] {
+            try? FileManager.default.removeItem(atPath: "\(root)/\(memory)")
         }
         return removed
     }

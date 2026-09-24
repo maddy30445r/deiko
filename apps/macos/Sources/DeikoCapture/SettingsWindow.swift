@@ -457,7 +457,8 @@ struct SettingsView: View {
                         alert.messageText = "Delete every past session?"
                         alert.informativeText =
                             "Removes \(model.sessionCount) session\(model.sessionCount == 1 ? "" : "s") "
-                            + "and their screenshots. A session being recorded right now is kept. "
+                            + "and their screenshots, and the task notes made from them. "
+                            + "A session being recorded right now is kept. "
                             + "This cannot be undone."
                         alert.addButton(withTitle: "Delete")
                         alert.addButton(withTitle: "Cancel")
