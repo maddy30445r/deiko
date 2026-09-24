@@ -293,9 +293,13 @@ if (existsSync(contextPath)) {
 }
 const root = dirname(dir);
 const myTask = context?.task ?? taskIdFor(basename(dir));
-const groups = groupTasks(readBoard(root).filter((b) => b.id !== basename(dir)));
+// OLDER BRIEFS ONLY, as `classify.mjs` reads the board: re-rendering an old
+// brief must not hand its agent work that happened after it.
+const groups = groupTasks(readBoard(root).filter((b) => b.id < basename(dir)));
 const taskTitles = readTasks(root);
 const mates = groups.get(myTask) ?? [];
+// Every mate is older, so the oldest of them is the oldest brief of the task
+// counting this one — the brief `writeTaskNotes` titles an untitled task by.
 const myTitle = mates.length ? taskTitles.get(myTask) ?? titleFor(mates.at(-1)) : null;
 const task = mates.length
   ? {
