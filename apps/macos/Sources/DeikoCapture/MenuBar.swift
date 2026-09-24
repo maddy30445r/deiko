@@ -280,6 +280,9 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // session already knows whether Jira is reachable. Off the main
         // thread; a cold answer only ever renders the cautious wording.
         AgentConfigs.warm()
+        // The meaning model, if it isn't already there. Filing works on words
+        // alone until this finishes, so nothing here blocks the app.
+        MeaningModel.shared.start()
 
         // OLD SESSIONS GO. Nothing ever removed one before, and a session is a
         // folder of full-resolution screenshots — the folder grew for as long

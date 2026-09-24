@@ -318,6 +318,7 @@ final class SettingsModel: ObservableObject {
 
 struct SettingsView: View {
     @StateObject private var model = SettingsModel()
+    @ObservedObject private var meaning = MeaningModel.shared
     /// Passed down rather than read from a global: see the controller's
     /// properties of the same names.
     let openSessionDir: (() -> String?)?
@@ -350,6 +351,8 @@ struct SettingsView: View {
                     SectionLabel("Tasks")
                     sorting
                 }
+                SectionLabel("Memory")
+                memory
                 SectionLabel("Capturing")
                 capturing
                 SectionLabel("Appearance")
@@ -435,13 +438,47 @@ struct SettingsView: View {
                     set: { model.setSortBriefs($0) }
                 ))
                 .font(.system(size: 13))
-                Text("Files each brief with the earlier work it belongs to. To do that, what you said, a one-line summary, your window titles and notes on earlier work go to Deiko's relay, which keeps nothing. Off: nothing is sent to file them, and a new brief joins earlier work only when you move it there or it's a short follow-up on the same window.")
+                Text("Files each brief with the earlier work it belongs to. To do that, what you said, a one-line summary, your window and page titles and notes on earlier work go to Deiko's relay, which keeps nothing. Off: nothing is sent to file them, and a new brief joins earlier work only when you move it there or it's a short follow-up on the same window.")
                     .font(.system(size: 11))
                     .foregroundStyle(DeikoStyle.ink2)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(14)
         }
+    }
+
+    /// What Deiko keeps on this Mac to remember earlier work. The model line
+    /// is quiet on purpose: it is a download in the background, not a task.
+    private var memory: some View {
+        InsetCard {
+            VStack(alignment: .leading, spacing: 10) {
+                switch meaning.state {
+                case .checking:
+                    captionLine("Meaning model: checking…")
+                case .downloading(let done, let total):
+                    captionLine(total > 0
+                        ? "Meaning model: downloading, \(done / 1_000_000) of \(total / 1_000_000) MB"
+                        : "Meaning model: starting the download…")
+                case .ready:
+                    captionLine("Meaning model ready. Deiko matches briefs by what they mean, not only the words.")
+                case .failed(let why):
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        captionLine("Meaning model not downloaded (\(why)). Deiko matches briefs by their words until it is.")
+                        Button("Try again") { meaning.start() }
+                    }
+                case .off:
+                    captionLine("Meaning model off. Deiko matches briefs by their words.")
+                }
+            }
+            .padding(14)
+        }
+    }
+
+    private func captionLine(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11))
+            .foregroundStyle(DeikoStyle.ink2)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     /// Light, dark, or the system's answer — for every Deiko window, the orb
@@ -756,31 +793,45 @@ struct SettingsView: View {
 
     /// The version, and one button that makes a bug report answerable.
     private var about: some View {
-        HStack(spacing: 10) {
-            Text("Deiko \(DeikoVersion.current) (\(DeikoVersion.build))")
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(DeikoStyle.ink2)
-                .textSelection(.enabled)
-            Spacer()
-            Button(copied ? "Copied" : "Copy diagnostics") {
-                Diagnostics.copyToPasteboard()
-                copied = true
-                // Long enough to notice, short enough that the button is not
-                // stuck reading "Copied" the next time somebody needs it.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
-            }
-            .help("Version, permissions and where the log is — no session content.")
-            Button("Reveal log") { Diagnostics.revealLog() }
-            // Only when this build knows where feedback goes. Copying
-            // diagnostics with nowhere to send them was the whole of the old
-            // bug-report story.
-            if Diagnostics.feedbackURL() != nil {
-                Button("Send feedback…") {
-                    if let url = Diagnostics.feedbackURL() { NSWorkspace.shared.open(url) }
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Text("Deiko \(DeikoVersion.current) (\(DeikoVersion.build))")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(DeikoStyle.ink2)
+                    .textSelection(.enabled)
+                Spacer()
+                Button(copied ? "Copied" : "Copy diagnostics") {
+                    Diagnostics.copyToPasteboard()
+                    copied = true
+                    // Long enough to notice, short enough that the button is not
+                    // stuck reading "Copied" the next time somebody needs it.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
+                }
+                .help("Version, permissions and where the log is — no session content.")
+                Button("Reveal log") { Diagnostics.revealLog() }
+                // Only when this build knows where feedback goes. Copying
+                // diagnostics with nowhere to send them was the whole of the old
+                // bug-report story.
+                if Diagnostics.feedbackURL() != nil {
+                    Button("Send feedback…") {
+                        if let url = Diagnostics.feedbackURL() { NSWorkspace.shared.open(url) }
+                    }
                 }
             }
+            .font(.system(size: 12))
+
+            HStack(spacing: 10) {
+                Text("Matching uses harrier-oss-v1-270m by Microsoft, under the MIT licence.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(DeikoStyle.ink2)
+                Spacer()
+                Button("Licences") {
+                    if let folder = MeaningModel.licencesFolder() { NSWorkspace.shared.open(folder) }
+                }
+                .disabled(MeaningModel.licencesFolder() == nil)
+                .help("The licences of the model and the libraries Deiko runs it with.")
+            }
         }
-        .font(.system(size: 12))
     }
 
     private func keyRow(
