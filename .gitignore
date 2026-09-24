@@ -59,3 +59,6 @@ graphify-out/
 # editor / tooling droppings
 .DS_Store
 .playwright-mcp/
+
+# The design tool's working folder (impeccable), never part of the product
+.impeccable/
