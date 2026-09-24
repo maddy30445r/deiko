@@ -312,8 +312,10 @@ const task = mates.length
 // ON ITS OWN, BUT MAYBE NOT: the tasks `classify.mjs` could not choose
 // between. Only ids the board still has briefs for — which is also what makes
 // a hand-edited id safe to put in a path.
-// Never once placed by hand: the app drops them then, but an older file may not have.
-const maybe = !task && context?.decidedBy !== "you" && Array.isArray(context?.candidates)
+// Not gated on `decidedBy`: placing the COLLECTION by hand leaves the task a
+// guess, and the question stands. The app drops `candidates` when the TASK is
+// placed by hand, which is the one placement that answers it.
+const maybe = !task && Array.isArray(context?.candidates) && context.candidates.length
   ? context.candidates.filter((id) => groups.has(id)).map((id) => {
     const bs = groups.get(id);
     const title = taskTitles.get(id) ?? titleFor(bs.at(-1));

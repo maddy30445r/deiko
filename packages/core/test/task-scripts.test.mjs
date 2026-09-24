@@ -54,3 +54,14 @@ test("a re-rendered brief carries on only from briefs older than itself", async 
   assert.doesNotMatch(prompt(b), /cart total/, "a later brief never reaches an earlier one's prompt");
   assert.match(prompt(c), /\(2 briefs so far\)\. Where it stands:\nLast asked: The listing page shows the old price too\.\n/);
 });
+
+test("candidates are listed whenever the task was not placed, even with the collection placed by hand", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-render-"));
+  session(root, "20260918-100000", { said: "the price still shows 99 after I save", summary: "Fix the price display after saving." });
+  const d = session(root, "20260918-110000", {
+    said: "this one is broken again", summary: "Something is broken again.",
+    context: { collection: "shop", task: "t-20260918-110000", decidedBy: "you", candidates: ["t-20260918-100000"] },
+  });
+  await render(d);
+  assert.match(prompt(d), /This might carry on from earlier work, one of these:\n- "Fix the price display after saving"\. History: /);
+});
