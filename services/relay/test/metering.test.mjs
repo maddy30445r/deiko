@@ -713,6 +713,18 @@ test("a failed second look drops that task's answer, not the brief", async () =>
   assert.equal(rows.get(classifyDay())?.audioSeconds, 1, "round one answered, so the classify counts");
 });
 
+test("a second look the gateway drops once is asked again", async () => {
+  let looks = 0;
+  jevReply = (sent) => {
+    if (sent.questions.is_work_brief) return { model: "jev-1.13.0", answers: { [`same_${A}`]: { noul: 0.9 } } };
+    looks += 1;
+    return looks === 1 ? null : { model: "jev-1.13.0", answers: { same_task: { noul: 0.9 }, relation: { score: 2 } } };
+  };
+  const r = await classify("dev_retry", { version: 3, narration: "the pricing bug again", tasks: tasksOf(3) });
+  assert.deepEqual(Object.keys(JSON.parse(r.body).second), [A]);
+  assert.equal(looks, 2, "one retry, no more");
+});
+
 test("a present but unreadable gate does not stop the second look", async () => {
   // An unreadable `noul` (null, here) must read as MISSING, not as a
   // confident 0 — `Number(null)` is itself finite, so a naive coercion would

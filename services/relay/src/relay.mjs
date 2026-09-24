@@ -1411,7 +1411,13 @@ export async function handle({ method, path, query = "", token, contentType, bod
     const remaining = V3_BUDGET_MS - (Date.now() - budgetStart);
     if (remaining >= 1000) {
       await Promise.all(finalists(answers, Object.keys(request.state.tasks)).map(async (id) => {
-        const out = await askJev(secondLookRequest(request, id), remaining);
+        const look = secondLookRequest(request, id);
+        let out = await askJev(look, remaining);
+        // ONE RETRY on an upstream 5xx while budget is left: the gateway
+        // drops the odd request (4 × 503 in one 33-brief eval run), and a
+        // lost second look turns a clear join into a "Which one?".
+        const left = V3_BUDGET_MS - (Date.now() - budgetStart);
+        if (out.status >= 500 && left >= 1000) out = await askJev(look, left);
         if (out.status !== 200) return;
         try {
           const answered = JSON.parse(out.body);
