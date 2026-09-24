@@ -37,10 +37,17 @@ const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 // change both or the relay path and the BYO-key path drift apart.
 const MODEL = "openai/gpt-oss-20b";
 
+/// "Same as I speak" (Settings → Brief language) or the default, Hinglish read
+/// into English. The relay is told WHICH, never given the prompt itself.
+const MODE = process.env.DEIKO_NARRATION === "native" ? "native" : "hinglish";
+
+// Sent only with the developer's own key. Deiko's relay holds a copy of each
+// variant and picks one by `mode` — `summarySystem` in
+// services/relay/relay.mjs MIRRORS this, so change both.
 const SYSTEM = [
   "You summarise a developer's spoken description of a coding task.",
   "",
-  ...(process.env.DEIKO_NARRATION === "native"
+  ...(MODE === "native"
     ? ["The transcript may be in any language, mixed with English technical terms.",
        "Answer in the same language as the transcript."]
     : ["The transcript is Hinglish — Hindi written in Latin script, mixed with English",
@@ -115,16 +122,23 @@ async function main() {
   // If you are here to give the model "a bit more context" so the summary reads
   // better: that is the change this comment exists to stop. Build the body from
   // `narration` and nothing else.
-  const body = {
-    model: MODEL,
-    messages: [
-      { role: "system", content: SYSTEM },
-      { role: "user", content: `<transcript>\n${narration}\n</transcript>` },
-    ],
-    // Low, not zero. Zero is not more accurate here, just more repetitive.
-    temperature: 0.2,
-    max_completion_tokens: 200,
-  };
+  //
+  // THE RELAY GETS NO PROMPT. It spends Deiko's key for any bearer, so it
+  // pins the model, the budget and the system prompt itself — a relay that
+  // took a prompt from its caller was a free chat endpoint. It is told the
+  // narration and which of its two prompts to use.
+  const body = apiKey
+    ? {
+        model: MODEL,
+        messages: [
+          { role: "system", content: SYSTEM },
+          { role: "user", content: `<transcript>\n${narration}\n</transcript>` },
+        ],
+        // Low, not zero. Zero is not more accurate here, just more repetitive.
+        temperature: 0.2,
+        max_completion_tokens: 200,
+      }
+    : { narration, mode: MODE };
 
   let text;
   try {
