@@ -9,7 +9,13 @@ import { readFileSync } from "node:fs";
 import { STAMP } from "./context.mjs";
 
 export function readLabels(path) {
-  const labels = JSON.parse(readFileSync(path, "utf8"));
+  let labels;
+  try {
+    labels = JSON.parse(readFileSync(path, "utf8"));
+  } catch (err) {
+    if (err instanceof SyntaxError) throw new Error(`${path}: not valid JSON (${err.message})`);
+    throw err;
+  }
   if (labels?.version !== 1 || !labels.groups || typeof labels.groups !== "object"
     || !labels.briefs || typeof labels.briefs !== "object") {
     throw new Error(`${path}: expected { version: 1, groups, briefs }`);
@@ -23,12 +29,15 @@ export function readLabels(path) {
   return labels;
 }
 
-export function expectations(briefs) {
+/// `has(stamp)` says whether the brief can be replayed at all. A missing one is
+/// left out BEFORE firsts are counted, so the next brief of its group is the
+/// group's new task rather than a join to a task that never reaches the board.
+export function expectations(briefs, has = () => true) {
   const out = new Map();
   const first = new Map();
   for (const stamp of Object.keys(briefs).sort()) {
     const v = briefs[stamp];
-    if (v === "skip") continue;
+    if (v === "skip" || !has(stamp)) continue;
     if (v === "odds") {
       out.set(stamp, { want: "odds", task: null, slug: null });
     } else if (!first.has(v)) {
@@ -83,7 +92,7 @@ export function recall(rows, label, n) {
 
 const pct = (a, b) => (b ? `${Math.round((100 * a) / b)}%` : "–");
 
-export function formatReport({ rows, shortlistOnly }) {
+export function formatReport({ rows, shortlistOnly, errored = 0 }) {
   const out = ["shortlist recall (briefs that should join)"];
   for (const label of [...new Set(rows.flatMap((r) => Object.keys(r.ranks ?? {})))]) {
     const [h5, of] = recall(rows, label, 5);
@@ -95,6 +104,7 @@ export function formatReport({ rows, shortlistOnly }) {
   for (const w of t.wrong) out.push(`✗ ${w.stamp}  want ${w.want.padEnd(26)} got ${w.got}`);
   out.push(`accuracy ${t.correct}/${t.n} (${pct(t.correct, t.n)}) · odds ${t.byWant.odds.join("/")} · new ${t.byWant.new.join("/")} · join ${t.byWant.join.join("/")}`);
   out.push(`ask rate ${t.asks}/${t.real} (${pct(t.asks, t.real)})`);
+  if (errored) out.push(`· ${errored} brief(s) got no answer from the relay and are not counted`);
   return out.join("\n");
 }
 

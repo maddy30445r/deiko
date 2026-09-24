@@ -584,7 +584,7 @@ reclassify:
 ## The key lives outside the repo: ~/Documents/Deiko-eval/filing-labels.json.
 ## `node scripts/eval-filing.mjs --draft > …` prints a starting one.
 eval:
-	@set -a; [ -f .env ] && . ./.env; set +a; node scripts/eval-filing.mjs $(ARGS)
+	@set -a; [ -f .env ] && . ./.env; set +a; $(SORT_BRIEFS) node scripts/eval-filing.mjs $(ARGS)
 
 ## flow-check — render → classify → render on a throwaway copy of real briefs
 ##

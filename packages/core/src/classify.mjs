@@ -126,7 +126,6 @@ async function main() {
     return;
   }
   const { summary, me, windowTitles } = inputs;
-  const narration = (summary?.narration ?? "").trim();
   const why = unplaceable(me);
   // Only a relay needs the rest; a brief with nothing to ask decides without one.
   if (!why && !relay) {

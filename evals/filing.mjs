@@ -19,7 +19,7 @@
  * allowance: --relay, else DEIKO_CLASSIFY_URL, else DEIKO_RELAY_URL; the token
  * is DEIKO_CLASSIFY_TOKEN or DEIKO_RELAY_TOKEN. --draft prints a starting key.
  */
-import { existsSync, readdirSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -50,6 +50,12 @@ if (!shortlistOnly && !relay) {
   console.error("✗ no relay — pass --relay <url>, set DEIKO_CLASSIFY_URL, or use --shortlist-only");
   process.exit(2);
 }
+// The app's "Sort briefs into tasks" switch, as `make eval` passes it: off means
+// no narration leaves for sorting, so full mode needs an explicit --relay.
+if (!shortlistOnly && process.env.DEIKO_SORT_BRIEFS === "0" && !flag("--relay")) {
+  console.error("✗ sorting is off in Settings — pass --relay <url> to send the briefs anyway, or use --shortlist-only");
+  process.exit(2);
+}
 
 async function ask(body) {
   let res = await requestClassify({ url: relay, token, body });
@@ -61,19 +67,20 @@ async function ask(body) {
   return res.json();
 }
 
-const exp = expectations(readLabels(home(value("--labels", "~/Documents/Deiko-eval/filing-labels.json"))).briefs);
+const inputsOf = new Map();
+const readable = (stamp) => {
+  if (!inputsOf.has(stamp)) inputsOf.set(stamp, sessionInputs(join(boardDir, stamp)));
+  if (!inputsOf.get(stamp)) console.error(`· ${stamp} has no readable brief.json — skipped`);
+  return inputsOf.get(stamp) != null;
+};
+const exp = expectations(readLabels(home(value("--labels", "~/Documents/Deiko-eval/filing-labels.json"))).briefs, readable);
 const rows = [];
+let errored = 0;
 const done = [];
 const taskTitles = new Map();
 const collections = [];
 for (const [stamp, e] of exp) {
-  const dir = join(boardDir, stamp);
-  const inputs = existsSync(dir) ? sessionInputs(dir) : null;
-  if (!inputs) {
-    console.error(`· ${stamp} has no readable brief.json — skipped`);
-    continue;
-  }
-  const { me, summary, windowTitles } = inputs;
+  const { me, summary, windowTitles } = inputsOf.get(stamp);
   const board = done.filter((b) => b.line && !b.odds && !unplaceable(b));
   const prep = prepare({ id: stamp, me, summary, windowTitles, board, taskTitles, collections });
   const row = { stamp, exp: e, ranks: { words: e.want === "join" ? rankOf(prep.shortlist.map((t) => t.id), e.task) : null } };
@@ -88,14 +95,19 @@ for (const [stamp, e] of exp) {
       }
       row.out = outcomeOf(decision, stamp);
     } catch (err) {
-      row.out = { got: "error", task: null, candidates: [] };
+      // No answer is not a wrong answer: left out of the tally, counted apart.
+      errored += 1;
       console.error(`· ${stamp}: ${String(err.message).slice(0, 80)}`);
+      if (/relay (401|403|429)\b/.test(err.message)) {
+        console.error("✗ the relay refused (auth or allowance) — stopping here");
+        break;
+      }
     }
   }
   rows.push(row);
   // THE KEY, NOT THE GUESS, goes on the in-memory board — and as a hand
   // placement, which is what a corrected answer key is.
-  done.push({ ...me, task: e.task, odds: e.want === "odds", decidedBy: "you" });
+  done.push({ ...me, task: e.task, odds: e.want === "odds" });
   if (e.want === "new") taskTitles.set(e.task, titleFor(me));
 }
-process.stdout.write(formatReport({ rows, shortlistOnly }) + "\n");
+process.stdout.write(formatReport({ rows, shortlistOnly, errored }) + "\n");

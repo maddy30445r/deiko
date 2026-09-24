@@ -25,6 +25,16 @@ test("a slug's first brief is new, later ones join its task; odds stay odds and 
   assert.deepEqual(exp.get("20260918-110000"), { want: "odds", task: null, slug: null });
 });
 
+test("a group whose first brief is missing starts with its next brief, not a join to nowhere", () => {
+  const exp = expectations(
+    { "20260918-100000": "price", "20260918-120000": "price", "20260918-130000": "price" },
+    (s) => s !== "20260918-100000",
+  );
+  assert.deepEqual([...exp.keys()], ["20260918-120000", "20260918-130000"]);
+  assert.deepEqual(exp.get("20260918-120000"), { want: "new", task: "t-20260918-120000", slug: "price" });
+  assert.deepEqual(exp.get("20260918-130000"), { want: "join", task: "t-20260918-120000", slug: "price" });
+});
+
 test("an answer key with a bad shape or an unknown group is refused by name", () => {
   const dir = mkdtempSync(join(tmpdir(), "deiko-eval-"));
   const write = (labels) => { writeFileSync(join(dir, "l.json"), JSON.stringify(labels)); return join(dir, "l.json"); };
@@ -143,7 +153,7 @@ test("shortlist-only needs no network and writes nothing under the board", async
   assert.deepEqual(snapshot(board), before);
 });
 
-test("full mode asks the relay exactly as classify does, once per placeable brief", async () => {
+test("full mode asks the relay through classify's own request code, once per placeable brief", async () => {
   const { board, labels } = fixtureBoard();
   const before = snapshot(board);
   const bodies = [];
