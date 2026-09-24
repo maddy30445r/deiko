@@ -219,6 +219,11 @@ test("a request that never connected leaves no sent marker; one that got an answ
   const refused = filed(root, "20260918-090000", { narration: "the price still shows 99 after I save it" });
   await classify(refused, closed.url);
   assert.equal(existsSync(join(refused, "classify.sent")), false);
+  // An earlier request's words did leave, so its marker is put back.
+  const earlier = JSON.stringify({ at: "2026-09-18T09:00:00.000Z", summary: true }) + "\n";
+  writeFileSync(join(refused, "classify.sent"), earlier);
+  await classify(refused, closed.url);
+  assert.equal(readFileSync(join(refused, "classify.sent"), "utf8"), earlier);
 
   const failing = await relay(() => [500, { error: "upstream" }]);
   const answered = filed(root, "20260918-100000", { narration: "same price bug on the listing page" });
@@ -244,4 +249,19 @@ test("the sent marker says whether a summary went with the request", async () =>
   await classify(withOne, again.url);
   again.close();
   assert.equal(json(join(withOne, "classify.sent")).summary, true);
+});
+
+test("an answer that lands after a newer request for the same brief went out is left to that one", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
+  filed(root, "20260918-090000", { narration: "the price still shows 99 after I save it" });
+  const dir = filed(root, "20260918-100000", { narration: "same price bug on the listing page" });
+  // "Point at more" asks again while this request is still out.
+  const stub = await relay(() => {
+    writeFileSync(join(dir, "classify.sent"), JSON.stringify({ at: "newer", summary: false }) + "\n");
+    return join1("t-20260918-090000")();
+  });
+  const { stderr } = await classify(dir, stub.url);
+  stub.close();
+  assert.equal(existsSync(join(dir, "context.json")), false);
+  assert.match(stderr, /asked again since/);
 });

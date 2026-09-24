@@ -275,6 +275,7 @@ final class ReviewModel: ObservableObject {
     /// cancelled — a brief whose card closed still gets filed — so this is
     /// what keeps an older run from clearing a newer one's `placing`.
     private var placingRun = 0
+    private var placingDir: String?
     /// Bumped whenever a send in flight is called off: by a newer send, or by
     /// the card going away. Checked at the last moment, inside the render
     /// lane, where `Task.isCancelled` answers for the lane's own task and not
@@ -323,6 +324,9 @@ final class ReviewModel: ObservableObject {
             opensSettings: false,
             raw: ""
         ))
+        // `prepareToExtend` stood the filing down for a `reload` that is not
+        // coming, so file the brief as it stands.
+        if let sessionDir { fetchContext(sessionDir: sessionDir) }
     }
     /// The narration as recognised, so "did the developer change it" is a
     /// comparison rather than a flag that has to be maintained.
@@ -613,8 +617,7 @@ final class ReviewModel: ObservableObject {
     private func fetchContext(sessionDir: String) {
         // No relay, no sorter: nothing to wait for and nothing to say.
         guard Credentials.relayURL != nil else { return }
-        placingRun += 1
-        let run = placingRun
+        let run = startFiling(sessionDir)
         let summary = summaryTask
         let root = (sessionDir as NSString).deletingLastPathComponent
         placing = true
@@ -634,10 +637,17 @@ final class ReviewModel: ObservableObject {
                 await SessionsStore.shared.load(root: root)
             }
             let placed = await BriefPipeline.classify(sessionDir: sessionDir)
+            // A NEWER FILING OF THIS BRIEF TOOK OVER — "Point at more" added
+            // words, or the card opened on it again. That one re-renders and
+            // shows; this one must do neither after it. `context.json` is
+            // already safe: `classify.mjs` leaves it to whichever request for
+            // the brief went out last.
+            guard !superseded(run, sessionDir) else { return }
             if placed != nil {
                 await exclusively { [self] in
+                    guard !superseded(run, sessionDir) else { return }
                     let rerendered = try? await BriefPipeline.rerender(sessionDir: sessionDir)
-                    guard stillCurrent(sessionDir) else { return }
+                    guard stillCurrent(sessionDir), !superseded(run, sessionDir) else { return }
                     if let rerendered { digest = rerendered }
                     context = SessionContext.read(sessionDir: sessionDir)
                     collections = Collections.all()
@@ -653,6 +663,20 @@ final class ReviewModel: ObservableObject {
             notFiled = placed == nil && filed
             placing = false
         }
+    }
+
+    /// A new filing of this brief, which any earlier one still in flight for
+    /// it stands down for. The run number is what it checks.
+    private func startFiling(_ sessionDir: String) -> Int {
+        placingRun += 1
+        placingDir = sessionDir
+        return placingRun
+    }
+
+    /// Only a newer filing of the SAME brief. A filing whose card moved on to
+    /// another brief carries on — that brief still has to be filed.
+    private func superseded(_ run: Int, _ sessionDir: String) -> Bool {
+        run != placingRun && placingDir == sessionDir
     }
 
     /// Runs alongside the visible brief, never in front of it. Its own task, so
@@ -738,6 +762,10 @@ final class ReviewModel: ObservableObject {
         // touched — a claim that reads as authority the words have not earned.
         carriedNarration = narrationEdited ? narration : nil
         holdsBeforeExtending = Set(BriefPipeline.holdTexts(sessionDir: sessionDir).keys)
+        // The filing in flight stands down here, as the note above says: it
+        // would re-render from a half-written session. `reload` files again.
+        _ = startFiling(sessionDir)
+        placing = false
         phase = .working("Recording — tap \(SessionKey.selected.name) to stop")
     }
 

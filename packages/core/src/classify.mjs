@@ -104,8 +104,16 @@ async function main() {
   // Read by the app as `filed` — see `ClassifyRequest.sentSummary` in
   // `Context.swift`. It carries no content: when it went, and whether a
   // summary went with it — the card can show a summary that landed after the
-  // request left without one.
+  // request left without one. `at` also tells this run whether a newer
+  // request for the same brief has gone out since — see below.
   const sentMarker = join(dir, "classify.sent");
+  const sentAt = () => {
+    try {
+      return JSON.parse(readFileSync(sentMarker, "utf8"))?.at ?? null;
+    } catch {
+      return null; // none, or a bare timestamp from before `at`
+    }
+  };
 
   if (existsSync(contextPath)) {
     try {
@@ -219,9 +227,9 @@ async function main() {
     signal: AbortSignal.timeout(15_000),
   });
 
-  // What an earlier request for this brief left: a summary it carried stays
-  // said — the marker answers what went for this brief, not for this request
-  // alone.
+  // What an earlier request for this brief left. Put back if this one never
+  // connects — its words did leave — and a summary it carried stays said:
+  // the marker answers what went for this brief, not for this request alone.
   let previous = null;
   try {
     previous = readFileSync(sentMarker, "utf8");
@@ -268,8 +276,21 @@ async function main() {
   } catch (err) {
     // NOTHING LEFT IF NOTHING CONNECTED: no DNS, nothing listening, no route.
     // A timeout or a reset may have carried the body out, so those keep it.
-    if (!answered && NEVER_CONNECTED.has(err?.cause?.code)) rmSync(sentMarker, { force: true });
+    // Only this run's marker: a newer request's is that one's to keep.
+    if (!answered && NEVER_CONNECTED.has(err?.cause?.code) && sentAt() === mine.at) {
+      if (previous === null) rmSync(sentMarker, { force: true });
+      else writeFileSync(sentMarker, previous);
+    }
     console.error(`· classification failed (${err.message.slice(0, 80)}) — skipping`);
+    return;
+  }
+
+  // A NEWER REQUEST FOR THIS BRIEF WENT OUT while this one waited: "Point at
+  // more" added words and the app asked again. Its answer is the one to keep,
+  // whichever lands last — and nothing below awaits, so this holds through
+  // every write.
+  if (sentAt() !== mine.at) {
+    console.error("· asked again since — leaving it to the newer answer");
     return;
   }
 
