@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 // ─────────────────────────────────────────────────────────────────────────────
-// deiko-capture ui-shot --out /tmp/deiko-ui
+// deiko-capture ui-shot --out /tmp/deiko-ui [--root <dir>]
 //
 // Renders the app's own windows to PNGs, light and dark, so a change to the
 // design system can be LOOKED AT instead of argued about. Same reason
@@ -12,7 +12,8 @@ import SwiftUI
 // It renders the real views with real models, not a mock of them — a preview
 // that drifts from the app is worse than no preview. The models are the
 // default ones, so what comes out is each window's first paint: the state a
-// person actually meets.
+// person actually meets. `--root` reads another board — a re-sorted copy, say
+// — instead of the one in Documents; only ever read, never written.
 // ─────────────────────────────────────────────────────────────────────────────
 
 @MainActor
@@ -23,6 +24,7 @@ enum UIShot {
         app.setActivationPolicy(.accessory)
         let out = args.string("out") ?? "/tmp/deiko-ui"
         titled = args.has("titled")
+        let root = args.string("root") ?? Sessions.defaultRoot
 
         for (name, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
             guard let look = NSAppearance(named: appearance) else { continue }
@@ -34,7 +36,7 @@ enum UIShot {
             for section in MainSection.allCases {
                 MainNav.shared.section = section
                 shoot(
-                    MainWindowView(openSessionDir: nil, sessionRoot: Sessions.defaultRoot),
+                    MainWindowView(openSessionDir: nil, sessionRoot: root),
                     size: NSSize(width: 980, height: 660), look: look,
                     to: "\(out)-\(section.rawValue)-\(name).png"
                 )
@@ -42,10 +44,24 @@ enum UIShot {
             // Settings runs past the first paint; this is all of it.
             MainNav.shared.section = .settings
             shoot(
-                MainWindowView(openSessionDir: nil, sessionRoot: Sessions.defaultRoot),
+                MainWindowView(openSessionDir: nil, sessionRoot: root),
                 size: NSSize(width: 980, height: 1500), look: look,
                 to: "\(out)-settings-full-\(name).png"
             )
+            // THE BOARD, BOTH SHELF STYLES, for the owner to pick one. Tall
+            // enough for the whole board: the choice is about how shelves,
+            // "On their own" and odds and ends sit together, and 900pt showed
+            // two shelves and nothing else.
+            for style in [BoardStyle.shelf, .spine] {
+                BoardStyle.current = style
+                MainNav.shared.section = .board
+                shoot(
+                    MainWindowView(openSessionDir: nil, sessionRoot: root),
+                    size: NSSize(width: 980, height: 2900), look: look,
+                    to: "\(out)-board-\(style)-\(name).png"
+                )
+            }
+            BoardStyle.current = .shelf
             shoot(orbCard(), size: NSSize(width: 400, height: 130), look: look, to: "\(out)-orb-\(name).png")
             shoot(orbReady(), size: NSSize(width: 400, height: 190), look: look, to: "\(out)-orbready-\(name).png")
             shoot(orbReady(notice: true), size: NSSize(width: 400, height: 250), look: look,
@@ -85,7 +101,7 @@ enum UIShot {
             }
         }
 
-        Emit.log("wrote \(out)-{welcome,orb,orbready,orbnotice,orbsent,review,review-odds,review-related,dashboard,board,personas,settings,settings-full}-{light,dark}.png")
+        Emit.log("wrote \(out)-{welcome,orb,orbready,orbnotice,orbsent,review,review-odds,review-related,dashboard,board,board-shelf,board-spine,personas,settings,settings-full}-{light,dark}.png")
     }
 
     /// The collapsed card, mid-session: the state the orb spends most of its
