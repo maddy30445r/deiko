@@ -17,7 +17,7 @@
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 
-import { KINDS } from "./labels.mjs";
+import { KINDS, normaliseLabel } from "./labels.mjs";
 import { TASK_ID, parseOutcome } from "./tasks.mjs";
 
 /// Where a probability becomes a decision.
@@ -256,10 +256,14 @@ export function readBriefLine(sessionDir) {
     screenTerms: Array.isArray(summary.screenTerms) ? summary.screenTerms : [],
     repoHints: Array.isArray(summary.repoHints) ? summary.repoHints : [],
     // Labels (`labels.mjs`). A brief rendered before labels existed has only
-    // its repo hints, which were the first label.
+    // its repo hints, which were the first label — through the same
+    // `normaliseLabel` a current brief's repo names already went through, so
+    // an old hint is redacted too, not just a fresh one.
     keys: Object.fromEntries(KINDS.map((k) => [k,
       Array.isArray(summary.keys?.[k]) ? summary.keys[k]
-        : k === "repo" && Array.isArray(summary.repoHints) ? summary.repoHints : []])),
+        : k === "repo" && Array.isArray(summary.repoHints)
+          ? summary.repoHints.map((h) => normaliseLabel(h, "repo")).filter(Boolean)
+          : []])),
     outcome,
   };
 }

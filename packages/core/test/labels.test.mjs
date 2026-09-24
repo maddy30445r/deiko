@@ -81,6 +81,67 @@ test("a brief's labels come from what the recorder saw and what was said", () =>
 test("a secret in a title never becomes a label", () => {
   const keys = briefKeys({ referents: [{ app: { name: "Google Chrome" }, window: "AKIAIOSFODNN7EXAMPLE — build - Google Chrome", text: { ax: [], ocr: [] } }] });
   assert.equal(JSON.stringify(keys).includes("AKIAIOSFODNN7EXAMPLE"), false);
+  assert.deepEqual(keys.pages, [], "a placeholder is not a page either — dropped, not shared as a label");
+});
+
+test("a long mixed-case name redact() opaques never becomes a shared '<REDACTED>' label", () => {
+  // These are exactly what `redact` turns into "<REDACTED>" — a real name,
+  // not a secret, but a placeholder shared across unrelated briefs is worse
+  // than no label at all.
+  assert.equal(normaliseLabel("UserProfileSettingsV2.tsx", "file"), "<REDACTED>", "redact still runs");
+  const keys = briefKeys({ referents: [
+    { app: { name: "Code" }, window: "UserProfileSettingsV2.tsx — acme-portal", text: { ax: [], ocr: [] } },
+    { app: { name: "Code" }, window: "console-2026-09-18T23-26-49-693Z.log — acme-portal", text: { ax: [], ocr: [] } },
+  ] });
+  assert.deepEqual(keys.files, [], "neither long mixed-case name is shared as the placeholder");
+  // A redacted URL PATH SEGMENT is kept: it is a deliberate wildcard, the
+  // same as an id segment already is.
+  assert.deepEqual(
+    briefKeys({ referents: [{ app: {}, page: { url: "https://x.dev/reset/AbCdEf1234567890GhIjKlMnOpQr" } }] }).urls,
+    ["x.dev/reset/<REDACTED>"],
+  );
+});
+
+test("a mis-paired app still yields the window's own browser title", () => {
+  // The candidate's app and the probe's window title pair asynchronously
+  // (session.ts) — an app that lost the race can carry a window that is
+  // plainly a browser's, tail and all.
+  const keys = briefKeys({ referents: [
+    { app: { name: "MongoDB Compass" }, window: "Signups — build - Google Chrome – Alex", text: { ax: [], ocr: [] } },
+  ] });
+  assert.deepEqual(keys.pages, ["Signups"]);
+  assert.deepEqual(keys.sites, ["build"]);
+  assert.deepEqual(keys.docs, [], "never read as a document named after the app");
+});
+
+test("Chrome's tab-state suffix comes off before the site name is read", () => {
+  assert.equal(browserTitle("Signups — build – Camera and microphone recording - Google Chrome – Alex"), "Signups — build");
+  assert.equal(browserTitle("Pricing — build – Audio playing - Google Chrome – Alex"), "Pricing — build");
+  const keys = briefKeys({ referents: [
+    { app: { name: "Google Chrome" }, window: "Signups — build – Camera and microphone recording - Google Chrome – Alex", text: { ax: [], ocr: [] } },
+  ] });
+  assert.deepEqual(keys.sites, ["build"], "not the tab-state phrase");
+});
+
+test("video-call apps never name a document", () => {
+  const keys = briefKeys({ referents: [
+    { app: { name: "zoom.us" }, window: "Zoom Meeting", text: { ax: [], ocr: [] } },
+    { app: { name: "FaceTime" }, window: "FaceTime", text: { ax: [], ocr: [] } },
+    { app: { name: "Microsoft Teams" }, window: "General | Team - Microsoft Teams", text: { ax: [], ocr: [] } },
+    { app: { name: "Webex" }, window: "Webex Meeting", text: { ax: [], ocr: [] } },
+  ] });
+  assert.deepEqual(keys.docs, []);
+});
+
+test("a plain word pair is not mistaken for an address, and a VS Code dirty marker keeps its file name", () => {
+  const keys = briefKeys({ referents: [
+    { app: { name: "Google Chrome" }, page: { title: "N/A — build" }, text: { ax: [], ocr: [] } },
+    { app: { name: "Google Chrome" }, page: { title: "TCP/IP basics - Wikipedia" }, text: { ax: [], ocr: [] } },
+    { app: { name: "Code" }, window: "● App.tsx — acme-portal", text: { ax: [], ocr: [] } },
+  ] });
+  assert.deepEqual(keys.urls, [], "neither 'N/A' nor 'TCP/IP' has a dotted host or a port");
+  assert.deepEqual(keys.pages, ["N/A", "TCP/IP basics"]);
+  assert.deepEqual(keys.files, ["App.tsx"]);
 });
 
 test("nothing captured is no labels, not an error", () => {

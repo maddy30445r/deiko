@@ -23,18 +23,27 @@ export const EDITOR = /^(code|visual studio code|cursor|windsurf|zed|xcode|subli
 export const TERMINAL = /^(terminal|iterm2?|warp|ghostty|kitty|alacritty|wezterm)$/i;
 /// Apps whose window titles name a conversation or the system, never a document.
 /// ponytail: a list; grow it when a real board shows another chat app as a project.
-const NOT_A_DOC = /^(finder|dock|deiko|deiko capture|usernotificationcenter|screenshot|system settings|dictionary|discord|slack|messages|mail|spotlight|control center|notification center)$/i;
+const NOT_A_DOC = /^(finder|dock|deiko|deiko capture|usernotificationcenter|screenshot|system settings|dictionary|discord|slack|messages|mail|spotlight|control center|notification center|zoom\.us|facetime|microsoft teams|webex)$/i;
 
 const GENERIC = new Set(["new tab", "dashboard", "home", "untitled", "loading", "loading…", "loading...", "index", "start page", "about:blank", "blank"]);
 const SEPARATOR = / (?:—|–|-|\||·) /;
 const COUNT = /^\(\d+\)\s*|\s*\(\d+\)$/g;
 const ID_SEGMENT = /^(\d+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{16,})$/i;
-const LOOKS_LIKE_URL = /^(https?:\/\/)?[\w.-]+(:\d+)?\/\S*/i;
+// A real address: localhost/127.0.0.1, a dotted host, or anything with a
+// port — never a bare "word/word" like "N/A" or "TCP/IP", which the old
+// `[\w.-]+/\S*` shape matched by accident (no dot, no port, still "looked
+// like" a path).
+const LOOKS_LIKE_URL = /^(https?:\/\/)?((localhost|127\.0\.0\.1)(:\d+)?|[\w-]+(\.[\w-]+)+(:\d+)?|[\w-]+:\d+)\/\S*/i;
 const TICKET = /\b([A-Z][A-Z0-9]{1,9}-\d{1,6})\b|(?<![\w&])#(\d{1,6})\b/g;
 /// Standards and encodings shaped like tickets. ponytail: a list.
 const NOT_A_TICKET = /^(UTF|ISO|SHA|MD|RFC|TLS|SSL|GPT|ES|IPV|HTTP|COVID|WCAG|PEP)-/;
 const ERROR_LINE = /\b[A-Z][A-Za-z]*(Error|Exception)\b|\bUncaught\b|\bTraceback\b|\bpanic:|^(error|Error|ERROR)\b/;
 const BROWSER_TAIL = /\s[-–—]\s(Google Chrome|Mozilla Firefox|Firefox|Microsoft Edge|Brave|Chromium|Opera|Vivaldi)\b.*$/;
+/// Chrome appends one of these as an extra trailing segment while a tab is
+/// actively capturing camera/mic/audio — not part of the page's own title,
+/// or it reads as the site name. ponytail: a short, known list; grow it when
+/// a real board shows another one.
+const TAB_STATE = /\s[-–—]\s(Camera and microphone recording|Camera recording|Microphone recording|Audio playing|Audio muted|Recording|Sharing your screen|Picture-in-picture)$/i;
 
 export function splitTitle(title) {
   return String(title ?? "")
@@ -45,7 +54,7 @@ export function splitTitle(title) {
 }
 
 export function browserTitle(windowTitle) {
-  const t = String(windowTitle ?? "").replace(BROWSER_TAIL, "").trim();
+  const t = String(windowTitle ?? "").replace(BROWSER_TAIL, "").replace(TAB_STATE, "").trim();
   return t || null;
 }
 
@@ -78,7 +87,9 @@ function cleanError(text) {
 }
 
 function cleanFile(text) {
-  let s = String(text).trim().split(/[\\/]/).pop() ?? "";
+  // VS Code's unsaved-changes dot ("● App.tsx") is chrome round the name, the
+  // same as the "(Working Tree)" suffix below — not part of it.
+  let s = String(text).trim().replace(/^●\s*/, "").split(/[\\/]/).pop() ?? "";
   while (/\s*\([^()]*\)\s*$/.test(s)) s = s.replace(/\s*\([^()]*\)\s*$/, "");
   return /^[\w.@+-]+\.[A-Za-z0-9]{1,8}$/.test(s) ? s : null;
 }
@@ -138,7 +149,15 @@ export function briefKeys({ referents = [], narration = "" } = {}) {
   const found = Object.fromEntries(KINDS.map((k) => [k, []]));
   const add = (kind, text, opts) => {
     const v = normaliseLabel(text, ONE[kind], opts);
-    if (v && !found[kind].some((x) => x.toLowerCase() === v.toLowerCase())) found[kind].push(v);
+    if (!v) return;
+    // A REDACTED PLACEHOLDER IS NEVER A LABEL. `redact` turns a long
+    // mixed-case name (`UserProfileSettingsV2.tsx`) or a secret pattern
+    // (an AWS key id) into "<REDACTED...>" — unrelated briefs would then
+    // share the same fake label. `urls` is the one exception: there a
+    // redacted PATH SEGMENT is a deliberate wildcard, kept the same way an
+    // id segment already is.
+    if (kind !== "urls" && v.includes("<REDACTED")) return;
+    if (!found[kind].some((x) => x.toLowerCase() === v.toLowerCase())) found[kind].push(v);
   };
   const pageTitle = (title) => {
     if (!title) return;
@@ -152,7 +171,11 @@ export function briefKeys({ referents = [], narration = "" } = {}) {
     const app = r.app?.name ?? "";
     const window = r.window ?? "";
     pageTitle(r.page?.title);
-    if (BROWSER.test(app)) {
+    // The app name comes from the settle's candidate, the window title from
+    // its probe — pairing that can land slightly apart (see `session.ts`), so
+    // an app that lost the race (e.g. a database client) can carry a window
+    // that is plainly a browser's, tail and all. Trust the tail either way.
+    if (BROWSER.test(app) || BROWSER_TAIL.test(window)) {
       pageTitle(browserTitle(window));
     } else if (EDITOR.test(app)) {
       const parts = window.split("—").map((p) => p.trim()).filter(Boolean);

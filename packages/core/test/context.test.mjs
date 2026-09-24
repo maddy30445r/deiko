@@ -208,6 +208,17 @@ test("a brief's labels are read back, and an old brief's repo hints stand in for
   assert.deepEqual(old.keys.pages, []);
 });
 
+test("an old brief's repo-hint fallback is redacted too, not just a fresh one", () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-keys-"));
+  const dir = join(root, "20260918-120000");
+  mkdirSync(dir);
+  // A pre-labels brief with an AWS-key-shaped repo hint (however it got
+  // there) and one with a space, which is never a repo name at all.
+  writeFileSync(join(dir, "brief.json"), JSON.stringify({ summary: { repoHints: ["AKIAIOSFODNN7EXAMPLE", "acme portal"] } }));
+  const { keys } = readBriefLine(dir);
+  assert.deepEqual(keys.repo, ["<REDACTED-AWS-KEY-ID>"], "redacted, not the raw hint, and the spaced one is dropped");
+});
+
 test("a long outcome is read whole and each section capped", () => {
   const root = mkdtempSync(join(tmpdir(), "deiko-context-"));
   const dir = join(root, "20260918-155717");
