@@ -3,13 +3,15 @@
  * the chart work and "the drag thing" finds "moving cards". Run through
  * onnxruntime-node and @huggingface/tokenizers directly: not transformers.js,
  * which pulls in sharp/libvips and every platform's binaries, and not
- * node-llama-cpp, which lacks last-token pooling. The pooling is written here.
+ * node-llama-cpp, which lacks last-token pooling. Both shipped models pool
+ * inside their ONNX graph and return `sentence_embedding`.
  *
  * FAILS SOFT, EVERYWHERE. No model, no runtime, a bad file, a throw inside
  * the runtime — `loadModel` answers null or `embed` answers null, and Deiko
  * matches on words. Vectors never leave this Mac.
  *
- * ponytail: the model loads per process (~0.6 s, ~70 ms per short text).
+ * ponytail: the model loads per process (~0.7 s, ~13 ms per short text on
+ * an Apple Silicon Mac).
  * Keep a resident process if that is ever felt.
  */
 import { createHash } from "node:crypto";
@@ -70,28 +72,6 @@ export function isReady(key) {
   return Boolean(key) && existsSync(join(modelDir(key), ".complete"));
 }
 
-export function pool(hidden, seq, dim, mask, mode) {
-  const out = new Float32Array(dim);
-  if (mode === "cls") {
-    out.set(hidden.subarray(0, dim));
-    return out;
-  }
-  if (mode === "lasttoken") {
-    let last = 0;
-    for (let i = 0; i < seq; i++) if (mask[i]) last = i;
-    out.set(hidden.subarray(last * dim, last * dim + dim));
-    return out;
-  }
-  let n = 0;
-  for (let i = 0; i < seq; i++) {
-    if (!mask[i]) continue;
-    n += 1;
-    for (let j = 0; j < dim; j++) out[j] += hidden[i * dim + j];
-  }
-  for (let j = 0; j < dim; j++) out[j] /= n || 1;
-  return out;
-}
-
 const normalise = (v) => {
   let s = 0;
   for (const x of v) s += x * x;
@@ -100,16 +80,6 @@ const normalise = (v) => {
 };
 export function finish(vec, dims) {
   return normalise(normalise(Float32Array.from(vec)).slice(0, dims));
-}
-
-/** How the model's own config says to pool; mean when it says nothing. */
-function poolingMode(dir) {
-  try {
-    const cfg = JSON.parse(readFileSync(join(dir, "1_Pooling", "config.json"), "utf8"));
-    return cfg.pooling_mode_lasttoken ? "lasttoken" : cfg.pooling_mode_cls_token ? "cls" : "mean";
-  } catch {
-    return "mean";
-  }
 }
 
 export async function loadModel(key = currentModel()) {
@@ -124,7 +94,6 @@ export async function loadModel(key = currentModel()) {
     const json = (p) => JSON.parse(readFileSync(join(dir, p), "utf8"));
     const tokenizer = new Tokenizer(json("tokenizer.json"), json("tokenizer_config.json"));
     const session = await InferenceSession.create(join(dir, spec.onnx));
-    const mode = poolingMode(dir);
     const int64 = (xs) => new Tensor("int64", BigInt64Array.from(xs, (x) => BigInt(x)), [1, xs.length]);
     return {
       key,
@@ -138,15 +107,13 @@ export async function loadModel(key = currentModel()) {
           for (const name of session.inputNames) {
             if (name === "input_ids") feeds[name] = int64(ids);
             else if (name === "attention_mask") feeds[name] = int64(ids.map(() => 1));
-            else if (name === "position_ids") feeds[name] = int64(ids.map((_, i) => i));
-            else if (name === "token_type_ids") feeds[name] = int64(ids.map(() => 0));
           }
           const out = await session.run(feeds);
-          const hidden = out.sentence_embedding ?? out[session.outputNames[0]];
-          const vec = out.sentence_embedding
-            ? hidden.data
-            : pool(hidden.data, ids.length, hidden.dims.at(-1), ids.map(() => 1), mode);
-          return finish(vec, spec.dims);
+          // Both shipped models pool inside the graph and hand back
+          // `sentence_embedding`. A model that doesn't is no meaning at all
+          // (word matching carries on), never a guessed pooling.
+          const vec = out.sentence_embedding?.data;
+          return vec ? finish(vec, spec.dims) : null;
         } catch {
           return null;
         }

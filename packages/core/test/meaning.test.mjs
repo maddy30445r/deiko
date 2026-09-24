@@ -7,20 +7,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
-  DEFAULT_MODEL, MODELS, briefText, currentModel, download, finish, isReady, loadModel, pool,
+  DEFAULT_MODEL, MODELS, briefText, currentModel, download, finish, isReady, loadModel,
   readVector, vectorIsCurrent, writeVector,
 } from "../lib/meaning.mjs";
 import { cosine } from "../lib/tasks.mjs";
 
 const close = (a, b) => a.length === b.length && [...a].every((x, i) => Math.abs(x - b[i]) < 1e-6);
-
-test("pooling: the last real token, the mean over the mask, or the first", () => {
-  // Three tokens of two dims: [1,2] [3,4] [5,6]; the last is padding.
-  const hidden = Float32Array.from([1, 2, 3, 4, 5, 6]);
-  assert.ok(close(pool(hidden, 3, 2, [1, 1, 0], "lasttoken"), [3, 4]));
-  assert.ok(close(pool(hidden, 3, 2, [1, 1, 0], "mean"), [2, 3]));
-  assert.ok(close(pool(hidden, 3, 2, [1, 1, 0], "cls"), [1, 2]));
-});
 
 test("finish normalises, truncates and normalises again", () => {
   const v = finish(Float32Array.from([3, 4, 12]), 2);
