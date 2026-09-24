@@ -272,3 +272,17 @@ test("an IPv4 caller is its address, and a dual-stack socket's mapped form is th
   assert.equal(ipBucket("::ffff:203.0.113.7"), "203.0.113.7");
   assert.equal(ipBucket("fe80::1%en0"), "fe80:0:0:0::/64", "a zone id is not part of the address");
 });
+
+test("an IPv4-mapped address is its IPv4 however it is spelled, and ::1 is nobody else", () => {
+  // All of these sat in one `0:0:0:0::/64` bucket, so every IPv4 caller a
+  // dual-stack socket reported in hex shared a single allowance.
+  for (const spelling of [
+    "::ffff:203.0.113.7", "::FFFF:203.0.113.7", "::ffff:cb00:7107",
+    "0:0:0:0:0:ffff:cb00:7107", "0000:0000:0000:0000:0000:FFFF:CB00:7107",
+  ]) {
+    assert.equal(ipBucket(spelling), "203.0.113.7", spelling);
+  }
+  assert.notEqual(ipBucket("::ffff:198.51.100.1"), ipBucket("::ffff:cb00:7107"), "two IPv4 callers are two callers");
+  assert.notEqual(ipBucket("::1"), ipBucket("::2"), "the zero /64 is not one subscriber");
+  assert.notEqual(ipBucket("::1"), ipBucket("::ffff:0:1"));
+});

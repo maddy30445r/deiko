@@ -66,11 +66,12 @@ export const PRO_MONTHLY_SECONDS = 10 * 60 * 60;
 /// is 360 a month: three dozen Pro users all pinning their cap, or several
 /// hundred at the usage anybody actually has.
 ///
-/// THE COST OF THAT, STATED: this is the only guard on Sarvam spend anywhere
-/// in this repo. The AWS budget alarm watches the AWS bill, and Sarvam is a
-/// different vendor — so a maximally bad month is now ~₹10,800 rather than
-/// ~₹3,600, and nothing but this number stops it. Set a cap in Sarvam's own
-/// dashboard as well; that is the guard this file cannot provide.
+/// THE COST OF THAT, STATED: this is the only guard on the transcription
+/// vendor's spend anywhere in this repo. The AWS budget alarm watches the AWS
+/// bill, and Groq is a different vendor — so a maximally bad month is 360
+/// hours, about $40 at the $0.111/hour above, and nothing but this number
+/// stops it. Set a spend limit in the vendor's own console as well if it
+/// offers one; that is the guard this file cannot provide.
 export const GLOBAL_DAILY_SECONDS =
   Number(process.env.DEIKO_GLOBAL_DAILY_SECONDS ?? 12 * 60 * 60);
 
@@ -151,49 +152,31 @@ export const TEXT_CALLS_PER_IP_PER_DAY =
 /// 16 kHz, mono, 16-bit — so two bytes a sample, 32,000 bytes a second. The
 /// client's chunker uses exactly these constants.
 ///
-/// Derived from the body's LENGTH, never by parsing it. The relay's header
-/// promises it does not touch the audio, and a quota is not a good enough
-/// reason to break that: the multipart wrapper adds a few hundred bytes, which
-/// overestimates by well under a percent, and over-counting is the correct
-/// direction for a limit to be wrong in.
-///
-/// The under-count direction is accepted, and bounded: a body that is not
-/// 16-bit 16 kHz PCM — compressed audio, a lower rate — meters as fewer
-/// seconds than Sarvam hears, up to roughly 10× if Sarvam accepts it at all.
-/// Fixing it means parsing the audio, which the promise above forbids. What
-/// bounds it instead: Sarvam rejects clips over ~30 s regardless of size, the
-/// per-request clamp below, the global daily ceiling, and the budget alarm.
+/// THE BYTES ARE THE DURATION because the relay makes them so: /v1/transcribe
+/// accepts only the app's own WAV — PCM, 16 kHz, mono, 16-bit, in the 44-byte
+/// header `wrapWav` writes — and meters the data after that header. This
+/// used to be a byte count of whatever body arrived, forwarded as it came, so
+/// compressed audio metered at a fraction of its length (8 kbps MP3 at 1/31).
+/// The format check in relay.mjs is what closed that; nothing here parses.
 export const BYTES_PER_SECOND = 32_000;
 
-/// No single request may count as more than this. The client's chunker splits
-/// at 25 seconds, so a request claiming more than 40 is not a chunk — and
-/// because the counter is incremented before it is judged (see `relay.mjs`),
-/// an unclamped one let a handful of oversized junk bodies spend the whole
-/// service's daily ceiling and lock out everybody paying. Clamping is the
-/// right direction to be wrong in: an honest chunk is never near it.
+/// No single request may count as more than this, and relay.mjs refuses any
+/// upload longer than it — so what is metered is what Groq hears. The client's
+/// chunker splits at 25 seconds (about 27 where it waits for a pause), so a
+/// request claiming more than 40 is not a chunk. The clamp in `audioSeconds`
+/// stays as the second line: because the counter is incremented before it is
+/// judged, an unclamped oversized body once let a handful of junk requests
+/// spend the whole service's daily ceiling.
 export const MAX_SECONDS_PER_REQUEST = 40;
 
-/// WHAT THE CHEAPEST POSSIBLE REQUEST COSTS, and why a floor exists at all.
-///
-/// The comment above accepts the under-count "up to roughly 10×". Measured, it
-/// is worse: thirty seconds of 8 kbps MP3 is 30 KB, which meters as 0.96 s —
-/// a **31×** under-count, because the body is forwarded verbatim and the CALLER
-/// picks the format. Sarvam hears thirty seconds and bills for thirty seconds.
-/// Left alone, the 12-hour ceiling bounds roughly ₹11,500 of real audio a day
-/// rather than the ₹360 it appears to promise.
-///
-/// Parsing the audio to fix it properly is what the relay's header forbids, so
-/// bound the REQUEST COUNT instead: with a floor of five seconds the day holds
-/// at most ~8,640 transcribe calls whatever the codec. Honest chunks are 25 s
-/// and never meet it; only a hold shorter than five seconds rounds up, which is
-/// the correct direction for a limit to be wrong in.
-///
-/// ponytail: a floor, not a format check. The residual is still ~6× nominal, so
-/// THE CAP IN SARVAM'S OWN DASHBOARD IS NOT OPTIONAL — it is the only bound on
-/// that vendor's bill. If this ever needs to be tighter without touching the
-/// audio, scan the multipart body for the `RIFF` container magic and refuse
-/// anything else: reading four bytes of a container header is not parsing
-/// speech.
+/// WHAT THE CHEAPEST POSSIBLE REQUEST COSTS. Five seconds, however short the
+/// audio: a floor on the price of a REQUEST, so the day's ceiling also bounds
+/// how many calls can be made against it (~8,640 at twelve hours), not only
+/// how much audio. It was first the only answer to compressed audio metering
+/// short; the format check answers that now, and the floor stays because a
+/// request has a cost of its own — a Lambda slot, two writes, a Groq call.
+/// Honest chunks are 25 s and never meet it; only a hold shorter than five
+/// seconds rounds up, which is the correct direction for a limit to be wrong in.
 export const MIN_SECONDS_PER_REQUEST = 5;
 
 export function audioSeconds(byteLength) {
@@ -225,12 +208,19 @@ export function audioSeconds(byteLength) {
 /// Length is the same bug in a different hat: DynamoDB's partition key stops at
 /// 2048 bytes, so an over-long id made the SUBJECT write throw while the global
 /// write beside it succeeded — seconds banked against the whole service's day
-/// that no refund path could reach, and no Sarvam call to show for them.
+/// that no refund path could reach, and no audio bought to show for them.
 ///
 /// The charset is what the three real issuers produce and nothing else: Polar
 /// licence keys (alphanumeric and dashes), the 32-hex device digest, and the
 /// v4-shaped UUIDs every build up to 0.3.0 sent unprefixed.
 const ID_ALLOWED = /^[A-Za-z0-9_-]{1,128}$/;
+
+/// WHAT EVERY POLAR LICENCE KEY ENDS WITH: an optional brand prefix, then a
+/// UUID4 (polar.sh/docs/features/benefits/license-keys, "MYAPP_<UUID4>").
+/// A `lic_` id without one cannot be a key Polar issued.
+export function isPolarKey(id) {
+  return /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(id));
+}
 
 export function subjectFrom(token) {
   if (typeof token !== "string" || token.length === 0) return null;
@@ -305,20 +295,29 @@ export function callerKey(route, who, now) {
 /// WHAT COUNTS AS ONE ADDRESS. An IPv4 address is one; an IPv6 address is
 /// its /64, because that is what one subscriber is handed — keyed on the full
 /// address, a single home line could mint a fresh identity per request and
-/// the per-address caps bounded nothing. IPv4-mapped IPv6 (`::ffff:a.b.c.d`,
-/// what a dual-stack socket reports) is the IPv4 address it carries.
+/// the per-address caps bounded nothing.
+///
+/// EXCEPT THE /64 THAT IS ALL ZEROES, which is not a subscriber's: it holds
+/// `::1` and every IPv4-mapped address (`::ffff:a.b.c.d`, however it is
+/// spelled — dotted, hex, zero-padded). Bucketed like the rest it put every
+/// IPv4 caller that a dual-stack socket reported in hex into ONE bucket, so
+/// one of them could spend the others' allowance. A mapped address is the
+/// IPv4 address it carries; anything else there is its own address.
 export function ipBucket(ip) {
   const addr = String(ip ?? "").split("%")[0];
   if (!isIPv6(addr)) return addr;
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(addr);
-  if (mapped) return mapped[1];
-  const [head, tail] = addr.split("::");
+  // Eight 16-bit groups, a dotted IPv4 tail counted as the two it is.
+  const v4 = /(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(addr);
+  const hex = v4
+    ? `${addr.slice(0, v4.index)}${((v4[1] << 8) | v4[2]).toString(16)}:${((v4[3] << 8) | v4[4]).toString(16)}`
+    : addr;
+  const [head, tail] = hex.split("::");
   const left = head ? head.split(":") : [];
-  // A dotted tail is two groups counted as one; only the first four groups
-  // are kept and `::` pads with at least one, so the miscount never reaches them.
-  const right = tail === undefined ? [] : tail ? tail.split(":") : [];
-  const groups = [...left, ...Array(Math.max(0, 8 - left.length - right.length)).fill("0"), ...right];
-  return `${groups.slice(0, 4).map((g) => parseInt(g, 16).toString(16)).join(":")}::/64`;
+  const right = tail ? tail.split(":") : [];
+  const g = [...left, ...Array(8 - left.length - right.length).fill("0"), ...right].map((x) => parseInt(x, 16));
+  if (g.slice(0, 4).some(Boolean)) return `${g.slice(0, 4).map((x) => x.toString(16)).join(":")}::/64`;
+  if (g[4] === 0 && g[5] === 0xffff) return [g[6] >> 8, g[6] & 255, g[7] >> 8, g[7] & 255].join(".");
+  return g.map((x) => x.toString(16)).join(":");
 }
 
 /// ── THE PLAYGROUND ──────────────────────────────────────────────────────────
