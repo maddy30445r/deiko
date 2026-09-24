@@ -113,9 +113,9 @@ struct SessionContext: Codable, Equatable {
         let url = Self.path(sessionDir: sessionDir)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        var merged = (try? JSONSerialization.jsonObject(with: Data(contentsOf: url))) as? [String: Any] ?? [:]
+        let disk = (try? JSONSerialization.jsonObject(with: Data(contentsOf: url))) as? [String: Any] ?? [:]
         let mine = try JSONSerialization.jsonObject(with: encoder.encode(self)) as? [String: Any] ?? [:]
-        for key in Self.ownKeys { merged[key] = mine[key] }  // nil removes
+        let merged = TaskFiling.merge(disk: disk, mine: mine, ownKeys: Self.ownKeys)
         let data = try JSONSerialization.data(
             withJSONObject: merged, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         )

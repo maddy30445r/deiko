@@ -23,6 +23,15 @@ public enum TaskFiling {
     /// 1-based, "new" for the brief's own task, "missing" when it was not
     /// shortlisted at all. Right answers landing low say the shortlist should
     /// grow; "missing" says it failed.
+    /// A context.json rewrite by the app: the keys the app models come from
+    /// `mine` (absent there means removed); every other key on disk — the
+    /// classifier's `jev` log above all — is kept as it was.
+    public static func merge(disk: [String: Any], mine: [String: Any], ownKeys: [String]) -> [String: Any] {
+        var merged = disk
+        for key in ownKeys { merged[key] = mine[key] }
+        return merged
+    }
+
     public static func correctedRank(task: String, own: String, shortlist: [String]) -> String {
         if task == own { return "new" }
         return shortlist.firstIndex(of: task).map { String($0 + 1) } ?? "missing"

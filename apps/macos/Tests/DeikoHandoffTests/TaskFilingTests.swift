@@ -24,3 +24,14 @@ func correctedRank() {
     #expect(TaskFiling.correctedRank(task: "t-20260920-100000", own: "t-20260920-100000", shortlist: shortlist) == "new")
     #expect(TaskFiling.correctedRank(task: "t-20260901-100000", own: "t-20260920-100000", shortlist: shortlist) == "missing")
 }
+
+@Test("an app rewrite keeps the classifier's log and replaces only its own keys")
+func mergeKeepsTheLog() {
+    let disk: [String: Any] = ["task": "t-20260918-100000", "candidates": ["t-1"], "jev": ["gate": 0.9], "classifier": "v3.0"]
+    let mine: [String: Any] = ["task": "t-20260918-110000", "decidedBy": "you", "classifier": "v3.0"]
+    let merged = TaskFiling.merge(disk: disk, mine: mine, ownKeys: ["task", "candidates", "decidedBy", "classifier"])
+    #expect(merged["task"] as? String == "t-20260918-110000")
+    #expect(merged["decidedBy"] as? String == "you")
+    #expect(merged["candidates"] == nil, "a hand placement clears Which one?")
+    #expect((merged["jev"] as? [String: Any])?["gate"] as? Double == 0.9, "the log survives")
+}
