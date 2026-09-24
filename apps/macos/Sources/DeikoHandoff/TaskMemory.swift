@@ -51,4 +51,17 @@ public enum Sorting {
         }
         return env
     }
+
+    /// Whether to tell somebody on their own key that filing sends what they
+    /// said to the relay — which it did not before sorting reached own-key
+    /// users. Only while it does, and yes once only: the answer is remembered.
+    public static func noticeDue(
+        ownKey: @autoclosure () -> Bool, files: @autoclosure () -> Bool,
+        defaults: UserDefaults = .standard
+    ) -> Bool {
+        let told = "DEIKO_SORTING_NOTICE_SHOWN"
+        guard !defaults.bool(forKey: told), ownKey(), files() else { return false }
+        defaults.set(true, forKey: told)
+        return true
+    }
 }

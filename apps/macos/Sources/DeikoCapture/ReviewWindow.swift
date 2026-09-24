@@ -154,6 +154,11 @@ final class ReviewModel: ObservableObject {
     /// carries no task. Said on the sent pill. Settable so `UIShot` can pose
     /// that pill.
     @Published var sentUnfiled = false
+    /// Tells somebody on their own key, once, that filing sends what they
+    /// said to the relay. On the collapsed card, which every brief passes
+    /// through, of the first brief to reach Ready — see `Sorting.noticeDue`.
+    /// Settable so `UIShot` can pose it.
+    @Published var sortingNotice = false
 
     private func apply(_ next: SessionContext) {
         guard let sessionDir else { return }
@@ -407,6 +412,7 @@ final class ReviewModel: ObservableObject {
         filedSummary = sent == true
         notFiled = false
         sentUnfiled = false
+        sortingNotice = false
         summary = nil
         handedTo = nil
         phase = .working("Transcribing…")
@@ -421,6 +427,9 @@ final class ReviewModel: ObservableObject {
                 self.narration = digest.summary.narration
                 self.originalNarration = digest.summary.narration
                 self.phase = .ready
+                self.sortingNotice = Sorting.noticeDue(
+                    ownKey: Credentials.willUse("GROQ_API_KEY"), files: Credentials.filesBriefs
+                )
                 self.fetchSummary(sessionDir: sessionDir)
                 if settled == nil {
                     self.fetchContext(sessionDir: sessionDir)

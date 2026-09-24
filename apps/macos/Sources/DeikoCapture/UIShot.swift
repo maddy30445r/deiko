@@ -48,6 +48,8 @@ enum UIShot {
             )
             shoot(orbCard(), size: NSSize(width: 400, height: 130), look: look, to: "\(out)-orb-\(name).png")
             shoot(orbReady(), size: NSSize(width: 400, height: 190), look: look, to: "\(out)-orbready-\(name).png")
+            shoot(orbReady(notice: true), size: NSSize(width: 400, height: 250), look: look,
+                  to: "\(out)-orbnotice-\(name).png")
             shoot(orbSent(), size: NSSize(width: 400, height: 70), look: look, to: "\(out)-orbsent-\(name).png")
             // The expanded panel, at the size the orb gives it. The most
             // consequential screen in the app — it is the last thing anybody
@@ -81,7 +83,7 @@ enum UIShot {
             }
         }
 
-        Emit.log("wrote \(out)-{welcome,orb,dashboard,board,personas,settings,settings-full}-{light,dark}.png")
+        Emit.log("wrote \(out)-{welcome,orb,orbready,orbnotice,orbsent,review,review-odds,dashboard,board,personas,settings,settings-full}-{light,dark}.png")
     }
 
     /// The collapsed card, mid-session: the state the orb spends most of its
@@ -102,9 +104,11 @@ enum UIShot {
 
     /// The card as it looks the moment before somebody throws the coin: the
     /// state that carries the verdict, the crop counts and the persona chip.
-    private static func orbReady() -> some View {
+    /// `notice`: the first card an own-key user sees after sorting reached them.
+    private static func orbReady(notice: Bool = false) -> some View {
         let model = ReviewModel()
         model.phase = .ready
+        model.sortingNotice = notice
         model.summary = "Make the Save button use the header indigo, and give it more padding."
         model.personaName = "QA ticket"
         // Posed as a hesitant answer on purpose: "Looks like" is the wording

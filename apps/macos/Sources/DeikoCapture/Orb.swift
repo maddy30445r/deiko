@@ -1366,6 +1366,15 @@ struct OrbRootView: View {
                 .lineLimit(1)
                 .help(model.notFiled ? ReviewView.notFiledHelp : "")
         }
+        // ONCE, for somebody on their own key: filing now sends what they
+        // said to the relay. Here because every brief passes this card, and
+        // the next one never shows it again — nothing to dismiss.
+        if model.sortingNotice {
+            Text("Deiko can now sort briefs into tasks. To do that it sends what you said and your window titles to its relay, which keeps nothing. You can turn this off in Settings.")
+                .font(.system(size: 11))
+                .foregroundStyle(DeikoStyle.ink2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
         // WHY THIS ONE READS WORSE, on the card somebody actually looks at.
         //
         // The expanded panel carries this too, but most sessions never open it

@@ -66,3 +66,14 @@ func sortingOnFilesThroughTheRelay() {
     #expect(none["DEIKO_CLASSIFY_URL"] == nil)
     #expect(none["DEIKO_CLASSIFY_TOKEN"] == nil)
 }
+
+@Test("somebody on their own key is told about filing once, and only while it happens")
+func sortingNoticeOnce() throws {
+    let name = "deiko-notice-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: name))
+    defer { defaults.removePersistentDomain(forName: name) }
+    #expect(!Sorting.noticeDue(ownKey: false, files: true, defaults: defaults))
+    #expect(!Sorting.noticeDue(ownKey: true, files: false, defaults: defaults))
+    #expect(Sorting.noticeDue(ownKey: true, files: true, defaults: defaults))
+    #expect(!Sorting.noticeDue(ownKey: true, files: true, defaults: defaults))
+}
