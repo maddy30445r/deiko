@@ -134,7 +134,12 @@ async function main() {
   };
   const scored = scoreTasks({
     query: [me.summaryLine, me.narration, ...windowTitles, ...(summary.repoHints ?? []), ...me.screenTerms].join(" "),
-    tasks: [...groups].map(([tid, bs]) => ({ id: tid, text: taskText(taskTitles.get(tid) ?? titleFor(bs.at(-1)), bs), lastActive: stampTime(bs[0].id) })),
+    tasks: [...groups].map(([tid, bs]) => ({
+      id: tid,
+      text: taskText(taskTitles.get(tid) ?? titleFor(bs.at(-1)), bs),
+      lastActive: stampTime(bs[0].id),
+      repoHints: bs.flatMap((b) => b.repoHints),
+    })),
     repoHints: summary.repoHints ?? [],
     now,
   });

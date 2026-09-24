@@ -161,7 +161,9 @@ const RECENT = 2;
 /**
  * The shortlist: BM25 over each task's text, plus a nudge for the same repo
  * and for recent work. A nudge, not a gate — a topic switch ten minutes after
- * the last brief must still be able to lose.
+ * the last brief must still be able to lose. Same repo is one of this brief's
+ * repo hints equal to one of the task's own (`t.repoHints`), not a word
+ * found anywhere in its text.
  *
  * ponytail: lexical, so blind to paraphrase ("the drag thing" vs "moving
  * cards"). The weights are eyeballed. Upgrade: on-device sentence embeddings
@@ -186,7 +188,7 @@ export function scoreTasks({ query, tasks, repoHints = [], now = Date.now(), lim
       const idf = Math.log(1 + (N - df.get(w) + 0.5) / (df.get(w) + 0.5));
       score += idf * (f * (k1 + 1)) / (f + k1 * (1 - b + (b * docs[i].length) / avg));
     }
-    const sameRepo = hints.some((h) => t.text.toLowerCase().includes(h));
+    const sameRepo = (t.repoHints ?? []).some((h) => hints.includes(String(h).toLowerCase()));
     if (sameRepo) score += 2;
     const age = now - t.lastActive;
     if (age < 2 * 3600e3) score += 2;

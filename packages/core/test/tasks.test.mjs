@@ -144,13 +144,21 @@ test("the price bug is shortlisted first for another brief about it", () => {
 test("recency and repo add to a match; they do not replace one", () => {
   const now = stampTime("20260920-100000");
   const tasks = [
-    { id: "t-20260918-155836", text: taskText("price", price), lastActive: stampTime("20260918-162340") },
+    { id: "t-20260918-155836", text: taskText("price", price), lastActive: stampTime("20260918-162340"), repoHints: ["acme-portal"] },
     { id: "t-20260920-095000", text: "the week 32 signup chart", lastActive: now - 10 * 60e3 },
   ];
   const top = scoreTasks({ query: "the price toast still shows $99 after save", tasks, now });
   assert.equal(top[0].id, "t-20260918-155836");
-  const repo = scoreTasks({ query: "unrelated words", tasks, now: now + 3 * 86400e3, repoHints: ["acme-portal"] });
+  const repo = scoreTasks({ query: "unrelated words", tasks, now: now + 3 * 86400e3, repoHints: ["Acme-Portal"] });
   assert.equal(repo.find((t) => t.id === "t-20260918-155836").sameRepo, true);
+});
+
+test("same repo is an exact repo hint, never a word somewhere in the task", () => {
+  const tasks = [{ id: "t-20260918-155836", text: "Deiko app window deiko-site", lastActive: 0, repoHints: ["deiko-site"] }];
+  for (const hint of ["Deiko", "app", "site"]) {
+    assert.equal(scoreTasks({ query: "x", tasks, repoHints: [hint], now: 0 })[0].sameRepo, false, hint);
+  }
+  assert.equal(scoreTasks({ query: "x", tasks, repoHints: ["Deiko-Site"], now: 0 })[0].sameRepo, true);
 });
 
 test("the shortlist is capped", () => {

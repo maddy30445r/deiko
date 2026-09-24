@@ -161,6 +161,7 @@ test("a sibling is read with its summary line, task, windows, terms and outcome"
   mkdirSync(dir);
   writeFileSync(join(dir, "brief.json"), JSON.stringify({ summary: {
     narration: "hey so fix the drag on the board", apps: ["Deiko"], windows: ["Orb.swift — Deiko"], screenTerms: ["drag"],
+    repoHints: ["Deiko"],
   } }));
   writeFileSync(join(dir, "review-summary.txt"), "Fix the drag on the board.\nIt sticks.\n");
   writeFileSync(join(dir, "context.json"), JSON.stringify({ collection: "deiko", task: "t-20260915-100000" }));
@@ -171,7 +172,7 @@ test("a sibling is read with its summary line, task, windows, terms and outcome"
     summaryLine: "Fix the drag on the board.",
     line: "Fix the drag on the board.",
     collection: "deiko", task: "t-20260915-100000",
-    apps: ["Deiko"], windows: ["Orb.swift — Deiko"], screenTerms: ["drag"],
+    apps: ["Deiko"], windows: ["Orb.swift — Deiko"], screenTerms: ["drag"], repoHints: ["Deiko"],
     outcome: { did: ["Moved the threshold."], decided: [], open: ["Test on a trackpad."], files: [] },
   });
 });

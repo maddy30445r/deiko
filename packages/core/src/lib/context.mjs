@@ -222,6 +222,7 @@ export function readBriefLine(sessionDir) {
     apps: Array.isArray(summary.apps) ? summary.apps : [],
     windows: Array.isArray(summary.windows) ? summary.windows : [],
     screenTerms: Array.isArray(summary.screenTerms) ? summary.screenTerms : [],
+    repoHints: Array.isArray(summary.repoHints) ? summary.repoHints : [],
     outcome,
   };
 }
