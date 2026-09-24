@@ -1,4 +1,4 @@
-.PHONY: dev build test probe watch region clean setup bundle install icon dmg release guard-clean relay-deploy relay-dev site-deploy resources dist record transcribe align ground brief summarize signing-setup reset-permissions reclassify
+.PHONY: dev build test probe watch region clean setup bundle install icon dmg release guard-clean relay-deploy relay-dev site-deploy resources dist record transcribe align ground brief summarize signing-setup reset-permissions reclassify flow-check
 
 # Code-signing identity for the bundle.
 #
@@ -575,6 +575,14 @@ reclassify:
 		$(SORT_BRIEFS) node scripts/classify.mjs "$$d"; \
 		node scripts/render-brief.mjs "$$d" >/dev/null 2>&1 || true; \
 	done
+
+## flow-check — render → classify → render on a throwaway copy of real briefs
+##
+## Starts this checkout's relay on a local port with .env's keys, files a
+## handful of real sessions from scratch in a temp dir, checks each has a
+## prompt and a filing, and prints how it was filed. The board is only read.
+flow-check:
+	@./scripts/flow-check.sh
 
 ## ground — score how well a session resolved its referents, and check M1
 ##
