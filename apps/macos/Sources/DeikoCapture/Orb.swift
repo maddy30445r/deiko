@@ -1409,8 +1409,16 @@ struct OrbRootView: View {
                     .foregroundStyle(DeikoStyle.sentGreen)
             }
             .frame(width: 36, height: 36)
-            Text(sentLine)
-                .font(.system(size: 13))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(sentLine)
+                    .font(.system(size: 13))
+                // What was pasted carries no task, whatever the filing does next.
+                if model.sentUnfiled {
+                    Text("Sent before Deiko finished filing it")
+                        .font(.system(size: 11))
+                        .foregroundStyle(DeikoStyle.ink2)
+                }
+            }
         }
         .padding(.leading, 8)
         .padding(.trailing, 20)
@@ -1424,7 +1432,7 @@ struct OrbRootView: View {
         // draws a pill on its own, and a pill inside an invisible card carries
         // the card's shadow with it.
         .frame(maxWidth: .infinity)
-        .accessibilityLabel(sentLine)
+        .accessibilityLabel(model.sentUnfiled ? "\(sentLine). Sent before Deiko finished filing it" : sentLine)
     }
 
     // ── The expanded panel ──────────────────────────────────────────────────

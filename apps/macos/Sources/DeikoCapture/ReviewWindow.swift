@@ -109,6 +109,11 @@ final class ReviewModel: ObservableObject {
     var sessionID: String? { sessionDir.map { ($0 as NSString).lastPathComponent } }
     var ownTask: String? { sessionID.map(Tasks.own) }
 
+    /// The throw went before the filing finished, so the brief it pasted
+    /// carries no task. Said on the sent pill. Settable so `UIShot` can pose
+    /// that pill.
+    @Published var sentUnfiled = false
+
     private func apply(_ next: SessionContext) {
         guard let sessionDir else { return }
         context = next
@@ -226,6 +231,14 @@ final class ReviewModel: ObservableObject {
     private var task: Task<Void, Never>?
     private var summaryTask: Task<Void, Never>?
     private var classifyTask: Task<Void, Never>?
+    /// Bumped whenever a send in flight is called off: by a newer send, or by
+    /// the card going away. Checked at the last moment, inside the render
+    /// lane, where `Task.isCancelled` answers for the lane's own task and not
+    /// for the send's.
+    private var sendTicket = 0
+    /// From a send's last check until its paste returns — the stretch a
+    /// throw can no longer be called back in.
+    private var delivering = false
 
     /// The session on screen, for the controller to hand back to the recorder.
     var currentSessionDir: String? { sessionDir }
@@ -404,15 +417,38 @@ final class ReviewModel: ObservableObject {
             return
         }
 
+        // ONE PASTE PER BRIEF. The coin arms at the press, so a throw pressed
+        // while the brief was still transcribing can be released after it
+        // landed and another send began. One still waiting is called off
+        // below and this one goes instead; one already pasting cannot be
+        // called back, so this one is dropped rather than paste it twice.
+        if after != nil, delivering || phase == .sent {
+            Handoff.trace?("fling: the brief is already being handed over — this throw is dropped")
+            return
+        }
+
         task?.cancel()
+        sendTicket += 1
+        let ticket = sendTicket
+        if after != nil {
+            // Now, not after the wait below: `.working` is what disarms the
+            // coin, and while this read `.ready` a second throw armed, cancelled
+            // nothing it could reach, and pasted the brief again.
+            phase = .working("Handing to \(appName ?? "your editor")…")
+        }
         task = Task {
             do {
                 // A brief thrown the instant the card appears should still
-                // carry where it belongs, if that is about to arrive. A
-                // second is long past a call that takes 70–500ms, and short
-                // enough that nobody waits on a classifier that is not
-                // coming.
-                await waitForPlacing()
+                // carry where it belongs. The filing waits on the summary and
+                // then the classifier — measured 1.2–2.3s together — so three
+                // seconds catches it, and caps a wait on one that is not
+                // coming. Only a send waits: the panel's path sends nothing.
+                var unfiled = false
+                if after != nil {
+                    await waitForPlacing()
+                    guard !Task.isCancelled else { return }
+                    unfiled = placing
+                }
                 var failure: Error?
                 await exclusively { [self] in
                 do {
@@ -451,11 +487,16 @@ final class ReviewModel: ObservableObject {
                     return
                 }
                 let prompt = try BriefPipeline.prompt(sessionDir: sessionDir)
-                guard stillCurrent(sessionDir) else { return }
+                // A send called off while it queued for the lane must not
+                // go now. The last point it can still be stopped.
+                guard stillCurrent(sessionDir), ticket == sendTicket else { return }
                 phase = .working("Handing to \(appName ?? "your editor")…")
+                delivering = true
+                defer { delivering = false }
                 try await after(prompt)
                 guard stillCurrent(sessionDir) else { return }
                 handedTo = appName
+                sentUnfiled = unfiled
                 phase = .sent
                 } catch { failure = error }
                 }
@@ -551,7 +592,7 @@ final class ReviewModel: ObservableObject {
     /// Polling a flag is the shape `Handoff` already uses to wait for an app
     /// to activate, and unlike the group it is honest about being a deadline.
     /// `Task.sleep` is cancellable, so a session switch still ends it.
-    private func waitForPlacing(upTo ticks: Int = 40) async {
+    private func waitForPlacing(upTo ticks: Int = 120) async {
         for _ in 0..<ticks where placing {
             try? await Task.sleep(for: .milliseconds(25))
         }
@@ -676,6 +717,8 @@ final class ReviewModel: ObservableObject {
     func cancelPendingWork() {
         task?.cancel()
         task = nil
+        // A send waiting in the render lane is past `task`'s reach.
+        sendTicket += 1
         summaryTask?.cancel()
         summaryTask = nil
         classifyTask?.cancel()

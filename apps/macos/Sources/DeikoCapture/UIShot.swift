@@ -41,6 +41,7 @@ enum UIShot {
             }
             shoot(orbCard(), size: NSSize(width: 400, height: 130), look: look, to: "\(out)-orb-\(name).png")
             shoot(orbReady(), size: NSSize(width: 400, height: 190), look: look, to: "\(out)-orbready-\(name).png")
+            shoot(orbSent(), size: NSSize(width: 400, height: 70), look: look, to: "\(out)-orbsent-\(name).png")
             // The expanded panel, at the size the orb gives it. The most
             // consequential screen in the app — it is the last thing anybody
             // reads before a brief leaves the Mac — and it had no capture.
@@ -108,6 +109,24 @@ enum UIShot {
             decidedBy: "jev",
             model: "jev-1.13.0"
         )
+        return OrbRootView(
+            model: model,
+            state: OrbState(),
+            actions: OrbActions(
+                onPress: {}, onDrag: { _ in }, onRelease: {}, onDismiss: {},
+                onExtend: {}, onSetMode: { _ in }, onOpenSettings: {},
+                onDelete: {}, onHeightChange: { _ in }
+            )
+        )
+    }
+
+    /// The pill after a throw that went before the filing finished — the
+    /// one sent state with a second line.
+    private static func orbSent() -> some View {
+        let model = ReviewModel()
+        model.phase = .sent
+        model.handedTo = "Claude Code"
+        model.sentUnfiled = true
         return OrbRootView(
             model: model,
             state: OrbState(),
