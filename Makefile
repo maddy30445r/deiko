@@ -552,21 +552,27 @@ summarize:
 ## Never fatal, like summarize: no relay, a short narration, or a brief the
 ## developer already placed by hand, and nothing is written. `brief` reads the
 ## file if it is there.
+##
+## Follows the app's "Sort briefs into tasks" switch: DEIKO_SORT_BRIEFS as the
+## app passes it, else as its preferences hold it (`defaults read` prints 0
+## when off, nothing when never set, which is on).
+SORT_BRIEFS = DEIKO_SORT_BRIEFS="$${DEIKO_SORT_BRIEFS-$$(defaults read com.deiko.capture DEIKO_SORT_BRIEFS 2>/dev/null)}"
 classify:
-	@node scripts/classify.mjs $(SESSION)
+	@$(SORT_BRIEFS) node scripts/classify.mjs $(SESSION)
 
 ## reclassify — group an existing board into tasks, oldest brief first
 ##
 ## Renders, classifies, renders again, so each brief's brief.json carries the
 ## new matching fields before it is placed and its prompt carries its task
 ## after. Needs DEIKO_RELAY_URL (and DEIKO_RELAY_TOKEN if you use one) in the
-## environment — source .env first. Hand-placed briefs are left alone.
+## environment — source .env first. Hand-placed briefs are left alone, and
+## with the app's sorting switch off nothing is sent (see classify).
 ROOT ?= $(HOME)/Documents/Deiko
 reclassify:
 	@npm run build -w @deiko/alignment --silent
 	@for d in $$(ls -d "$(ROOT)"/2*-* | sort); do \
 		node scripts/render-brief.mjs "$$d" >/dev/null 2>&1 || echo "· $$d did not render"; \
-		node scripts/classify.mjs "$$d"; \
+		$(SORT_BRIEFS) node scripts/classify.mjs "$$d"; \
 		node scripts/render-brief.mjs "$$d" >/dev/null 2>&1 || true; \
 	done
 

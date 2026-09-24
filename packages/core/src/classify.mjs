@@ -105,7 +105,9 @@ async function main() {
     console.error("usage: node scripts/classify.mjs <session-dir>");
     process.exit(2);
   }
-  const sorting = process.env.DEIKO_SORT_BRIEFS !== "0";
+  // "0" from the app; "NO" or "false" as `defaults read` prints one written
+  // by hand (`make classify`) — the app reads those as off too.
+  const sorting = !/^(0|no|false)$/i.test(process.env.DEIKO_SORT_BRIEFS ?? "");
   const relay = sorting && (process.env.DEIKO_CLASSIFY_URL || process.env.DEIKO_RELAY_URL);
 
   const dir = resolve(sessionArg.replace(/^~/, homedir()));

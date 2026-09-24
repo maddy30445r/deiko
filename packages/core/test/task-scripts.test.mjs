@@ -360,6 +360,8 @@ test("with sorting off nothing is sent, whichever relay is named, and what needs
   const off = { DEIKO_SORT_BRIEFS: "0", DEIKO_RELAY_URL: stub.url };
   const { stderr } = await classify(dir, stub.url, off);
   await classify(odds, stub.url, off);
+  // As `defaults read` prints a switch turned off by hand.
+  await classify(dir, stub.url, { ...off, DEIKO_SORT_BRIEFS: "NO" });
   stub.close();
   assert.equal(stub.bodies.length, 0);
   assert.match(stderr, /sorting is off/);
