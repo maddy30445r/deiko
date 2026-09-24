@@ -713,6 +713,82 @@ test("a failed second look drops that task's answer, not the brief", async () =>
   assert.equal(rows.get(classifyDay())?.audioSeconds, 1, "round one answered, so the classify counts");
 });
 
+test("a present but unreadable gate does not stop the second look", async () => {
+  // An unreadable `noul` (null, here) must read as MISSING, not as a
+  // confident 0 — `Number(null)` is itself finite, so a naive coercion would
+  // gate every task out on a garbled answer rather than none.
+  jevReply = (sent) => (sent.questions.is_work_brief
+    ? { model: "jev-1.13.0", answers: { is_work_brief: { noul: null }, [`same_${A}`]: { noul: 0.9 } } }
+    : { model: "jev-1.13.0", answers: { same_task: { noul: 0.9 }, relation: { score: 2 } } });
+  const r = await classify("dev_badgate", { version: 3, narration: "the pricing bug again", tasks: tasksOf(3) });
+  assert.deepEqual(Object.keys(JSON.parse(r.body).second), [A]);
+});
+
+test("a round two reply with no answers object leaves that task out of second", async () => {
+  jevReply = (sent) => (sent.questions.is_work_brief
+    ? { model: "jev-1.13.0", answers: { is_work_brief: { noul: 0.9 }, [`same_${A}`]: { noul: 0.9 }, [`same_${B}`]: { noul: 0.9 } } }
+    : sent.state.task.id === A
+      ? { model: "jev-1.13.0" } // no `answers` at all — a 200 that says nothing
+      : { model: "jev-1.13.0", answers: { same_task: { noul: 0.9 }, relation: { score: 2 } } });
+  const r = await classify("dev_noanswers", { version: 3, narration: "the pricing bug again", tasks: tasksOf(3) });
+  assert.deepEqual(Object.keys(JSON.parse(r.body).second), [B], "no answers object is no entry, not an empty one");
+});
+
+test("a slow round one leaves no round two", async () => {
+  const realNow = Date.now;
+  const t0 = realNow();
+  jevReply = () => {
+    // Round one alone ate nearly the whole 12s v3 budget.
+    Date.now = () => t0 + 11_800;
+    return { model: "jev-1.13.0", answers: { is_work_brief: { noul: 0.9 }, [`same_${A}`]: { noul: 0.9 } } };
+  };
+  try {
+    const r = await classify("dev_slow1", { version: 3, narration: "the pricing bug again", tasks: tasksOf(1) });
+    assert.equal(upstreamBodies.length, 1, "under a second remained, so round two never started");
+    assert.deepEqual(JSON.parse(r.body).second, {});
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("round two is aborted at what remains of the budget, not the full upstream timeout", async () => {
+  const realNow = Date.now;
+  const realFetch = globalThis.fetch;
+  const t0 = realNow();
+  let roundTwoStarted = false;
+  globalThis.fetch = async (url, init) => {
+    upstream.push(String(url));
+    const bodyStr = typeof init?.body === "string" ? init.body : "";
+    upstreamBodies.push(bodyStr);
+    const sent = JSON.parse(bodyStr);
+    if (sent.questions.is_work_brief) {
+      Date.now = () => t0 + 10_800; // leaves 1.2s of the 12s v3 budget
+      return new Response(JSON.stringify({
+        model: "jev-1.13.0",
+        answers: { is_work_brief: { noul: 0.9 }, [`same_${A}`]: { noul: 0.9 } },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    roundTwoStarted = true;
+    // Never resolves on its own — only the relay's own abort can end this,
+    // and it must do so at what remained of the budget, not the default 20s.
+    return new Promise((_, reject) => {
+      init.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+    });
+  };
+  try {
+    const start = realNow();
+    const r = await classify("dev_budget", { version: 3, narration: "the pricing bug again", tasks: tasksOf(1) });
+    assert.ok(roundTwoStarted, "1.2s was enough left to attempt round two");
+    assert.ok(realNow() - start < 5000, "aborted at what remained of the budget, not the default 20s");
+    assert.equal(r.status, 200);
+    assert.deepEqual(JSON.parse(r.body).second, {}, "an aborted second look is no second look");
+  } finally {
+    Date.now = realNow;
+    globalThis.fetch = realFetch;
+    stubFetch();
+  }
+});
+
 test("a classification without a narration is refused", async () => {
   const r = await classify("dev_empty", { candidates: [] });
   assert.equal(r.status, 400);
@@ -722,6 +798,13 @@ test("a classification without a narration is refused", async () => {
 test("an upstream failure refunds the classification", async () => {
   jevDown = true;
   const r = await classify("dev_unlucky");
+  assert.equal(r.status, 502);
+  assert.equal(rows.get(classifyDay())?.audioSeconds ?? 0, 0);
+});
+
+test("an upstream failure refunds a v3 classification too", async () => {
+  jevDown = true;
+  const r = await classify("dev_unlucky3", { version: 3, narration: "the pricing bug again" });
   assert.equal(r.status, 502);
   assert.equal(rows.get(classifyDay())?.audioSeconds ?? 0, 0);
 });
@@ -744,6 +827,40 @@ test("Cloudflare serves the same model, and the caller cannot tell", async () =>
     assert.equal(back.result, undefined, "the envelope is taken off");
     assert.ok(back.answers.tier, "and the answers are where the app looks for them");
   } finally {
+    process.env.TYPESAFE_API_KEY = key;
+    delete process.env.CLOUDFLARE_ACCOUNT_ID;
+    delete process.env.CLOUDFLARE_AI_TOKEN;
+  }
+});
+
+test("Cloudflare wraps round two as well, and a finalist still gets a second look", async () => {
+  const key = process.env.TYPESAFE_API_KEY;
+  delete process.env.TYPESAFE_API_KEY;
+  process.env.CLOUDFLARE_ACCOUNT_ID = "acct";
+  process.env.CLOUDFLARE_AI_TOKEN = "cf-token";
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    upstream.push(String(url));
+    const bodyStr = typeof init?.body === "string" ? init.body : "";
+    upstreamBodies.push(bodyStr);
+    const inner = JSON.parse(bodyStr).input;
+    const answers = inner.questions.is_work_brief
+      ? { is_work_brief: { noul: 0.9 }, [`same_${A}`]: { noul: 0.9 } }
+      : { same_task: { noul: 0.95 }, relation: { score: 2 } };
+    return new Response(JSON.stringify({
+      result: { model: "jev-1.13.0", answers }, success: true, errors: [], messages: [],
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  try {
+    const r = await classify("dev_cf3", { version: 3, narration: "the pricing bug again", tasks: tasksOf(1) });
+    assert.equal(r.status, 200);
+    assert.equal(upstream.filter((u) => u.includes("api.cloudflare.com")).length, 2,
+      "round one and the one finalist's round two");
+    const back = JSON.parse(r.body);
+    assert.equal(back.second[A]?.same_task?.noul, 0.95, "round two's wrapped answer came back unwrapped too");
+  } finally {
+    globalThis.fetch = realFetch;
+    stubFetch();
     process.env.TYPESAFE_API_KEY = key;
     delete process.env.CLOUDFLARE_ACCOUNT_ID;
     delete process.env.CLOUDFLARE_AI_TOKEN;

@@ -158,9 +158,8 @@ const summarySystem = (native) => [
 // ── What a classification is allowed to be ──────────────────────────────────
 //
 // Jev (TypeSafe AI) answers typed questions about a piece of state with
-// calibrated probabilities: which collection a brief belongs to, which earlier
-// task it belongs to, and how much work it asks. One request, every question
-// evaluated in parallel.
+// calibrated probabilities: whether a brief is real work, which earlier task
+// it continues, which project it belongs to, and how much work it asks.
 //
 // THE CALLER SENDS FACTS, NOT QUESTIONS. This route spends Deiko's TypeSafe
 // key and takes any bearer, so the request to the model is built here from a
@@ -179,8 +178,9 @@ const summarySystem = (native) => [
 // A RELEASED APP MAY STILL SEND THE OLD BODY. `legacyClassifyRequest` keeps
 // today's single-request "which of these tasks is it" shape working for
 // 0.5.0 installs until they update — chosen by a body with no `version`, or
-// one below 3. `classifyRequest`/`secondLookRequest` are the v3 shape. Every
-// request builder is exported so its shape is testable without a network.
+// one below 3. `classifyRequest`/`secondLookRequest`/`finalists` are the v3
+// shape, and are exported so it is testable without a network;
+// `legacyClassifyRequest` stays private, called only from this route.
 // WHO ANSWERS THE QUESTIONS, and why there are two of them.
 //
 // TypeSafe paused new signups two days after opening them, so a key from them
@@ -367,12 +367,14 @@ function legacyClassifyRequest(sent) {
 
 // ── v3: round 1 (every question at once) and round 2 (the finalists alone) ─
 
-/// Twenty tasks with their descriptions fit with room to spare; Jev's own
-/// limit (~64k tokens) is several times this.
+/// Twenty tasks and twenty collections — collections' labels appear TWICE
+/// (once in `state`, once again as a Choice option), so an uncapped 60 could
+/// have pushed a full request past Jev's own limit (~150k characters). Both
+/// caps together still leave this comfortably under `MAX_CLASSIFY_BYTES`.
 export const MAX_CLASSIFY_BYTES = 192 * 1024;
 const CLASSIFY_LIMITS = {
   narration: 2000, summary: 600, apps: 10, repoHints: 5, titles: 30, title: 200,
-  collections: 60, name: 200, tasks: 20, now: 400, decided: 300, outcome: 300, label: 120,
+  collections: 20, name: 200, tasks: 20, now: 400, decided: 300, outcome: 300, label: 120,
 };
 /// Labels that may travel — `components` never does (see scripts/lib/labels.mjs).
 const BRIEF_KEYS = ["pages", "sites", "urls", "files", "repo", "docs", "errors", "tickets"];
@@ -382,6 +384,12 @@ const TASK_KEYS = ["pages", "sites", "files", "tickets"];
 /// MIRRORED by `GATE` and `ASK` in scripts/lib/context.mjs — change both.
 export const GATE = 0.5;
 export const SECOND_LOOK = { min: 0.35, max: 2 };
+
+/// ponytail: fixed at 12s rather than reading the client's own deadline off
+/// the request — the client (`scripts/lib/filing.mjs`) aborts at 15s, and
+/// this leaves 3s of slack for the two hops home. Revisit both together if
+/// either timeout changes.
+const V3_BUDGET_MS = 12_000;
 
 /// The relation levels, in order. MIRRORS `RELATIONS` in scripts/lib/context.mjs.
 export const RELATION_RUBRIC = [
@@ -479,7 +487,12 @@ const yes = (a) => {
 
 /** Which tasks get a second look: at most two, each ≥ 0.35, none when the gate says no. */
 export function finalists(answers, ids) {
-  if (answers?.is_work_brief && yes(answers.is_work_brief) < GATE) return [];
+  // `Number.isFinite`, NOT `yes()`'s coercing version: a gate Jev answered
+  // with an unreadable noul (`null`, a string, …) must read as MISSING, not
+  // as a confident 0 — `Number(null)` is itself finite (0), so coercing
+  // first would gate everything out on a garbled answer rather than none.
+  const gate = answers?.is_work_brief?.noul;
+  if (Number.isFinite(gate) && gate < GATE) return [];
   return ids
     .map((id) => [id, yes(answers?.[`same_${id}`])])
     .filter(([, p]) => p >= SECOND_LOOK.min)
@@ -1360,16 +1373,24 @@ export async function handle({ method, path, query = "", token, contentType, bod
     if (spent.refusal) return spent.refusal;
 
     const headers = { authorization: `Bearer ${speaker.key}`, "content-type": "application/json" };
-    const askJev = async (req) => (speaker.wrapped
-      ? unwrapJev(await proxy(speaker.url, headers, JSON.stringify({ model: speaker.model, input: req })))
-      : proxy(speaker.url, headers, JSON.stringify({ model: speaker.model, ...req })));
+    const askJev = async (req, timeoutMs) => (speaker.wrapped
+      ? unwrapJev(await proxy(speaker.url, headers, JSON.stringify({ model: speaker.model, input: req }), timeoutMs))
+      : proxy(speaker.url, headers, JSON.stringify({ model: speaker.model, ...req }), timeoutMs));
 
+    // ponytail: drop once no 0.5.0 app calls (legacy body has no version).
     if (!isV3) {
       const out = await askJev(request);
       if (out.providerFault) await uncountCalls(spent.rows).catch(() => {});
       return out;
     }
 
+    // THE WHOLE V3 CALL HAS A BUDGET, NOT JUST EACH REQUEST. The client
+    // aborts at 15s (`scripts/lib/filing.mjs`); round 1 alone may take up to
+    // `UPSTREAM_TIMEOUT_MS`, so round 2 gets only what is left of
+    // `V3_BUDGET_MS` — and is skipped outright once under a second remains,
+    // rather than starting a request that cannot finish before the client
+    // has already given up.
+    const budgetStart = Date.now();
     const first = await askJev(request);
     if (first.providerFault) await uncountCalls(spent.rows).catch(() => {});
     if (first.status !== 200) return first;
@@ -1385,15 +1406,21 @@ export async function handle({ method, path, query = "", token, contentType, bod
     // get a request of their own. A second look that fails is simply absent:
     // the client then cannot join, and asks instead — never a failed brief.
     const second = {};
-    await Promise.all(finalists(answers, Object.keys(request.state.tasks)).map(async (id) => {
-      const out = await askJev(secondLookRequest(request, id));
-      if (out.status !== 200) return;
-      try {
-        second[id] = JSON.parse(out.body)?.answers ?? {};
-      } catch {
-        // A garbled second look is no second look.
-      }
-    }));
+    const remaining = V3_BUDGET_MS - (Date.now() - budgetStart);
+    if (remaining >= 1000) {
+      await Promise.all(finalists(answers, Object.keys(request.state.tasks)).map(async (id) => {
+        const out = await askJev(secondLookRequest(request, id), remaining);
+        if (out.status !== 200) return;
+        try {
+          const answered = JSON.parse(out.body);
+          // No `answers` at all is the same as no second look: an object
+          // present in `second` promises a real answer, never an empty one.
+          if (answered?.answers) second[id] = answered.answers;
+        } catch {
+          // A garbled second look is no second look.
+        }
+      }));
+    }
     return {
       status: 200,
       contentType: "application/json",
@@ -1463,7 +1490,7 @@ const UPSTREAM_TIMEOUT_MS = 20_000;
 /// true unless the provider objected to something the caller chose.
 const CALLERS_FAULT = new Set([400, 413, 415, 422]);
 
-async function proxy(url, headers, body) {
+async function proxy(url, headers, body, timeoutMs = UPSTREAM_TIMEOUT_MS) {
   const host = new URL(url).host;
   const failed = (providerFault) => ({
     status: 502,
@@ -1476,7 +1503,7 @@ async function proxy(url, headers, body) {
       method: "POST",
       headers,
       body,
-      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     const text = await upstream.text();
     if (upstream.ok) return { status: 200, body: text, contentType: "application/json" };
