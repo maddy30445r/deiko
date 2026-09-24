@@ -48,6 +48,16 @@ import {
 /// Titles are the widest thing sent; thirty distinct ones cover any session.
 const MAX_TITLES = 30;
 
+/** `tasks.json` as rows. Missing or unreadable is none. */
+function readTaskRows(root) {
+  try {
+    const list = JSON.parse(readFileSync(join(root, "tasks.json"), "utf8"));
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+
 /** Most frequent first; ties keep first-seen order, newest first for a task's briefs. */
 function byCount(items) {
   const counts = new Map();
@@ -265,11 +275,11 @@ async function main() {
     // RE-READ, AND CHECK THE ID. The id is this brief's own stamp, so a
     // re-classify racing the first ("Forgot something?") finds the row the
     // first one wrote and leaves it.
-    let list = [];
-    try { list = JSON.parse(readFileSync(join(root, "tasks.json"), "utf8")); } catch { list = []; }
-    if (!Array.isArray(list)) list = [];
+    // `from` says what the title was made from, so a narration title can
+    // give way to the first summary line that joins its task (below).
+    const list = readTaskRows(root);
     if (!list.some((t) => t?.id === decision.newTask.id)) {
-      list.push(decision.newTask);
+      list.push({ ...decision.newTask, from: me.summaryLine ? "summary" : "narration" });
       writeFileSync(join(root, "tasks.json"), JSON.stringify(list, null, 2) + "\n");
     }
   }
@@ -287,6 +297,18 @@ async function main() {
       }
     } catch {
       // Unreadable is not "decided"; it is replaced below.
+    }
+  }
+
+  // A TITLE MADE FROM WHAT WAS SAID gives way to the first summary line that
+  // joins its task. Only a row written from narration: one somebody typed
+  // (`from: "you"`), or one with no `from` at all, is left as it is.
+  if (!decision.newTask && decision.task && me.summaryLine) {
+    const list = readTaskRows(root);
+    const row = list.find((t) => t?.id === decision.task);
+    if (row?.from === "narration") {
+      Object.assign(row, { title: titleFor(me), from: "summary" });
+      writeFileSync(join(root, "tasks.json"), JSON.stringify(list, null, 2) + "\n");
     }
   }
 
