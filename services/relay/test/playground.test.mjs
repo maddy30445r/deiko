@@ -42,8 +42,18 @@ test("issuing a ticket needs the usage table, and fails CLOSED without it", asyn
   // The per-caller daily cap is the only thing stopping a script from minting
   // tickets in a loop, so a ticket must not be handed out when that counter
   // cannot be read. No AWS here, so this is the unreachable case.
-  const res = await call("/v1/playground/ticket");
+  const res = await call("/v1/playground/ticket", { origin: "https://deiko.app" });
   assert.equal(res.status, 503);
+});
+
+test("only a listed page may ask for a ticket, and a script with no Origin may not", async () => {
+  // CORS stops another site reading the answer, not its visitors' browsers
+  // sending the request — so the check is on the request itself, and it comes
+  // before the usage table is touched (a 503 here would mean it had not).
+  for (const origin of ["https://evil.example", "", "https://deiko.app.evil.example"]) {
+    const res = await call("/v1/playground/ticket", { origin });
+    assert.equal(res.status, 403, `${origin || "no origin"} must be refused`);
+  }
 });
 
 test("a minted ticket has the shape the relay signs", () => {

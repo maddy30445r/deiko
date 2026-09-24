@@ -42,8 +42,6 @@ import {
   playgroundIpKey,
   playgroundTicketKey,
   playgroundTicketQueryKey,
-  summaryKey,
-  classifyKey,
   usageKey,
 } from "./quota.mjs";
 
@@ -73,6 +71,9 @@ const POLAR_ORGANIZATION_ID =
 /// changes at most once a month. A cancellation therefore takes up to a day to
 /// bite, which is the right trade for a $2.99 product.
 const LICENSE_CACHE_MS = 24 * 60 * 60 * 1000;
+
+/// What every Polar licence key ends with: `<prefix?><UUID4>`.
+const POLAR_KEY = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /// How soon an ERROR-derived verdict is rechecked. Minutes, not a day: an
 /// error is not a fact about the licence, only about the network between two
@@ -106,18 +107,22 @@ function db() {
 /// the deploy where the table is missing or the role has no policy. The one
 /// thing this flag exists to catch is the one thing that version cannot see.
 ///
-/// `DescribeTable` is a cheap control-plane call, and `/health` is asked at
-/// deploy time rather than per request.
-export async function meteringHealthy() {
-  try {
-    const out = await db().send(new DescribeTableCommand({ TableName: TABLE }));
-    return out.Table?.TableStatus === "ACTIVE";
-  } catch {
-    return false;
+/// AT MOST ONCE A MINUTE PER CONTAINER. `/health` takes no bearer, and a
+/// control-plane call per anonymous GET let anybody spend the account's
+/// DescribeTable rate on a loop. The PROMISE is what is cached, so a burst of
+/// concurrent checks shares one call instead of racing to make its own.
+const HEALTH_CACHE_MS = 60_000;
+let health = null;
+export function meteringHealthy(now = Date.now()) {
+  if (!health || now - health.at >= HEALTH_CACHE_MS) {
+    health = {
+      at: now,
+      ok: db().send(new DescribeTableCommand({ TableName: TABLE }))
+        .then((out) => out.Table?.TableStatus === "ACTIVE", () => false),
+    };
   }
+  return health.ok;
 }
-
-export const USAGE_TABLE = TABLE;
 
 /// Add `seconds` to a subject's counter and return the new total.
 ///
@@ -222,44 +227,40 @@ export async function record({ subject, seconds, tier, now = Date.now() }) {
 /// Best-effort by design: the caller swallows a refund that fails, because the
 /// fallback is only the old over-counting behaviour. `ADD` of a negative is
 /// atomic like any other, so concurrent refunds cannot corrupt the row.
-export async function refund({ subject, seconds, tier, now = Date.now() }) {
+///
+/// `now` IS THE RECORD'S, AND HAS NO DEFAULT. A refund that took its own clock
+/// credited the wrong row whenever the upstream answered after midnight: the
+/// new day's counters went negative and the old day's kept the charge.
+export async function refund({ subject, seconds, tier, now }) {
   await Promise.all([
     addSeconds(usageKey(subject, now, tier), -seconds, null),
     addSeconds(globalKey(now), -seconds, null),
   ]);
 }
 
-/// Count one summary against the day, and report the day's new total.
+/// Count one call against each of `keys` — daily rows, TTL'd — and return the
+/// new totals in the same order. The text routes' shape: a global day, the
+/// caller's own day, and the caller's address's day.
 ///
-/// Its OWN row (`summaryKey`), not the audio ceiling's. Charging summaries to
-/// a user's own counter would spend a transcription allowance on a text call
-/// and make the trial run out faster than the thing the trial is for; charging
-/// them to the AUDIO ceiling — which is what this did — let a flood of cheap
-/// text calls close the expensive route for everybody, paying customers
-/// included. A budget each, so neither can shut the other.
+/// ALL ROWS OR NONE, for the reason `record` gives: a write that fails beside
+/// ones that landed would leave charges no refund path can reach.
 ///
 /// The stored attribute is still `audioSeconds` because it is the counter
 /// `addSeconds` maintains; here it counts REQUESTS. The row key says which.
-export async function recordSummary({ now = Date.now() } = {}) {
-  const summariesToday = await addSeconds(summaryKey(now), 1, DAILY_TTL_SECONDS);
-  return { summariesToday };
+export async function countCalls(keys) {
+  const writes = await Promise.allSettled(keys.map((k) => addSeconds(k, 1, DAILY_TTL_SECONDS)));
+  const failed = writes.find((w) => w.status === "rejected");
+  if (failed) {
+    await uncountCalls(keys.filter((_, i) => writes[i].status === "fulfilled")).catch(() => {});
+    throw failed.reason;
+  }
+  return writes.map((w) => w.value);
 }
 
-/// A refused summary gives its count back, or refusals would keep climbing the
-/// very ceiling that is refusing them.
-export async function refundSummary({ now = Date.now() } = {}) {
-  await addSeconds(summaryKey(now), -1, null);
-}
-
-/// One classification against the day, on the classifier's own row. See
-/// `recordSummary` for why a text call never touches the audio ceiling.
-export async function recordClassify({ now = Date.now() } = {}) {
-  const classifiesToday = await addSeconds(classifyKey(now), 1, DAILY_TTL_SECONDS);
-  return { classifiesToday };
-}
-
-export async function refundClassify({ now = Date.now() } = {}) {
-  await addSeconds(classifyKey(now), -1, null);
+/// Give those calls back. The keys carry their own day, so a refund after
+/// midnight still lands on the row it was charged to.
+export async function uncountCalls(keys) {
+  await Promise.all(keys.map((k) => addSeconds(k, -1, null)));
 }
 
 /// ── Playground counters ─────────────────────────────────────────────────────
@@ -276,7 +277,7 @@ export async function recordPlaygroundClip(ticketId, { now = Date.now() } = {}) 
   return { clipsToday, ticketClips };
 }
 
-export async function refundPlaygroundClip(ticketId, { now = Date.now() } = {}) {
+export async function refundPlaygroundClip(ticketId, { now }) {
   await Promise.all([
     addSeconds(playgroundClipKey(now), -1, null),
     addSeconds(playgroundTicketKey(ticketId), -1, null),
@@ -291,7 +292,7 @@ export async function recordPlaygroundIntent(ticketId, { now = Date.now() } = {}
   return { intentsToday, ticketQueries };
 }
 
-export async function refundPlaygroundIntent(ticketId, { now = Date.now() } = {}) {
+export async function refundPlaygroundIntent(ticketId, { now }) {
   await Promise.all([
     addSeconds(playgroundIntentKey(now), -1, null),
     addSeconds(playgroundTicketQueryKey(ticketId), -1, null),
@@ -311,6 +312,12 @@ export async function recordPlaygroundTicket(ipHash, { now = Date.now() } = {}) 
 /// fact — something the service learned that must outlive one container.
 export async function tierFor(subject, now = Date.now()) {
   if (subject.kind !== "license") return "free";
+  // NOT SHAPED LIKE A KEY, NOT WORTH A WRITE. Polar keys end in a UUID4
+  // after an optional brand prefix (polar.sh/docs/features/benefits/license-keys),
+  // so anything else is junk and gets junk's verdict — "free", which for a
+  // licence is no allowance — without the Polar call and the verdict PutItem
+  // that rotating junk keys otherwise cost on every request.
+  if (!POLAR_KEY.test(subject.id)) return "free";
 
   const key = licenseKey(subject);
   const cached = await db().send(new GetItemCommand({
