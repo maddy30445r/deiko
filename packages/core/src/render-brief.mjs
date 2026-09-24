@@ -35,8 +35,9 @@ import { groupTasks, readBoard, readTasks, taskIdFor, taskState, titleFor, token
 // ── Repo identity ───────────────────────────────────────────────────────────
 
 /** App/browser names that are never a repo, so they can be discarded. */
+/// Whole words, so `search-api` and `research` are not "Arc".
 const NOT_A_REPO =
-  /google chrome|safari|firefox|arc|bitbucket|github|gitlab|jira|discord|slack|visual studio code|cursor|finder|terminal|iterm|warp|screen recording/i;
+  /\b(google chrome|safari|firefox|arc|bitbucket|github|gitlab|jira|discord|slack|visual studio code|cursor|finder|terminal|iterm2?|warp|screen recording)\b/i;
 
 /**
  * Guess repo names from window titles. Editors render `App.tsx — acme-portal`

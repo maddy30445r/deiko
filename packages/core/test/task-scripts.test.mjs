@@ -65,3 +65,14 @@ test("candidates are listed whenever the task was not placed, even with the coll
   await render(d);
   assert.match(prompt(d), /This might carry on from earlier work, one of these:\n- "Fix the price display after saving"\. History: /);
 });
+
+test("repo hints keep names that merely contain an app's name", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-render-"));
+  const dir = session(root, "20260918-100000", {
+    said: "look at this search thing here",
+    windows: ["index.ts — search-api", "Notes — research — Arc", "Pull requests — acme-portal — Bitbucket"],
+  });
+  await render(dir);
+  const { repoHints } = JSON.parse(readFileSync(join(dir, "brief.json"), "utf8")).summary;
+  assert.deepEqual(repoHints.sort(), ["acme-portal", "research", "search-api"]);
+});
