@@ -1,4 +1,4 @@
-.PHONY: dev build test probe watch region clean setup bundle install icon dmg release guard-clean relay-deploy relay-dev site-deploy resources dist record transcribe align ground brief summarize signing-setup reset-permissions reclassify flow-check
+.PHONY: dev build test probe watch region clean setup bundle install icon dmg release guard-clean relay-deploy relay-dev site-deploy resources dist record transcribe align ground brief summarize signing-setup reset-permissions reclassify flow-check eval
 
 # Code-signing identity for the bundle.
 #
@@ -575,6 +575,16 @@ reclassify:
 		$(SORT_BRIEFS) node scripts/classify.mjs "$$d"; \
 		node scripts/render-brief.mjs "$$d" >/dev/null 2>&1 || true; \
 	done
+
+## eval — score filing against the hand-made answer key (read-only)
+##
+##   make eval ARGS="--shortlist-only"
+##   make eval                       # full: one classify per brief, via the relay in .env
+##
+## The key lives outside the repo: ~/Documents/Deiko-eval/filing-labels.json.
+## `node scripts/eval-filing.mjs --draft > …` prints a starting one.
+eval:
+	@set -a; [ -f .env ] && . ./.env; set +a; node scripts/eval-filing.mjs $(ARGS)
 
 ## flow-check — render → classify → render on a throwaway copy of real briefs
 ##
