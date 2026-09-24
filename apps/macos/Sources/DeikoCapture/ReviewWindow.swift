@@ -548,10 +548,15 @@ final class ReviewModel: ObservableObject {
                 var failure: Error?
                 await exclusively { [self] in
                 do {
-                if narrationEdited || rerenderPending {
-                    phase = .working(narrationEdited
-                        ? "Applying your correction…"
-                        : "Leaving that screenshot out…")
+                // AN EARLIER BRIEF OF THIS TASK WROTE BACK SINCE THIS ONE
+                // RENDERED — its agent finished while this one waited — so
+                // what this says about where the task stands is behind.
+                // Checked here, in the lane, the moment before the read.
+                let stale = after != nil && SessionsStore.shared.memoryIsStale(sessionDir: sessionDir)
+                if narrationEdited || rerenderPending || stale {
+                    phase = .working(narrationEdited ? "Applying your correction…"
+                        : rerenderPending ? "Leaving that screenshot out…"
+                        : "Handing to \(appName ?? "your editor")…")
                     if narrationEdited {
                         try BriefPipeline.writeNarrationOverride(narration, sessionDir: sessionDir)
                     }

@@ -379,6 +379,30 @@ final class SessionsStore: ObservableObject {
         }
     }
 
+    /// Whether an earlier brief of this one's task wrote back since this one
+    /// rendered — see `TaskMemory`. Earlier only: those are all
+    /// `render-brief.mjs` carries. Its own task from `context.json`, not the
+    /// board, which may not have caught up with the filing yet; odds and ends
+    /// have no task to remember.
+    func memoryIsStale(sessionDir: String) -> Bool {
+        let id = (sessionDir as NSString).lastPathComponent
+        let context = SessionContext.read(sessionDir: sessionDir)
+        guard context?.isOdds != true else { return false }
+        let task = context?.task ?? Tasks.own(id)
+        let mates = items.filter { $0.task == task && !$0.odds && $0.id < id }.map(\.dir)
+        return TaskMemory.isStale(sessionDir: sessionDir, mates: mates)
+    }
+
+    /// The brief as it would go out now, re-rendered first when its memory is
+    /// stale. What the board's copies read; the throw checks inside its own
+    /// render lane instead.
+    func freshPrompt(sessionDir: String) async -> BriefPipeline.Prompt? {
+        if memoryIsStale(sessionDir: sessionDir) {
+            _ = try? await BriefPipeline.rerender(sessionDir: sessionDir)
+        }
+        return try? BriefPipeline.prompt(sessionDir: sessionDir)
+    }
+
     /// File a brief somewhere else, from the board rather than the card.
     /// Marked as the developer's decision, which the classifier never
     /// overwrites.
@@ -595,13 +619,13 @@ private struct DashboardPane: View {
     }
 
     /// The same text the fling would paste. Read from disk, because the review
-    /// window may have rewritten it since.
+    /// window may have rewritten it since, and fresh — see `freshPrompt`.
     private func copy(_ item: SessionsStore.Item) {
-        guard let prompt = try? BriefPipeline.prompt(sessionDir: item.dir) else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(prompt.text, forType: .string)
-        copied = item.id
         Task {
+            guard let prompt = await sessions.freshPrompt(sessionDir: item.dir) else { return }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(prompt.text, forType: .string)
+            copied = item.id
             try? await Task.sleep(for: .seconds(2))
             if copied == item.id { copied = nil }
         }
@@ -1075,9 +1099,11 @@ struct SessionMenu: View {
 
     var body: some View {
         Button("Copy the brief") {
-            guard let prompt = try? BriefPipeline.prompt(sessionDir: item.dir) else { return }
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(prompt.text, forType: .string)
+            Task {
+                guard let prompt = await store.freshPrompt(sessionDir: item.dir) else { return }
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(prompt.text, forType: .string)
+            }
         }
         Button("Open folder") { NSWorkspace.shared.open(URL(fileURLWithPath: item.dir)) }
         Button("Show in Finder") {
