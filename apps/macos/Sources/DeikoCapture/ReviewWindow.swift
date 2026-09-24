@@ -1231,8 +1231,13 @@ struct ReviewView: View {
             if let own = model.ownTask {
                 // Already its own task: there is nothing new to start —
                 // unless it is in odds and ends, which this takes it out of.
+                // Its own id taken by briefs moved into it since: "new"
+                // would join them, so that is chosen from the list instead.
+                let taken = (context.isOdds || (context.task ?? own) != own)
+                    && store.hasOthers(inTask: own, besides: model.sessionID ?? "")
                 Button("Start a new task") { model.setTask(own) }
-                    .disabled(!context.isOdds && (context.task ?? own) == own)
+                    .disabled(taken || (!context.isOdds && (context.task ?? own) == own))
+                    .help(taken ? SessionsStore.ownTaskTakenHelp : "")
                 Button("Start a new task and name it…") {
                     guard let title = Collections.askText(
                         title: "Name this task",
@@ -1244,8 +1249,12 @@ struct ReviewView: View {
                     Tasks.name(own, title)
                     model.setTask(own)
                 }
+                .disabled(taken)
+                .help(taken ? SessionsStore.ownTaskTakenHelp : "")
             }
-            let others = store.recentTasks(excluding: model.ownTask)
+            // An odds brief is in no task, so every task is somewhere to go —
+            // its own id's included, once other briefs are in it.
+            let others = store.recentTasks(excluding: context.isOdds ? nil : model.ownTask)
             if !others.isEmpty { Divider() }
             ForEach(others) { group in
                 Button {

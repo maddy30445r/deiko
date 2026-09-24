@@ -369,6 +369,14 @@ final class SessionsStore: ObservableObject {
         Array(groups(of: items).filter { $0.id != id }.prefix(20))
     }
 
+    /// Whether any brief but `id` is in `task` — so "Start a new task" for a
+    /// brief whose own id that is, and which is not in it, would join them.
+    func hasOthers(inTask task: String, besides id: String) -> Bool {
+        items.contains { $0.task == task && !$0.odds && $0.id != id }
+    }
+
+    static let ownTaskTakenHelp = "Other briefs are already in the task this one started, so this would join them rather than start a new one."
+
     /// Put a brief in another task. Re-rendered, because the prompt carries
     /// the task — unlike a collection move, which changes nothing it says.
     func move(_ item: Item, toTask id: String) {
@@ -696,7 +704,7 @@ private struct BoardPane: View {
             (sessions.taskTitles[group.id] ?? group.items.last?.title ?? "").lowercased().contains(q)
         }.map(\.id))
         return inFilter.filter {
-            named.contains($0.task)
+            (!$0.odds && named.contains($0.task))
                 || ($0.line ?? "").lowercased().contains(q)
                 || ($0.repo ?? "").lowercased().contains(q)
                 || $0.apps.contains { $0.lowercased().contains(q) }
@@ -1129,9 +1137,14 @@ struct SessionMenu: View {
             // The brief that started its task is already on its own task:
             // moving it there would change nothing — unless it is in odds
             // and ends, which this takes it out of.
-            Button("Start a new task") { store.move(item, toTask: Tasks.own(item.id)) }
-                .disabled(item.task == Tasks.own(item.id) && !item.odds)
-            let others = store.recentTasks(excluding: item.task)
+            // Its own id taken by briefs moved into it since: "new" would
+            // join them, so that is chosen from the list instead.
+            let own = Tasks.own(item.id)
+            let taken = (item.odds || item.task != own) && store.hasOthers(inTask: own, besides: item.id)
+            Button("Start a new task") { store.move(item, toTask: own) }
+                .disabled(taken || (item.task == own && !item.odds))
+                .help(taken ? SessionsStore.ownTaskTakenHelp : "")
+            let others = store.recentTasks(excluding: item.odds ? nil : item.task)
             if !others.isEmpty { Divider() }
             ForEach(others) { group in
                 Button("\(store.title(ofTask: group.id)) · \(group.items.count)") {
