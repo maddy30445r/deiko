@@ -668,7 +668,8 @@ test("a browser is not told about the same round of work twice", () => {
   const attached = buildPrompt({ ...oneShot(), attached: true, task: finished });
   assert.ok(attached.text.endsWith(
     "\n\nThis carries on from \"Price display doesn't update after editing\". "
-      + "Where it stands: Last done: Synced the price after save.\n",
+      + "Where it stands: Last done: Synced the price after save. "
+      + "Last time: Added a test.\n",
   ));
   // Only the exact line counts: an Open line that merely contains a Did line is not "Last done".
   const open = { ...priceTask(), now: ["Synced the price after save. Still slow on mobile."], lastDid: ["Synced the price after save."] };
