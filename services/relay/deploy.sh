@@ -388,7 +388,7 @@ policy() {
 aws lambda add-permission --function-name "$FUNCTION" --region "$REGION" \
   --statement-id FunctionURLAllowPublicAccess --action lambda:InvokeFunctionUrl \
   --principal '*' --function-url-auth-type NONE >/dev/null 2>&1 || true
-POLICY=$(policy) || { echo "  no grant was changed."; exit 1; }
+POLICY=$(policy) || { echo "  neither InvokeFunction grant was changed."; exit 1; }
 if ! POLICY="$POLICY" node -e '
   const s = (JSON.parse(process.env.POLICY).Statement || [])
     .find((x) => x.Sid === "FunctionURLInvokeAllowPublicAccess");

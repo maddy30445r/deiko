@@ -57,7 +57,7 @@ export const PRO_MONTHLY_SECONDS = 10 * 60 * 60;
 /// that actually bounds the bill — whatever anybody mints, the service will not
 /// buy more than this much audio in a day.
 ///
-/// Twelve hours is ₹360/day. It was four, and it had to move when Pro went
+/// Twelve hours is about $1.33 a day at Groq's $0.111/hour. It was four, and it had to move when Pro went
 /// from five hours a month to ten: at four hours a day the whole service buys
 /// 120 hours a month, so a dozen licences pinning a ten-hour cap would have
 /// made the limit people actually hit this one — and this one fails CLOSED FOR

@@ -261,7 +261,7 @@ In order, cheapest first:
    preferences, so `defaults delete` no longer buys a trial — but a VM, a
    borrowed Mac, or anyone willing to patch the client still can. The ceiling
    caps the whole service's audio for a day no matter how many subjects exist.
-   Twelve hours is ₹360/day, and free callers reach only half of it.
+   Twelve hours is about $1.33 a day at Groq's rate, and free callers reach only half of it.
 4. **A separate summary budget** — `DEIKO_SUMMARIES_PER_DAY`, and the
    classifier's — `DEIKO_CLASSIFIES_PER_DAY`. Both routes accept any bearer
    string, and the burst limiter is keyed by token, so a caller rotating
