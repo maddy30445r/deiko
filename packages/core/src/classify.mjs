@@ -41,7 +41,7 @@
  * decided here or by Jev is, when there is more to go on.
  */
 
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 
@@ -128,15 +128,18 @@ async function main() {
     }
   };
 
-  if (existsSync(contextPath)) {
+  /** `context.json` as it is now. Missing or unreadable is none: not "decided", and rewritten below. */
+  const current = () => {
     try {
-      if (JSON.parse(readFileSync(contextPath, "utf8"))?.decidedBy === "you") {
-        console.error("· placed by hand — leaving it");
-        return;
-      }
+      return JSON.parse(readFileSync(contextPath, "utf8"));
     } catch {
-      // Unreadable is not "decided"; it is rewritten below.
+      return null;
     }
+  };
+
+  if (current()?.decidedBy === "you") {
+    console.error("· placed by hand — leaving it");
+    return;
   }
 
   let summary;
@@ -207,6 +210,12 @@ async function main() {
         model: null,
       }
       : { pile: "odds", decidedBy: "local" };
+    // CHECKED AGAIN, as before the answer's write below: the board walk above
+    // reads every brief on the Mac, and a "Move to task" can land meanwhile.
+    if (current()?.decidedBy === "you") {
+      console.error("· placed by hand while we were looking — leaving it");
+      return;
+    }
     writeFileSync(contextPath, JSON.stringify(context, null, 2) + "\n");
     console.error(joins ? `✓ context → joins ${top.id} here (${why})` : `· ${why} — odds and ends`);
     return;
@@ -379,15 +388,18 @@ async function main() {
   // to" can file this very session in the meantime. Writing then would undo a
   // choice somebody had already made, which is the one thing `decidedBy` is
   // for.
-  if (existsSync(contextPath)) {
-    try {
-      if (JSON.parse(readFileSync(contextPath, "utf8"))?.decidedBy === "you") {
-        console.error("· placed by hand while we were asking — leaving it");
-        return;
-      }
-    } catch {
-      // Unreadable is not "decided"; it is replaced below.
-    }
+  const placed = current();
+  if (placed?.decidedBy === "you") {
+    console.error("· placed by hand while we were asking — leaving it");
+    return;
+  }
+  // DECIDED ON THIS MAC SINCE WE ASKED: the words changed while this request
+  // was out, and a newer run placed the brief here. A local decision leaves no
+  // marker for the check above to see, so its file's time says it is newer.
+  if (placed?.decidedBy === "local"
+    && (statSync(contextPath, { throwIfNoEntry: false })?.mtimeMs ?? 0) > Date.parse(mine.at)) {
+    console.error("· decided here since we asked — leaving it");
+    return;
   }
 
   // A TITLE MADE FROM WHAT WAS SAID gives way to the first summary line that

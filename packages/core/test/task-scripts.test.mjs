@@ -6,7 +6,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  closeSync, constants, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync, writeSync,
+} from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -342,4 +344,48 @@ test("an answer that lands after a newer request for the same brief went out is 
   stub.close();
   assert.equal(existsSync(join(dir, "context.json")), false);
   assert.match(stderr, /asked again since/);
+});
+
+// ── decisions that land while one is being made ─────────────────────────────
+
+test("a hand placement made while the board is read stands over a decision made here", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
+  // An earlier brief whose brief.json is a pipe: the board walk waits on it,
+  // which is when a board move lands in real life.
+  const pipe = join(root, "20260918-090000", "brief.json");
+  mkdirSync(join(root, "20260918-090000"));
+  await run("mkfifo", [pipe]);
+  const dir = filed(root, "20260918-100000", { narration: "Thank you." });
+  const done = classify(dir);
+  // Opens only once the script is reading it — past its first check.
+  let fd;
+  for (let i = 0; fd === undefined && i < 400; i++) {
+    try {
+      fd = openSync(pipe, constants.O_WRONLY | constants.O_NONBLOCK);
+    } catch {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+  }
+  const moved = { task: "t-20260918-090000", decidedBy: "you" };
+  writeFileSync(join(dir, "context.json"), JSON.stringify(moved));
+  writeSync(fd, JSON.stringify({ summary: { narration: "the price still shows 99 after I save" } }));
+  closeSync(fd);
+  const { stderr } = await done;
+  assert.deepEqual(json(join(dir, "context.json")), moved);
+  assert.match(stderr, /placed by hand while we were looking/);
+});
+
+test("a decision made here after the request went out stands over its answer", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
+  filed(root, "20260918-090000", { narration: "the price still shows 99 after I save it" });
+  const dir = filed(root, "20260918-100000", { narration: "same price bug on the listing page" });
+  // Its words were cut short and it was filed here again while this was out.
+  const stub = await relay(() => {
+    writeFileSync(join(dir, "context.json"), JSON.stringify(ODDS));
+    return join1("t-20260918-090000")();
+  });
+  const { stderr } = await classify(dir, stub.url);
+  stub.close();
+  assert.deepEqual(json(join(dir, "context.json")), ODDS);
+  assert.match(stderr, /decided here since we asked/);
 });
