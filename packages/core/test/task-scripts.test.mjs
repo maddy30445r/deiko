@@ -133,6 +133,26 @@ test("a task is described by its most frequent windows, and same repo is an exac
   assert.equal(sent["t-20260918-093000"].sameRepo, false, "a screen word is not a repo");
 });
 
+test("the classifier reads what a task is before its newest, maybe mis-filed, ask", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
+  const task = "t-20260918-090000";
+  filed(root, "20260918-090000", {
+    narration: "the price still shows 99 after I save", summary: "Fix the price display after saving.",
+    outcome: "## Did\nSynced the price after save.\n## Open\nThe listing page still caches the old price.\n",
+  });
+  filed(root, "20260918-091000", {
+    narration: "why does the signup chart drop in week 32", summary: "Explain the week-32 drop in the signup chart.", context: { task },
+  });
+  const dir = filed(root, "20260918-100000", { narration: "the price bug is back on the listing" });
+  const stub = await relay();
+  await classify(dir, stub.url);
+  stub.close();
+  assert.deepEqual(stub.bodies[0].tasks[0].now.split("\n"), [
+    "Still open from Sep 18: The listing page still caches the old price.",
+    "Last asked: Explain the week-32 drop in the signup chart.",
+  ]);
+});
+
 test("a joined brief nothing else placed takes its task's collection", async () => {
   const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
   writeFileSync(join(root, "collections.json"), JSON.stringify([{ id: "shop", name: "Shop", hint: "" }]));

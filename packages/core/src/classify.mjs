@@ -173,7 +173,13 @@ async function main() {
     return {
       id: s.id,
       title: redact(title),
-      now: taskState(bs, title).now.join("\n"),
+      // The newest ask LAST here, unlike a prompt: the relay describes a
+      // task by this field's first line, and the newest brief is the one
+      // most likely filed here by mistake. What is open, or was done, says
+      // what the task is. A stable sort keeps the rest in order.
+      now: [...taskState(bs, title).now]
+        .sort((a, b) => a.startsWith("Last asked: ") - b.startsWith("Last asked: "))
+        .join("\n"),
       decided: bs.flatMap((b) => b.outcome?.decided ?? []).slice(0, 5).map(redact).join("\n"),
       // Its most frequent windows, not its newest: one brief filed here by
       // mistake must not become the face the classifier matches against.
