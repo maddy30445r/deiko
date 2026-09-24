@@ -240,9 +240,8 @@ DEIKO_USAGE_TABLE="$TABLE" node -e '
     "DEIKO_CLASSIFIES_PER_DAY",
     "DEIKO_PRO_BENEFIT_IDS",
     "POLAR_API_BASE",
-    // The playground. Without the secret every /v1/playground/* route 503s,
-    // which is the right default: the public page stays shut until somebody
-    // deliberately opens it.
+    // The playground. The secret is required (checked at the top): without it
+    // every /v1/playground/* route 503s and the site demo is dead.
     "DEIKO_PLAYGROUND_SECRET",
     "DEIKO_PLAYGROUND_CLIPS_PER_DAY",
     "DEIKO_PLAYGROUND_INTENTS_PER_DAY",
@@ -263,8 +262,9 @@ if aws lambda get-function --function-name "$FUNCTION" --region "$REGION" >/dev/
   # NEVER SHIP FEWER SETTINGS THAN ARE LIVE. `--environment` replaces the whole
   # set, so a shell that is missing one variable used to strip it from the
   # function and report success — a classifier key gone, a daily ceiling back
-  # to its default. NAMES only: `keys()` is evaluated by the CLI, so no value
-  # is ever fetched. Checked before anything is changed.
+  # to its default. NAMES only: the values do reach the CLI process (`keys()`
+  # is applied to the response it receives) but are never printed, stored or
+  # handed to this script. Checked before anything is changed.
   LIVE_NAMES=$(aws lambda get-function-configuration --function-name "$FUNCTION" --region "$REGION" \
     --query 'keys(Environment.Variables || `{}`)' --output text)
   DROPPED=$(LIVE_NAMES="$LIVE_NAMES" node -e '
@@ -366,11 +366,29 @@ fi
 # `--invoked-via-function-url` stops the deploy while the old grant still
 # stands. The first statement keeps its `|| true`: add-permission errors when
 # a statement exists, which is the normal case on a redeploy.
+#
+# THE POLICY MUST BE READABLE. A deployer without `lambda:GetPolicy` used to
+# read as "no policy", which re-added the grant (the 403 blink above) on
+# every deploy and could verify nothing. Now "there is none" and "may not
+# look" are told apart, and the second stops the deploy with the reason.
+policy() {
+  local err="$BUILD/get-policy.err" out
+  if out=$(aws lambda get-policy --function-name "$FUNCTION" --region "$REGION" \
+      --query Policy --output text 2>"$err"); then
+    printf '%s' "$out"
+  elif grep -q ResourceNotFoundException "$err"; then
+    printf '{}'
+  else
+    echo "✗ could not read the function's resource policy:" >&2
+    sed 's/^/    /' "$err" >&2
+    echo "  the deployer needs lambda:GetPolicy so the invoke grant can be checked." >&2
+    return 1
+  fi
+}
 aws lambda add-permission --function-name "$FUNCTION" --region "$REGION" \
   --statement-id FunctionURLAllowPublicAccess --action lambda:InvokeFunctionUrl \
   --principal '*' --function-url-auth-type NONE >/dev/null 2>&1 || true
-POLICY=$(aws lambda get-policy --function-name "$FUNCTION" --region "$REGION" \
-  --query Policy --output text 2>/dev/null) || POLICY='{}'
+POLICY=$(policy) || { echo "  no grant was changed."; exit 1; }
 if ! POLICY="$POLICY" node -e '
   const s = (JSON.parse(process.env.POLICY).Statement || [])
     .find((x) => x.Sid === "FunctionURLInvokeAllowPublicAccess");
@@ -385,6 +403,31 @@ if ! POLICY="$POLICY" node -e '
 fi
 aws lambda remove-permission --function-name "$FUNCTION" --region "$REGION" \
   --statement-id AllowPublicInvoke >/dev/null 2>&1 || true
+
+# VERIFIED, NOT ASSUMED. The removal above swallows its errors — it fails on
+# every deploy after the first, when there is nothing to remove — so what
+# decides is the policy as it now stands: no statement may let anybody (`*`)
+# invoke the function, by `lambda:InvokeFunction` or any wildcard that
+# covers it, without the function-URL condition. Whatever put one there —
+# this script before, the console, a hand-run add-permission — the deploy
+# fails and names it.
+POLICY=$(policy) || exit 1
+OPEN=$(POLICY="$POLICY" node -e '
+  const covers = (pattern) => new RegExp("^" + String(pattern)
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$", "i")
+    .test("lambda:InvokeFunction");
+  const open = (JSON.parse(process.env.POLICY).Statement || []).filter((s) =>
+    s.Effect === "Allow"
+    && (s.Principal === "*" || [].concat(s.Principal?.AWS ?? []).includes("*"))
+    && [].concat(s.Action ?? []).some(covers)
+    && String(s.Condition?.Bool?.["lambda:InvokedViaFunctionUrl"]) !== "true");
+  process.stdout.write(open.map((s) => s.Sid || "(unnamed)").join(" "));
+')
+if [ -n "$OPEN" ]; then
+  echo "✗ anybody can still invoke $FUNCTION directly, past its URL: $OPEN"
+  echo "  remove each with: aws lambda remove-permission --function-name $FUNCTION --region $REGION --statement-id <Sid>"
+  exit 1
+fi
 
 URL="${URL%/}"
 

@@ -37,7 +37,16 @@ case "$1 $2" in
   "lambda get-function") [ -n "$STUB_EXISTS" ] || exit 254 ;;
   "lambda get-function-configuration") echo "$STUB_LIVE_NAMES" ;;
   "lambda get-function-url-config") echo https://stub.lambda-url.ap-south-1.on.aws/ ;;
-  "lambda get-policy") [ -n "$STUB_POLICY" ] && echo "$STUB_POLICY" || exit 254 ;;
+  "lambda get-policy")
+    if [ -n "$STUB_POLICY_DENIED" ]; then
+      echo "An error occurred (AccessDeniedException) when calling the GetPolicy operation: User: arn:aws:iam::123456789012:user/deployer is not authorized to perform: lambda:GetPolicy" >&2
+      exit 254
+    fi
+    if [ -z "$STUB_POLICY" ]; then
+      echo "An error occurred (ResourceNotFoundException) when calling the GetPolicy operation: The resource you requested does not exist." >&2
+      exit 254
+    fi
+    echo "$STUB_POLICY" ;;
 esac
 exit 0
 `;
@@ -145,4 +154,29 @@ test("the SDK comes from the lockfile, and the log group exists before its reten
 test("localhost in the playground origins is called out before launch", () => {
   const { out } = deploy({ DEIKO_PLAYGROUND_ORIGINS: "https://deiko.app,localhost" });
   assert.match(out, /still allows localhost/);
+});
+
+test("a deployer who may not read the policy is told so, and no grant is touched", () => {
+  const { status, calls, out } = deploy({ STUB_POLICY_DENIED: "1" });
+  assert.equal(status, 1);
+  assert.match(out, /needs lambda:GetPolicy/);
+  assert.equal(index(calls, /-permission .*(FunctionURLInvokeAllowPublicAccess|AllowPublicInvoke)/), -1,
+    "neither re-added every deploy (a 403 blink) nor removed blind");
+});
+
+test("the deploy fails if anybody can still invoke the function past its URL", () => {
+  const withOpen = (statement) => JSON.stringify({
+    Statement: [...JSON.parse(SCOPED_POLICY).Statement, { Effect: "Allow", ...statement }],
+  });
+  for (const [what, statement] of [
+    ["an old grant that would not go", { Sid: "AllowPublicInvoke", Principal: "*", Action: "lambda:InvokeFunction" }],
+    ["a wildcard action", { Sid: "Everything", Principal: "*", Action: "lambda:*" }],
+    ["a wildcard in a list, for AWS:*", { Sid: "Sneaky", Principal: { AWS: "*" }, Action: ["s3:GetObject", "lambda:Invoke*"] }],
+  ]) {
+    const { status, out } = deploy({ STUB_POLICY: withOpen(statement) });
+    assert.equal(status, 1, `${what} must fail the deploy`);
+    assert.match(out, new RegExp(`past its URL: ${statement.Sid}`));
+  }
+  const urlOnly = withOpen({ Sid: "FunctionURLAllowPublicAccess", Principal: "*", Action: "lambda:InvokeFunctionUrl" });
+  assert.equal(deploy({ STUB_POLICY: urlOnly }).status, 0, "the URL's own grant is not an open door");
 });
