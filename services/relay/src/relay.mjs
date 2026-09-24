@@ -687,7 +687,7 @@ function formData(wav, fields) {
  * @param {string} request.method
  * @param {string} request.path
  * @param {string|null} request.token     bearer, already extracted
- * @param {string} request.contentType    forwarded verbatim to the provider
+ * @param {string} request.contentType    the upload's own, carrying its multipart boundary
  * @param {Buffer|Uint8Array|null} request.body
  * @returns {Promise<{status:number, body:string, contentType:string}>}
  */

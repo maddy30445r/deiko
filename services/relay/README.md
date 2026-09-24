@@ -48,12 +48,22 @@ production, which is the point: a bug found locally is a bug fixed everywhere.
 ## Deploying — AWS Lambda
 
 ```sh
-GROQ_API_KEY=… make relay-deploy
+GROQ_API_KEY=… TYPESAFE_API_KEY=… DEIKO_PLAYGROUND_SECRET=… make relay-deploy
 ```
 
 `deploy-aws.sh` creates or updates the function, its role, its URL and its
 concurrency cap using only the AWS CLI — no SAM, CDK or Terraform. It is
 idempotent, so the same command ships a code change.
+
+It **refuses** rather than ship a relay missing a route: the Groq key, a
+classifier key (or the Cloudflare pair) and the playground secret are all
+required, a deploy that would remove a setting the live function has stops
+before changing anything (`DEIKO_ALLOW_ENV_DROP=1` to drop one on purpose), and
+`/health` must report every route configured afterwards. The function URL is the
+only way in: `lambda:InvokeFunction` is granted only with
+`lambda:InvokedViaFunctionUrl`, so nobody can invoke it directly with a forged
+source address. The DynamoDB SDK is installed with `npm ci` from this
+directory's `package-lock.json`, at the versions the tests run against.
 
 **Lambda specifically because this service is idle most of the day by design** —
 nobody is recording — and it is the only option that costs *nothing* while
@@ -71,19 +81,23 @@ Knobs, all overridable in the environment:
 | `DEIKO_USAGE_TABLE` | `deiko-usage` — the DynamoDB table holding every counter |
 | `DEIKO_GLOBAL_DAILY_SECONDS` | `43200` (12 hours) — the ceiling on the whole service's daily audio |
 | `DEIKO_SUMMARIES_PER_DAY` | `2000` — summaries served in a day, counted in their own row so a flood cannot close transcription |
+| `DEIKO_SUMMARIES_PER_CALLER_PER_DAY` / `DEIKO_CLASSIFIES_PER_CALLER_PER_DAY` | `200` each — one install's share of those days |
+| `DEIKO_TEXT_CALLS_PER_IP_PER_DAY` | `400` — one address's (IPv6: one /64's) share, per text route, so rotating bearers resets nothing |
 | `DEIKO_PRO_BENEFIT_IDS` | Polar benefit ids that mean Pro. Unset = any live licence is Pro — correct while Pro is the only paid benefit; the day there is a second one this MUST be set, or the cheaper SKU buys Pro's allowance. |
 | `POLAR_API_BASE` | `https://sandbox-api.polar.sh` to validate against Polar's sandbox. Unset = production. |
 
-Then verify — and check `transcription`, not just `ok`:
+The deploy checks this for you; by hand, check every flag, not just `ok`:
 
 ```sh
 curl -s https://<id>.lambda-url.<region>.on.aws/health
-# {"ok":true,"transcription":true,"summary":true,"metering":true,"table":"deiko-usage"}
+# {"ok":true,"transcription":true,"summary":true,"classify":true,"playground":true,"metering":true}
 ```
 
 `metering` is a real `DescribeTable`, not a check on whether the table's name is
 configured — the name has a default, so the cheap version reports healthy on
-precisely the deploy where the table is missing or the role has no policy.
+precisely the deploy where the table is missing or the role has no policy. It
+is asked at most once a minute per container, so an anonymous loop on `/health`
+cannot spend the account's control-plane rate.
 **A relay answering `"metering":false` will 503 every transcription**, on
 purpose: not knowing what anybody has spent should stop the buying.
 
@@ -192,24 +206,27 @@ meter as a free trial.
 
 ## The client and the relay ship together
 
-**The body is forwarded verbatim, so the CLIENT chooses the provider's parameters and the relay only
-adds the key.** That is what keeps the promise about not touching the audio — and it means the two
-halves are version-coupled. Deploying a relay that points at a different provider breaks every app
-built before it:
+**The upload is parsed and rebuilt, and only what the app sends survives.** `/v1/transcribe` accepts
+exactly `sttForm`'s fields — one `file`, `model=whisper-large-v3`, `response_format`, and for "Same as
+I speak" `timestamp_granularities[]` and `language` — and refuses anything else with a 400 before a
+second is counted. It used to forward the body verbatim, which let a caller add Groq's `url` field
+(Groq then fetches audio of any length itself, off the meter) or a billed `prompt`. The file must be
+the app's own WAV — PCM, 16 kHz, mono, 16-bit — which pins bytes to seconds, so the meter reads the
+audio's real duration. The audio's bytes are forwarded untouched; only the envelope is rebuilt.
 
-```
-old client (model=saaras:v3, mode=translit) → 400 "unknown param `mode`"
-new client (model=whisper-large-v3)         → 200
-```
+`/v1/summarize` takes `{ narration, mode: "hinglish" | "native" }` and holds the two system prompts
+itself (mirrored from `scripts/summarize.mjs`, and a test keeps them word for word). A body in the
+old `{ messages }` shape still gets a summary — its transcript is taken, its system turn is not.
 
-Worse than it looks, because a provider 4xx is **billed and not refunded** — that rule exists so junk
-bodies cannot probe the upstream off the meter, and a version mismatch is indistinguishable from
-junk. An old install burns its trial a chunk at a time and falls back to on-device words with no
-error a user would recognise.
+The two halves are still version-coupled: a relay that expects different fields refuses every app
+built before it. A 400-class answer from the provider about the caller's audio stays **billed** —
+that rule exists so junk bodies cannot probe the upstream off the meter — so an old install on a
+mismatched relay burns its trial a chunk at a time. Every other provider failure (a 401 from a
+rotated key, a 429, a 5xx, a dropped response) is refunded, and the caller only ever sees a fixed
+502: the provider's status and body stay in CloudWatch.
 
 So: **cut a release whenever the upstream changes**, and treat `make relay-deploy` followed by
-`make release` as one operation rather than two. There is no negotiation step and deliberately so;
-the alternative is the relay parsing and rebuilding the body it promises not to read.
+`make release` as one operation rather than two.
 
 ## What actually bounds the spend
 
@@ -224,9 +241,9 @@ In order, cheapest first:
    then judged, in one round trip, so concurrent chunks cannot both claim room
    only one of them has — and **both rows or neither**: a subject write that
    fails while the global one lands is compensated before the error surfaces.
-   **No request meters below 5 seconds** (`MIN_SECONDS_PER_REQUEST`): the body
-   is forwarded verbatim, so its length is only honest about PCM, and a caller
-   sending 8 kbps MP3 would otherwise buy thirty seconds of Groq for one.
+   **No request meters below 5 seconds** (`MIN_SECONDS_PER_REQUEST`), and the
+   audio must be 16 kHz mono 16-bit PCM WAV, so its length is its duration — a
+   caller sending 8 kbps MP3 used to buy thirty seconds of Groq for one.
    **The id after the prefix is `[A-Za-z0-9_-]{1,128}`** — it is interpolated
    into row keys, and `lic_<key>#2026-09` used to spell a paying customer's
    monthly usage row as a verdict row that `PutItem` then replaced.
@@ -237,10 +254,18 @@ In order, cheapest first:
    borrowed Mac, or anyone willing to patch the client still can. The ceiling
    caps the whole service's audio for a day no matter how many subjects exist.
    Twelve hours is ₹360/day, and free callers reach only half of it.
-4. **A separate summary budget** — `DEIKO_SUMMARIES_PER_DAY`. `/v1/summarize`
-   accepts any bearer string, and the burst limiter is keyed by token, so a
-   caller rotating tokens is not limited by it. Its own row and its own budget
-   mean a flood of cheap text calls can no longer close the expensive route.
+4. **A separate summary budget** — `DEIKO_SUMMARIES_PER_DAY`, and the
+   classifier's — `DEIKO_CLASSIFIES_PER_DAY`. Both routes accept any bearer
+   string, and the burst limiter is keyed by token, so a caller rotating
+   tokens is not limited by it. Their own rows mean a flood of cheap text
+   calls cannot close the expensive route, and **per-caller rows in front of
+   them** — per bearer, and per hashed address — mean one script cannot spend
+   the whole day's text calls for everybody.
+   **A row found over its cap is remembered** for the rest of its day in that
+   container, so refusals stop costing a write and a refund each — a stream
+   of them no longer throttles the table under paying requests. A licence key
+   not shaped like Polar's (a prefix and a UUID) is refused without a Polar
+   call or a write at all.
 5. **Reserved concurrency** — 5 by intent. **Not applied on a default account:**
    AWS's per-account limit is 10 and it keeps 10 unreserved, so the deploy warns
    and the account-wide cap applies instead. Ask AWS to raise the quota.
