@@ -681,3 +681,88 @@ test("order at the tail: task, persona, cost hint, write-back", () => {
       + `\n${WRITE_BACK}\n`,
   ));
 });
+
+// ── Might carry on: the candidates, when Deiko couldn't tell ─────────────────
+
+const maybe = () => [
+  {
+    title: "Price display doesn't update after editing",
+    now: ["The listing page still caches the old price."],
+    notePath: "/Users/dev/Documents/Deiko/tasks/t-20260918-155836.md",
+  },
+  {
+    title: "Checkout total is off by a cent",
+    now: ["Rounding happens twice.", "Needs a test"],
+    notePath: "/Users/dev/Documents/Deiko/20260919-101010/outcome.md",
+  },
+];
+const ASK = "If the screenshots don't make it clear which one I mean, ask me before you start.";
+
+test("candidates are listed with where each stands and its history, then the ask", () => {
+  const plain = buildPrompt(oneShot());
+  const local = buildPrompt({ ...oneShot(), maybe: maybe() });
+  assert.equal(
+    local.text.slice(plain.text.length - 1),
+    "\n\nThis might carry on from earlier work, one of these:\n"
+      + "- \"Price display doesn't update after editing\" — where it stands: The listing page still caches the old price. "
+      + "History: /Users/dev/Documents/Deiko/tasks/t-20260918-155836.md\n"
+      + "- \"Checkout total is off by a cent\" — where it stands: Rounding happens twice. Needs a test. "
+      + "History: /Users/dev/Documents/Deiko/20260919-101010/outcome.md\n"
+      + `${ASK}\n`,
+  );
+});
+
+test("a browser gets the same candidates without paths", () => {
+  const plain = buildPrompt({ ...oneShot(), attached: true });
+  const attached = buildPrompt({ ...oneShot(), attached: true, maybe: maybe() });
+  assert.equal(
+    attached.text.slice(plain.text.length - 1),
+    "\n\nThis might carry on from earlier work, one of these:\n"
+      + "- \"Price display doesn't update after editing\" — where it stands: The listing page still caches the old price.\n"
+      + "- \"Checkout total is off by a cent\" — where it stands: Rounding happens twice. Needs a test\n"
+      + `${ASK}\n`,
+  );
+});
+
+test("candidates' words are redacted evidence; their paths are not evidence", () => {
+  const plain = buildPrompt(oneShot());
+  const secret = "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY";
+  const local = buildPrompt({ ...oneShot(), maybe: [...maybe(), { title: "Rotate the key", now: [secret], notePath: "/x/tasks/t-1.md" }] });
+  assert.doesNotMatch(local.text, /wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY/);
+  assert.equal(local.evidence, [
+    plain.evidence,
+    "Price display doesn't update after editing", "The listing page still caches the old price.",
+    "Checkout total is off by a cent", "Rounding happens twice.", "Needs a test",
+    "Rotate the key", redact(secret).trim(),
+  ].join("\n"));
+  assert.equal(local.evidence.includes("/Users/dev"), false);
+});
+
+test("candidates give way to a task, and none renders the document it always was", () => {
+  for (const attached of [false, true]) {
+    const withTask = buildPrompt({ ...oneShot(), attached, task: priceTask() });
+    const both = buildPrompt({ ...oneShot(), attached, task: priceTask(), maybe: maybe() });
+    assert.equal(both.text, withTask.text);
+    assert.equal(both.evidence, withTask.evidence);
+    const plain = buildPrompt({ ...oneShot(), attached });
+    for (const none of [null, []]) {
+      const out = buildPrompt({ ...oneShot(), attached, maybe: none });
+      assert.equal(out.text, plain.text);
+      assert.equal(out.evidence, plain.evidence);
+    }
+  }
+});
+
+test("candidates sit where the task would, ahead of persona, hint and write-back", () => {
+  const { text } = buildPrompt({
+    ...oneShot(), maybe: maybe(),
+    personaPath: "/Users/dev/Documents/Deiko/personas/qa-ticket.md",
+    quickHint: true, outcomePath: OUTCOME,
+  });
+  assert.ok(text.endsWith(
+    `${ASK}\n`
+      + "\nHow I want this written up is in /Users/dev/Documents/Deiko/personas/qa-ticket.md — read that first.\n"
+      + "\nThis looks like a quick one and a fast model is probably enough. Judge for yourself.\n"
+      + `\n${WRITE_BACK}\n`,
+  ));
+});

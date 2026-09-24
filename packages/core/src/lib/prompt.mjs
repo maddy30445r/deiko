@@ -188,7 +188,7 @@ function markLabel(r, endpoints) {
  */
 export function buildPrompt({
   narration, referents, attached = false, personaPath = null,
-  task = null, outcomePath = null, quickHint = false,
+  task = null, maybe = null, outcomePath = null, quickHint = false,
 }) {
   const narrationRedacted = redact(narration ?? "").trim();
   const out = [narrationRedacted, "", REPLY_LANGUAGE];
@@ -327,8 +327,8 @@ export function buildPrompt({
   // The lines are agent-written and another session's words, so they join
   // `evidence` below; the note path does not, like every path this mints.
   const earlierSpoken = [];
+  const clean = (s) => redact(s ?? "").replace(/\s+/g, " ").trim();
   if (task) {
-    const clean = (s) => redact(s ?? "").replace(/\s+/g, " ").trim();
     const title = clean(task.title);
     const now = task.now.map(clean).filter(Boolean);
     const did = task.lastDid.map(clean).filter(Boolean);
@@ -344,6 +344,20 @@ export function buildPrompt({
         `The full history is in ${task.notePath} — read what you need.`,
       );
     }
+  } else if (maybe?.length) {
+    // THE TASKS IT MIGHT CARRY ON, when the classifier could not tell which
+    // (`decide`'s `candidates`). Named, not guessed: the agent asks if the
+    // screenshots don't settle it. Same rules as the task above — words to
+    // `evidence`, paths never, and no path for a browser.
+    out.push("", "This might carry on from earlier work, one of these:");
+    for (const m of maybe) {
+      const title = clean(m.title);
+      const now = m.now.map(clean).filter(Boolean);
+      earlierSpoken.push(title, ...now);
+      const line = `- "${title}"` + (now.length ? ` — where it stands: ${now.join(" ")}` : "");
+      out.push(attached ? line : `${line}${/[.!?]$/.test(line) ? "" : "."} History: ${m.notePath}`);
+    }
+    out.push("If the screenshots don't make it clear which one I mean, ask me before you start.");
   }
 
   // No headings, no paths — just the redacted content a secret could actually

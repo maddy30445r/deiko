@@ -74,6 +74,48 @@ test("below the floor, new, or outside the shortlist starts a task named for thi
   assert.equal(FLOORS.task, 0.7);
 });
 
+// ── Candidates: the few it might be, when it can't tell ─────────────────────
+
+const [A, B, C, D, E] = ["t-20260918-100000", "t-20260918-110000", "t-20260918-120000", "t-20260918-130000", "t-20260918-140000"];
+const unsure = { shortlist: [A, B, C, D, E], scores: [10, 9, 8, 7, 6], sessionId: "20260920-100000", title: "Same bug" };
+
+test("a joined brief and confident new work have no candidates", () => {
+  const joined = decide({ ...unsure, answers: { task: { choice: A, confidence: 0.8, probabilities: { [A]: 0.8, [B]: 0.2 } } } });
+  assert.equal(joined.task, A);
+  assert.equal(joined.candidates, undefined);
+  const fresh = decide({ ...unsure, answers: { task: { choice: "new", confidence: 0.7, probabilities: { new: 0.7, [A]: 0.3 } } } });
+  assert.equal(fresh.candidates, undefined);
+  assert.equal(decide({ ...unsure, answers: { task: { choice: "new", confidence: 0.7 } } }).candidates, undefined);
+});
+
+test("probabilities pick the candidates: shortlisted, at or over the floor, likeliest first, three at most", () => {
+  const out = decide({ ...unsure, answers: { task: { choice: C, confidence: 0.4, probabilities: {
+    new: 0.3, [A]: 0.1, [B]: 0.25, [C]: 0.4, [D]: 0.15, [E]: 0.2, "t-20260101-000000": 0.5,
+  } } } });
+  assert.equal(out.newTask.id, "t-20260920-100000", "unsure still starts its own task");
+  assert.deepEqual(out.candidates, [C, B, E]);
+  assert.equal(FLOORS.candidate, 0.15);
+  const edge = decide({ ...unsure, answers: { task: { choice: "new", confidence: 0.5, probabilities: { [A]: 0.149, [B]: 0.15 } } } });
+  assert.deepEqual(edge.candidates, [B], "one candidate is still worth asking about");
+  const none = decide({ ...unsure, answers: { task: { choice: "new", confidence: 0.6, probabilities: { new: 0.6, [A]: 0.1 } } } });
+  assert.equal(none.candidates, undefined, "a map with nothing over the floor is an answer, not a gap");
+});
+
+test("without probabilities, Jev's pick then the local score, down to half the top score", () => {
+  // Jev's pick leads even when its local score is under the cut.
+  const picked = decide({ ...unsure, scores: [10, 9, 1, 0, 0], answers: { task: { choice: C, confidence: 0.6 } } });
+  assert.deepEqual(picked.candidates, [C, A, B]);
+  // Only what scores at least half the top joins it.
+  const cut = decide({ ...unsure, scores: [10, 5, 4.9, 1, 0], answers: { task: { choice: "new", confidence: 0.5 } } });
+  assert.deepEqual(cut.candidates, [A, B]);
+  // An id outside the shortlist, a missing answer, or an array where a map belongs all fall back the same way.
+  for (const task of [{ choice: "t-20260101-000000", confidence: 0.9 }, undefined, { choice: "new", confidence: 0.5, probabilities: [0.9, 0.1] }]) {
+    assert.deepEqual(decide({ ...unsure, scores: [10, 5, 4.9, 1, 0], answers: { task } }).candidates, [A, B]);
+  }
+  // Nothing matched locally and nothing picked: nobody to ask about.
+  assert.equal(decide({ ...unsure, scores: [0, 0, 0, 0, 0], answers: { task: { choice: "new", confidence: 0.5 } } }).candidates, undefined);
+});
+
 test("the tier is the most likely level, or the rounded score without probabilities", () => {
   const byProb = decide({ answers: { tier: { score: 0.4, probabilities: [0.2, 0.6, 0.15, 0.05], confidence: 0.6 } } });
   assert.equal(byProb.tier, "medium");

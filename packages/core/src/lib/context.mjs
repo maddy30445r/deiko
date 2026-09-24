@@ -27,8 +27,14 @@ import { TASK_ID, parseOutcome } from "./tasks.mjs";
 export const FLOORS = {
   collection: 0.6,
   task: 0.7,
+  // Worth naming to the agent as "it might be this one" when no task was
+  // joined. Low on purpose: this is a question, not a decision.
+  candidate: 0.15,
   quickHint: 0.8,
 };
+
+/// At most this many are named; past three it is a list, not a question.
+const MAX_CANDIDATES = 3;
 
 /// The Score levels, in order. Index = level. MIRRORS the rubric in
 /// `services/relay/relay.mjs` (`TIER_RUBRIC`): the relay names the levels to
@@ -70,14 +76,20 @@ export const MIN_NARRATION = 12;
 /**
  * The classifier's answers, turned into a `context.json`.
  *
- * Returns `{ collection, task, newTask, tier, confidence, newCollection }`.
- * `newCollection` is `{ id, name }` when the brief matched no collection but
- * carries a repo hint that is not one yet — the caller creates it. `newTask`
- * is `{ id, title }` when no shortlisted task was confidently chosen — the
- * caller creates it. Never throws on a partial answer: a missing question
- * reads as "no".
+ * Returns `{ collection, task, newTask, tier, confidence, newCollection }`,
+ * plus `candidates` when there are any. `newCollection` is `{ id, name }`
+ * when the brief matched no collection but carries a repo hint that is not
+ * one yet — the caller creates it. `newTask` is `{ id, title }` when no
+ * shortlisted task was confidently chosen — the caller creates it. Never
+ * throws on a partial answer: a missing question reads as "no".
+ *
+ * `shortlist` is the task ids Deiko sent, best local score first; `scores` is
+ * those local scores, index for index (`scoreTasks`' `score`). `candidates`
+ * is up to three of those ids, likeliest first, when the brief joined none
+ * and Jev did not confidently call it new — the tasks it MIGHT carry on, for
+ * somebody to be asked about. Absent, not empty, when there are none.
  */
-export function decide({ answers = {}, collections = [], repoHints = [], shortlist = [], sessionId = null, title = null } = {}) {
+export function decide({ answers = {}, collections = [], repoHints = [], shortlist = [], scores = [], sessionId = null, title = null } = {}) {
   const out = {
     collection: null,
     task: null,
@@ -111,12 +123,32 @@ export function decide({ answers = {}, collections = [], repoHints = [], shortli
   // chosen, so a model that invents an id starts a task rather than joining
   // one that does not exist.
   const pick = answers.task;
-  if (pick && shortlist.includes(pick.choice) && (pick.confidence ?? 0) >= FLOORS.task) {
+  const sure = (pick?.confidence ?? 0) >= FLOORS.task;
+  if (sure && shortlist.includes(pick.choice)) {
     out.task = pick.choice;
     out.confidence.task = pick.confidence;
   } else if (sessionId) {
     out.task = `t-${sessionId}`;
     out.newTask = { id: out.task, title: title ?? "A brief" };
+  }
+
+  // WHICH ONES IT MIGHT BE, unless it joined one or is confidently new work.
+  // Jev's own spread when it sent one — a map keyed by option id; the local
+  // score when it did not, behind Jev's pick, and only what scored at least
+  // half the best (a best of 0 matched nothing, so it names nothing).
+  if (!sure || (pick.choice !== "new" && !shortlist.includes(pick.choice))) {
+    const probs = pick?.probabilities;
+    let ids;
+    if (probs && typeof probs === "object" && !Array.isArray(probs)) {
+      ids = shortlist
+        .filter((id) => Number(probs[id]) >= FLOORS.candidate)
+        .sort((a, b) => probs[b] - probs[a]);
+    } else {
+      const top = Math.max(0, ...scores);
+      const near = shortlist.filter((id, i) => top > 0 && (scores[i] ?? 0) >= top / 2);
+      ids = shortlist.includes(pick?.choice) ? [pick.choice, ...near.filter((id) => id !== pick.choice)] : near;
+    }
+    if (ids.length) out.candidates = ids.slice(0, MAX_CANDIDATES);
   }
 
   const tier = answers.tier;

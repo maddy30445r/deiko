@@ -293,20 +293,39 @@ if (existsSync(contextPath)) {
 }
 const root = dirname(dir);
 const myTask = context?.task ?? taskIdFor(basename(dir));
-const mates = groupTasks(readBoard(root).filter((b) => b.id !== basename(dir))).get(myTask) ?? [];
+const groups = groupTasks(readBoard(root).filter((b) => b.id !== basename(dir)));
+const taskTitles = readTasks(root);
+const mates = groups.get(myTask) ?? [];
 const task = mates.length
   ? {
-    title: readTasks(root).get(myTask) ?? titleFor(mates.at(-1)),
+    title: taskTitles.get(myTask) ?? titleFor(mates.at(-1)),
     count: mates.length,
     ...taskState(mates),
     notePath: join(root, "tasks", `${myTask}.md`),
   }
   : null;
+// ON ITS OWN, BUT MAYBE NOT: the tasks `classify.mjs` could not choose
+// between. Only ids the board still has briefs for — which is also what makes
+// a hand-edited id safe to put in a path.
+const maybe = !task && Array.isArray(context?.candidates)
+  ? context.candidates.filter((id) => groups.has(id)).map((id) => {
+    const bs = groups.get(id);
+    return {
+      title: taskTitles.get(id) ?? titleFor(bs.at(-1)),
+      now: taskState(bs).now,
+      // A task of one has no note (`writeTaskNotes` skips it), so its history
+      // is that brief's own file — by name, never the folder.
+      notePath: bs.length > 1
+        ? join(root, "tasks", `${id}.md`)
+        : join(bs[0].dir, bs[0].outcome ? "outcome.md" : "prompt.txt"),
+    };
+  })
+  : null;
 const quickHint = wantsQuickHint(context, process.env.DEIKO_OPTIMIZE_COSTS === "1");
 const outcomePath = join(dir, "outcome.md");
 
 const { text, evidence } = buildPrompt({
-  narration, referents: released, personaPath, task, outcomePath, quickHint,
+  narration, referents: released, personaPath, task, maybe, outcomePath, quickHint,
 });
 
 // The same message for a destination that cannot open a local path.
@@ -321,7 +340,7 @@ const { text, evidence } = buildPrompt({
 // until the developer throws it — and re-running the renderer at that moment
 // would put a Node spawn between letting go and the paste landing.
 const attached = buildPrompt({
-  narration, referents: released, attached: true, task, outcomePath, quickHint,
+  narration, referents: released, attached: true, task, maybe, outcomePath, quickHint,
 });
 
 // Fail closed on the captured content, not on the assembled prompt. `text`

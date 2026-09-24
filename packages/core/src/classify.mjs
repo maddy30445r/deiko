@@ -218,6 +218,7 @@ async function main() {
     collections,
     repoHints: summary.repoHints ?? [],
     shortlist: shortlist.map((t) => t.id),
+    scores: scored.map((s) => s.score),
     sessionId: id,
     title: titleFor(me),
   });
@@ -276,10 +277,14 @@ async function main() {
     confidence: decision.confidence,
     decidedBy: "jev",
     model: typeof answer?.model === "string" ? answer.model : null,
+    // The tasks it might carry on, when it could not tell — only when there
+    // are some. The app clears this on any hand placement.
+    ...(decision.candidates && { candidates: decision.candidates }),
   };
   writeFileSync(contextPath, JSON.stringify(context, null, 2) + "\n");
   console.error(`✓ context → ${context.collection ?? "unsorted"} · `
-    + `${decision.newTask ? "new task" : `joins ${context.task}`} · ${context.tier ?? "?"}`);
+    + `${decision.newTask ? "new task" : `joins ${context.task}`}`
+    + `${context.candidates ? ` (maybe ${context.candidates.join(", ")})` : ""} · ${context.tier ?? "?"}`);
 }
 
 // Even an unexpected throw must not fail the pipeline that called us.
