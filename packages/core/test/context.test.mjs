@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { FLOORS, TIERS, briefDate, decide, readBriefLine, slug, wantsQuickHint } from "../lib/context.mjs";
+import { COULD_NOT_TELL, FLOORS, TIERS, briefDate, decide, readBriefLine, slug, unplaceable, wantsQuickHint } from "../lib/context.mjs";
 
 // ── Names and dates ─────────────────────────────────────────────────────────
 
@@ -200,6 +200,17 @@ test("a long outcome is read whole and each section capped", () => {
   const { outcome } = readBriefLine(dir);
   assert.equal(outcome.did.length, 40);
   assert.deepEqual(outcome.open, ["Test on a trackpad."], "an Open past 8000 characters still counts");
+});
+
+test("could not tell is Groq's own line, not any summary that says too short", () => {
+  const said = "a narration long enough to place";
+  for (const line of ["The transcript is too short to determine a request.", "The transcript is too garbled to determine a coding task."]) {
+    assert.ok(COULD_NOT_TELL.test(line), line);
+    assert.equal(unplaceable({ narration: said, summaryLine: line }), "the summary could not tell what was asked");
+  }
+  const real = "Increase the session timeout; it is too short for large uploads.";
+  assert.equal(COULD_NOT_TELL.test(real), false);
+  assert.equal(unplaceable({ narration: said, summaryLine: real }), null);
 });
 
 test("a sibling whose summary could not tell falls back to what was said", () => {

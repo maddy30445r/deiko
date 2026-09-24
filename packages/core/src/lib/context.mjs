@@ -73,8 +73,12 @@ export function briefDate(id, now = new Date()) {
 /// is a question with no answer.
 export const MIN_NARRATION = 12;
 
-/// What `summarize.mjs` tells Groq to say when it cannot tell.
-export const COULD_NOT_TELL = /too (short|garbled)/i;
+/// What `summarize.mjs` tells Groq to say when it cannot tell ("too garbled
+/// or too short to tell"), as Groq words it: "The transcript is too short to
+/// determine a request." Narrow on purpose — it drops briefs from the board
+/// and skips filing, so a real summary saying a timeout is "too short for
+/// large uploads" must not match.
+export const COULD_NOT_TELL = /\btoo (short|garbled) to (tell|determine|understand)\b|\btranscript\b.*\btoo (short|garbled)\b/i;
 
 /** Why a brief has nothing to place — too little said, or a summary that
  *  could not tell what was asked — or null when it can be placed. One rule
