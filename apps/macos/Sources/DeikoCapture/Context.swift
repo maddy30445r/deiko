@@ -268,6 +268,10 @@ enum Collections {
 struct BriefTask: Codable, Identifiable, Equatable {
     let id: String
     var title: String
+    /// What the title was made from — `"summary"`, `"narration"` or `"you"`.
+    /// `classify.mjs` swaps a narration title for the first summary that
+    /// joins the task, and leaves one somebody typed alone.
+    var from: String?
 }
 
 /// Task titles, beside the collections. Membership is not here — it is each
@@ -292,8 +296,9 @@ enum Tasks {
         var list = all()
         if let index = list.firstIndex(where: { $0.id == id }) {
             list[index].title = title
+            list[index].from = "you"
         } else {
-            list.append(BriefTask(id: id, title: title))
+            list.append(BriefTask(id: id, title: title, from: "you"))
         }
         do {
             let encoder = JSONEncoder()
