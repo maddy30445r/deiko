@@ -52,10 +52,30 @@ struct SessionContext: Codable, Equatable {
     /// re-sorts a brief somebody placed, task or project.
     var decidedBy: String = "you"
     var model: String?
-    /// `"you"` once somebody picked the project by hand. Separate from
-    /// `decidedBy` because tapping a task chip is a hand placement too, and it
-    /// must not turn Deiko's guess at the project into a stated answer.
+    /// `"you"` once somebody picked the project by hand, `"jev"` once a
+    /// hand placement of the TASK had to say the project was still Deiko's
+    /// guess. Separate from `decidedBy` because tapping a task chip is a hand
+    /// placement too, and it must not turn a guessed project into a stated
+    /// one. Absent on contexts from before it existed — see `isGuess`.
     var collectionBy: String?
+
+    /// Put the brief in a project by hand.
+    mutating func placeCollection(_ id: String?) {
+        collection = id
+        decidedBy = "you"
+        collectionBy = "you"
+    }
+
+    /// Put the brief in a task by hand. That answers the question the
+    /// candidates were asking, so they go; and how the project was decided is
+    /// written down first, so the `decidedBy` this sets reads neither as a
+    /// pick of Deiko's guess nor as a guess at somebody's pick.
+    mutating func placeTask(_ id: String) {
+        collectionBy = collectionBy ?? (decidedBy == "you" ? "you" : "jev")
+        task = id
+        decidedBy = "you"
+        candidates = nil
+    }
 
     static func path(sessionDir: String) -> URL {
         URL(fileURLWithPath: sessionDir).appendingPathComponent("context.json")
@@ -82,7 +102,10 @@ struct SessionContext: Codable, Equatable {
     static let sureEnough = 0.85
 
     var isGuess: Bool {
-        collectionBy != "you" && collection != nil && (confidence.collection ?? 1) < Self.sureEnough
+        // No `collectionBy` and `decidedBy: "you"` is a project picked by hand
+        // before `collectionBy` existed, when a pick was the only way to get it.
+        let picked = collectionBy == "you" || (collectionBy == nil && decidedBy == "you")
+        return !picked && collection != nil && (confidence.collection ?? 1) < Self.sureEnough
     }
 
     /// The tier, in the words the card uses.

@@ -95,9 +95,7 @@ final class ReviewModel: ObservableObject {
     /// and a project answers something else, so they stay.
     func setCollection(_ id: String?) {
         var next = context ?? SessionContext()
-        next.collection = id
-        next.decidedBy = "you"
-        next.collectionBy = "you"
+        next.placeCollection(id)
         apply(next)
     }
 
@@ -106,9 +104,7 @@ final class ReviewModel: ObservableObject {
     /// question the candidates were asking.
     func setTask(_ id: String) {
         var next = context ?? SessionContext()
-        next.task = id
-        next.decidedBy = "you"
-        next.candidates = nil
+        next.placeTask(id)
         apply(next)
     }
 

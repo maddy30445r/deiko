@@ -368,10 +368,7 @@ final class SessionsStore: ObservableObject {
     /// the task — unlike a collection move, which changes nothing it says.
     func move(_ item: Item, toTask id: String) {
         var context = SessionContext.read(sessionDir: item.dir) ?? SessionContext()
-        context.task = id
-        context.decidedBy = "you"
-        // The task was the question the candidates were asking; it is answered.
-        context.candidates = nil
+        context.placeTask(id)
         try? context.write(sessionDir: item.dir)
         Task {
             _ = try? await BriefPipeline.rerender(sessionDir: item.dir)
@@ -384,9 +381,7 @@ final class SessionsStore: ObservableObject {
     /// overwrites.
     func move(_ item: Item, to collection: String?) {
         var context = SessionContext.read(sessionDir: item.dir) ?? SessionContext()
-        context.collection = collection
-        context.decidedBy = "you"
-        context.collectionBy = "you"
+        context.placeCollection(collection)
         try? context.write(sessionDir: item.dir)
         guard let index = items.firstIndex(where: { $0.id == item.id }) else { return }
         if let was = item.collection { counts[was, default: 1] -= 1 } else { unsortedCount -= 1 }
