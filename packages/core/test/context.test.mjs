@@ -43,10 +43,10 @@ const r2 = (id, p, relation = "same") => ({
 const keys = (over = {}) => ({ ...EMPTY_KEYS, ...over });
 const tk = (over = {}) => ({ pages: [], files: [], tickets: [], ...over });
 
-test("the starting values are the ones the owner agreed", () => {
+test("the values are the ones calibrated on the owner's board", () => {
   assert.equal(CLASSIFIER, "v3.0");
   assert.equal(GATE, 0.5);
-  assert.deepEqual(JOIN, { line: 0.9, gap: 0.2, recent: 0.75, recentMs: 30 * 60e3 });
+  assert.deepEqual(JOIN, { first: 0.6, second: 0.4, gap: 0.2, recent: 0.5, recentMs: 30 * 60e3 });
   assert.equal(ASK, 0.35);
   assert.equal(FLOORS.collection, 0.6);
 });
@@ -74,15 +74,20 @@ test("a missing gate reads as a real request", () => {
   assert.equal(decide({ ...base, answers: {} }).pile, null);
 });
 
-test("only the second look joins: 0.9 or more and 0.2 ahead", () => {
-  const out = decide({ ...base, answers: r1({ [A]: 0.8, [B]: 0.4 }), second: { ...r2(A, 0.93), ...r2(B, 0.6, "related") } });
+test("a join needs the second look to say 'same', round one ≥ 0.6 and 0.2 ahead", () => {
+  // The shape measured on real joins: round one 0.62–0.82, the pairwise look
+  // shy (0.43–0.88) but calling it the same work.
+  const out = decide({ ...base, answers: r1({ [A]: 0.72, [B]: 0.4 }), second: { ...r2(A, 0.46), ...r2(B, 0.6, "related") } });
   assert.equal(out.task, A);
   assert.equal(out.newTask, null);
   assert.equal(out.why, "join");
-  assert.equal(out.confidence.task, 0.93);
+  assert.equal(out.confidence.task, 0.72);
   assert.equal(out.jev.rank, 1);
-  assert.deepEqual(out.jev.second[A], { same: 0.93, relation: "same" });
+  assert.deepEqual(out.jev.second[A], { same: 0.46, relation: "same" });
   assert.equal(out.candidates, undefined);
+  assert.equal(decide({ ...base, answers: r1({ [A]: 0.72 }), second: r2(A, 0.3) }).why, "ask", "a doubting second look asks");
+  assert.equal(decide({ ...base, answers: r1({ [A]: 0.55 }), second: r2(A, 0.9) }).why, "ask", "round one not clearly for it asks");
+  assert.equal(decide({ ...base, answers: r1({ [A]: 0.7, [B]: 0.6 }), second: r2(A, 0.9) }).why, "ask", "not clearly ahead asks");
 });
 
 test("round one alone never joins; it asks", () => {
@@ -101,16 +106,16 @@ test("two that both look right ask which one", () => {
 });
 
 test("between 0.35 and the join line asks; below it, or a clear 'different', is new", () => {
-  assert.deepEqual(decide({ ...base, answers: r1({ [A]: 0.6 }), second: r2(A, 0.8) }).candidates, [A]);
+  assert.deepEqual(decide({ ...base, answers: r1({ [A]: 0.5 }), second: r2(A, 0.8) }).candidates, [A]);
   const different = decide({ ...base, answers: r1({ [A]: 0.5 }), second: r2(A, 0.34, "different") });
   assert.equal(different.why, "new");
   assert.equal(different.candidates, undefined);
   assert.equal(decide({ ...base, answers: r1({ [A]: 0.2 }) }).why, "new");
 });
 
-test("recent work on the same page or file joins at 0.75; older work does not", () => {
+test("recent work on the same page or file joins from 0.5 in round one; older work does not", () => {
   const args = {
-    ...base, answers: r1({ [A]: 0.8 }), second: r2(A, 0.8),
+    ...base, answers: r1({ [A]: 0.55 }), second: r2(A, 0.8),
     keys: keys({ pages: ["Pricing"] }), taskKeys: { [A]: tk({ pages: ["pricing"] }) },
   };
   assert.equal(decide({ ...args, newest: { [A]: NOW - 8 * 60e3 } }).why, "join-recent");

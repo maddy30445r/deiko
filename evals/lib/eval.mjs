@@ -67,8 +67,11 @@ const said = (o) => (o.got === "join" ? `join ${o.task}` : o.got === "ask" ? `as
 function numbers(r) {
   const jev = r.jev;
   if (!jev) return "";
-  const id = r.exp.task;
+  // The expected task when it was on the shortlist; else the one Jev liked most.
+  const best = Object.entries(jev.same ?? {}).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  const id = r.exp.task && r.exp.task in (jev.same ?? {}) ? r.exp.task : best;
   const parts = [`gate ${fmt(jev.gate)}`];
+  if (id && id !== r.exp.task) parts.push(`top ${id}`);
   if (id && id in (jev.same ?? {})) parts.push(`r1 ${fmt(jev.same[id])}`);
   const look = id ? jev.second?.[id] : null;
   if (look) parts.push(`r2 ${fmt(look.same)} ${look.relation ?? "?"}`);
@@ -107,7 +110,7 @@ export function recall(rows, label, n) {
 
 const pct = (a, b) => (b ? `${Math.round((100 * a) / b)}%` : "–");
 
-export function formatReport({ rows, shortlistOnly, errored = 0 }) {
+export function formatReport({ rows, shortlistOnly, errored = 0, all = false }) {
   const out = ["shortlist recall (briefs that should join)"];
   for (const label of [...new Set(rows.flatMap((r) => Object.keys(r.ranks ?? {})))]) {
     const [h5, of] = recall(rows, label, 5);
@@ -117,6 +120,12 @@ export function formatReport({ rows, shortlistOnly, errored = 0 }) {
   if (shortlistOnly) return out.join("\n");
   const t = tally(rows);
   for (const w of t.wrong) out.push(`✗ ${w.stamp}  want ${w.want.padEnd(26)} got ${w.got}${w.why ? `  (${w.why})` : ""}`);
+  // --all: the right ones too, so a looser line can be checked against them.
+  if (all) {
+    for (const r of rows.filter((x) => x.out && right(x) && x.jev)) {
+      out.push(`✓ ${r.stamp}  ${said(r.out).padEnd(31)}  (${numbers(r)})`);
+    }
+  }
   out.push(`accuracy ${t.correct}/${t.n} (${pct(t.correct, t.n)}) · odds ${t.byWant.odds.join("/")} · new ${t.byWant.new.join("/")} · join ${t.byWant.join.join("/")}`);
   out.push(`ask rate ${t.asks}/${t.real} (${pct(t.asks, t.real)})`);
   if (errored) out.push(`· ${errored} brief(s) got no answer from the relay and are not counted`);

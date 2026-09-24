@@ -4,7 +4,7 @@
  *
  *   node scripts/eval-filing.mjs [--board ~/Documents/Deiko]
  *     [--labels ~/Documents/Deiko-eval/filing-labels.json]
- *     [--shortlist-only] [--relay <url>] [--pace <ms>] [--draft]
+ *     [--shortlist-only] [--relay <url>] [--pace <ms>] [--all] [--draft]
  *
  * READ-ONLY. Nothing under --board is written, ever. Briefs are replayed oldest
  * first against an in-memory board on which every earlier brief sits where the
@@ -115,4 +115,4 @@ for (const [stamp, e] of exp) {
   done.push({ ...me, task: e.task, odds: e.want === "odds" });
   if (e.want === "new") taskTitles.set(e.task, titleFor(me));
 }
-process.stdout.write(formatReport({ rows, shortlistOnly, errored }) + "\n");
+process.stdout.write(formatReport({ rows, shortlistOnly, errored, all: flag("--all") }) + "\n");

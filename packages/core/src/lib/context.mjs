@@ -95,7 +95,16 @@ export const CLASSIFIER = "v3.0";
 /// and later on real corrections. GATE and ASK are MIRRORED by `GATE` and
 /// `SECOND_LOOK.min` in services/relay/relay.mjs — change both.
 export const GATE = 0.5;
-export const JOIN = { line: 0.9, gap: 0.2, recent: 0.75, recentMs: 30 * 60e3 };
+/// THE JOIN RULE, CALIBRATED ON THE OWNER'S BOARD (2026-09-25, 33 labelled
+/// briefs against live Jev). The first guess — a second look ≥ 0.9 — joined
+/// nothing: on all ten true joins the pairwise look said relation "same" but
+/// its yes sat at 0.43–0.88 (Jev is shy with only one pair in view), while
+/// round one gave those tasks 0.62–0.82 and every correctly-new brief's best
+/// task ≤ 0.23. So a join needs the second look to call it the SAME work
+/// (relation) and not to doubt it (`second`), round one to be clearly for it
+/// (`first`) and clearly ahead of the next task (`gap`). Recent work on the
+/// same page or file needs less from round one (`recent`).
+export const JOIN = { first: 0.6, second: 0.4, gap: 0.2, recent: 0.5, recentMs: 30 * 60e3 };
 export const ASK = 0.35;
 /// The relation levels, in order. MIRRORS `RELATION_RUBRIC` in the relay.
 export const RELATIONS = ["different", "related", "same"];
@@ -139,9 +148,10 @@ const differ = (a, b) => (a?.length ?? 0) > 0 && (b?.length ?? 0) > 0 && !meets(
  * decision, and every rule is here:
  *
  *   gate < GATE                                   → odds and ends
- *   a second look ≥ JOIN.line and JOIN.gap ahead  → join
- *     (≥ JOIN.recent when the task's newest brief is under 30 min old AND a
- *      page or file label matches — never for old work)
+ *   the second look says "same" (and its yes ≥ JOIN.second), round one
+ *     ≥ JOIN.first and JOIN.gap ahead of the next  → join
+ *     (round one ≥ JOIN.recent when the task's newest brief is under 30 min
+ *      old AND a page or file label matches — never for old work)
  *     … but a different page                      → ask instead
  *   a different ticket                            → that task is never joined or offered
  *   anything ≥ ASK not joined, not "different",
@@ -185,26 +195,28 @@ export function decide({
   }
 
   const open = shortlist.filter((id) => !differ(keys.tickets, taskKeys[id]?.tickets));
-  const p = (id) => looks[id]?.same ?? same[id] ?? 0;
-  const ranked = open.filter((id) => looks[id]).sort((a, b) => looks[b].same - looks[a].same);
+  const p = (id) => same[id] ?? 0;
+  const ranked = open.filter((id) => looks[id]).sort((a, b) => p(b) - p(a));
   const best = ranked[0];
   let why = "new";
   let task = null;
   let related = null;
   let candidates = [];
   if (best) {
-    const s = looks[best].same;
+    const first = p(best);
+    const look = looks[best];
     const theirs = taskKeys[best] ?? {};
     const next = Math.max(0, ...open.filter((id) => id !== best).map(p));
     const recent = now - (newest[best] ?? -Infinity) < JOIN.recentMs
       && (meets(keys.pages, theirs.pages) || meets(keys.files, theirs.files));
-    if (s >= (recent ? JOIN.recent : JOIN.line) && s - next >= JOIN.gap) {
+    if (look.relation === "same" && look.same >= JOIN.second
+      && first >= (recent ? JOIN.recent : JOIN.first) && first - next >= JOIN.gap) {
       // A bug found on one page is often fixed on another: ask, don't block.
       if (differ(keys.pages, theirs.pages)) {
         why = "ask-page";
         candidates = [best];
       } else {
-        why = s < JOIN.line ? "join-recent" : "join";
+        why = first < JOIN.first ? "join-recent" : "join";
         task = best;
       }
     }
@@ -220,7 +232,7 @@ export function decide({
 
   if (task) {
     out.task = task;
-    out.confidence.task = looks[task].same;
+    out.confidence.task = p(task);
     jev.rank = shortlist.indexOf(task) + 1;
   } else if (sessionId) {
     out.task = `t-${sessionId}`;
