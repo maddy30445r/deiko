@@ -106,7 +106,7 @@ async function relay(respond = () => [200, { model: "stub", answers: {} }]) {
   });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   server.unref(); // a failed assertion before `close` must not hold the run open
-  return { url: `http://127.0.0.1:${server.address().port}`, bodies, close: () => server.close() };
+  return { url: `http://127.0.0.1:${server.address().port}`, bodies, close: () => new Promise((r) => server.close(r)) };
 }
 
 /** Only the relay URL: never a token from the environment running the tests. */
@@ -195,7 +195,7 @@ test("a new task's title says where it came from, and a narration title gives wa
 test("a request that never connected leaves no sent marker; one that got an answer keeps it", async () => {
   const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
   const closed = await relay();
-  closed.close();
+  await closed.close();
   const refused = filed(root, "20260918-090000", { narration: "the price still shows 99 after I save it" });
   await classify(refused, closed.url);
   assert.equal(existsSync(join(refused, "classify.sent")), false);
