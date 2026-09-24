@@ -644,6 +644,16 @@ final class ReviewModel: ObservableObject {
                 await SessionsStore.shared.load(root: root)
             }
             let placed = await BriefPipeline.classify(sessionDir: sessionDir)
+            // WHAT LEFT, whichever run is still wanted. Read before the guard
+            // below: a filing that was taken over still sent its request, and
+            // if the one that took over never gets this far the trust line
+            // would go on saying less than went. The marker only ever tells
+            // the truth, so reading it here cannot overstate.
+            if stillCurrent(sessionDir) {
+                let sent = ClassifyRequest.sentSummary(sessionDir: sessionDir)
+                filed = sent != nil
+                filedSummary = sent == true
+            }
             // A NEWER FILING OF THIS BRIEF TOOK OVER — "Point at more" added
             // words, or the card opened on it again. That one re-renders and
             // shows; this one must do neither after it. `context.json` is
@@ -667,9 +677,6 @@ final class ReviewModel: ObservableObject {
                 await SessionsStore.shared.load(root: root)
             }
             guard run == placingRun, stillCurrent(sessionDir) else { return }
-            let sent = ClassifyRequest.sentSummary(sessionDir: sessionDir)
-            filed = sent != nil
-            filedSummary = sent == true
             notFiled = placed == nil && filed
             placing = false
         }
