@@ -6,11 +6,12 @@ import SwiftUI
 // ─────────────────────────────────────────────────────────────────────────────
 // SETTINGS — a section of the Deiko window, not a window of its own
 //
-// A licence key, and a transcription key. Nothing else belongs here: every
-// other decision Deiko makes is either settled in the design or answered
-// per-session on the orb. There used to be a row per coding client, writing
-// that client's MCP config — gone along with the bridge it pointed at. Nothing
-// needs connecting any more.
+// A licence key, and a transcription key. Nearly every other decision Deiko
+// makes is either settled in the design or answered per-session on the orb —
+// the one exception is the Memory section's button, which is the only thing
+// here that writes to a file this app does not own (see `MemoryHelper`).
+// There used to be a row per coding client too, writing that client's own
+// bridge config — gone along with the bridge it pointed at.
 //
 // The licence row is not a sign-in. There is no email, no password, no account
 // to recover — the key IS the entitlement, and the window says so, because a
@@ -325,6 +326,10 @@ struct SettingsView: View {
     let sessionRoot: String
     /// Momentary, so the button can say it worked.
     @State private var copied = false
+    /// Whether Claude Code or Cursor already has the memory helper registered.
+    @State private var helperConnected = false
+    /// What the button's last press said, or nil for the default caption.
+    @State private var helperMessage: String?
 
     var body: some View {
         ScrollView {
@@ -469,8 +474,39 @@ struct SettingsView: View {
                 case .off:
                     captionLine("Meaning model off. Deiko matches briefs by their words.")
                 }
+
+                Divider()
+
+                Button(helperConnected ? "Remove Deiko memory from Claude Code / Cursor" : "Give Claude Code / Cursor your Deiko memory") {
+                    let removing = helperConnected
+                    Task.detached(priority: .userInitiated) {
+                        let message: String
+                        do {
+                            if removing {
+                                try MemoryHelper.disconnect()
+                                message = "Removed. Restart Claude Code or Cursor to drop it."
+                            } else {
+                                let names = try MemoryHelper.connect()
+                                message = names.isEmpty
+                                    ? "Neither Claude Code nor Cursor is set up on this Mac yet."
+                                    : "Connected to \(names.joined(separator: " and ")). Restart \(names.count == 1 ? "it" : "them") to pick it up."
+                            }
+                        } catch {
+                            message = error.localizedDescription
+                        }
+                        let connected = MemoryHelper.isConnected()
+                        await MainActor.run { helperMessage = message; helperConnected = connected }
+                    }
+                }
+                Text(helperMessage ?? "A small helper that runs only on this Mac. Your agent can search past briefs and open a task's history. It hands back only what your briefs already share: prompts, outcome notes, task notes, scrubbed screen text and the screenshots you kept.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(DeikoStyle.ink2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .padding(14)
+        }
+        .task {
+            helperConnected = await Task.detached { MemoryHelper.isConnected() }.value
         }
     }
 
