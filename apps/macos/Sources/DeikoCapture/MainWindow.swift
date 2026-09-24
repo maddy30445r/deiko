@@ -383,6 +383,7 @@ final class SessionsStore: ObservableObject {
         var context = SessionContext.read(sessionDir: item.dir) ?? SessionContext()
         context.placeTask(id)
         try? context.write(sessionDir: item.dir)
+        SessionContext.noteCorrection(sessionDir: item.dir, task: id)
         Task {
             _ = try? await BriefPipeline.rerender(sessionDir: item.dir)
             await load(root: root)

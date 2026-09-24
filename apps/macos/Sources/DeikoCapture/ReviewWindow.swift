@@ -106,6 +106,7 @@ final class ReviewModel: ObservableObject {
         var next = context ?? SessionContext()
         next.placeTask(id)
         apply(next)
+        if let sessionDir { SessionContext.noteCorrection(sessionDir: sessionDir, task: id) }
     }
 
     var sessionID: String? { sessionDir.map { ($0 as NSString).lastPathComponent } }
@@ -118,6 +119,30 @@ final class ReviewModel: ObservableObject {
         let store = SessionsStore.shared
         guard let id = context?.task, id != ownTask,
               store.items.contains(where: { $0.task == id && !$0.odds && $0.id != sessionID })
+        else { return nil }
+        return store.title(ofTask: id)
+    }
+
+    /// "from 3 weeks ago" when the joined task's newest OTHER brief — before
+    /// this one — is more than a day old; nil otherwise. A stale join is then
+    /// easy to spot, and one click undoes it.
+    var joinedAge: String? {
+        let store = SessionsStore.shared
+        guard let id = context?.task, id != ownTask, let sessionID,
+              let mine = Sessions.stamp(sessionID),
+              let newest = store.items
+                  .filter({ $0.task == id && !$0.odds && $0.id != sessionID && $0.date < mine })
+                  .map(\.date).max()
+        else { return nil }
+        return TaskFiling.agePhrase(from: newest, to: mine)
+    }
+
+    /// The task this brief is related to, by title — only while it is still
+    /// its own task, and only a task the board still has.
+    var relatedTitle: String? {
+        let store = SessionsStore.shared
+        guard let id = context?.related, context?.task == nil || context?.task == ownTask,
+              store.items.contains(where: { $0.task == id && !$0.odds })
         else { return nil }
         return store.title(ofTask: id)
     }
@@ -1088,6 +1113,7 @@ struct ReviewView: View {
                 personaRow
                 contextRow
                 whichOneRow
+                relatedRow
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1194,10 +1220,20 @@ struct ReviewView: View {
                 // second voice — present, clickable, and naming the task once
                 // somebody has — and linking it promotes the phrase to indigo.
                 if let earlier = model.joinedTask {
-                    Text("carries on from")
-                        .font(.system(size: 11))
-                        .foregroundStyle(DeikoStyle.ink2)
-                    taskMenu(context, label: clipped(earlier), linked: true)
+                    if let age = model.joinedAge {
+                        Text("picks up")
+                            .font(.system(size: 11))
+                            .foregroundStyle(DeikoStyle.ink2)
+                        taskMenu(context, label: clipped(earlier), linked: true)
+                        Text("from \(age)")
+                            .font(.system(size: 11))
+                            .foregroundStyle(DeikoStyle.ink2)
+                    } else {
+                        Text("carries on from")
+                            .font(.system(size: 11))
+                            .foregroundStyle(DeikoStyle.ink2)
+                        taskMenu(context, label: clipped(earlier), linked: true)
+                    }
                 } else {
                     taskMenu(context, label: model.ownTaskTitle.map { "new task: \(clipped($0))" } ?? "a new task", linked: false)
                 }
@@ -1295,7 +1331,7 @@ struct ReviewView: View {
         let known = model.openCandidates
         if !known.isEmpty {
             VStack(alignment: .leading, spacing: 5) {
-                Text("Carries on from which?")
+                Text("Which one?")
                     .font(.system(size: 11))
                     .foregroundStyle(DeikoStyle.ink2)
                 ViewThatFits(in: .horizontal) {
@@ -1304,6 +1340,30 @@ struct ReviewView: View {
                 }
             }
             .padding(.top, 3)
+        }
+    }
+
+    /// RELATED, NOT MERGED: the classifier linked this brief to earlier work
+    /// it judged connected but separate. One quiet line; the menu is the way
+    /// to say "no, it is the same work".
+    @ViewBuilder private var relatedRow: some View {
+        if let title = model.relatedTitle, let id = model.context?.related {
+            HStack(spacing: 0) {
+                Text("Related to")
+                    .font(.system(size: 11))
+                    .foregroundStyle(DeikoStyle.ink2)
+                Menu {
+                    Button("It's the same work: move it there") { model.setTask(id) }
+                } label: {
+                    Text(clipped(title))
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(DeikoStyle.mark)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Deiko thinks this is connected to that task but a separate piece of work.")
+            }
+            .padding(.top, 1)
         }
     }
 
@@ -1326,12 +1386,12 @@ struct ReviewView: View {
         Button {
             if let own = model.ownTask { model.setTask(own) }
         } label: {
-            Text("Start a new task").font(.system(size: 11))
+            Text("None of these").font(.system(size: 11))
         }
         .buttonStyle(ChipButtonStyle(on: false))
         .deikoFocusRing(Capsule())
         .fixedSize()
-        .help("None of these. This brief starts a new task.")
+        .help("None of these. This brief starts its own task.")
     }
 
     /// Named by hand, and nothing is created until somebody types something.
