@@ -36,6 +36,7 @@ import {
   MONTHLY_TTL_SECONDS,
   DAILY_TTL_SECONDS,
   globalKey,
+  isPolarKey,
   licenseKey,
   playgroundClipKey,
   playgroundIntentKey,
@@ -71,9 +72,6 @@ const POLAR_ORGANIZATION_ID =
 /// changes at most once a month. A cancellation therefore takes up to a day to
 /// bite, which is the right trade for a $2.99 product.
 const LICENSE_CACHE_MS = 24 * 60 * 60 * 1000;
-
-/// What every Polar licence key ends with: `<prefix?><UUID4>`.
-const POLAR_KEY = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /// How soon an ERROR-derived verdict is rechecked. Minutes, not a day: an
 /// error is not a fact about the licence, only about the network between two
@@ -312,12 +310,13 @@ export async function recordPlaygroundTicket(ipHash, { now = Date.now() } = {}) 
 /// fact — something the service learned that must outlive one container.
 export async function tierFor(subject, now = Date.now()) {
   if (subject.kind !== "license") return "free";
-  // NOT SHAPED LIKE A KEY, NOT WORTH A WRITE. Polar keys end in a UUID4
-  // after an optional brand prefix (polar.sh/docs/features/benefits/license-keys),
-  // so anything else is junk and gets junk's verdict — "free", which for a
-  // licence is no allowance — without the Polar call and the verdict PutItem
-  // that rotating junk keys otherwise cost on every request.
-  if (!POLAR_KEY.test(subject.id)) return "free";
+  // NOT SHAPED LIKE A KEY, NOT WORTH A WRITE. Anything `isPolarKey` refuses
+  // is junk and gets junk's verdict — "free", which for a licence is no
+  // allowance — without the Polar call and the verdict PutItem that rotating
+  // junk keys otherwise cost on every request. relay.mjs logs each one, so a
+  // real key of some other shape shows up in CloudWatch rather than in a
+  // refund request.
+  if (!isPolarKey(subject.id)) return "free";
 
   const key = licenseKey(subject);
   const cached = await db().send(new GetItemCommand({

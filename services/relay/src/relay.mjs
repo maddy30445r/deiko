@@ -39,6 +39,8 @@ import {
   CLASSIFIES_PER_DAY,
   CLASSIFIES_PER_CALLER_PER_DAY,
   TEXT_CALLS_PER_IP_PER_DAY,
+  BYTES_PER_SECOND,
+  MAX_SECONDS_PER_REQUEST,
   audioSeconds,
   callerKey,
   capFor,
@@ -47,6 +49,7 @@ import {
   globalCapFor,
   globalKey,
   ipBucket,
+  isPolarKey,
   playgroundClipKey,
   playgroundIntentKey,
   playgroundIpKey,
@@ -397,20 +400,25 @@ function overRateLimit(token) {
 /// under the requests of whoever was paying. A row found over its cap is
 /// remembered here and refused on sight.
 ///
-/// Every key carries its day (or, for a ticket, dies with the ticket), so the
-/// flag lapses at UTC midnight without anything to reset: tomorrow's key is
-/// simply not in the set.
+/// FOR A MINUTE, NOT FOR THE DAY. "Over its cap" is read from a counter that
+/// also holds the seconds of requests still in flight — ones that will be
+/// refused and refunded, or were refused for another row entirely — so a
+/// row can look full for an instant while the day still has room. Held until
+/// midnight, that instant shut a container for hours. Held for a minute, the
+/// worst a false reading costs is a minute, and a truly full row costs one
+/// write-and-refund per container per minute instead of two writes per
+/// attempt. Every key also carries its day, so none outlives UTC midnight.
 ///
-/// ponytail: per container and clear-all, like `seen`. A fresh container
-/// re-learns each full row with one write-and-refund; and a refund elsewhere
-/// that dips a row back under its cap is not noticed until tomorrow, which
-/// for a ceiling that was already reached is the answer anyway.
-export const fullRows = new Set();
+/// ponytail: per container and clear-all, like `seen`.
+export const fullRows = new Map();
+const FULL_FOR_MS = 60_000;
 
-function markFull(key) {
+function markFull(key, now) {
   if (fullRows.size > MAX_TRACKED_TOKENS) fullRows.clear();
-  fullRows.add(key);
+  fullRows.set(key, now + FULL_FOR_MS);
 }
+
+const isFull = (key, now) => (fullRows.get(key) ?? 0) > now;
 
 /// The identifier that appears in the logs, and the one you revoke by.
 ///
@@ -586,6 +594,16 @@ const json = (status, obj) => ({
 /// A multipart body as `[name, value]` pairs (values as latin1 strings, so
 /// bytes survive), or a sentence saying why it is not one.
 ///
+/// STRICT WHEREVER TWO PARSERS COULD DISAGREE. Every route rebuilds what it
+/// forwards, so Groq never parses the caller's bytes — but what this returns
+/// is what gets rebuilt, so it must be what any standard parser would read:
+/// one `boundary` parameter, found only at a parameter's start (`xboundary=`
+/// once split the body on a different string from Groq's); a part's name taken
+/// only from its own Content-Disposition line (a dummy `X-Dummy: name="file"`
+/// header once named a `url` part "file"); exactly one `name`; and every
+/// delimiter followed by a line break, so a boundary cannot match the front of
+/// a longer one.
+///
 /// SPLIT ON THE BOUNDARY — do not pattern-match the whole body. The file's
 /// bytes are the caller's to choose, so a scan of the raw request reads
 /// whatever they write into the audio: an approved-looking `name="model"`
@@ -598,18 +616,23 @@ const json = (status, obj) => ({
 /// went to hide. Anything but whitespace after the last terminator is the same
 /// trick one step removed, and is refused the same way.
 function parseMultipart(contentType, body) {
-  const bnd = /boundary=("?)([^";,]+)\1/.exec(contentType || "")?.[2];
-  if (!bnd) return "expected a multipart upload";
+  const type = String(contentType ?? "");
+  const params = [...type.matchAll(/(?:^|;)\s*boundary=(?:"([^"]{1,70})"|([^\s";,]{1,70}))/gi)];
+  if (!/^\s*multipart\/form-data\s*;/i.test(type) || params.length !== 1) return "expected a multipart upload";
+  const bnd = params[0][1] ?? params[0][2];
   const text = Buffer.from(body ?? "").toString("latin1");
   const end = text.lastIndexOf(`--${bnd}--`);
   if (end < 0 || text.slice(end + bnd.length + 4).trim()) return "malformed upload";
   const named = [];
   for (const part of text.slice(0, end).split(`--${bnd}`).slice(1)) {
     const cut = part.indexOf("\r\n\r\n");
-    if (cut < 0) return "malformed upload";
-    const name = /[;\s]name="([^"]{1,40})"/.exec(part.slice(0, cut))?.[1];
-    if (!name) return "unnamed field in the upload";
-    named.push([name, part.slice(cut + 4).replace(/\r\n$/, "")]);
+    if (!part.startsWith("\r\n") || cut < 0) return "malformed upload";
+    const dispositions = part.slice(2, cut).split("\r\n")
+      .filter((line) => /^content-disposition\s*:/i.test(line));
+    if (dispositions.length !== 1) return "unnamed field in the upload";
+    const names = [...dispositions[0].matchAll(/(?:^|;)\s*name\*?\s*=\s*(?:"([^"]{1,40})")?/gi)];
+    if (names.length !== 1 || !names[0][1]) return "unnamed field in the upload";
+    named.push([names[0][1], part.slice(cut + 4).replace(/\r\n$/, "")]);
   }
   return named;
 }
@@ -642,7 +665,9 @@ function transcribeUpload(contentType, body) {
   const fields = parts.filter(([n]) => n !== "file");
   if (files.length !== 1) return "expected exactly one audio file";
   for (const [name, value] of fields) {
-    const rule = TRANSCRIBE_FIELDS[name];
+    // OWN properties only: `constructor` or `__proto__` as a field name found
+    // Object's and threw, which the adapter answered with a 500.
+    const rule = Object.hasOwn(TRANSCRIBE_FIELDS, name) ? TRANSCRIBE_FIELDS[name] : null;
     if (!rule || !rule.ok.test(value)) return "unexpected field in the upload";
     if (fields.filter(([n]) => n === name).length > rule.max) return "repeated field in the upload";
   }
@@ -657,13 +682,33 @@ function transcribeUpload(contentType, body) {
     && wav.readUInt16LE(34) === 16
     && wav.toString("latin1", 36, 40) === "data";
   if (!pcm16kMono) return "expected 16 kHz mono 16-bit WAV audio";
+  // No longer than one request may count for: the meter clamps at 40 seconds,
+  // so a longer upload would be heard in full and billed in part. The app's
+  // chunks are 25 seconds, and at most ~27 where it waits for a pause.
+  if (wav.length - 44 > MAX_SECONDS_PER_REQUEST * BYTES_PER_SECOND) {
+    return `audio longer than ${MAX_SECONDS_PER_REQUEST} seconds — send it in chunks`;
+  }
   return { wav, fields };
+}
+
+/// WHAT A BROWSER CLIP IS, read from its first bytes rather than from anything
+/// the caller wrote about it: the filename and type Groq is told are ours.
+/// WebM (Chrome, Firefox), Ogg, MP4 (Safari) or WAV; anything else is not a
+/// recording this page made.
+function clipType(bytes) {
+  const head = Buffer.from(bytes.slice(0, 12), "latin1");
+  if (head.length < 12) return null;
+  if (head.readUInt32BE(0) === 0x1a45dfa3) return ["clip.webm", "audio/webm"];
+  if (head.toString("latin1", 0, 4) === "OggS") return ["clip.ogg", "audio/ogg"];
+  if (head.toString("latin1", 4, 8) === "ftyp") return ["clip.mp4", "audio/mp4"];
+  if (head.toString("latin1", 0, 4) === "RIFF" && head.toString("latin1", 8, 12) === "WAVE") return ["clip.wav", "audio/wav"];
+  return null;
 }
 
 /// The upload, REBUILT from the parts that passed. What Groq parses is then
 /// exactly what was checked here — no second parser reading the caller's
 /// bytes differently from the first.
-function formData(wav, fields) {
+function formData(audio, fields, [filename, type] = ["audio.wav", "audio/wav"]) {
   const b = `deiko-${randomBytes(16).toString("hex")}`;
   const part = (disposition, value) => [
     Buffer.from(`--${b}\r\nContent-Disposition: form-data; ${disposition}\r\n\r\n`),
@@ -672,7 +717,7 @@ function formData(wav, fields) {
   ];
   return {
     body: Buffer.concat([
-      ...part(`name="file"; filename="audio.wav"\r\nContent-Type: audio/wav`, wav),
+      ...part(`name="file"; filename="${filename}"\r\nContent-Type: ${type}`, audio),
       ...fields.flatMap(([name, value]) => part(`name="${name}"`, value)),
       Buffer.from(`--${b}--\r\n`),
     ]),
@@ -754,7 +799,7 @@ export async function handle({ method, path, query = "", token, contentType, bod
       if (overRateLimit(`pgip:${who}`)) return pgJson(429, { error: "slow down" });
       const usedUp = { error: "you have used the playground for today — the real Deiko has no such limit" };
       const ipRow = playgroundIpKey(who, now);
-      if (fullRows.has(ipRow)) return pgJson(429, usedUp);
+      if (isFull(ipRow, now)) return pgJson(429, usedUp);
       let taken;
       try {
         taken = await recordPlaygroundTicket(who, { now });
@@ -764,8 +809,8 @@ export async function handle({ method, path, query = "", token, contentType, bod
       if (taken.ticketsToday > PLAYGROUND_TICKETS_PER_IP_PER_DAY) {
         // NOT refunded. A refused ticket must still count, or asking for one
         // in a loop would be free and the cap would bound nothing — and once
-        // it is over, the next attempt is refused before it writes at all.
-        markFull(ipRow);
+        // it is over, attempts for the next minute are refused before they write.
+        markFull(ipRow, now);
         return pgJson(429, usedUp);
       }
       const { ticket, expiresAt } = issueTicket();
@@ -807,13 +852,21 @@ export async function handle({ method, path, query = "", token, contentType, bod
       if (models[0][1] !== "whisper-large-v3") {
         return pgJson(400, { error: "this route transcribes with whisper-large-v3 only" });
       }
+      // REBUILT, NEVER FORWARDED — the same rule as /v1/transcribe. The
+      // caller's bytes reach Groq only as the audio of a body built here,
+      // beside the pinned model, so no reading of them can smuggle a `url`
+      // (Groq fetching audio of any length, off every counter here) past us.
+      const clip = named.find(([n]) => n === "file")[1];
+      const kind = clipType(clip);
+      if (!kind) return pgJson(400, { error: "that is not an audio recording" });
+      const form = formData(clip, [["model", "whisper-large-v3"]], kind);
       // `spent` = this TICKET is used up and a fresh one would work. The daily
       // ceilings deliberately carry no such marker, because there retrying is
       // pointless and the page should stop asking.
       const sessionDone = { error: "this playground session is done", spent: true };
       const clipCeiling = { error: "the playground is at its daily ceiling — try again tomorrow" };
-      if (fullRows.has(playgroundTicketKey(ticketId))) return pgJson(429, sessionDone);
-      if (fullRows.has(playgroundClipKey(now))) return pgJson(429, clipCeiling);
+      if (isFull(playgroundTicketKey(ticketId), now)) return pgJson(429, sessionDone);
+      if (isFull(playgroundClipKey(now), now)) return pgJson(429, clipCeiling);
       let counts;
       try {
         counts = await recordPlaygroundClip(ticketId, { now });
@@ -821,19 +874,19 @@ export async function handle({ method, path, query = "", token, contentType, bod
         return pgJson(503, { error: unavailable(err) });
       }
       if (counts.ticketClips > PLAYGROUND_CLIPS_PER_TICKET) {
-        markFull(playgroundTicketKey(ticketId));
+        markFull(playgroundTicketKey(ticketId), now);
         await refundPlaygroundClip(ticketId, { now }).catch(() => {});
         return pgJson(429, sessionDone);
       }
       if (counts.clipsToday > PLAYGROUND_CLIPS_PER_DAY) {
-        markFull(playgroundClipKey(now));
+        markFull(playgroundClipKey(now), now);
         await refundPlaygroundClip(ticketId, { now }).catch(() => {});
         return pgJson(429, clipCeiling);
       }
       const out = await proxy(GROQ_STT_URL, {
         authorization: `Bearer ${groqKey}`,
-        "content-type": contentType || "multipart/form-data",
-      }, body);
+        "content-type": form.contentType,
+      }, form.body);
       // A VENDOR 429 IS OUR BILL, NOT THEIR MISTAKE. It is the likeliest
       // failure on a public page under burst, and charging for it meant two
       // bursts killed a ticket having produced nothing. `providerFault` is
@@ -860,8 +913,8 @@ export async function handle({ method, path, query = "", token, contentType, bod
 
       const goesUsed = { error: "that is both of this session's goes", spent: true };
       const intentCeiling = { error: "the playground is at its daily ceiling — try again tomorrow" };
-      if (fullRows.has(playgroundTicketQueryKey(ticketId))) return pgJson(429, goesUsed);
-      if (fullRows.has(playgroundIntentKey(now))) return pgJson(429, intentCeiling);
+      if (isFull(playgroundTicketQueryKey(ticketId), now)) return pgJson(429, goesUsed);
+      if (isFull(playgroundIntentKey(now), now)) return pgJson(429, intentCeiling);
       let counts;
       try {
         counts = await recordPlaygroundIntent(ticketId, { now });
@@ -872,12 +925,12 @@ export async function handle({ method, path, query = "", token, contentType, bod
       // type, and typing reaches this route without spending one. Counted
       // here, a visitor gets the same number of goes either way.
       if (counts.ticketQueries > PLAYGROUND_QUERIES_PER_TICKET) {
-        markFull(playgroundTicketQueryKey(ticketId));
+        markFull(playgroundTicketQueryKey(ticketId), now);
         await refundPlaygroundIntent(ticketId, { now }).catch(() => {});
         return pgJson(429, goesUsed);
       }
       if (counts.intentsToday > PLAYGROUND_INTENTS_PER_DAY) {
-        markFull(playgroundIntentKey(now));
+        markFull(playgroundIntentKey(now), now);
         await refundPlaygroundIntent(ticketId, { now }).catch(() => {});
         return pgJson(429, intentCeiling);
       }
@@ -964,6 +1017,14 @@ export async function handle({ method, path, query = "", token, contentType, bod
   // attacker's request, they fail /v1/transcribe for whoever is paying.
   if (overRateLimit(token)) return json(429, { error: "rate limit exceeded" });
 
+  // A LICENCE THAT WILL NEVER REACH POLAR. `tierFor` treats a key not shaped
+  // like Polar's as junk, without asking — so if a real key ever has another
+  // shape, this line is where the operator finds out, by the fingerprint
+  // DEIKO_REVOKED_TOKENS and the request log already use. Never the key.
+  if (subject.kind === "license" && !isPolarKey(subject.id) && (path === "/v1/quota" || path === "/v1/transcribe")) {
+    console.warn(`licence not shaped like a Polar key, metered as no allowance: tok:${tokenFingerprint(token)}`);
+  }
+
   // WHAT AM I, AND WHAT IS LEFT. Read-only, and the only route the app itself
   // calls rather than the pipeline. Settings asks the instant a licence key is
   // pasted, because "Pro · 10 hours a month" is the confirmation that the key
@@ -998,8 +1059,9 @@ export async function handle({ method, path, query = "", token, contentType, bod
     // anything is counted, so a malformed upload costs no write.
     const upload = transcribeUpload(contentType, body);
     if (typeof upload === "string") return json(400, { error: upload });
-    // The header is pinned to 16 kHz mono 16-bit, so the data's length IS its
-    // duration. Still floored: see `MIN_SECONDS_PER_REQUEST`.
+    // The header is pinned to 16 kHz mono 16-bit and the data to at most 40
+    // seconds, so the data's length IS its duration and the meter's clamp
+    // never bites. Still floored: see `MIN_SECONDS_PER_REQUEST`.
     const seconds = Math.max(audioSeconds(upload.wav.length - 44), MIN_SECONDS_PER_REQUEST);
 
     // METERED BEFORE IT IS SPENT. The counter is incremented and then judged,
@@ -1014,7 +1076,7 @@ export async function handle({ method, path, query = "", token, contentType, bod
       // no allowance at all (a licence that is not Pro — a junk key included).
       // Counting those and then refunding them was two writes per refusal.
       const ceiling = `${globalKey(now)}#${tier === "pro" ? "pro" : "free"}`;
-      const known = fullRows.has(ceiling)
+      const known = isFull(ceiling, now)
         ? decide({ tier, kind: subject.kind, usedSeconds: 0, globalUsedSeconds: Infinity })
         : capFor(tier, subject.kind) === 0
           ? decide({ tier, kind: subject.kind, usedSeconds: seconds, globalUsedSeconds: 0 })
@@ -1022,7 +1084,7 @@ export async function handle({ method, path, query = "", token, contentType, bod
       if (known) return json(known.status, { error: known.error });
       const { usedSeconds, globalUsedSeconds } = await record({ subject, seconds, tier, now });
       verdict = decide({ tier, kind: subject.kind, usedSeconds, globalUsedSeconds });
-      if (globalUsedSeconds > globalCapFor(tier)) markFull(ceiling);
+      if (globalUsedSeconds > globalCapFor(tier)) markFull(ceiling, now);
     } catch (err) {
       // FAILING CLOSED, DELIBERATELY. If the usage table cannot be reached we
       // do not know what anybody has spent, and the honest answer is to stop
@@ -1174,7 +1236,7 @@ export async function handle({ method, path, query = "", token, contentType, bod
 ///
 /// A refusal gives every count back — refusals must not climb the rows that
 /// are refusing them — and remembers the full row, so the next one is
-/// refused before it writes (`fullRows`).
+/// refused before it writes (`fullRows`, for a minute).
 async function spendTextCall({ route, day, dayCap, callerCap, subject, ip, now, ceiling, mine }) {
   const who = ipHash(ip);
   const rows = [
@@ -1182,7 +1244,7 @@ async function spendTextCall({ route, day, dayCap, callerCap, subject, ip, now, 
     [callerKey(route, `${subject.kind === "license" ? "lic" : "dev"}:${subject.id}`, now), callerCap, mine],
     ...(who ? [[callerKey(route, `ip:${who}`, now), TEXT_CALLS_PER_IP_PER_DAY, mine]] : []),
   ];
-  const known = rows.find(([key]) => fullRows.has(key));
+  const known = rows.find(([key]) => isFull(key, now));
   if (known) return { refusal: json(429, { error: known[2] }) };
   const keys = rows.map(([key]) => key);
   let totals;
@@ -1193,7 +1255,7 @@ async function spendTextCall({ route, day, dayCap, callerCap, subject, ip, now, 
   }
   const over = rows.filter(([, cap], i) => totals[i] > cap);
   if (!over.length) return { rows: keys };
-  over.forEach(([key]) => markFull(key));
+  over.forEach(([key]) => markFull(key, now));
   await uncountCalls(keys).catch(() => {});
   return { refusal: json(429, { error: over[0][2] }) };
 }

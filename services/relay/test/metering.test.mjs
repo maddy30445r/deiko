@@ -1175,8 +1175,8 @@ test("a playground clip whose answer dies halfway keeps its CORS headers and its
   withPlayground(async () => {
     const b = "----pg";
     const body = Buffer.from(
-      `--${b}\r\nContent-Disposition: form-data; name="file"; filename="a.webm"\r\n\r\nAUDIO\r\n` +
-      `--${b}\r\nContent-Disposition: form-data; name="model"\r\n\r\nwhisper-large-v3\r\n--${b}--\r\n`);
+      `--${b}\r\nContent-Disposition: form-data; name="file"; filename="a.webm"\r\n\r\n\x1a\x45\xdf\xa3${"\0".repeat(64)}\r\n` +
+      `--${b}\r\nContent-Disposition: form-data; name="model"\r\n\r\nwhisper-large-v3\r\n--${b}--\r\n`, "latin1");
     globalThis.fetch = async (url) => {
       upstream.push(String(url));
       return new Response(new ReadableStream({ start(c) { c.error(new Error("reset")); } }), { status: 200 });
@@ -1212,4 +1212,149 @@ test("the upload the app's own FormData encodes is accepted, in both modes", asy
     assert.equal(r.status, 200, `native=${native}: ${r.body}`);
     assert.equal(rows.get(`dev:fd${native}`).audioSeconds, MIN_SECONDS_PER_REQUEST);
   }
+});
+
+// ── The playground's clip is rebuilt too ────────────────────────────────────
+
+const pgClip = (contentType, body, ticketId = "clipticket") => handle({
+  method: "POST", path: "/v1/playground/transcribe", token: mintTicket(ticketId), origin: "https://deiko.app",
+  contentType, body: Buffer.from(body, "latin1"),
+});
+const WEBM = "\x1a\x45\xdf\xa3" + "\x00".repeat(64);
+
+test("a header line that is not Content-Disposition cannot name a part", () =>
+  withPlayground(async () => {
+    // The reviewer's probe: the relay read `name="file"` off a dummy header,
+    // Groq read the Content-Disposition, and a `url` went through as audio.
+    const b = "----pg";
+    const r = await pgClip(`multipart/form-data; boundary=${b}`,
+      `--${b}\r\nX-Dummy: name="file"\r\nContent-Disposition: form-data; name="url"\r\n\r\nhttps://example.com/slow.wav\r\n` +
+      `--${b}\r\nContent-Disposition: form-data; name="model"\r\n\r\nwhisper-large-v3\r\n--${b}--\r\n`);
+    assert.equal(r.status, 400);
+    assert.ok(upstreamBodies.every((u) => !u.includes('name="url"')), "no url reaches Groq");
+    assert.equal(writes, 0);
+  }));
+
+test("a second boundary hidden in another parameter cannot split the body two ways", () =>
+  withPlayground(async () => {
+    // `xboundary=AAA` made the relay split on AAA while Groq split on BBB,
+    // hiding a `url` part inside what the relay took to be the file.
+    const hidden =
+      `--BBB\r\nContent-Disposition: form-data; name="url"\r\n\r\nhttps://example.com/slow.wav\r\n` +
+      `--BBB\r\nContent-Disposition: form-data; name="model"\r\n\r\nwhisper-large-v3\r\n--BBB--\r\n`;
+    const r = await pgClip("multipart/form-data; xboundary=AAA; boundary=BBB",
+      `--AAA\r\nContent-Disposition: form-data; name="file"; filename="a.webm"\r\n\r\n${WEBM}\r\n${hidden}` +
+      `--AAA\r\nContent-Disposition: form-data; name="model"\r\n\r\nwhisper-large-v3\r\n--AAA--\r\n`);
+    assert.equal(r.status, 400);
+    assert.ok(upstreamBodies.every((u) => !u.includes('name="url"')), "no url reaches Groq");
+  }));
+
+test("a real browser clip is rebuilt: its audio, its type, the pinned model, nothing else", () =>
+  withPlayground(async () => {
+    const clips = [
+      ["webm", WEBM, "audio/webm"],
+      ["ogg", "OggS" + "\x00".repeat(64), "audio/ogg"],
+      ["mp4", "\x00\x00\x00\x20ftypM4A " + "\x00".repeat(64), "audio/mp4"],
+      ["wav", "RIFF\x24\x00\x00\x00WAVEfmt " + "\x00".repeat(64), "audio/wav"],
+    ];
+    for (const [ext, audio, type] of clips) {
+      const b = "----WebKitFormBoundaryAbC123";
+      const r = await pgClip(`multipart/form-data; boundary=${b}`,
+        `--${b}\r\nContent-Disposition: form-data; name="file"; filename="narration.bin"\r\nContent-Type: application/octet-stream\r\n\r\n${audio}\r\n` +
+        `--${b}\r\nContent-Disposition: form-data; name="model"\r\n\r\nwhisper-large-v3\r\n--${b}--\r\n`,
+        `clip${ext}`); // a ticket each: two clips is a ticket's whole allowance
+      assert.equal(r.status, 200, `${ext}: ${r.body}`);
+      const sent = upstreamBodies.at(-1);
+      assert.match(sent, new RegExp(`filename="clip\\.${ext}"\\r\\nContent-Type: ${type}\\r\\n\\r\\n`));
+      assert.deepEqual(parts(sent, upstreamTypes.at(-1)).map(([n]) => n), ["file", "model"]);
+      assert.equal(parts(sent, upstreamTypes.at(-1))[0][1], audio, "the audio arrives byte for byte");
+      assert.doesNotMatch(upstreamTypes.at(-1), /WebKitFormBoundary/, "under the relay's own boundary");
+    }
+  }));
+
+test("a clip that is not audio is refused before it is counted", () =>
+  withPlayground(async () => {
+    const b = "----pg";
+    const r = await pgClip(`multipart/form-data; boundary=${b}`,
+      `--${b}\r\nContent-Disposition: form-data; name="file"; filename="a.webm"\r\n\r\n%PDF-1.7 not audio\r\n` +
+      `--${b}\r\nContent-Disposition: form-data; name="model"\r\n\r\nwhisper-large-v3\r\n--${b}--\r\n`);
+    assert.equal(r.status, 400);
+    assert.equal(writes, 0);
+    assert.equal(upstream.length, 0);
+  }));
+
+test("audio longer than one request may count for is refused, not under-billed", async () => {
+  // The meter clamps at 40 s, so a two-minute WAV used to be heard in full
+  // and billed as forty seconds.
+  const r = await post("dev_long", 5, { file: wav(41) });
+  assert.equal(r.status, 400);
+  assert.match(JSON.parse(r.body).error, /longer than 40 seconds/);
+  assert.equal(writes, 0);
+  assert.equal((await post("dev_long", 5, { file: wav(40) })).status, 200, "forty seconds is still one request");
+});
+
+test("a row seen full is refused on sight for a minute, then looked at again", async () => {
+  // Concurrent requests being refused and refunded can make a row read full
+  // for an instant. Remembered until midnight, that instant shut a container
+  // for the day; for a minute, it costs a minute.
+  const realNow = Date.now;
+  const t0 = Date.UTC(2026, 8, 24, 12);
+  try {
+    Date.now = () => t0;
+    seed(summaryKey(t0), SUMMARIES_PER_DAY);
+    assert.equal((await summarize("dev_blip1")).status, 429);
+    seed(summaryKey(t0), SUMMARIES_PER_DAY - 5); // the in-flight refunds land
+    Date.now = () => t0 + 30_000;
+    writes = 0;
+    assert.equal((await summarize("dev_blip2")).status, 429);
+    assert.equal(writes, 0, "inside the minute, refused without a write");
+    Date.now = () => t0 + 61_000;
+    assert.equal((await summarize("dev_blip3")).status, 200, "after it, the row is read again and has room");
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("a licence key the shape gate refuses is logged by fingerprint, never by value", async () => {
+  const warned = [];
+  const realWarn = console.warn;
+  console.warn = (line) => warned.push(String(line));
+  try {
+    await post("lic_not-a-polar-key", 10);
+  } finally {
+    console.warn = realWarn;
+  }
+  const { tokenFingerprint } = await import("../relay.mjs");
+  assert.equal(warned.length, 1);
+  assert.match(warned[0], new RegExp(`tok:${tokenFingerprint("lic_not-a-polar-key")}`));
+  assert.doesNotMatch(warned[0], /not-a-polar-key/);
+});
+
+test("an upload two parsers could read differently is refused, not guessed at", async () => {
+  // Each of these read as a valid upload to the old parser while a standard
+  // one saw something else. Rebuilding means Groq never sees the difference,
+  // but what is rebuilt must be what the caller's body actually says.
+  const audio = wav(3).toString("latin1");
+  const model = (b) => `--${b}\r\nContent-Disposition: form-data; name="model"\r\n\r\nwhisper-large-v3\r\n`;
+  const file = (b, header = `Content-Disposition: form-data; name="file"`) => `--${b}\r\n${header}\r\n\r\n${audio}\r\n`;
+  const cases = [
+    ["a dummy header naming the part", "multipart/form-data; boundary=B",
+      file("B", `X-Dummy: name="file"\r\nContent-Disposition: form-data; name="url"`) + model("B") + "--B--\r\n"],
+    ["a boundary inside another parameter", "multipart/form-data; xboundary=AAA; boundary=BBB",
+      file("AAA") + model("AAA") + "--AAA--\r\n"],
+    ["two boundary parameters", "multipart/form-data; boundary=AAA; boundary=BBB",
+      file("AAA") + model("AAA") + "--AAA--\r\n"],
+    ["two names in one disposition", "multipart/form-data; boundary=B",
+      file("B", `Content-Disposition: form-data; name="file"; name="url"`) + model("B") + "--B--\r\n"],
+    ["a delimiter that is only the front of a longer one", "multipart/form-data; boundary=AA",
+      file("AA") + `--AAXY\r\nContent-Disposition: form-data; name="language"\r\n\r\nhi\r\n` + model("AA") + "--AA--\r\n"],
+    ["not form-data at all", "multipart/mixed; boundary=B", file("B") + model("B") + "--B--\r\n"],
+  ];
+  for (const [what, contentType, body] of cases) {
+    const r = await handle({
+      method: "POST", path: "/v1/transcribe", token: "dev_parser", contentType, body: Buffer.from(body, "latin1"),
+    });
+    assert.equal(r.status, 400, `${what} must be refused`);
+  }
+  assert.equal(writes, 0);
 });

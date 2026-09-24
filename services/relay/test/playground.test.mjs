@@ -124,7 +124,7 @@ const clip = (parts, { filename = true } = {}) => {
     `--${b}\r\nContent-Disposition: form-data; name="${k}"` +
     (k === "file" && filename ? `; filename="narration.webm"\r\nContent-Type: audio/webm` : "") +
     `\r\n\r\n${v}\r\n`).join("") + `--${b}--\r\n`;
-  return { body: Buffer.from(body), contentType: `multipart/form-data; boundary=${b}` };
+  return { body: Buffer.from(body, "latin1"), contentType: `multipart/form-data; boundary=${b}` };
 };
 const postClip = async (parts, opts) => {
   const c = clip(parts, opts);
@@ -132,10 +132,26 @@ const postClip = async (parts, opts) => {
 };
 
 test("a real browser upload is not mistaken for an abusive one", async () => {
-  // Reaches the vendor (no key here, so anything but 400 proves it got past
-  // the guard) rather than being refused as a malformed field list.
-  const res = await postClip([["file", "AUDIO"], ["model", "whisper-large-v3"]]);
+  // Gets past every check on the upload (no usage table here, so anything
+  // but 400 proves it) rather than being refused as a malformed field list.
+  // The clip has to BE audio now — WebM's first four bytes, here.
+  const res = await postClip([["file", "\x1a\x45\xdf\xa3" + "\0".repeat(16)], ["model", "whisper-large-v3"]]);
   assert.notEqual(res.status, 400, "the page's own upload shape must be accepted");
+});
+
+test("a field named after an Object property is refused, not a crash", async () => {
+  // `TRANSCRIBE_FIELDS[name]` found Object's own `constructor`, whose `.ok`
+  // was undefined, and threw — a 500 carrying a stack trace.
+  for (const name of ["constructor", "__proto__", "toString", "hasOwnProperty"]) {
+    const b = "----X";
+    const res = await handle({
+      method: "POST", path: "/v1/transcribe", query: "", token: "dev_proto", origin: "",
+      contentType: `multipart/form-data; boundary=${b}`,
+      body: Buffer.from(`--${b}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\nx\r\n` +
+        `--${b}\r\nContent-Disposition: form-data; name="file"\r\n\r\nRIFF\r\n--${b}--\r\n`),
+    });
+    assert.equal(res.status, 400, `${name} must be an unexpected field`);
+  }
 });
 
 test("the caller cannot choose the model or smuggle billed fields", async () => {
