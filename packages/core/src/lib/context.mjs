@@ -78,7 +78,7 @@ export const MIN_NARRATION = 12;
 /// determine a request." Narrow on purpose — it drops briefs from the board
 /// and skips filing, so a real summary saying a timeout is "too short for
 /// large uploads" must not match.
-export const COULD_NOT_TELL = /\btoo (short|garbled) to (tell|determine|understand)\b|\btranscript\b.*\btoo (short|garbled)\b/i;
+export const COULD_NOT_TELL = /\btoo (short|garbled) to (tell|determine|understand)\b/i;
 
 /** Why a brief has nothing to place — too little said, or a summary that
  *  could not tell what was asked — or null when it can be placed. One rule

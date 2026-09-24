@@ -211,6 +211,9 @@ test("could not tell is Groq's own line, not any summary that says too short", (
   const real = "Increase the session timeout; it is too short for large uploads.";
   assert.equal(COULD_NOT_TELL.test(real), false);
   assert.equal(unplaceable({ narration: said, summaryLine: real }), null);
+  const alsoReal = "The transcript is too short after trimming; fix the truncation";
+  assert.equal(COULD_NOT_TELL.test(alsoReal), false);
+  assert.equal(unplaceable({ narration: said, summaryLine: alsoReal }), null);
 });
 
 test("a sibling whose summary could not tell falls back to what was said", () => {
