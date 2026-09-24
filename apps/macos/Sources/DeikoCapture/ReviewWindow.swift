@@ -535,11 +535,9 @@ final class ReviewModel: ObservableObject {
                 // then the classifier — measured 1.2–2.3s together — so three
                 // seconds catches it, and caps a wait on one that is not
                 // coming. Only a send waits: the panel's path sends nothing.
-                var unfiled = false
                 if after != nil {
                     await waitForPlacing()
                     guard !Task.isCancelled else { return }
-                    unfiled = placing
                 }
                 var failure: Error?
                 await exclusively { [self] in
@@ -578,6 +576,10 @@ final class ReviewModel: ObservableObject {
                     phase = .ready
                     return
                 }
+                // Read here, in the lane: the filing clears `placing` in the
+                // lane too, the moment its re-render lands, so this says
+                // whether the prompt about to be read carries the task.
+                let unfiled = placing
                 let prompt = try BriefPipeline.prompt(sessionDir: sessionDir)
                 // A send called off while it queued for the lane must not
                 // go now. The last point it can still be stopped.
@@ -647,6 +649,9 @@ final class ReviewModel: ObservableObject {
                 await exclusively { [self] in
                     guard !superseded(run, sessionDir) else { return }
                     let rerendered = try? await BriefPipeline.rerender(sessionDir: sessionDir)
+                    // Here, in the lane, the moment the prompt carries the
+                    // task: a send queued behind this reads it next.
+                    if run == placingRun { placing = false }
                     guard stillCurrent(sessionDir), !superseded(run, sessionDir) else { return }
                     if let rerendered { digest = rerendered }
                     context = SessionContext.read(sessionDir: sessionDir)
