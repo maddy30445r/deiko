@@ -11,6 +11,8 @@
 // `usage.mjs` reads and writes the numbers. This file only says what they mean.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { isIPv6 } from "node:net";
+
 /// A free install gets thirty minutes of relay audio ONCE — not thirty a month.
 ///
 /// The recurring version was the earlier plan and it is a small annuity paid to
@@ -131,6 +133,20 @@ export const SUMMARIES_PER_DAY =
 /// anything real, and the counter is global rather than per person.
 export const CLASSIFIES_PER_DAY =
   Number(process.env.DEIKO_CLASSIFIES_PER_DAY ?? 1000);
+
+/// ONE CALLER'S SHARE OF THOSE TWO DAYS. The ceilings above are global, so a
+/// single script could spend all of one on its own and switch the route off
+/// for everybody until midnight. These sit in front of them: per subject (the
+/// bearer), and per hashed address so that rotating bearers from one machine
+/// does not reset anything. An honest install summarises and files a few
+/// dozen briefs a day; the address cap is twice the subject's so an office
+/// behind one NAT is not one person.
+export const SUMMARIES_PER_CALLER_PER_DAY =
+  Number(process.env.DEIKO_SUMMARIES_PER_CALLER_PER_DAY ?? 200);
+export const CLASSIFIES_PER_CALLER_PER_DAY =
+  Number(process.env.DEIKO_CLASSIFIES_PER_CALLER_PER_DAY ?? 200);
+export const TEXT_CALLS_PER_IP_PER_DAY =
+  Number(process.env.DEIKO_TEXT_CALLS_PER_IP_PER_DAY ?? 400);
 
 /// 16 kHz, mono, 16-bit — so two bytes a sample, 32,000 bytes a second. The
 /// client's chunker uses exactly these constants.
@@ -277,6 +293,32 @@ export function summaryKey(now) {
 /// classifier's vendor bill and the summary's cannot close each other.
 export function classifyKey(now) {
   return `global#${dayKey(now)}#classify`;
+}
+
+/// One caller's count on a text route today. `who` is `dev:<id>`, `lic:<id>`
+/// or `ip:<hash>` — ids are `[A-Za-z0-9_-]`, so none of them can spell another
+/// row's key.
+export function callerKey(route, who, now) {
+  return `${route}:${who}#${dayKey(now)}`;
+}
+
+/// WHAT COUNTS AS ONE ADDRESS. An IPv4 address is one; an IPv6 address is
+/// its /64, because that is what one subscriber is handed — keyed on the full
+/// address, a single home line could mint a fresh identity per request and
+/// the per-address caps bounded nothing. IPv4-mapped IPv6 (`::ffff:a.b.c.d`,
+/// what a dual-stack socket reports) is the IPv4 address it carries.
+export function ipBucket(ip) {
+  const addr = String(ip ?? "").split("%")[0];
+  if (!isIPv6(addr)) return addr;
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(addr);
+  if (mapped) return mapped[1];
+  const [head, tail] = addr.split("::");
+  const left = head ? head.split(":") : [];
+  // A dotted tail is two groups counted as one; only the first four groups
+  // are kept and `::` pads with at least one, so the miscount never reaches them.
+  const right = tail === undefined ? [] : tail ? tail.split(":") : [];
+  const groups = [...left, ...Array(Math.max(0, 8 - left.length - right.length)).fill("0"), ...right];
+  return `${groups.slice(0, 4).map((g) => parseInt(g, 16).toString(16)).join(":")}::/64`;
 }
 
 /// ── THE PLAYGROUND ──────────────────────────────────────────────────────────

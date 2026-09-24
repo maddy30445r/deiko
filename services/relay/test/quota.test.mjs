@@ -18,6 +18,7 @@ import {
   dayKey,
   decide,
   globalKey,
+  ipBucket,
   licenseKey,
   monthKey,
   subjectFrom,
@@ -251,4 +252,23 @@ test("the byte rule alone is fooled by compressed audio, which is why a floor ex
   assert.ok(audioSeconds(30 * 1024) < 1);
   assert.ok(MIN_SECONDS_PER_REQUEST >= 5, "bounds the day at ~8,640 calls");
   assert.ok(MIN_SECONDS_PER_REQUEST < 25, "an honest 25s chunk must never meet it");
+});
+
+// ── What counts as one address ──────────────────────────────────────────────
+
+test("an IPv6 caller is its /64, however the address is written", () => {
+  // One subscriber is handed a whole /64. Keyed on the full address, a
+  // single home line minted a fresh identity per request.
+  const home = ipBucket("2001:db8:abcd:12::1");
+  assert.equal(home, "2001:db8:abcd:12::/64");
+  for (const same of ["2001:db8:abcd:12:ffff:1:2:3", "2001:0DB8:ABCD:0012::9", "2001:db8:abcd:12:0:0:0:0"]) {
+    assert.equal(ipBucket(same), home, `${same} is the same subscriber`);
+  }
+  assert.notEqual(ipBucket("2001:db8:abcd:13::1"), home, "the next /64 is somebody else");
+});
+
+test("an IPv4 caller is its address, and a dual-stack socket's mapped form is the same one", () => {
+  assert.equal(ipBucket("203.0.113.7"), "203.0.113.7");
+  assert.equal(ipBucket("::ffff:203.0.113.7"), "203.0.113.7");
+  assert.equal(ipBucket("fe80::1%en0"), "fe80:0:0:0::/64", "a zone id is not part of the address");
 });
