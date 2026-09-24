@@ -163,6 +163,7 @@ enum AXProbe {
             ? [element] + neighbours
             : neighbours + [element]
 
+        let page = pageContext(for: hit)
         return ProbeEvent(
             shape: shape,
             app: pid.map(appIdentity(pid:)),
@@ -175,7 +176,9 @@ enum AXProbe {
                 manualAccessibilityApplied: poked,
                 elapsedMs: Clock.nowMs() - started,
                 error: nil
-            )
+            ),
+            pageURL: page.url,
+            document: page.document
         )
     }
 
@@ -316,6 +319,7 @@ enum AXProbe {
             }
 
         let pid = hits.first.flatMap { pidOf($0.element) }
+        let page = hits.first.map { pageContext(for: $0.element) }
         return ProbeEvent(
             shape: shape,
             app: pid.map(appIdentity(pid:)),
@@ -333,7 +337,9 @@ enum AXProbe {
                 manualAccessibilityApplied: poked,
                 elapsedMs: Clock.nowMs() - started,
                 error: elements.isEmpty ? "no elements resolved in region" : nil
-            )
+            ),
+            pageURL: page?.url,
+            document: page?.document
         )
     }
 
@@ -526,7 +532,9 @@ enum AXProbe {
             selectedText: text(kAXSelectedTextAttribute as String),
             frame: frame(of: el),
             ancestors: withAncestors ? ancestors(of: el, levels: 3) : [],
-            attributeNames: names
+            attributeNames: names,
+            domIdentifier: text("AXDOMIdentifier"),
+            domClassList: text("AXDOMClassList")?.split(separator: " ").map(String.init)
         )
     }
 
@@ -581,6 +589,29 @@ enum AXProbe {
             current = parentRef as! AXUIElement
         }
         return nil
+    }
+
+    /// The page address of the nearest web area above `el` (host and path —
+    /// `PageURL.trim`), and the window's open document. A walk of at most 40
+    /// parents, the bound `windowTitle` uses; nil for either when absent.
+    private static func pageContext(for el: AXUIElement) -> (url: String?, document: String?) {
+        var url: String?
+        var current = el
+        for _ in 0..<40 {
+            if stringify(copyAttr(current, kAXRoleAttribute as String)) == "AXWebArea" {
+                url = stringify(copyAttr(current, "AXURL")).flatMap(PageURL.trim)
+                break
+            }
+            guard let parentRef = copyAttr(current, kAXParentAttribute as String),
+                  CFGetTypeID(parentRef) == AXUIElementGetTypeID() else { break }
+            current = parentRef as! AXUIElement
+        }
+        var document: String?
+        if let ref = copyAttr(el, kAXWindowAttribute as String), CFGetTypeID(ref) == AXUIElementGetTypeID() {
+            document = stringify(copyAttr(ref as! AXUIElement, kAXDocumentAttribute as String))
+                .flatMap(PageURL.documentPath)
+        }
+        return (url, document)
     }
 
     // ── Electron bridge ─────────────────────────────────────────────────────
@@ -791,6 +822,17 @@ enum AXProbe {
             default:
                 return nil
             }
+        }
+        if typeID == CFURLGetTypeID() {
+            // AXURL and AXDocument arrive as CFURL; they used to be dropped here.
+            let url = ref as! CFURL   // a CF cast; cannot fail after the type check
+            return (url as URL).absoluteString
+        }
+        if typeID == CFArrayGetTypeID() {
+            // AXDOMClassList arrives as an array of strings.
+            guard let items = ref as? [Any] else { return nil }
+            let strings = items.compactMap { $0 as? String }.filter { !$0.isEmpty }
+            return strings.isEmpty ? nil : strings.joined(separator: " ")
         }
         if typeID == AXUIElementGetTypeID() {
             return "<AXUIElement>"
