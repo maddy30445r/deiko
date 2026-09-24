@@ -276,6 +276,9 @@ final class ReviewModel: ObservableObject {
     /// what keeps an older run from clearing a newer one's `placing`.
     private var placingRun = 0
     private var placingDir: String?
+    /// Whether `prepareToExtend` interrupted a filing — what a refused
+    /// extension has to make up for.
+    private var stoodDownFiling = false
     /// Bumped whenever a send in flight is called off: by a newer send, or by
     /// the card going away. Checked at the last moment, inside the render
     /// lane, where `Task.isCancelled` answers for the lane's own task and not
@@ -324,9 +327,11 @@ final class ReviewModel: ObservableObject {
             opensSettings: false,
             raw: ""
         ))
-        // `prepareToExtend` stood the filing down for a `reload` that is not
-        // coming, so file the brief as it stands.
-        if let sessionDir { fetchContext(sessionDir: sessionDir) }
+        // `prepareToExtend` stood a filing down for a `reload` that is not
+        // coming, so file the brief as it stands — only then. A brief already
+        // filed keeps its place: filing it again is another request, and a
+        // second sort that could move it.
+        if stoodDownFiling, let sessionDir { fetchContext(sessionDir: sessionDir) }
     }
     /// The narration as recognised, so "did the developer change it" is a
     /// comparison rather than a flag that has to be maintained.
@@ -769,6 +774,7 @@ final class ReviewModel: ObservableObject {
         holdsBeforeExtending = Set(BriefPipeline.holdTexts(sessionDir: sessionDir).keys)
         // The filing in flight stands down here, as the note above says: it
         // would re-render from a half-written session. `reload` files again.
+        stoodDownFiling = placing
         _ = startFiling(sessionDir)
         placing = false
         phase = .working("Recording — tap \(SessionKey.selected.name) to stop")
