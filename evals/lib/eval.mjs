@@ -62,6 +62,20 @@ export const rankOf = (ids, task) => (ids.indexOf(task) + 1) || null;
 const right = (r) => r.out.got === r.exp.want && (r.exp.want !== "join" || r.out.task === r.exp.task);
 const said = (o) => (o.got === "join" ? `join ${o.task}` : o.got === "ask" ? `ask ${o.candidates.join(", ")}` : o.got);
 
+/// What Jev said about the task the key expected, for tuning the lines:
+/// round one's yes, and the second look's yes and relation when there was one.
+function numbers(r) {
+  const jev = r.jev;
+  if (!jev) return "";
+  const id = r.exp.task;
+  const parts = [`gate ${fmt(jev.gate)}`];
+  if (id && id in (jev.same ?? {})) parts.push(`r1 ${fmt(jev.same[id])}`);
+  const look = id ? jev.second?.[id] : null;
+  if (look) parts.push(`r2 ${fmt(look.same)} ${look.relation ?? "?"}`);
+  return parts.join(" ");
+}
+const fmt = (p) => (typeof p === "number" ? p.toFixed(2) : "–");
+
 export function tally(rows) {
   const judged = rows.filter((r) => r.out);
   const byWant = {};
@@ -79,6 +93,7 @@ export function tally(rows) {
       stamp: r.stamp,
       want: r.exp.want === "join" ? `join ${r.exp.task}` : r.exp.want,
       got: said(r.out),
+      ...(r.jev && { why: numbers(r) }),
     })),
     asks: real.filter((r) => r.out.got === "ask").length,
     real: real.length,
@@ -101,7 +116,7 @@ export function formatReport({ rows, shortlistOnly, errored = 0 }) {
   }
   if (shortlistOnly) return out.join("\n");
   const t = tally(rows);
-  for (const w of t.wrong) out.push(`✗ ${w.stamp}  want ${w.want.padEnd(26)} got ${w.got}`);
+  for (const w of t.wrong) out.push(`✗ ${w.stamp}  want ${w.want.padEnd(26)} got ${w.got}${w.why ? `  (${w.why})` : ""}`);
   out.push(`accuracy ${t.correct}/${t.n} (${pct(t.correct, t.n)}) · odds ${t.byWant.odds.join("/")} · new ${t.byWant.new.join("/")} · join ${t.byWant.join.join("/")}`);
   out.push(`ask rate ${t.asks}/${t.real} (${pct(t.asks, t.real)})`);
   if (errored) out.push(`· ${errored} brief(s) got no answer from the relay and are not counted`);
