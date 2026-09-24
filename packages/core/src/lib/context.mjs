@@ -188,6 +188,10 @@ export function wantsQuickHint(context, optimizeCosts) {
 
 const COULD_NOT_TELL = /too (short|garbled)/i;
 
+/// Lines kept per outcome section. The file itself is parsed whole, so a
+/// long Did cannot push Open out of reach.
+const OUTCOME_LINES = 40;
+
 /**
  * What a sibling session says, read the one way every script reads it.
  * Missing pieces are null or empty, never a throw.
@@ -205,6 +209,8 @@ export function readBriefLine(sessionDir) {
   const summaryLine = (text("review-summary.txt") ?? "").split("\n").map((l) => l.trim()).find(Boolean) ?? null;
   const said = (narration ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
   const outcomeText = text("outcome.md");
+  const outcome = outcomeText?.trim() ? parseOutcome(outcomeText) : null;
+  if (outcome) for (const k in outcome) outcome[k] = outcome[k].slice(0, OUTCOME_LINES);
   return {
     id: basename(sessionDir),
     dir: sessionDir,
@@ -216,6 +222,6 @@ export function readBriefLine(sessionDir) {
     apps: Array.isArray(summary.apps) ? summary.apps : [],
     windows: Array.isArray(summary.windows) ? summary.windows : [],
     screenTerms: Array.isArray(summary.screenTerms) ? summary.screenTerms : [],
-    outcome: outcomeText?.trim() ? parseOutcome(outcomeText.slice(0, 8000)) : null,
+    outcome,
   };
 }

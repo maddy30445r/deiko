@@ -176,6 +176,17 @@ test("a sibling is read with its summary line, task, windows, terms and outcome"
   });
 });
 
+test("a long outcome is read whole and each section capped", () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-context-"));
+  const dir = join(root, "20260918-155717");
+  mkdirSync(dir);
+  const did = Array.from({ length: 120 }, (_, i) => `- Changed thing number ${i} in a line long enough to add up.`);
+  writeFileSync(join(dir, "outcome.md"), ["## Did", ...did, "## Open", "Test on a trackpad."].join("\n"));
+  const { outcome } = readBriefLine(dir);
+  assert.equal(outcome.did.length, 40);
+  assert.deepEqual(outcome.open, ["Test on a trackpad."], "an Open past 8000 characters still counts");
+});
+
 test("a sibling whose summary could not tell falls back to what was said", () => {
   const root = mkdtempSync(join(tmpdir(), "deiko-context-"));
   const dir = join(root, "20260918-163821");
