@@ -30,9 +30,9 @@ import { carriesSecret, assertNoSecrets, redact, redactBlock } from "./lib/redac
 import { briefKeys, repoHints } from "./lib/labels.mjs";
 import { buildPrompt, quoteSurvives } from "./lib/prompt.mjs";
 import { degradedReason as cloudDegradedReason } from "./lib/cloud.mjs";
-import { readBriefLine, wantsQuickHint } from "./lib/context.mjs";
+import { briefDate, readBriefLine, relativeAge, wantsQuickHint } from "./lib/context.mjs";
 import { briefText, loadModel, vectorIsCurrent, writeVector } from "./lib/meaning.mjs";
-import { groupTasks, readBoard, readTasks, taskIdFor, taskState, titleFor, tokens, writeTaskNotes } from "./lib/tasks.mjs";
+import { firm, groupTasks, readBoard, readTasks, stampTime, taskIdFor, taskState, titleFor, tokens, writeTaskNotes } from "./lib/tasks.mjs";
 
 // ── Rendering ───────────────────────────────────────────────────────────────
 
@@ -242,6 +242,10 @@ const released = kept.map((r) => {
 });
 
 const narration = narrationOverride ?? utteranceText(words).replace(/\s*\n\s*/g, " ");
+// THE BRIEF'S LABELS, computed once — `manifest.summary` reuses this instead
+// of calling `briefKeys` a second time, and `related` below reads it to say
+// why a linked task might be related.
+const keys = briefKeys({ referents: kept, narration });
 
 // Which persona this brief is being written for, as an absolute path the app
 // wrote beside the session — the same arrangement as `narration.override.txt`
@@ -275,11 +279,21 @@ const mates = context?.pile === "odds" ? [] : groups.get(myTask) ?? [];
 // Every mate is older, so the oldest of them is the oldest brief of the task
 // counting this one — the brief `writeTaskNotes` titles an untitled task by.
 const myTitle = mates.length ? taskTitles.get(myTask) ?? titleFor(mates.at(-1)) : null;
+// RECENT BRIEFS, for the prompt: firm ones only (`firm` in tasks.mjs) — the
+// founder, a hand placement, or a sure v3 join — so a join Jev only guessed
+// at never shows up dressed as this task's own history. Newest three,
+// oldest first, dated.
+const firmMates = mates.filter((b) => firm(b, myTask));
 const task = mates.length
   ? {
     title: myTitle,
     count: mates.length,
+    id: myTask,
+    // "Last asked" already says the newest ask; the recent briefs below say
+    // that themselves, dated, so it would only repeat.
     ...taskState(mates, myTitle),
+    now: taskState(mates, myTitle).now.filter((l) => !l.startsWith("Last asked: ")),
+    recent: firmMates.slice(0, 3).reverse().map((b) => ({ date: briefDate(b.id), line: b.line })),
     notePath: join(root, "tasks", `${myTask}.md`),
   }
   : null;
@@ -294,6 +308,7 @@ const maybe = !task && Array.isArray(context?.candidates) && context.candidates.
     const bs = groups.get(id);
     const title = taskTitles.get(id) ?? titleFor(bs.at(-1));
     return {
+      id,
       title,
       now: taskState(bs, title).now,
       // A task of one has no note (`writeTaskNotes` skips it), so its history
@@ -304,11 +319,32 @@ const maybe = !task && Array.isArray(context?.candidates) && context.candidates.
     };
   })
   : null;
+
+// RELATED, NOT MERGED: the earlier task `classify.mjs` linked instead of
+// joining. Only a task the board still has, and only while this brief is its
+// own task. Why it might be related comes from the labels the two share.
+const relatedId = !task && typeof context?.related === "string" && context.related !== myTask && groups.has(context.related)
+  ? context.related : null;
+const related = relatedId ? (() => {
+  const bs = groups.get(relatedId);
+  const theirs = (k) => new Set(bs.flatMap((b) => b.keys?.[k] ?? []).map((s) => String(s).toLowerCase()));
+  const shares = (k) => (keys[k] ?? []).some((v) => theirs(k).has(String(v).toLowerCase()));
+  return {
+    id: relatedId,
+    title: taskTitles.get(relatedId) ?? titleFor(bs.at(-1)),
+    why: shares("pages") ? "same page" : shares("files") ? "same file" : shares("sites") ? "same site" : null,
+    age: relativeAge(stampTime(basename(dir)) - stampTime(bs[0].id)),
+    notePath: bs.length > 1
+      ? join(root, "tasks", `${relatedId}.md`)
+      : join(bs[0].dir, bs[0].outcome ? "outcome.md" : "prompt.txt"),
+  };
+})() : null;
+
 const quickHint = wantsQuickHint(context, process.env.DEIKO_OPTIMIZE_COSTS === "1");
 const outcomePath = join(dir, "outcome.md");
 
 const { text, evidence } = buildPrompt({
-  narration, referents: released, personaPath, task, maybe, outcomePath, quickHint,
+  narration, referents: released, personaPath, task, maybe, related, outcomePath, quickHint,
 });
 
 // The same message for a destination that cannot open a local path.
@@ -323,7 +359,7 @@ const { text, evidence } = buildPrompt({
 // until the developer throws it — and re-running the renderer at that moment
 // would put a Node spawn between letting go and the paste landing.
 const attached = buildPrompt({
-  narration, referents: released, attached: true, task, maybe, outcomePath, quickHint,
+  narration, referents: released, attached: true, task, maybe, related, outcomePath, quickHint,
 });
 
 // Fail closed on the captured content, not on the assembled prompt. `text`
@@ -396,7 +432,7 @@ const manifest = {
     // error, ticket — cleaned so the next visit to the same page matches.
     // Kept referents only, like everything here. All but `components` may
     // travel to the classifier, redacted, as the window titles do.
-    keys: briefKeys({ referents: kept, narration }),
+    keys,
     referentCount: kept.length,
     wordCount: words.length,
     // COUNTED OVER `kept`, like `referentCount`. `align` runs over every

@@ -54,10 +54,28 @@ test("a re-rendered brief carries on only from briefs older than itself", async 
   await render(a);
   await render(b);
   assert.doesNotMatch(prompt(a), /carries on/, "the first brief has nothing earlier");
-  assert.match(prompt(b), /This carries on from "Fix the price display after saving" \(1 brief so far\)\.\nThe full history is in /,
+  assert.match(prompt(b), /This carries on from "Fix the price display after saving" \(1 brief so far\)\.\nRecent briefs:\n- Sep 18: Fix the price display after saving\.\nThe full history is in [^\n]*— read what you need\. Deiko task id: t-20260918-100000 \(the deiko-memory tools can open it\)\.\n/,
     "titled from the oldest brief, counting only earlier ones, with no line repeating the title");
   assert.doesNotMatch(prompt(b), /cart total/, "a later brief never reaches an earlier one's prompt");
-  assert.match(prompt(c), /\(2 briefs so far\)\. Where it stands:\nLast asked: The listing page shows the old price too\.\n/);
+  assert.match(prompt(c), /\(2 briefs so far\)\.\nRecent briefs:\n- Sep 18: Fix the price display after saving\.\nThe full history is in /);
+  // b's own join was only ever set by hand in the test, never decided by Jev
+  // or a person — so it is not firm, and never dresses up as c's history.
+  assert.doesNotMatch(prompt(c), /old price too/, "a guessed join never appears as history");
+  assert.equal(prompt(c, "prompt-attached.txt").includes("t-20260918-100000"), false, "a browser never gets the id");
+});
+
+test("a brief linked to related work names it as a hint, not as its history", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-render-"));
+  const pricing = session(root, "20260918-100000", { said: "the price still shows 99 after I save", summary: "Fix the price display after saving." });
+  const chart = session(root, "20260918-110000", {
+    said: "why does the week 32 signup chart drop", summary: "Explain the week-32 signup drop.",
+    context: { task: "t-20260918-110000", related: "t-20260918-100000", decidedBy: "jev" },
+  });
+  await render(pricing);
+  await render(chart);
+  assert.match(prompt(chart), /Possibly related, not confirmed: "Fix the price display after saving" \(1 hour ago\)\. History: [^\n]*20260918-100000\/prompt\.txt · task id t-20260918-100000\n/);
+  assert.doesNotMatch(prompt(chart), /carries on/);
+  assert.match(prompt(chart, "prompt-attached.txt"), /Possibly related, not confirmed: "Fix the price display after saving" \(1 hour ago\)\.\n/);
 });
 
 test("candidates are listed whenever the task was not placed, even with the collection placed by hand", async () => {

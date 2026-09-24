@@ -65,6 +65,19 @@ export function briefDate(id, now = new Date()) {
   return year === now.getFullYear() ? text : `${text}, ${year}`;
 }
 
+/** "2 days ago", from a gap in milliseconds — plain words for a prompt. */
+export function relativeAge(ms) {
+  const hours = ms / 3600e3;
+  const days = hours / 24;
+  const n = (x, unit) => `${x} ${unit}${x === 1 ? "" : "s"} ago`;
+  if (hours < 1) return "within the hour";
+  if (hours < 24) return n(Math.round(hours), "hour");
+  if (days < 1.5) return "yesterday";
+  if (days < 14) return n(Math.round(days), "day");
+  if (days < 60) return n(Math.round(days / 7), "week");
+  return n(Math.round(days / 30), "month");
+}
+
 /// The shortest narration worth classifying. "Thank you." is a real
 /// transcript, and a board is full of them; asking what project it belongs to
 /// is a question with no answer. Shorter joins its task only on a clear local

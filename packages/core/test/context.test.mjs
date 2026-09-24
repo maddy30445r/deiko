@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 
 import {
   ASK, CLASSIFIER, COULD_NOT_TELL, FLOORS, GATE, JOIN, RELATIONS, TIERS, briefDate, decide, level,
-  projectFromKeys, readBriefLine, slug, unplaceable, wantsQuickHint, yes,
+  projectFromKeys, readBriefLine, relativeAge, slug, unplaceable, wantsQuickHint, yes,
 } from "../lib/context.mjs";
 import { EMPTY_KEYS } from "../lib/labels.mjs";
 import { stampTime } from "../lib/tasks.mjs";
@@ -25,6 +25,17 @@ test("a brief's date comes from its stamp, with the year only when it is not thi
   assert.equal(briefDate("20260918-155717", now), "Sep 18");
   assert.equal(briefDate("20251102-090000", now), "Nov 2, 2025");
   assert.equal(briefDate("personas", now), "");
+});
+
+test("a gap reads in plain words", () => {
+  const h = 3600e3;
+  assert.equal(relativeAge(0.5 * h), "within the hour");
+  assert.equal(relativeAge(1 * h), "1 hour ago");
+  assert.equal(relativeAge(3 * h), "3 hours ago");
+  assert.equal(relativeAge(26 * h), "yesterday");
+  assert.equal(relativeAge(2 * 24 * h), "2 days ago");
+  assert.equal(relativeAge(21 * 24 * h), "3 weeks ago");
+  assert.equal(relativeAge(90 * 24 * h), "3 months ago");
 });
 
 // ── Decisions ───────────────────────────────────────────────────────────────
