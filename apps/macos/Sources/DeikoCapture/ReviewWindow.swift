@@ -645,11 +645,6 @@ final class ReviewModel: ObservableObject {
     /// slow round trip cannot delay Good to go.
     private func fetchSummary(sessionDir: String) {
         summaryTask?.cancel()
-        // The classifier reads this file. Left in place, a summary that fails
-        // after "Point at more" filed the longer brief on the shorter one's.
-        try? FileManager.default.removeItem(
-            at: URL(fileURLWithPath: sessionDir).appendingPathComponent("review-summary.txt")
-        )
         summaryPending = true
         summaryTask = Task {
             let text = await BriefPipeline.summary(sessionDir: sessionDir)
@@ -748,6 +743,13 @@ final class ReviewModel: ObservableObject {
         self.sessionDir = sessionDir
         summary = nil
         notFiled = false
+        // The classifier reads this file, and it describes the shorter
+        // session. Left in place, a summary that failed now filed the longer
+        // brief on the old one. Only here: reopening a brief keeps its summary
+        // when a fresh one cannot be had.
+        try? FileManager.default.removeItem(
+            at: URL(fileURLWithPath: sessionDir).appendingPathComponent("review-summary.txt")
+        )
         phase = .working("Transcribing what you added…")
         task = Task {
             do {
