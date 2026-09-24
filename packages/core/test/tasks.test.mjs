@@ -158,6 +158,24 @@ test("the shortlist is capped", () => {
   assert.equal(scoreTasks({ query: "price", tasks: many, now: 0 }).length, SHORTLIST);
 });
 
+test("the two most recently active tasks keep a place on the shortlist whatever they score", () => {
+  const now = stampTime("20260920-100000");
+  const matching = Array.from({ length: 10 }, (_, i) => ({
+    id: `t-202609${String(i + 1).padStart(2, "0")}-100000`, text: "the price bug", lastActive: now - 10 * 86400e3,
+  }));
+  const recent = [
+    { id: "t-20260919-080000", text: "signup chart", lastActive: now - 26 * 3600e3 },
+    { id: "t-20260919-090000", text: "sitemap xml", lastActive: now - 25 * 3600e3 },
+  ];
+  const top = scoreTasks({ query: "the price bug", tasks: [...recent, ...matching], now });
+  assert.equal(top.length, SHORTLIST);
+  assert.deepEqual(top.slice(0, 6).map((t) => t.id), matching.slice(0, 6).map((t) => t.id), "the best six by score stay");
+  assert.deepEqual(top.slice(6).map((t) => t.id).sort(), recent.map((t) => t.id), "the lowest two give way");
+  const scored = scoreTasks({ query: "signup chart sitemap xml", tasks: [...recent, ...matching], now });
+  assert.deepEqual(scored.slice(0, 2).map((t) => t.id).sort(), recent.map((t) => t.id));
+  assert.deepEqual(scored.slice(2).map((t) => t.id), matching.slice(0, 6).map((t) => t.id), "already in, they take no extra slot");
+});
+
 test("the note is deterministic, capped and names two files, never a folder", () => {
   const members = [...price].reverse().map((b) => ({ ...b, task: "t-20260918-155836" }));
   const note = renderTaskNote({ id: "t-20260918-155836", title: "Price display doesn't update", collection: "acme-portal", briefs: members });

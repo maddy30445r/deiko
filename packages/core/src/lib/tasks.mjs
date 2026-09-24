@@ -155,6 +155,9 @@ export function taskText(title, briefs) {
   ].join(" ");
 }
 
+/// Shortlist places kept for the most recently active tasks.
+const RECENT = 2;
+
 /**
  * The shortlist: BM25 over each task's text, plus a nudge for the same repo
  * and for recent work. A nudge, not a gate — a topic switch ten minutes after
@@ -173,7 +176,7 @@ export function scoreTasks({ query, tasks, repoHints = [], now = Date.now(), lim
   const q = [...new Set(tokens(query))];
   const hints = repoHints.filter(Boolean).map((h) => h.toLowerCase());
   const k1 = 1.2, b = 0.75, N = docs.length;
-  return tasks.map((t, i) => {
+  const ranked = tasks.map((t, i) => {
     const tf = new Map();
     for (const w of docs[i]) tf.set(w, (tf.get(w) ?? 0) + 1);
     let score = 0;
@@ -189,7 +192,18 @@ export function scoreTasks({ query, tasks, repoHints = [], now = Date.now(), lim
     if (age < 2 * 3600e3) score += 2;
     else if (age < 24 * 3600e3) score += 1;
     return { id: t.id, score, sameRepo };
-  }).sort((x, y) => y.score - x.score).slice(0, limit);
+  }).sort((x, y) => y.score - x.score);
+  // "Same bug as yesterday" shares few words with yesterday's task once the
+  // board is full of the same page's words, and the recency nudge is noise
+  // beside a BM25 score. So the two most recently active tasks always get a
+  // place, taken from the lowest scores when they did not earn one.
+  // ponytail: a fixed two, whatever they score; a third recent task still has
+  // to win on words. Upgrade: weigh recency into the score itself once real
+  // filing misses say how much.
+  const top = ranked.slice(0, limit);
+  const recent = new Set([...tasks].sort((x, y) => y.lastActive - x.lastActive).slice(0, RECENT).map((t) => t.id));
+  const missing = ranked.filter((r) => recent.has(r.id) && !top.includes(r));
+  return [...top.slice(0, limit - missing.length), ...missing];
 }
 
 /** The compiled note. `briefs` newest first. Every line from another
