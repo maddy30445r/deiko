@@ -239,7 +239,7 @@ enum Collections {
     @MainActor
     static func ask(prefill: String?, informative: String) -> Collection? {
         guard let name = askText(
-            title: "New collection",
+            title: "New project",
             informative: informative,
             value: prefill ?? "",
             placeholder: "Project name",

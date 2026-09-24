@@ -663,8 +663,16 @@ private struct BoardPane: View {
         }
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         guard !q.isEmpty else { return inFilter }
+        // A TASK IS FOUND BY ITS NAME, and found whole: its header counts
+        // its briefs, so showing only the ones whose words also matched made
+        // the count and the cards disagree. Titled from the group, not per
+        // brief — `title(ofTask:)` walks the board for an untitled task.
+        let named = Set(sessions.groups(of: inFilter).filter { group in
+            (sessions.taskTitles[group.id] ?? group.items.last?.title ?? "").lowercased().contains(q)
+        }.map(\.id))
         return inFilter.filter {
-            ($0.line ?? "").lowercased().contains(q)
+            named.contains($0.task)
+                || ($0.line ?? "").lowercased().contains(q)
                 || ($0.repo ?? "").lowercased().contains(q)
                 || $0.apps.contains { $0.lowercased().contains(q) }
         }
@@ -737,7 +745,7 @@ private struct BoardPane: View {
                             title: sessions.items.isEmpty ? "The board is empty" : "Nothing here yet",
                             line: sessions.items.isEmpty
                                 ? "Briefs pin themselves here as you record them. Nothing is uploaded — this is the folder in your Documents."
-                                : "Try another collection, an app name, or a word you said."
+                                : "Try another project, a task name, an app name, or a word you said."
                         )
                     } else {
                         // `.top`, because the default is `.center`: cards of
@@ -983,8 +991,9 @@ private struct BoardCard: View {
     }
 }
 
-/// A task's name above its briefs: what it is, how many, since when. The
-/// menu is on the words, like a collection's is on its chip.
+/// A task's name above its briefs: what it is, how many, since when — and
+/// the same ⋯ a board card has, because a menu found only by right-click is a
+/// menu most people never find.
 private struct TaskHeader: View {
     let group: SessionsStore.Group
     let store: SessionsStore
@@ -998,28 +1007,45 @@ private struct TaskHeader: View {
                 .font(.system(size: 11))
                 .foregroundStyle(DeikoStyle.ink2)
                 .lineLimit(1)
+            Menu {
+                TaskMenu(group: group, store: store)
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.system(size: 12))
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .tint(DeikoStyle.ink2)
+            .help("Rename this task or open its note")
             Spacer(minLength: 0)
         }
         .padding(.top, 10)
         .contentShape(Rectangle())
-        .contextMenu {
-            Button("Rename…") {
-                guard let title = Collections.askText(
-                    title: "Rename this task",
-                    informative: "Its briefs stay together. The next one that belongs here joins them.",
-                    value: store.title(ofTask: group.id),
-                    placeholder: "What the work is",
-                    confirm: "Rename"
-                ), !title.isEmpty else { return }
-                Tasks.name(group.id, title)
-                Task { await store.load(root: store.root) }
-            }
-            Button("Open the task note") {
-                let note = Tasks.notePath(for: group.id)
-                if FileManager.default.fileExists(atPath: note.path) { NSWorkspace.shared.open(note) }
-            }
+        .contextMenu { TaskMenu(group: group, store: store) }
+    }
+}
+
+private struct TaskMenu: View {
+    let group: SessionsStore.Group
+    let store: SessionsStore
+
+    var body: some View {
+        Button("Rename…") {
+            guard let title = Collections.askText(
+                title: "Rename this task",
+                informative: "Its briefs stay together. The next one that belongs here joins them.",
+                value: store.title(ofTask: group.id),
+                placeholder: "What the work is",
+                confirm: "Rename"
+            ), !title.isEmpty else { return }
+            Tasks.name(group.id, title)
+            Task { await store.load(root: store.root) }
         }
-        .help("Right-click to rename this task or open its note")
+        Button("Open the task note") {
+            let note = Tasks.notePath(for: group.id)
+            if FileManager.default.fileExists(atPath: note.path) { NSWorkspace.shared.open(note) }
+        }
     }
 }
 
@@ -1040,7 +1066,7 @@ struct SessionMenu: View {
             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.dir)])
         }
         Divider()
-        Menu("Move to collection") {
+        Menu("Move to project") {
             Button("Unsorted") { store.move(item, to: nil) }
             if !store.collections.isEmpty { Divider() }
             ForEach(store.collections) { collection in
@@ -1051,12 +1077,12 @@ struct SessionMenu: View {
                 }
             }
             Divider()
-            Button("New collection…") { newCollection() }
+            Button("New project…") { newCollection() }
         }
         Menu("Move to task") {
             // The brief that started its task is already on its own task:
             // moving it there would change nothing.
-            Button("On its own") { store.move(item, toTask: Tasks.own(item.id)) }
+            Button("Start a new task") { store.move(item, toTask: Tasks.own(item.id)) }
                 .disabled(item.task == Tasks.own(item.id))
             let others = store.recentTasks(excluding: item.task)
             if !others.isEmpty { Divider() }
@@ -1126,9 +1152,9 @@ private struct CollectionMenu: View {
             reload()
         }
         Divider()
-        Button("Delete collection…", role: .destructive) {
+        Button("Delete project…", role: .destructive) {
             let alert = NSAlert()
-            alert.messageText = "Delete the \(collection.name) collection?"
+            alert.messageText = "Delete the \(collection.name) project?"
             alert.informativeText = "Its \(store.count(of: collection.id)) brief"
                 + "\(store.count(of: collection.id) == 1 ? "" : "s") stay on the board, unsorted. "
                 + "No session is deleted."
