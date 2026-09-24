@@ -130,6 +130,11 @@ export function prepare({ id, me, summary, windowTitles, board, taskTitles, coll
       files: [...new Set(face.flatMap((b) => b.outcome?.files ?? []))].slice(0, 10).map(redact),
       outcome: last ? redact([...last.did, ...last.open].join(" ")).slice(0, 600) : "",
       keys: Object.fromEntries(["pages", "sites", "files", "tickets"].map((k) => [k, topLabels(face.map((b) => b.keys?.[k] ?? []), 3)])),
+      // WHAT ITS FIRM BRIEFS ASKED, newest first. A board without agent
+      // outcomes has nothing else to say what a task became after its first
+      // brief: measured, a QA task whose follow-ups were all about the price
+      // display scored 0.2 against a price brief without these, 0.75 with.
+      recent: face.slice(0, 3).map((b) => redact(b.summaryLine || b.narration || "").slice(0, 200)).filter(Boolean),
     };
   });
 

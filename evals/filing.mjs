@@ -110,9 +110,9 @@ for (const [stamp, e] of exp) {
     }
   }
   rows.push(row);
-  // THE KEY, NOT THE GUESS, goes on the in-memory board — and as a hand
-  // placement, which is what a corrected answer key is.
-  done.push({ ...me, task: e.task, odds: e.want === "odds" });
+  // THE KEY, NOT THE GUESS, goes on the in-memory board. A placement the key makes is a hand placement — which is also what lets
+  // it describe its task (`firm` in tasks.mjs), as a corrected brief would.
+  done.push({ ...me, task: e.task, odds: e.want === "odds", decidedBy: "you" });
   if (e.want === "new") taskTitles.set(e.task, titleFor(me));
 }
 process.stdout.write(formatReport({ rows, shortlistOnly, errored, all: flag("--all") }) + "\n");

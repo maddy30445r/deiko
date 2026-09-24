@@ -609,6 +609,7 @@ test("a legacy body never gets a second look, and its answer passes straight thr
 const tasksOf = (n) => Array.from({ length: n }, (_, i) => ({
   id: `t-202609${String(i + 10).padStart(2, "0")}-100000`, title: `task ${i}`, now: "where it stands",
   windows: ["Orb.swift — Deiko"], keys: { pages: ["Signups"], files: ["Orb.swift"], components: ["never sent"] },
+  recent: ["why does week 32 dip", "x".repeat(300), "third", "a fourth is one too many"],
   lastActive: "2 days ago", sameRepo: true,
 }));
 const [A, B, C] = ["t-20260910-100000", "t-20260911-100000", "t-20260912-100000"];
@@ -644,6 +645,7 @@ test("round one asks every question in one request, and the caller cannot add an
   assert.equal(sent.questions.collection.criteria.none, "None of these — a different project");
   assert.equal(Object.keys(sent.state.tasks).length, 20, "tasks are keyed by id");
   assert.deepEqual(sent.state.tasks[A].keys, { pages: ["Signups"], sites: [], files: ["Orb.swift"], tickets: [] });
+  assert.deepEqual(sent.state.tasks[A].recent, ["why does week 32 dip", "x".repeat(200), "third"], "three, each capped");
   assert.equal(sent.state.tasks[A].lastActive, undefined, "recency is not a clue");
   assert.equal(sent.state.tasks[A].sameRepo, undefined, "nor is the project name");
   assert.deepEqual(sent.state.brief.keys.pages, ["Signups"]);

@@ -441,6 +441,9 @@ export function classifyRequest(sent) {
       windows: strings(t.windows, 3, L.title),
       files: strings(t.files, 5, 120),
       outcome: str(t.outcome, L.outcome),
+      // What its confirmed briefs asked, newest first. Without an agent's
+      // outcome a task is otherwise only its first brief's title.
+      recent: strings(t.recent, 3, 200),
     }]));
 
   const questions = {

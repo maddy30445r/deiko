@@ -277,6 +277,7 @@ test("the request carries labels, never screen words or components", async () =>
   assert.deepEqual(body.keys.pages, ["Signups"]);
   assert.equal("components" in body.keys, false);
   assert.deepEqual(body.tasks[0].keys.pages, ["Pricing"]);
+  assert.deepEqual(body.tasks[0].recent, ["the price still shows 99 after I save"], "what its firm briefs asked");
   assert.deepEqual(body.collections[0].labels, ["build", "Pricing"]);
   assert.equal(JSON.stringify(body).includes("secretword"), false);
   assert.equal(JSON.stringify(body).includes("Weekly signups"), false);
