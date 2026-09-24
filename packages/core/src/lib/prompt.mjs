@@ -411,8 +411,10 @@ export function buildPrompt({
 
   // THE WRITE-BACK, under four headings, because the task note is compiled
   // from them: Open becomes where the task stands, Decided is kept dated.
+  // Asked again for a conversation that keeps going, or the next brief
+  // carries on from where the first answer left it.
   if (outcomePath && !attached) {
-    out.push("", `When you are done, write to ${outcomePath} under four headings — ## Did, ## Decided, ## Open, ## Files — a few lines each. Deiko folds it into this task's memory for the next brief.`);
+    out.push("", `When you are done — and again if we keep going — write to ${outcomePath} under four headings — ## Did, ## Decided, ## Open, ## Files — a few lines each. Deiko folds it into this task's memory for the next brief.`);
   }
 
   return { text: out.join("\n") + "\n", evidence };

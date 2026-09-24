@@ -201,6 +201,8 @@ export function renderTaskNote({ id, title, collection = null, briefs }) {
   const out = [
     `# ${redact(title)}`,
     `${redact(collection ?? "Unsorted")} · ${n} brief${n === 1 ? "" : "s"} · ${first}${last !== first ? `–${last}` : ""} · updated from ${briefs[0].id}`,
+    // Rewritten whole on every render, so an edit here would not last.
+    "Compiled by Deiko from each brief's outcome.md — edit those, not this file.",
   ];
   const now = taskState(briefs, title).now;
   if (now.length) out.push("", "## Now", ...now);

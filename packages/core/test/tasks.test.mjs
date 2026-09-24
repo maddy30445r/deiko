@@ -163,6 +163,7 @@ test("the note is deterministic, capped and names two files, never a folder", ()
   const note = renderTaskNote({ id: "t-20260918-155836", title: "Price display doesn't update", collection: "acme-portal", briefs: members });
   assert.equal(note, renderTaskNote({ id: "t-20260918-155836", title: "Price display doesn't update", collection: "acme-portal", briefs: members }));
   assert.match(note, /^# Price display doesn't update\nacme-portal · 3 briefs · Sep 18 · updated from 20260918-162340\n/);
+  assert.match(note, /\nCompiled by Deiko from each brief's outcome\.md — edit those, not this file\.\n\n## Now\n/);
   assert.match(note, /## Now\nThe listing page still caches the old price\.\n/);
   assert.match(note, /## Decided\n- Sep 18: Reject negative prices in the form\.\n/);
   assert.match(note, /\/20260918-162340\/prompt\.txt · \/Users\/dev\/Documents\/Deiko\/20260918-162340\/outcome\.md/);
