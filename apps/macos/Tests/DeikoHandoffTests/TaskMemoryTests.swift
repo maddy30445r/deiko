@@ -40,3 +40,29 @@ func ownOutcomeAndNoPrompt() throws {
     let done = try session(["outcome.md": 60])
     #expect(!TaskMemory.isStale(sessionDir: unrendered, mates: [done]))
 }
+
+// ── the sorting switch ──────────────────────────────────────────────────────
+
+@Test("sorting off gives the classifier no relay, not even the transcription one")
+func sortingOffHasNoClassifyVars() {
+    let base = ["PATH": "/usr/bin", "DEIKO_RELAY_URL": "https://relay.example",
+                "DEIKO_CLASSIFY_URL": "https://inherited.example", "DEIKO_CLASSIFY_TOKEN": "inherited"]
+    let off = Sorting.environment(base, relay: "https://relay.example", on: false) { "dev_1" }
+    #expect(off["DEIKO_CLASSIFY_URL"] == nil)
+    #expect(off["DEIKO_CLASSIFY_TOKEN"] == nil)
+    #expect(off["DEIKO_SORT_BRIEFS"] == "0")
+    // Transcription's relay is not this switch's to take.
+    #expect(off["DEIKO_RELAY_URL"] == "https://relay.example")
+    #expect(off["PATH"] == "/usr/bin")
+}
+
+@Test("sorting on files through the relay, and only when there is one")
+func sortingOnFilesThroughTheRelay() {
+    let on = Sorting.environment(["DEIKO_SORT_BRIEFS": "0"], relay: "https://relay.example", on: true) { "dev_1" }
+    #expect(on["DEIKO_CLASSIFY_URL"] == "https://relay.example")
+    #expect(on["DEIKO_CLASSIFY_TOKEN"] == "dev_1")
+    #expect(on["DEIKO_SORT_BRIEFS"] == nil)
+    let none = Sorting.environment([:], relay: nil, on: true) { "dev_1" }
+    #expect(none["DEIKO_CLASSIFY_URL"] == nil)
+    #expect(none["DEIKO_CLASSIFY_TOKEN"] == nil)
+}

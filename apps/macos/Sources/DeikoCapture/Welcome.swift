@@ -290,14 +290,15 @@ struct WelcomeView: View {
     }
 
     /// NO LONGER "Deiko's servers never see your narration" — the classifier
-    /// sends it, redacted, to sort the brief into a task, whenever there is a
-    /// relay to sort it through. Same claim as `SettingsWindow.whereAudioGoes`,
-    /// kept in sync by hand since this card has no room for the fuller
-    /// sentence — see that file for why the sorting clause is conditional.
+    /// sends it, redacted, to sort the brief into a task, whenever sorting is
+    /// on and there is a relay to sort it through. Same claim as
+    /// `SettingsWindow.whereAudioGoes`, kept in sync by hand since this card
+    /// has no room for the fuller sentence — see that file for why the sorting
+    /// clause is conditional.
     private var ownKeySubtitle: String {
         guard model.keyPresent else { return "optional — transcription works without one" }
         let local = "in your login keychain — transcription and the summary go straight to Groq"
-        guard Credentials.relayURL != nil else { return local }
+        guard Credentials.filesBriefs else { return local }
         return local + "; to sort briefs, what you said and notes on earlier work pass through Deiko to a sorting model, and Deiko keeps nothing"
     }
 

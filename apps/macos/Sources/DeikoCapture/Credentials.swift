@@ -1,4 +1,5 @@
 import CryptoKit
+import DeikoHandoff
 import Foundation
 import IOKit
 import Security
@@ -24,8 +25,8 @@ enum Credentials {
     /// ONE KEY. It was two — Sarvam for the words, Groq for the summary — until
     /// Whisper replaced Sarvam and took over both. A single name is what makes
     /// "bring your own key and your audio and its transcription skip Deiko"
-    /// a statement with no half-configured state hiding inside it — sorting
-    /// still goes through the relay regardless of a key.
+    /// a statement with no half-configured state hiding inside it — sorting,
+    /// while it is on, still goes through the relay regardless of a key.
     static let names = ["GROQ_API_KEY"]
 
     /// The environment for a spawned pipeline script.
@@ -43,8 +44,8 @@ enum Credentials {
         // so there was nothing left for it to protect. A key also never reaches
         // the relay for transcription — DEIKO_RELAY_URL below is withheld
         // while one is in use, though DEIKO_CLASSIFY_URL still goes out for
-        // sorting — so a free caller who brings one spends no TRANSCRIPTION
-        // quota of ours.
+        // sorting while that is on — so a free caller who brings one spends no
+        // TRANSCRIPTION quota of ours.
         //
         // Nobody without a key pays a keychain DECRYPT here: `willUse` asks an
         // attributes-only question, so there is no password prompt for the
@@ -87,13 +88,24 @@ enum Credentials {
         // the relay whoever transcribed it — the owner decided own-key users
         // keep their memory. Its own names, so `transcribe.mjs` and
         // `summarize.mjs`, which route through DEIKO_RELAY_URL when it is set,
-        // still never see a relay for somebody using their own key.
-        if let relay = relayURL {
-            env["DEIKO_CLASSIFY_URL"] = relay
-            env["DEIKO_CLASSIFY_TOKEN"] = License.bearerToken()
-        }
-        return env
+        // still never see a relay for somebody using their own key. And only
+        // while "Sort briefs into tasks" is on — see `Sorting`.
+        return Sorting.environment(env, relay: relayURL, on: sortsBriefs, token: License.bearerToken)
     }
+
+    /// "Sort briefs into tasks" in Settings — on unless somebody turned it
+    /// off. `bool(forKey:)` rather than `as? Bool`: `defaults write … 0` stores
+    /// a string, and read as "never set" that would leave the switch on.
+    static let sortBriefsKey = "DEIKO_SORT_BRIEFS"
+
+    static var sortsBriefs: Bool {
+        UserDefaults.standard.object(forKey: sortBriefsKey) == nil
+            || UserDefaults.standard.bool(forKey: sortBriefsKey)
+    }
+
+    /// Whether a brief's words go to the relay to be filed: sorting is on and
+    /// there is a relay to sort through. What every sentence about filing asks.
+    static var filesBriefs: Bool { sortsBriefs && relayURL != nil }
 
     /// Where Deiko's transcription service lives, or nil when this build has
     /// none — which is the state until it is actually deployed. `DEIKO_RELAY_URL`

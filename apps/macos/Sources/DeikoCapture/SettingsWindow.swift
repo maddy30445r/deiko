@@ -182,6 +182,16 @@ final class SettingsModel: ObservableObject {
         optimizeCosts = on
     }
 
+    /// "Sort briefs into tasks" — see `Credentials.sortsBriefs`, which the
+    /// pipeline reads when it next runs. Published so the sentence about what
+    /// leaves this Mac changes the moment the switch does.
+    @Published var sortBriefs = Credentials.sortsBriefs
+
+    func setSortBriefs(_ on: Bool) {
+        UserDefaults.standard.set(on, forKey: Credentials.sortBriefsKey)
+        sortBriefs = on
+    }
+
     func setLaunchAtLogin(_ on: Bool) {
         do {
             if on {
@@ -265,17 +275,21 @@ final class SettingsModel: ObservableObject {
             // THE SORTING CLAUSE IS CONDITIONAL, NOT ALWAYS TRUE. A build with
             // no relay stamped at all (`Credentials.relayURL == nil`) never
             // gets `DEIKO_CLASSIFY_URL` either — `childEnvironment` sets it
-            // from the same `relayURL` — so nothing is sorted and nothing
+            // from the same `relayURL` — and nor does anybody who turned
+            // "Sort briefs into tasks" off, so nothing is sorted and nothing
             // reaches Deiko. Saying otherwise there would be the exact bug
             // this sentence exists to avoid, just moved one line down.
             let goesToGroq = "Your narration goes straight to Groq with your key. \(narration.comesBackAs)"
-            guard Credentials.relayURL != nil else { return goesToGroq }
+            guard sortBriefs, Credentials.relayURL != nil else { return goesToGroq }
             return goesToGroq + " To sort each brief into its task, what you said, a one-line summary, your window titles and notes on earlier work go to Deiko, which passes them to a sorting model and keeps nothing."
         }
         if Credentials.relayURL != nil {
+            let ownKey = sortBriefs
+                ? "Add your own key below and transcription and the summary happen at Groq instead; sorting still sends what you said, a one-line summary, your window titles and notes on earlier work through Deiko, which keeps nothing."
+                : "Add your own key below and transcription and the summary happen at Groq instead."
             return isPro
-                ? "Your narration goes to Deiko, which passes it to a transcription service and keeps nothing. \(narration.comesBackAs) Add your own key below and transcription and the summary happen at Groq instead; sorting still sends what you said, a one-line summary, your window titles and notes on earlier work through Deiko, which keeps nothing."
-                : "Your narration goes to Deiko, which passes it to a transcription service and keeps nothing. \(narration.comesBackAs) When your trial runs out, transcription continues on this Mac, in the offline language below. Add your own key below and transcription and the summary happen at Groq instead; sorting still sends what you said, a one-line summary, your window titles and notes on earlier work through Deiko, which keeps nothing."
+                ? "Your narration goes to Deiko, which passes it to a transcription service and keeps nothing. \(narration.comesBackAs) \(ownKey)"
+                : "Your narration goes to Deiko, which passes it to a transcription service and keeps nothing. \(narration.comesBackAs) When your trial runs out, transcription continues on this Mac, in the offline language below. \(ownKey)"
         }
         return "Transcription runs on this Mac. Nothing is uploaded — accuracy is lower, especially for mixed-language speech."
     }
@@ -330,6 +344,12 @@ struct SettingsView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(DeikoStyle.ink2)
                     .fixedSize(horizontal: false, vertical: true)
+                // Only with a relay: without one nothing is filed through
+                // Deiko either way, and what needs no relay is placed anyway.
+                if Credentials.relayURL != nil {
+                    SectionLabel("Tasks")
+                    sorting
+                }
                 SectionLabel("Capturing")
                 capturing
                 SectionLabel("Appearance")
@@ -397,6 +417,25 @@ struct SettingsView: View {
                 ))
                 .font(.system(size: 13))
                 Text("Adds one line to a small brief saying a fast model is probably enough. Your agent still decides for itself — Deiko has never picked the model and this does not change that.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(DeikoStyle.ink2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(14)
+        }
+    }
+
+    /// Whether a brief is filed with the earlier work it belongs to — the one
+    /// switch over what leaves this Mac besides the key above.
+    private var sorting: some View {
+        InsetCard {
+            VStack(alignment: .leading, spacing: 10) {
+                Toggle("Sort briefs into tasks", isOn: Binding(
+                    get: { model.sortBriefs },
+                    set: { model.setSortBriefs($0) }
+                ))
+                .font(.system(size: 13))
+                Text("Files each brief with the earlier work it belongs to. To do that, what you said, a one-line summary, your window titles and notes on earlier work go to Deiko's relay, which keeps nothing. Off: briefs work the same but don't remember earlier work.")
                     .font(.system(size: 11))
                     .foregroundStyle(DeikoStyle.ink2)
                     .fixedSize(horizontal: false, vertical: true)

@@ -56,7 +56,11 @@ public enum SessionClaims {
     ///     through Deiko regardless of who transcribed the audio. The caller
     ///     reads this from a marker `classify.mjs` writes before its POST,
     ///     not from whether `context.json` ended up placed — a failed or
-    ///     raced request still sent the narration and window titles.
+    ///     raced request still sent the narration and window titles. Never
+    ///     true for a brief made with "Sort briefs into tasks" off: nothing
+    ///     is sent, so there is no marker. The claim follows the marker, not
+    ///     the switch, so a brief filed before the switch went off still says
+    ///     what left for it.
     public static func trustLine(
         transcriber: String?,
         degradedReason: String?,

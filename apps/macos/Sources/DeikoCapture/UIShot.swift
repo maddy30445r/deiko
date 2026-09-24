@@ -39,6 +39,13 @@ enum UIShot {
                     to: "\(out)-\(section.rawValue)-\(name).png"
                 )
             }
+            // Settings runs past the first paint; this is all of it.
+            MainNav.shared.section = .settings
+            shoot(
+                MainWindowView(openSessionDir: nil, sessionRoot: Sessions.defaultRoot),
+                size: NSSize(width: 980, height: 1500), look: look,
+                to: "\(out)-settings-full-\(name).png"
+            )
             shoot(orbCard(), size: NSSize(width: 400, height: 130), look: look, to: "\(out)-orb-\(name).png")
             shoot(orbReady(), size: NSSize(width: 400, height: 190), look: look, to: "\(out)-orbready-\(name).png")
             shoot(orbSent(), size: NSSize(width: 400, height: 70), look: look, to: "\(out)-orbsent-\(name).png")
@@ -74,7 +81,7 @@ enum UIShot {
             }
         }
 
-        Emit.log("wrote \(out)-{welcome,orb,dashboard,board,personas,settings}-{light,dark}.png")
+        Emit.log("wrote \(out)-{welcome,orb,dashboard,board,personas,settings,settings-full}-{light,dark}.png")
     }
 
     /// The collapsed card, mid-session: the state the orb spends most of its
@@ -102,8 +109,10 @@ enum UIShot {
         model.personaName = "QA ticket"
         // Posed as a hesitant answer on purpose: "Looks like" is the wording
         // that invites the correction, and it is the one worth looking at.
+        // Unfiled with "Sort briefs into tasks" off, as a brief then is —
+        // `-DEIKO_SORT_BRIEFS NO` poses that without touching the setting.
         model.collections = Collections.all()
-        model.context = SessionContext(
+        model.context = !Credentials.sortsBriefs ? nil : SessionContext(
             collection: Collections.all().first?.id,
             // A task with more than one brief, so the card's placement line
             // reads "Carries on from" the way a joined brief's does.
@@ -161,7 +170,7 @@ enum UIShot {
         // is in the shot: the brief is a new task and the row offers the
         // likely ones.
         let others = SessionsStore.shared.groups(of: items).map(\.id).filter { $0 != items.first?.task }
-        model.context = odds ? SessionContext(decidedBy: "local", pile: "odds") : SessionContext(
+        model.context = odds ? SessionContext(decidedBy: "local", pile: "odds") : !Credentials.sortsBriefs ? nil : SessionContext(
             collection: Collections.all().first?.id,
             // Three, the most `classify.mjs` leaves: the widest the row gets.
             candidates: Array(others.prefix(3)),

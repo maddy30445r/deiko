@@ -112,6 +112,25 @@ func ownKeySessionCanStillBeFiled() {
     #expect(!line.contains("Deiko's transcription"))
 }
 
+@Test("with sorting off nothing is filed, so no other input brings the filing clause in")
+func sortingOffNeverClaimsFiling() {
+    // Off, `classify.mjs` sends nothing and leaves no marker, so the caller
+    // passes `filed: false`. An own key, a summary, a summary said to have
+    // gone with a request: none of them may stand in for the marker.
+    for transcriber in ["groq:whisper-large-v3", "deiko", "on-device", nil] {
+        for ownKey in [true, false] {
+            for hasSummary in [true, false] {
+                let line = SessionClaims.trustLine(
+                    transcriber: transcriber, degradedReason: nil,
+                    seconds: 12, uploadedChunks: 1, hasSummary: hasSummary, ownGroqKey: ownKey, filed: false, filedSummary: true
+                )
+                #expect(!line.contains("to file it"))
+                #expect(!line.contains("notes on earlier work"))
+            }
+        }
+    }
+}
+
 @Test("nothing in the line ever names screen content, for a brief that was never filed")
 func screenContentIsNeverClaimedToLeave() {
     // The product's central claim: screenshots, OCR and accessibility text

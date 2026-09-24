@@ -631,10 +631,11 @@ final class ReviewModel: ObservableObject {
         let run = startFiling(sessionDir)
         let summary = summaryTask
         let root = (sessionDir as NSString).deletingLastPathComponent
-        // NO RELAY STILL PLACES WHAT NEEDS NO RELAY — odds and ends, a short
-        // follow-up on its task's window — but nothing is filed, so nothing
-        // says "Filing…" and nothing waits on it.
-        placing = Credentials.relayURL != nil
+        // NO RELAY, OR SORTING OFF, STILL PLACES WHAT NEEDS NO RELAY — odds
+        // and ends, a short follow-up on its task's window — but nothing is
+        // filed, so nothing says "Filing…" or "Not filed" and nothing waits.
+        let files = Credentials.filesBriefs
+        placing = files
         Task { [self] in
             // THE SUMMARY IS THE BRIEF'S BEST LINE — it names the task and
             // matches it — and it is written by a call that starts at the
@@ -684,7 +685,7 @@ final class ReviewModel: ObservableObject {
                 await SessionsStore.shared.load(root: root)
             }
             guard run == placingRun, stillCurrent(sessionDir) else { return }
-            notFiled = placed == nil && filed
+            notFiled = files && placed == nil && filed
             placing = false
         }
     }
