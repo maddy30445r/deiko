@@ -1,4 +1,5 @@
 import AppKit
+import DeikoHandoff
 import Foundation
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -288,13 +289,9 @@ enum Collections {
     }
 }
 
-struct BriefTask: Codable, Identifiable, Equatable {
+struct BriefTask: Decodable, Identifiable, Equatable {
     let id: String
     var title: String
-    /// What the title was made from — `"summary"`, `"narration"` or `"you"`.
-    /// `classify.mjs` swaps a narration title for the first summary that
-    /// joins the task, and leaves one somebody typed alone.
-    var from: String?
 }
 
 /// Task titles, beside the collections. Membership is not here — it is each
@@ -307,26 +304,30 @@ enum Tasks {
     /// The task a brief is when nobody has put it in another one.
     static func own(_ stamp: String) -> String { "t-" + stamp }
 
+    /// Row by row: one row this app cannot read costs that row, not every
+    /// task's name.
     static func all() -> [BriefTask] {
-        guard let data = try? Data(contentsOf: file) else { return [] }
-        return (try? JSONDecoder().decode([BriefTask].self, from: data)) ?? []
+        struct Row: Decodable {
+            let task: BriefTask?
+            init(from decoder: Decoder) throws { task = try? BriefTask(from: decoder) }
+        }
+        guard let data = try? Data(contentsOf: file),
+              let rows = try? JSONDecoder().decode([Row].self, from: data) else { return [] }
+        return rows.compactMap(\.task)
     }
 
-    /// Name or rename a task. Upserts: a task nobody has named yet has no row.
+    /// Name or rename a task, marked as named by you. Upserts: a task nobody
+    /// has named yet has no row. Every other row is written back exactly as
+    /// it was read — see `TaskTitles`.
     static func name(_ id: String, _ raw: String) {
         let title = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return }
-        var list = all()
-        if let index = list.firstIndex(where: { $0.id == id }) {
-            list[index].title = title
-            list[index].from = "you"
-        } else {
-            list.append(BriefTask(id: id, title: title, from: "you"))
+        guard let data = TaskTitles.renaming(try? Data(contentsOf: file), id: id, to: title) else {
+            Emit.log("tasks: \(file.lastPathComponent) is not a list — left as it is rather than overwritten")
+            return
         }
         do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try encoder.encode(list).write(to: file, options: .atomic)
+            try data.write(to: file, options: .atomic)
         } catch {
             Emit.log("tasks: could not write \(file.lastPathComponent) — \(error.localizedDescription)")
         }
