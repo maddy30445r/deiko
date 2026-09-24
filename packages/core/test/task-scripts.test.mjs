@@ -191,3 +191,19 @@ test("a new task's title says where it came from, and a narration title gives wa
   }
   joining.close();
 });
+
+test("a request that never connected leaves no sent marker; one that got an answer keeps it", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
+  const closed = await relay();
+  closed.close();
+  const refused = filed(root, "20260918-090000", { narration: "the price still shows 99 after I save it" });
+  await classify(refused, closed.url);
+  assert.equal(existsSync(join(refused, "classify.sent")), false);
+
+  const failing = await relay(() => [500, { error: "upstream" }]);
+  const answered = filed(root, "20260918-100000", { narration: "same price bug on the listing page" });
+  await classify(answered, failing.url);
+  failing.close();
+  assert.equal(failing.bodies.length, 2, "one retry on a 5xx");
+  assert.equal(existsSync(join(answered, "classify.sent")), true);
+});

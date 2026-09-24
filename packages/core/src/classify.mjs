@@ -34,7 +34,7 @@
  * developer placed by hand (`decidedBy: "you"`) is never re-guessed.
  */
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 
@@ -47,6 +47,9 @@ import {
 
 /// Titles are the widest thing sent; thirty distinct ones cover any session.
 const MAX_TITLES = 30;
+
+/// Failures that happen before a connection exists, so nothing was sent.
+const NEVER_CONNECTED = new Set(["ENOTFOUND", "ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "EAI_AGAIN"]);
 
 /** `tasks.json` as rows. Missing or unreadable is none. */
 function readTaskRows(root) {
@@ -210,12 +213,14 @@ async function main() {
   });
 
   let answer;
+  let answered = false;
   try {
     // Before the network call, not after: everything below can fail or
     // never resolve, and by the time any of them do, the body — narration,
     // summary, window titles — has already gone out.
     writeFileSync(sentMarker, new Date().toISOString() + "\n");
     let response = await post();
+    answered = true;
     // ONE RETRY, ON A 5XX ONLY. Measured live: about one call in ten came
     // back 503 from the model's side while its neighbours succeeded, and a
     // brief that loses its task's memory to a hiccup is the feature not
@@ -237,6 +242,9 @@ async function main() {
     }
     answer = await response.json();
   } catch (err) {
+    // NOTHING LEFT IF NOTHING CONNECTED: no DNS, nothing listening, no route.
+    // A timeout or a reset may have carried the body out, so those keep it.
+    if (!answered && NEVER_CONNECTED.has(err?.cause?.code)) rmSync(sentMarker, { force: true });
     console.error(`· classification failed (${err.message.slice(0, 80)}) — skipping`);
     return;
   }
