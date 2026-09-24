@@ -375,6 +375,18 @@ final class ReviewModel: ObservableObject {
 
     func load(sessionDir: String) {
         cancelPendingWork()
+        if sessionDir != self.sessionDir {
+            // A DIFFERENT BRIEF: nothing of the last one may stand in for it.
+            // A digest left over from the previous session read as "this one
+            // is rendered" — the coin refused a throw during "Transcribing…",
+            // and Delete no longer waited for the pipeline to finish.
+            digest = nil
+            narration = ""
+            originalNarration = ""
+            cropThumbnails = [:]
+            personaName = nil
+            rerenderPending = false
+        }
         self.sessionDir = sessionDir
         // A brief opened again after it was filed keeps its row on screen and
         // its place: sorting it a second time could move it, and blanked the
