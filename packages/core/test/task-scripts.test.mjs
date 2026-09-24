@@ -102,10 +102,10 @@ test("a render writes the brief's labels beside its summary", async () => {
 // ── classify ────────────────────────────────────────────────────────────────
 
 /** A sibling as `render-brief.mjs` leaves it: `brief.json`, and whatever else it has. */
-function filed(root, id, { narration, summary, windows = [], repoHints = [], screenTerms = [], context, outcome } = {}) {
+function filed(root, id, { narration, summary, windows = [], repoHints = [], screenTerms = [], keys, context, outcome } = {}) {
   const dir = join(root, id);
   mkdirSync(dir);
-  writeFileSync(join(dir, "brief.json"), JSON.stringify({ summary: { narration, apps: [], windows, repoHints, screenTerms } }));
+  writeFileSync(join(dir, "brief.json"), JSON.stringify({ summary: { narration, apps: [], windows, repoHints, screenTerms, ...(keys && { keys }) } }));
   if (summary) writeFileSync(join(dir, "review-summary.txt"), `${summary}\n`);
   if (context) writeFileSync(join(dir, "context.json"), JSON.stringify(context));
   if (outcome) writeFileSync(join(dir, "outcome.md"), outcome);
@@ -137,9 +137,13 @@ const classify = (dir, url, env = {}) => run(process.execPath, [join(scripts, "c
   env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("DEIKO_"))), ...(url && { DEIKO_CLASSIFY_URL: url }), ...env },
 });
 const json = (path) => JSON.parse(readFileSync(path, "utf8"));
-const join1 = (task) => () => [200, { model: "stub", answers: { task: { choice: task, confidence: 0.9 } } }];
+const join1 = (task) => () => [200, {
+  model: "stub",
+  answers: { is_work_brief: { noul: 0.95 }, [`same_${task}`]: { noul: 0.95 } },
+  second: { [task]: { same_task: { noul: 0.95 }, relation: { score: 2 } } },
+}];
 
-test("a task is described by its most frequent windows, and same repo is an exact hint", async () => {
+test("a task is described by its most frequent windows, never by when it was active", async () => {
   const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
   const task = "t-20260918-090000";
   filed(root, "20260918-090000", { narration: "the price still shows 99 after I save", windows: ["Price.tsx — acme-portal"], repoHints: ["acme-portal"] });
@@ -152,8 +156,8 @@ test("a task is described by its most frequent windows, and same repo is an exac
   stub.close();
   const sent = Object.fromEntries(stub.bodies[0].tasks.map((t) => [t.id, t]));
   assert.deepEqual(sent[task].windows, ["Price.tsx — acme-portal", "Chart.tsx — analytics"]);
-  assert.equal(sent[task].sameRepo, true);
-  assert.equal(sent["t-20260918-093000"].sameRepo, false, "a screen word is not a repo");
+  assert.equal("sameRepo" in sent[task], false);
+  assert.equal("lastActive" in sent[task], false);
 });
 
 test("the classifier reads what a task is before its newest, maybe mis-filed, ask", async () => {
@@ -187,6 +191,94 @@ test("a joined brief nothing else placed takes its task's collection", async () 
   const context = json(join(dir, "context.json"));
   assert.equal(context.task, "t-20260918-090000");
   assert.equal(context.collection, "shop");
+});
+
+test("a brief Jev calls no request goes to odds and ends, stamped and logged", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
+  filed(root, "20260918-090000", { narration: "the price still shows 99 after I save" });
+  const dir = filed(root, "20260918-100000", { narration: "testing testing can you hear me now" });
+  const stub = await relay(() => [200, { model: "stub", answers: { is_work_brief: { noul: 0.1 } }, second: {} }]);
+  await classify(dir, stub.url);
+  stub.close();
+  const context = json(join(dir, "context.json"));
+  assert.equal(context.pile, "odds");
+  assert.equal(context.decidedBy, "jev");
+  assert.equal(context.classifier, "v3.0");
+  assert.equal(context.jev.gate, 0.1);
+  assert.equal(existsSync(join(root, "tasks.json")), false, "odds and ends start no task");
+  assert.equal(existsSync(join(root, "collections.json")), false);
+});
+
+test("a join is stamped v3.0 and logs every probability and where the task sat", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
+  const task = "t-20260918-090000";
+  filed(root, "20260918-090000", { narration: "the price still shows 99 after I save" });
+  const dir = filed(root, "20260918-100000", { narration: "the price bug is back on the listing" });
+  const stub = await relay(join1(task));
+  await classify(dir, stub.url);
+  stub.close();
+  const context = json(join(dir, "context.json"));
+  assert.equal(context.task, task);
+  assert.equal(context.classifier, "v3.0");
+  assert.equal(context.confidence.task, 0.95);
+  assert.deepEqual(context.jev.second[task], { same: 0.95, relation: "same" });
+  assert.deepEqual(context.jev.shortlist, [task]);
+  assert.equal(context.jev.rank, 1);
+  assert.equal(context.jev.why, "join");
+});
+
+test("related work starts its own task with a link, not a merge", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
+  const pricing = "t-20260918-090000";
+  filed(root, "20260918-090000", { narration: "the price still shows 99 after I save" });
+  const dir = filed(root, "20260918-100000", { narration: "why does the week 32 signup chart drop" });
+  const stub = await relay(() => [200, {
+    model: "stub",
+    answers: { is_work_brief: { noul: 0.95 }, [`same_${pricing}`]: { noul: 0.6 } },
+    second: { [pricing]: { same_task: { noul: 0.5 }, relation: { score: 1 } } },
+  }]);
+  await classify(dir, stub.url);
+  stub.close();
+  const context = json(join(dir, "context.json"));
+  assert.equal(context.task, "t-20260918-100000");
+  assert.equal(context.related, pricing);
+  assert.equal(context.candidates, undefined);
+});
+
+test("the request carries labels, never screen words or components", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
+  writeFileSync(join(root, "collections.json"), JSON.stringify([{ id: "build", name: "build", hint: "" }]));
+  filed(root, "20260918-090000", {
+    narration: "the price still shows 99 after I save",
+    keys: { pages: ["Pricing"], sites: ["build"] }, context: { collection: "build" },
+  });
+  const dir = filed(root, "20260918-100000", {
+    narration: "the week 32 signup chart drops", screenTerms: ["secretword"],
+    keys: { pages: ["Signups"], sites: ["build"], components: ["Weekly signups"] },
+  });
+  const stub = await relay();
+  await classify(dir, stub.url);
+  stub.close();
+  const body = stub.bodies[0];
+  assert.equal(body.version, 3, "routes the relay to the v3 path");
+  assert.deepEqual(body.keys.pages, ["Signups"]);
+  assert.equal("components" in body.keys, false);
+  assert.deepEqual(body.tasks[0].keys.pages, ["Pricing"]);
+  assert.deepEqual(body.collections[0].labels, ["build", "Pricing"]);
+  assert.equal(JSON.stringify(body).includes("secretword"), false);
+  assert.equal(JSON.stringify(body).includes("Weekly signups"), false);
+});
+
+test("DEIKO_CLASSIFY_DEBUG=1 prints the request and the answer; nothing by default", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
+  const dir = filed(root, "20260918-100000", { narration: "the price bug is back on the listing" });
+  const stub = await relay();
+  const quiet = await classify(dir, stub.url);
+  const loud = await classify(dir, stub.url, { DEIKO_CLASSIFY_DEBUG: "1" });
+  stub.close();
+  assert.doesNotMatch(quiet.stderr, /debug/);
+  assert.match(loud.stderr, /· debug request \{"narration":"the price bug is back on the listing"/);
+  assert.match(loud.stderr, /· debug answer \{"model":"stub"/);
 });
 
 const ODDS = { pile: "odds", decidedBy: "local" };

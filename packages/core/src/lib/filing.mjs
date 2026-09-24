@@ -10,6 +10,7 @@ import { basename, dirname, join } from "node:path";
 import { COULD_NOT_TELL, decide, readBriefLine, unplaceable } from "./context.mjs";
 import { groupTasks, readBoard, scoreTasks, stampTime, taskState, taskText, titleFor } from "./tasks.mjs";
 import { loadEvents } from "./session-io.mjs";
+import { KINDS } from "./labels.mjs";
 import { redact } from "./redact.mjs";
 
 /// Titles are the widest thing sent; thirty distinct ones cover any session.
@@ -31,6 +32,16 @@ function byCount(items) {
   for (const x of items) counts.set(x, (counts.get(x) ?? 0) + 1);
   return [...counts].sort((a, b) => b[1] - a[1]).map(([x]) => x);
 }
+
+/// Labels that may travel (labels.mjs): all but `components`.
+const SENT_KEYS = KINDS.filter((k) => k !== "components");
+/** The most frequent values first, redacted, capped. */
+const topLabels = (lists, cap) => byCount(lists.flat().filter((s) => typeof s === "string" && s.trim())).slice(0, cap).map(redact);
+const taskKeysOf = (briefs) => ({
+  pages: [...new Set(briefs.flatMap((b) => b.keys?.pages ?? []))],
+  files: [...new Set(briefs.flatMap((b) => b.keys?.files ?? []))],
+  tickets: [...new Set(briefs.flatMap((b) => b.keys?.tickets ?? []))],
+});
 
 export function readCollections(root) {
   try {
@@ -70,10 +81,6 @@ export function olderBoard(root, id) {
 export function prepare({ id, me, summary, windowTitles, board, taskTitles, collections }) {
   const groups = groupTasks(board);
   const now = stampTime(id);
-  const ago = (ms) => {
-    const m = Math.round((now - ms) / 60e3);
-    return m < 60 ? `${m} min ago` : m < 48 * 60 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} days ago`;
-  };
   const scored = scoreTasks({
     query: [me.summaryLine, me.narration, ...windowTitles, ...(summary.repoHints ?? []), ...me.screenTerms].join(" "),
     tasks: [...groups].map(([tid, bs]) => ({
@@ -107,8 +114,7 @@ export function prepare({ id, me, summary, windowTitles, board, taskTitles, coll
       apps: [...new Set(bs.flatMap((b) => b.apps))].slice(0, 5).map(redact),
       files: [...new Set(bs.flatMap((b) => b.outcome?.files ?? []))].slice(0, 10).map(redact),
       outcome: last ? redact([...last.did, ...last.open].join(" ")).slice(0, 600) : "",
-      lastActive: ago(stampTime(bs[0].id)),
-      sameRepo: s.sameRepo,
+      keys: Object.fromEntries(["pages", "sites", "files", "tickets"].map((k) => [k, topLabels(bs.map((b) => b.keys?.[k] ?? []), 3)])),
     };
   });
 
@@ -122,9 +128,17 @@ export function prepare({ id, me, summary, windowTitles, board, taskTitles, coll
     apps: (summary.apps ?? []).map(redact),
     repoHints: (summary.repoHints ?? []).map(redact),
     titles: windowTitles,
-    collections: collections.map((c) => ({ id: c.id, name: c.name, hint: c.hint ?? "" })),
+    // NEVER `components` — see labels.mjs.
+    keys: Object.fromEntries(SENT_KEYS.map((k) => [k, (me.keys?.[k] ?? []).slice(0, 10).map(redact)])),
+    collections: collections.map((c) => ({
+      id: c.id, name: c.name, hint: c.hint ?? "",
+      labels: topLabels(board.filter((b) => b.collection === c.id).map((b) => [...(b.keys?.repo ?? []), ...(b.keys?.sites ?? []), ...(b.keys?.pages ?? [])]), 5),
+    })),
     tasks: shortlist,
     // NEVER screenTerms — they scored the shortlist above and stay here.
+    // ROUTES THE RELAY TO THE V3 PATH — see services/relay/relay.mjs. A body
+    // with no version (or below 3) reads as an unupdated 0.5.0 app.
+    version: 3,
   };
 
   return { groups, scored, local: scored, shortlist, body };
@@ -150,15 +164,20 @@ export function decideLocally({ me, why, local, groups, collections }) {
   return context;
 }
 
-export function place({ answer, id, me, summary, scored, groups, shortlist, collections }) {
+export function place({ answer, id, me, summary, groups, shortlist, collections }) {
+  const ids = shortlist.map((t) => t.id);
   return decide({
     answers: answer?.answers ?? {},
+    second: answer?.second ?? {},
     collections,
-    repoHints: summary.repoHints ?? [],
-    shortlist: shortlist.map((t) => t.id),
-    scores: scored.map((s) => s.score),
+    keys: me.keys ?? {},
+    apps: summary.apps ?? [],
+    shortlist: ids,
+    taskKeys: Object.fromEntries(ids.map((t) => [t, taskKeysOf(groups.get(t))])),
+    newest: Object.fromEntries(ids.map((t) => [t, stampTime(groups.get(t)[0].id)])),
+    now: stampTime(id),
     // Each shortlisted task's latest collection, for a join nothing else placed.
-    taskCollections: Object.fromEntries(scored.map((s) => [s.id, groups.get(s.id).find((b) => b.collection)?.collection ?? null])),
+    taskCollections: Object.fromEntries(ids.map((t) => [t, groups.get(t).find((b) => b.collection)?.collection ?? null])),
     sessionId: id,
     title: titleFor(me),
   });

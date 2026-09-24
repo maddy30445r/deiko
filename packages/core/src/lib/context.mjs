@@ -27,10 +27,6 @@ import { TASK_ID, parseOutcome } from "./tasks.mjs";
 /// because nothing here ever reads it.
 export const FLOORS = {
   collection: 0.6,
-  task: 0.7,
-  // Worth naming to the agent as "it might be this one" when no task was
-  // joined. Low on purpose: this is a question, not a decision.
-  candidate: 0.15,
   quickHint: 0.8,
 };
 
@@ -92,121 +88,170 @@ export function unplaceable(b) {
   return null;
 }
 
+/// Filing, v3. Stamped on every context.json this writes, so a re-sort after
+/// the rules change shows exactly which briefs moved and why.
+export const CLASSIFIER = "v3.0";
+/// ponytail: starting values, tuned on the filing eval (scripts/eval-filing.mjs)
+/// and later on real corrections. GATE and ASK are MIRRORED by `GATE` and
+/// `SECOND_LOOK.min` in services/relay/relay.mjs — change both.
+export const GATE = 0.5;
+export const JOIN = { line: 0.9, gap: 0.2, recent: 0.75, recentMs: 30 * 60e3 };
+export const ASK = 0.35;
+/// The relation levels, in order. MIRRORS `RELATION_RUBRIC` in the relay.
+export const RELATIONS = ["different", "related", "same"];
+
+export function yes(answer) {
+  const p = Number(answer?.noul);
+  return Number.isFinite(p) ? Math.min(1, Math.max(0, p)) : 0;
+}
+
+/** A score answer's level. TWO SHAPES FOR `probabilities`: TypeSafe's docs
+ *  show an array by level; Vercel's gateway returns an object keyed "0", "1",
+ *  … (measured on a live call). Rounding the score is the fallback, which is
+ *  not the same answer when the mass is split. */
+export function level(answer) {
+  if (!answer) return null;
+  const p = answer.probabilities;
+  const probs = Array.isArray(p) ? p
+    : p && typeof p === "object" ? Object.keys(p).sort((a, b) => Number(a) - Number(b)).map((k) => Number(p[k])) : [];
+  if (probs.length) return probs.indexOf(Math.max(...probs));
+  return typeof answer.score === "number" ? Math.round(answer.score) : null;
+}
+
+const NOT_A_PROJECT_APP = /^(google chrome|chrome|safari|arc|firefox|microsoft edge|brave browser|chromium|opera|vivaldi|zen|code|visual studio code|cursor|windsurf|zed|xcode|terminal|iterm2?|warp|ghostty|finder|dock|deiko|deiko capture|screenshot|usernotificationcenter|system settings)$/i;
+
+export function projectFromKeys({ keys = {}, apps = [] } = {}) {
+  const first = (list) => (Array.isArray(list) ? list.find((s) => typeof s === "string" && s.trim()) : undefined);
+  return first(keys.repo) ?? first(keys.sites) ?? first(keys.docs)
+    ?? apps.find((a) => typeof a === "string" && a.trim() && !NOT_A_PROJECT_APP.test(a.trim())) ?? null;
+}
+
+const lowered = (list) => new Set((list ?? []).map((s) => String(s).toLowerCase()));
+const meets = (a, b) => {
+  const theirs = lowered(b);
+  return [...lowered(a)].some((x) => theirs.has(x));
+};
+/// Both sides named one, and none is shared.
+const differ = (a, b) => (a?.length ?? 0) > 0 && (b?.length ?? 0) > 0 && !meets(a, b);
+
 /**
- * The classifier's answers, turned into a `context.json`.
+ * Jev's percentages → where the brief goes. The only place they become a
+ * decision, and every rule is here:
  *
- * Returns `{ collection, task, newTask, tier, confidence, newCollection }`,
- * plus `candidates` when there are any. `newCollection` is `{ id, name }`
- * when the brief matched no collection but carries a repo hint that is not
- * one yet — the caller creates it. `newTask` is `{ id, title }` when no
- * shortlisted task was confidently chosen — the caller creates it. Never
- * throws on a partial answer: a missing question reads as "no".
+ *   gate < GATE                                   → odds and ends
+ *   a second look ≥ JOIN.line and JOIN.gap ahead  → join
+ *     (≥ JOIN.recent when the task's newest brief is under 30 min old AND a
+ *      page or file label matches — never for old work)
+ *     … but a different page                      → ask instead
+ *   a different ticket                            → that task is never joined or offered
+ *   anything ≥ ASK not joined, not "different",
+ *     not "related"                               → ask "Which one?" (up to 3)
+ *   the second look says related-but-separate     → new task, `related` link
+ *   otherwise                                     → new task
  *
- * `shortlist` is the task ids Deiko sent, best local score first; `scores` is
- * those local scores, index for index (`scoreTasks`' `score`). `candidates`
- * is up to three of those ids, likeliest first, when the brief joined none
- * and Jev did not confidently call it new — the tasks it MIGHT carry on, for
- * somebody to be asked about. Absent, not empty, when there are none.
- *
- * `taskCollections` maps a shortlisted task id to its latest collection, so
- * a brief that joins a task and was placed by nothing else inherits it.
+ * Round one alone never joins. Time words never reach here.
  */
-export function decide({ answers = {}, collections = [], repoHints = [], shortlist = [], scores = [], taskCollections = {}, sessionId = null, title = null } = {}) {
+export function decide({
+  answers = {}, second = {}, collections = [], keys = {}, apps = [],
+  shortlist = [], taskKeys = {}, newest = {}, now = 0,
+  taskCollections = {}, sessionId = null, title = null,
+} = {}) {
+  const gate = answers.is_work_brief ? yes(answers.is_work_brief) : 1;
+  const same = Object.fromEntries(shortlist.map((id) => [id, yes(answers[`same_${id}`])]));
+  const looks = Object.fromEntries(Object.entries(second ?? {})
+    .filter(([id]) => shortlist.includes(id))
+    .map(([id, a]) => [id, { same: yes(a?.same_task), relation: RELATIONS[level(a?.relation)] ?? null }]));
+  const chosen = answers.collection;
+  const jev = {
+    gate, same, second: looks,
+    collection: chosen ? { choice: chosen.choice ?? null, confidence: chosen.confidence ?? null } : null,
+    shortlist, rank: null, why: null,
+  };
   const out = {
-    collection: null,
-    task: null,
-    newTask: null,
-    tier: null,
-    confidence: {},
-    newCollection: null,
+    pile: null, collection: null, newCollection: null, task: null, newTask: null,
+    tier: null, confidence: { gate }, why: null, jev,
   };
 
-  const known = new Set(collections.map((c) => c.id));
-  const chosen = answers.collection;
-  if (chosen && known.has(chosen.choice) && (chosen.confidence ?? 0) >= FLOORS.collection) {
-    out.collection = chosen.choice;
-    out.confidence.collection = chosen.confidence;
-  } else {
-    const hint = repoHints.find((h) => typeof h === "string" && h.trim());
-    if (hint) {
-      const existing = collections.find((c) => c.name.toLowerCase() === hint.trim().toLowerCase());
-      if (existing) {
-        out.collection = existing.id;
-      } else {
-        out.newCollection = { id: slug(hint), name: hint.trim() };
-        out.collection = out.newCollection.id;
-      }
-      // A repo name on the window is not a guess, and it does not need one.
-      out.confidence.collection = 1;
-    }
+  const tierLevel = level(answers.tier);
+  if (tierLevel != null && TIERS[tierLevel]) {
+    out.tier = TIERS[tierLevel];
+    out.confidence.tier = answers.tier.confidence ?? null;
   }
 
-  // ONE TASK OR A NEW ONE. Only ids Deiko put on the shortlist can be
-  // chosen, so a model that invents an id starts a task rather than joining
-  // one that does not exist.
-  const pick = answers.task;
-  const sure = (pick?.confidence ?? 0) >= FLOORS.task;
-  if (sure && shortlist.includes(pick.choice)) {
-    out.task = pick.choice;
-    out.confidence.task = pick.confidence;
+  if (gate < GATE) {
+    out.pile = "odds";
+    out.why = jev.why = "odds";
+    return out;
+  }
+
+  const open = shortlist.filter((id) => !differ(keys.tickets, taskKeys[id]?.tickets));
+  const p = (id) => looks[id]?.same ?? same[id] ?? 0;
+  const ranked = open.filter((id) => looks[id]).sort((a, b) => looks[b].same - looks[a].same);
+  const best = ranked[0];
+  let why = "new";
+  let task = null;
+  let related = null;
+  let candidates = [];
+  if (best) {
+    const s = looks[best].same;
+    const theirs = taskKeys[best] ?? {};
+    const next = Math.max(0, ...open.filter((id) => id !== best).map(p));
+    const recent = now - (newest[best] ?? -Infinity) < JOIN.recentMs
+      && (meets(keys.pages, theirs.pages) || meets(keys.files, theirs.files));
+    if (s >= (recent ? JOIN.recent : JOIN.line) && s - next >= JOIN.gap) {
+      // A bug found on one page is often fixed on another: ask, don't block.
+      if (differ(keys.pages, theirs.pages)) {
+        why = "ask-page";
+        candidates = [best];
+      } else {
+        why = s < JOIN.line ? "join-recent" : "join";
+        task = best;
+      }
+    }
+  }
+  if (!task && why !== "ask-page") {
+    related = ranked.find((id) => looks[id].relation === "related") ?? null;
+    candidates = open
+      .filter((id) => p(id) >= ASK && !["different", "related"].includes(looks[id]?.relation))
+      .sort((a, b) => p(b) - p(a))
+      .slice(0, MAX_CANDIDATES);
+    why = candidates.length ? "ask" : related ? "related" : "new";
+  }
+
+  if (task) {
+    out.task = task;
+    out.confidence.task = looks[task].same;
+    jev.rank = shortlist.indexOf(task) + 1;
   } else if (sessionId) {
     out.task = `t-${sessionId}`;
     out.newTask = { id: out.task, title: title ?? "A brief" };
   }
+  if (candidates.length) out.candidates = candidates;
+  if (related) out.related = related;
+  out.why = jev.why = why;
 
-  // A JOINED BRIEF NOTHING ELSE PLACED keeps its task's collection, or one
-  // task ends up split across two chips. As sure as the join, and only a
-  // collection that still exists.
-  const inherited = out.task && !out.newTask && out.collection == null ? taskCollections[out.task] : null;
-  if (inherited && known.has(inherited)) {
-    out.collection = inherited;
+  // THE PROJECT: Jev when sure; a joined task's own; else the strongest label.
+  const known = new Set(collections.map((c) => c.id));
+  if (chosen && known.has(chosen.choice) && (chosen.confidence ?? 0) >= FLOORS.collection) {
+    out.collection = chosen.choice;
+    out.confidence.collection = chosen.confidence;
+  } else if (task && known.has(taskCollections[task])) {
+    out.collection = taskCollections[task];
     out.confidence.collection = out.confidence.task;
-  }
-
-  // WHICH ONES IT MIGHT BE, unless it joined one or is confidently new work.
-  // Jev's own spread when it sent one — a map keyed by option id; the local
-  // score when it did not, behind Jev's pick, and only what scored at least
-  // half the best (a best of 0 matched nothing, so it names nothing).
-  if (!sure || (pick.choice !== "new" && !shortlist.includes(pick.choice))) {
-    const probs = pick?.probabilities;
-    let ids;
-    if (probs && typeof probs === "object" && !Array.isArray(probs)) {
-      ids = shortlist
-        .filter((id) => Number(probs[id]) >= FLOORS.candidate)
-        .sort((a, b) => probs[b] - probs[a]);
-    } else {
-      const top = Math.max(0, ...scores);
-      const near = shortlist.filter((id, i) => top > 0 && (scores[i] ?? 0) >= top / 2);
-      ids = shortlist.includes(pick?.choice) ? [pick.choice, ...near.filter((id) => id !== pick.choice)] : near;
-    }
-    if (ids.length) out.candidates = ids.slice(0, MAX_CANDIDATES);
-  }
-
-  const tier = answers.tier;
-  if (tier) {
-    let level = null;
-    // TWO SHAPES FOR ONE FIELD. TypeSafe's docs show `probabilities` as an
-    // array indexed by level; Vercel's gateway returns it as an object keyed
-    // "0", "1", … — measured on a live call. Without this branch the object
-    // was quietly ignored and the tier fell back to rounding the score, which
-    // is not the same answer when the mass is split.
-    const probs = Array.isArray(tier.probabilities)
-      ? tier.probabilities
-      : tier.probabilities && typeof tier.probabilities === "object"
-        ? Object.keys(tier.probabilities).sort((a, b) => Number(a) - Number(b))
-            .map((k) => Number(tier.probabilities[k]))
-        : [];
-    if (probs.length) {
-      level = probs.indexOf(Math.max(...probs));
-    } else if (typeof tier.score === "number") {
-      level = Math.round(tier.score);
-    }
-    if (level != null && TIERS[level]) {
-      out.tier = TIERS[level];
-      out.confidence.tier = tier.confidence ?? null;
+  } else {
+    const name = projectFromKeys({ keys, apps });
+    if (name) {
+      const existing = collections.find((c) => c.name.toLowerCase() === name.trim().toLowerCase() || c.id === slug(name));
+      if (existing) {
+        out.collection = existing.id;
+      } else {
+        out.newCollection = { id: slug(name), name: name.trim() };
+        out.collection = out.newCollection.id;
+      }
+      // A label on the window is not a guess.
+      out.confidence.collection = 1;
     }
   }
-
   return out;
 }
 

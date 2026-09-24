@@ -4,7 +4,7 @@
  *
  *   node scripts/eval-filing.mjs [--board ~/Documents/Deiko]
  *     [--labels ~/Documents/Deiko-eval/filing-labels.json]
- *     [--shortlist-only] [--relay <url>] [--draft]
+ *     [--shortlist-only] [--relay <url>] [--pace <ms>] [--draft]
  *
  * READ-ONLY. Nothing under --board is written, ever. Briefs are replayed oldest
  * first against an in-memory board on which every earlier brief sits where the
@@ -44,6 +44,9 @@ if (flag("--draft")) {
 }
 
 const shortlistOnly = flag("--shortlist-only");
+/// Gap between briefs in full mode. Each brief is up to three Jev requests,
+/// and the gateway answers a burst with 429s. ponytail: a fixed pause.
+const paceMs = Number(value("--pace", "1500"));
 const relay = value("--relay", process.env.DEIKO_CLASSIFY_URL || process.env.DEIKO_RELAY_URL);
 const token = process.env.DEIKO_CLASSIFY_TOKEN || process.env.DEIKO_RELAY_TOKEN || null;
 if (!shortlistOnly && !relay) {
@@ -57,7 +60,8 @@ if (!shortlistOnly && process.env.DEIKO_SORT_BRIEFS === "0" && !flag("--relay"))
   process.exit(2);
 }
 
-async function ask(body) {
+async function ask(body, pause = 0) {
+  if (pause > 0) await new Promise((r) => setTimeout(r, pause));
   let res = await requestClassify({ url: relay, token, body });
   if (res.status >= 500) {
     await new Promise((r) => setTimeout(r, 1000));
@@ -89,11 +93,12 @@ for (const [stamp, e] of exp) {
     try {
       const decision = why
         ? decideLocally({ me, why, local: prep.local, groups: prep.groups, collections })
-        : place({ answer: await ask(prep.body), id: stamp, me, summary, scored: prep.scored, groups: prep.groups, shortlist: prep.shortlist, collections });
+        : place({ answer: await ask(prep.body, paceMs), id: stamp, me, summary, groups: prep.groups, shortlist: prep.shortlist, collections });
       if (decision.newCollection && !collections.some((c) => c.id === decision.newCollection.id)) {
         collections.push({ ...decision.newCollection, hint: "" });
       }
       row.out = outcomeOf(decision, stamp);
+      row.jev = decision.jev ?? null;
     } catch (err) {
       // No answer is not a wrong answer: left out of the tally, counted apart.
       errored += 1;

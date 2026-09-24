@@ -50,7 +50,7 @@ import { readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 
-import { unplaceable } from "./lib/context.mjs";
+import { CLASSIFIER, unplaceable } from "./lib/context.mjs";
 import { readTasks, titleFor } from "./lib/tasks.mjs";
 import {
   decideLocally, olderBoard, place, prepare, readCollections, requestClassify, sessionInputs,
@@ -152,6 +152,8 @@ async function main() {
     return;
   }
 
+  const debug = process.env.DEIKO_CLASSIFY_DEBUG === "1";
+  if (debug) console.error(`· debug request ${JSON.stringify(body)}`);
   const post = () => requestClassify({
     url: relay, token: process.env.DEIKO_CLASSIFY_TOKEN || process.env.DEIKO_RELAY_TOKEN || null, body,
   });
@@ -202,6 +204,7 @@ async function main() {
       return;
     }
     answer = await response.json();
+    if (debug) console.error(`· debug answer ${JSON.stringify(answer)}`);
   } catch (err) {
     // NOTHING LEFT IF NOTHING CONNECTED: no DNS, nothing listening, no route.
     // A timeout or a reset may have carried the body out, so those keep it.
@@ -244,65 +247,74 @@ async function main() {
   }
 
   const decision = place({ answer, id, me, summary, scored, groups, shortlist, collections });
-  if (decision.newCollection) {
-    // RE-READ, AND CHECK THE ID. Two things happen between the read at the
-    // top of this script and here: a network call, and a user who may have
-    // made a collection from the review card while it was in flight. Writing
-    // the list we read minutes ago would drop theirs.
-    //
-    // The id check mirrors `Collections.add` in the app, which has always had
-    // it. Without it `decide` — which dedupes on NAME — creates a second
-    // `acme-portal` when the list already holds one called `Acme Portal`, and
-    // two rows with one id give the board two identical chips, a rename that
-    // moves one of them and a delete that takes both.
-    const listed = readCollections(root);
-    if (!listed.some((c) => c.id === decision.newCollection.id)) {
-      listed.push({ ...decision.newCollection, hint: "" });
-      writeFileSync(join(root, "collections.json"), JSON.stringify(listed, null, 2) + "\n");
-    } else {
-      decision.collection = decision.newCollection.id;
+  if (decision.pile !== "odds") {
+    if (decision.newCollection) {
+      // RE-READ, AND CHECK THE ID. Two things happen between the read at the
+      // top of this script and here: a network call, and a user who may have
+      // made a collection from the review card while it was in flight. Writing
+      // the list we read minutes ago would drop theirs.
+      //
+      // The id check mirrors `Collections.add` in the app, which has always had
+      // it. Without it `decide` — which dedupes on NAME — creates a second
+      // `acme-portal` when the list already holds one called `Acme Portal`, and
+      // two rows with one id give the board two identical chips, a rename that
+      // moves one of them and a delete that takes both.
+      const listed = readCollections(root);
+      if (!listed.some((c) => c.id === decision.newCollection.id)) {
+        listed.push({ ...decision.newCollection, hint: "" });
+        writeFileSync(join(root, "collections.json"), JSON.stringify(listed, null, 2) + "\n");
+      } else {
+        decision.collection = decision.newCollection.id;
+      }
     }
-  }
-  if (decision.newTask) {
-    // RE-READ, AND CHECK THE ID. The id is this brief's own stamp, so a
-    // re-classify racing the first ("Forgot something?") finds the row the
-    // first one wrote and leaves it.
-    // `from` says what the title was made from, so a narration title can
-    // give way to the first summary line that joins its task (below).
-    const list = readTaskRows(root);
-    if (!list.some((t) => t?.id === decision.newTask.id)) {
-      list.push({ ...decision.newTask, from: me.summaryLine ? "summary" : "narration" });
-      writeFileSync(join(root, "tasks.json"), JSON.stringify(list, null, 2) + "\n");
+    if (decision.newTask) {
+      // RE-READ, AND CHECK THE ID. The id is this brief's own stamp, so a
+      // re-classify racing the first ("Forgot something?") finds the row the
+      // first one wrote and leaves it.
+      // `from` says what the title was made from, so a narration title can
+      // give way to the first summary line that joins its task (below).
+      const list = readTaskRows(root);
+      if (!list.some((t) => t?.id === decision.newTask.id)) {
+        list.push({ ...decision.newTask, from: me.summaryLine ? "summary" : "narration" });
+        writeFileSync(join(root, "tasks.json"), JSON.stringify(list, null, 2) + "\n");
+      }
+    }
+
+    // A TITLE MADE FROM WHAT WAS SAID gives way to the first summary line that
+    // joins its task. Only a row written from narration: one somebody typed
+    // (`from: "you"`), or one with no `from` at all, is left as it is.
+    if (!decision.newTask && decision.task && me.summaryLine) {
+      const list = readTaskRows(root);
+      const row = list.find((t) => t?.id === decision.task);
+      if (row?.from === "narration") {
+        Object.assign(row, { title: titleFor(me), from: "summary" });
+        writeFileSync(join(root, "tasks.json"), JSON.stringify(list, null, 2) + "\n");
+      }
     }
   }
 
-  // A TITLE MADE FROM WHAT WAS SAID gives way to the first summary line that
-  // joins its task. Only a row written from narration: one somebody typed
-  // (`from: "you"`), or one with no `from` at all, is left as it is.
-  if (!decision.newTask && decision.task && me.summaryLine) {
-    const list = readTaskRows(root);
-    const row = list.find((t) => t?.id === decision.task);
-    if (row?.from === "narration") {
-      Object.assign(row, { title: titleFor(me), from: "summary" });
-      writeFileSync(join(root, "tasks.json"), JSON.stringify(list, null, 2) + "\n");
-    }
-  }
-
-  const context = {
-    collection: decision.collection,
-    task: decision.task,
-    tier: decision.tier,
-    confidence: decision.confidence,
-    decidedBy: "jev",
-    model: typeof answer?.model === "string" ? answer.model : null,
-    // The tasks it might carry on, when it could not tell — only when there
-    // are some. The app clears this on any hand placement.
-    ...(decision.candidates && { candidates: decision.candidates }),
-  };
+  const stamp = { decidedBy: "jev", model: typeof answer?.model === "string" ? answer.model : null, classifier: CLASSIFIER };
+  const context = decision.pile === "odds"
+    ? { pile: "odds", ...stamp, confidence: decision.confidence, jev: decision.jev }
+    : {
+      collection: decision.collection,
+      task: decision.task,
+      tier: decision.tier,
+      confidence: decision.confidence,
+      ...stamp,
+      // "Which one?" — only when there are some. The app clears this on any hand placement.
+      ...(decision.candidates && { candidates: decision.candidates }),
+      // "Related to …" — linked, never merged.
+      ...(decision.related && { related: decision.related }),
+      // Every probability, and the shortlist in the order sent, for tuning.
+      jev: decision.jev,
+    };
   writeFileSync(contextPath, JSON.stringify(context, null, 2) + "\n");
-  console.error(`✓ context → ${context.collection ?? "unsorted"} · `
-    + `${decision.newTask ? "new task" : `joins ${context.task}`}`
-    + `${context.candidates ? ` (maybe ${context.candidates.join(", ")})` : ""} · ${context.tier ?? "?"}`);
+  console.error(decision.pile === "odds"
+    ? `✓ context → odds and ends (not a request, ${decision.jev.gate})`
+    : `✓ context → ${context.collection ?? "unsorted"} · ${decision.newTask ? "new task" : `joins ${context.task}`}`
+      + `${context.candidates ? ` (maybe ${context.candidates.join(", ")})` : ""}`
+      + `${context.related ? ` (related ${context.related})` : ""} · ${decision.why} · ${context.tier ?? "?"}`);
 }
 
 // Even an unexpected throw must not fail the pipeline that called us.

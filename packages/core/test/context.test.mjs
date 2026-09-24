@@ -4,8 +4,12 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { COULD_NOT_TELL, FLOORS, TIERS, briefDate, decide, readBriefLine, slug, unplaceable, wantsQuickHint } from "../lib/context.mjs";
+import {
+  ASK, CLASSIFIER, COULD_NOT_TELL, FLOORS, GATE, JOIN, RELATIONS, TIERS, briefDate, decide, level,
+  projectFromKeys, readBriefLine, slug, unplaceable, wantsQuickHint, yes,
+} from "../lib/context.mjs";
 import { EMPTY_KEYS } from "../lib/labels.mjs";
+import { stampTime } from "../lib/tasks.mjs";
 
 // ── Names and dates ─────────────────────────────────────────────────────────
 
@@ -25,110 +29,154 @@ test("a brief's date comes from its stamp, with the year only when it is not thi
 
 // ── Decisions ───────────────────────────────────────────────────────────────
 
-const collections = [{ id: "deiko", name: "Deiko", hint: "" }, { id: "site", name: "Site", hint: "" }];
+const [A, B, C] = ["t-20260918-100000", "t-20260918-110000", "t-20260918-120000"];
+const NOW = stampTime("20260920-100000");
+const OWN = "t-20260920-100000";
+const base = { shortlist: [A, B, C], sessionId: "20260920-100000", title: "Fix the signup chart", now: NOW };
+const r1 = (same = {}, gate = 0.95) => ({
+  is_work_brief: { noul: gate },
+  ...Object.fromEntries(Object.entries(same).map(([id, p]) => [`same_${id}`, { noul: p }])),
+});
+const r2 = (id, p, relation = "same") => ({
+  [id]: { same_task: { noul: p }, relation: { score: RELATIONS.indexOf(relation), probabilities: RELATIONS.map((r) => (r === relation ? 0.9 : 0.05)) } },
+});
+const keys = (over = {}) => ({ ...EMPTY_KEYS, ...over });
+const tk = (over = {}) => ({ pages: [], files: [], tickets: [], ...over });
 
-test("a confident collection is taken; a hesitant one falls through", () => {
-  const sure = decide({ answers: { collection: { choice: "deiko", confidence: 0.6 } }, collections });
-  assert.equal(sure.collection, "deiko");
-  assert.equal(sure.confidence.collection, 0.6);
-  const unsure = decide({ answers: { collection: { choice: "deiko", confidence: 0.59 } }, collections });
-  assert.equal(unsure.collection, null);
-  assert.equal(unsure.newCollection, null);
+test("the starting values are the ones the owner agreed", () => {
+  assert.equal(CLASSIFIER, "v3.0");
+  assert.equal(GATE, 0.5);
+  assert.deepEqual(JOIN, { line: 0.9, gap: 0.2, recent: 0.75, recentMs: 30 * 60e3 });
+  assert.equal(ASK, 0.35);
+  assert.equal(FLOORS.collection, 0.6);
 });
 
-test("none of these plus a repo hint creates the collection, unless one already matches by name", () => {
-  const fresh = decide({ answers: { collection: { choice: "none", confidence: 0.9 } }, collections, repoHints: ["acme-portal"] });
-  assert.deepEqual(fresh.newCollection, { id: "acme-portal", name: "acme-portal" });
-  assert.equal(fresh.collection, "acme-portal");
-  const known = decide({ answers: { collection: { choice: "none", confidence: 0.9 } }, collections, repoHints: ["DEIKO"] });
-  assert.equal(known.newCollection, null);
-  assert.equal(known.collection, "deiko");
-  const nothing = decide({ answers: { collection: { choice: "none", confidence: 0.9 } }, collections });
-  assert.equal(nothing.collection, null);
+test("yes reads a noul; level reads a score in both shapes", () => {
+  assert.equal(yes({ noul: 0.7 }), 0.7);
+  assert.equal(yes(undefined), 0);
+  assert.equal(yes({ noul: "x" }), 0);
+  assert.equal(level({ probabilities: [0.1, 0.7, 0.2] }), 1);
+  assert.equal(level({ probabilities: { 0: 0.1, 1: 0.2, 2: 0.7 } }), 2);
+  assert.equal(level({ score: 1.4 }), 1);
+  assert.equal(level(undefined), null);
 });
 
-test("an unknown collection id is never taken", () => {
-  const out = decide({ answers: { collection: { choice: "made-up", confidence: 0.99 } }, collections });
-  assert.equal(out.collection, null);
+test("not a real request goes to odds and ends, whatever else was answered", () => {
+  const out = decide({ ...base, answers: r1({ [A]: 0.99 }, 0.3), second: r2(A, 0.99) });
+  assert.equal(out.pile, "odds");
+  assert.equal(out.task, null);
+  assert.equal(out.newTask, null);
+  assert.equal(out.why, "odds");
+  assert.equal(out.jev.gate, 0.3);
 });
 
-test("a confident task inside the shortlist is joined", () => {
-  const args = { shortlist: ["t-20260918-155836"], sessionId: "20260920-100000", title: "Fix the price" };
-  const yes = decide({ ...args, answers: { task: { choice: "t-20260918-155836", confidence: 0.7 } } });
-  assert.equal(yes.task, "t-20260918-155836");
-  assert.equal(yes.newTask, null);
-  assert.equal(yes.confidence.task, 0.7);
+test("a missing gate reads as a real request", () => {
+  assert.equal(decide({ ...base, answers: {} }).pile, null);
 });
 
-test("below the floor, new, or outside the shortlist starts a task named for this brief", () => {
-  const args = { shortlist: ["t-20260918-155836"], sessionId: "20260920-100000", title: "Fix the price" };
-  for (const task of [
-    { choice: "t-20260918-155836", confidence: 0.69 },
-    { choice: "new", confidence: 0.99 },
-    { choice: "t-20260101-000000", confidence: 0.99 },
-    undefined,
-  ]) {
-    const out = decide({ ...args, answers: { task } });
-    assert.equal(out.task, "t-20260920-100000");
-    assert.deepEqual(out.newTask, { id: "t-20260920-100000", title: "Fix the price" });
-  }
-  assert.equal(FLOORS.task, 0.7);
+test("only the second look joins: 0.9 or more and 0.2 ahead", () => {
+  const out = decide({ ...base, answers: r1({ [A]: 0.8, [B]: 0.4 }), second: { ...r2(A, 0.93), ...r2(B, 0.6, "related") } });
+  assert.equal(out.task, A);
+  assert.equal(out.newTask, null);
+  assert.equal(out.why, "join");
+  assert.equal(out.confidence.task, 0.93);
+  assert.equal(out.jev.rank, 1);
+  assert.deepEqual(out.jev.second[A], { same: 0.93, relation: "same" });
+  assert.equal(out.candidates, undefined);
 });
 
-// ── Candidates: the few it might be, when it can't tell ─────────────────────
-
-const [A, B, C, D, E] = ["t-20260918-100000", "t-20260918-110000", "t-20260918-120000", "t-20260918-130000", "t-20260918-140000"];
-const unsure = { shortlist: [A, B, C, D, E], scores: [10, 9, 8, 7, 6], sessionId: "20260920-100000", title: "Same bug" };
-
-test("a joined brief and confident new work have no candidates", () => {
-  const joined = decide({ ...unsure, answers: { task: { choice: A, confidence: 0.8, probabilities: { [A]: 0.8, [B]: 0.2 } } } });
-  assert.equal(joined.task, A);
-  assert.equal(joined.candidates, undefined);
-  const fresh = decide({ ...unsure, answers: { task: { choice: "new", confidence: 0.7, probabilities: { new: 0.7, [A]: 0.3 } } } });
-  assert.equal(fresh.candidates, undefined);
-  assert.equal(decide({ ...unsure, answers: { task: { choice: "new", confidence: 0.7 } } }).candidates, undefined);
+test("round one alone never joins; it asks", () => {
+  const out = decide({ ...base, answers: r1({ [A]: 0.99 }) });
+  assert.equal(out.task, OWN);
+  assert.deepEqual(out.newTask, { id: OWN, title: "Fix the signup chart" });
+  assert.deepEqual(out.candidates, [A]);
+  assert.equal(out.why, "ask");
 });
 
-test("probabilities pick the candidates: shortlisted, at or over the floor, likeliest first, three at most", () => {
-  const out = decide({ ...unsure, answers: { task: { choice: C, confidence: 0.4, probabilities: {
-    new: 0.3, [A]: 0.1, [B]: 0.25, [C]: 0.4, [D]: 0.15, [E]: 0.2, "t-20260101-000000": 0.5,
-  } } } });
-  assert.equal(out.newTask.id, "t-20260920-100000", "unsure still starts its own task");
-  assert.deepEqual(out.candidates, [C, B, E]);
-  assert.equal(FLOORS.candidate, 0.15);
-  const edge = decide({ ...unsure, answers: { task: { choice: "new", confidence: 0.5, probabilities: { [A]: 0.149, [B]: 0.15 } } } });
-  assert.deepEqual(edge.candidates, [B], "one candidate is still worth asking about");
-  const none = decide({ ...unsure, answers: { task: { choice: "new", confidence: 0.6, probabilities: { new: 0.6, [A]: 0.1 } } } });
-  assert.equal(none.candidates, undefined, "a map with nothing over the floor is an answer, not a gap");
+test("two that both look right ask which one", () => {
+  const out = decide({ ...base, answers: r1({ [A]: 0.9, [B]: 0.9 }), second: { ...r2(A, 0.95), ...r2(B, 0.92) } });
+  assert.equal(out.task, OWN);
+  assert.deepEqual(out.candidates, [A, B]);
+  assert.equal(out.why, "ask");
 });
 
-test("without probabilities, Jev's pick then the local score, down to half the top score", () => {
-  // Jev's pick leads even when its local score is under the cut.
-  const picked = decide({ ...unsure, scores: [10, 9, 1, 0, 0], answers: { task: { choice: C, confidence: 0.6 } } });
-  assert.deepEqual(picked.candidates, [C, A, B]);
-  // Only what scores at least half the top joins it.
-  const cut = decide({ ...unsure, scores: [10, 5, 4.9, 1, 0], answers: { task: { choice: "new", confidence: 0.5 } } });
-  assert.deepEqual(cut.candidates, [A, B]);
-  // An id outside the shortlist, a missing answer, or an array where a map belongs all fall back the same way.
-  for (const task of [{ choice: "t-20260101-000000", confidence: 0.9 }, undefined, { choice: "new", confidence: 0.5, probabilities: [0.9, 0.1] }]) {
-    assert.deepEqual(decide({ ...unsure, scores: [10, 5, 4.9, 1, 0], answers: { task } }).candidates, [A, B]);
-  }
-  // Nothing matched locally and nothing picked: nobody to ask about.
-  assert.equal(decide({ ...unsure, scores: [0, 0, 0, 0, 0], answers: { task: { choice: "new", confidence: 0.5 } } }).candidates, undefined);
+test("between 0.35 and the join line asks; below it, or a clear 'different', is new", () => {
+  assert.deepEqual(decide({ ...base, answers: r1({ [A]: 0.6 }), second: r2(A, 0.8) }).candidates, [A]);
+  const different = decide({ ...base, answers: r1({ [A]: 0.5 }), second: r2(A, 0.34, "different") });
+  assert.equal(different.why, "new");
+  assert.equal(different.candidates, undefined);
+  assert.equal(decide({ ...base, answers: r1({ [A]: 0.2 }) }).why, "new");
 });
 
-test("a joined brief nothing else placed takes its task's collection, as sure as the join", () => {
-  const args = { collections, shortlist: [A], scores: [10], sessionId: "20260920-100000", taskCollections: { [A]: "site" } };
-  const joined = decide({ ...args, answers: { task: { choice: A, confidence: 0.8 } } });
-  assert.equal(joined.collection, "site");
-  assert.equal(joined.confidence.collection, 0.8);
-  const own = decide({ ...args, answers: { collection: { choice: "deiko", confidence: 0.9 }, task: { choice: A, confidence: 0.8 } } });
-  assert.equal(own.collection, "deiko", "its own answer wins");
-  assert.equal(decide({ ...args, repoHints: ["Deiko"], answers: { task: { choice: A, confidence: 0.8 } } }).collection, "deiko",
-    "so does a repo on its window");
-  assert.equal(decide({ ...args, answers: { task: { choice: "new", confidence: 0.9 } } }).collection, null, "a new task inherits nothing");
-  assert.equal(decide({ ...args, taskCollections: { [A]: "gone" }, answers: { task: { choice: A, confidence: 0.8 } } }).collection, null,
-    "a collection since deleted is not brought back");
+test("recent work on the same page or file joins at 0.75; older work does not", () => {
+  const args = {
+    ...base, answers: r1({ [A]: 0.8 }), second: r2(A, 0.8),
+    keys: keys({ pages: ["Pricing"] }), taskKeys: { [A]: tk({ pages: ["pricing"] }) },
+  };
+  assert.equal(decide({ ...args, newest: { [A]: NOW - 8 * 60e3 } }).why, "join-recent");
+  assert.equal(decide({ ...args, newest: { [A]: NOW - 31 * 60e3 } }).why, "ask");
+  assert.equal(decide({ ...args, keys: keys({ files: ["Price.tsx"] }), taskKeys: { [A]: tk({ files: ["Price.tsx"] }) }, newest: { [A]: NOW - 8 * 60e3 } }).why, "join-recent");
+  assert.equal(decide({ ...args, keys: keys(), taskKeys: {}, newest: { [A]: NOW - 8 * 60e3 } }).why, "ask", "recency alone does nothing");
+});
+
+test("a join on a different page asks instead", () => {
+  const out = decide({
+    ...base, answers: r1({ [A]: 0.95 }), second: r2(A, 0.97),
+    keys: keys({ pages: ["Signups"] }), taskKeys: { [A]: tk({ pages: ["Pricing"] }) },
+  });
+  assert.equal(out.why, "ask-page");
+  assert.equal(out.task, OWN);
+  assert.deepEqual(out.candidates, [A]);
+});
+
+test("a different ticket never joins and is never offered", () => {
+  const out = decide({
+    ...base, answers: r1({ [A]: 0.95 }), second: r2(A, 0.97),
+    keys: keys({ tickets: ["ENG-2"] }), taskKeys: { [A]: tk({ tickets: ["ENG-1"] }) },
+  });
+  assert.equal(out.why, "new");
+  assert.equal(out.candidates, undefined);
+});
+
+test("related but separate starts its own task with a link, not a merge", () => {
+  const out = decide({ ...base, answers: r1({ [A]: 0.6 }), second: r2(A, 0.5, "related") });
+  assert.equal(out.why, "related");
+  assert.equal(out.task, OWN);
+  assert.equal(out.related, A);
+  assert.equal(out.candidates, undefined);
+});
+
+test("a project comes from Jev when it is sure, else from a join, else from the labels", () => {
+  const collections = [{ id: "deiko", name: "Deiko", hint: "" }, { id: "build", name: "build", hint: "" }];
+  assert.equal(decide({ ...base, collections, answers: { collection: { choice: "deiko", confidence: 0.6 } } }).collection, "deiko");
+  const joined = decide({
+    ...base, collections, answers: { ...r1({ [A]: 0.9 }), collection: { choice: "deiko", confidence: 0.59 } },
+    second: r2(A, 0.95), taskCollections: { [A]: "build" },
+  });
+  assert.equal(joined.collection, "build");
+  const fresh = decide({ ...base, collections: [], keys: keys({ sites: ["build"] }), apps: ["Google Chrome"] });
+  assert.deepEqual(fresh.newCollection, { id: "build", name: "build" });
+  assert.equal(fresh.collection, "build");
+  assert.equal(decide({ ...base, collections, keys: keys({ repo: ["DEIKO"], sites: ["build"] }) }).collection, "deiko", "code project first, matched by name");
+  assert.equal(decide({ ...base, collections, answers: { collection: { choice: "made-up", confidence: 0.99 } } }).collection, null);
+});
+
+test("the strongest label names the project: code project, website, document, app", () => {
+  assert.equal(projectFromKeys({ keys: keys({ repo: ["acme-portal"], sites: ["build"] }) }), "acme-portal");
+  assert.equal(projectFromKeys({ keys: keys({ sites: ["build"], docs: ["Card Library"] }) }), "build");
+  assert.equal(projectFromKeys({ keys: keys({ docs: ["Card Library"] }), apps: ["Figma"] }), "Card Library");
+  assert.equal(projectFromKeys({ keys: keys(), apps: ["Google Chrome", "Figma"] }), "Figma");
+  assert.equal(projectFromKeys({ keys: keys(), apps: ["Google Chrome", "Code", "Finder"] }), null);
+});
+
+test("every probability is logged, with the shortlist in the order it was sent", () => {
+  const out = decide({ ...base, answers: { ...r1({ [A]: 0.2, [B]: 0.4 }), collection: { choice: "none", confidence: 0.8 } }, second: r2(B, 0.3, "different") });
+  assert.deepEqual(out.jev.same, { [A]: 0.2, [B]: 0.4, [C]: 0 });
+  assert.deepEqual(out.jev.second, { [B]: { same: 0.3, relation: "different" } });
+  assert.deepEqual(out.jev.collection, { choice: "none", confidence: 0.8 });
+  assert.deepEqual(out.jev.shortlist, [A, B, C]);
+  assert.equal(out.jev.rank, null);
+  assert.equal(out.jev.why, "new");
 });
 
 test("the tier is the most likely level, or the rounded score without probabilities", () => {
@@ -155,9 +203,11 @@ test("score probabilities may arrive as an object keyed by level, as Vercel send
 });
 
 test("a missing or partial answer is a quiet no", () => {
-  assert.deepEqual(decide({}), {
-    collection: null, task: null, newTask: null, tier: null, confidence: {}, newCollection: null,
-  });
+  const out = decide({});
+  assert.equal(out.pile, null);
+  assert.equal(out.task, null);
+  assert.equal(out.collection, null);
+  assert.equal(out.why, "new");
 });
 
 test("the cost hint needs the toggle, a quick tier and a confident one", () => {
