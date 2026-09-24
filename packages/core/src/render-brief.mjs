@@ -285,17 +285,17 @@ const myTitle = mates.length ? taskTitles.get(myTask) ?? titleFor(mates.at(-1)) 
 // oldest first, dated.
 const firmMates = mates.filter((b) => firm(b, myTask));
 const task = mates.length
-  ? {
+  ? (({ now, ...state }) => ({
     title: myTitle,
     count: mates.length,
     id: myTask,
+    ...state,
     // "Last asked" already says the newest ask; the recent briefs below say
     // that themselves, dated, so it would only repeat.
-    ...taskState(mates, myTitle),
-    now: taskState(mates, myTitle).now.filter((l) => !l.startsWith("Last asked: ")),
+    now: now.filter((l) => !l.startsWith("Last asked: ")),
     recent: firmMates.slice(0, 3).reverse().map((b) => ({ date: briefDate(b.id), line: b.line })),
     notePath: join(root, "tasks", `${myTask}.md`),
-  }
+  }))(taskState(mates, myTitle))
   : null;
 // ON ITS OWN, BUT MAYBE NOT: the tasks `classify.mjs` could not choose
 // between. Only ids the board still has briefs for — which is also what makes
