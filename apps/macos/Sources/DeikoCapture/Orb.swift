@@ -1540,12 +1540,15 @@ struct OrbRootView: View {
         model.handedTo.map { "Handed to \($0)" } ?? "Handed over"
     }
 
-    /// Nothing when there is no relay: no sorter, nothing to report.
+    /// Nothing when there is no relay: no sorter, nothing to report. Once a
+    /// placement exists there is always a line — "A new task" when it joined
+    /// nothing — so the card does not shrink under the coin as "Filing…" goes.
     private var placementLine: String? {
         if model.placing { return "Filing…" }
         if model.notFiled { return "Not filed" }
         if !model.openCandidates.isEmpty { return "Which task? Open the card to choose" }
-        return model.joinedTask.map { "Carries on from \($0)" }
+        if let joined = model.joinedTask { return "Carries on from \(joined)" }
+        return model.context == nil ? nil : "A new task"
     }
 
     private var accessibilitySummary: String {
