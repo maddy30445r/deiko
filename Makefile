@@ -409,10 +409,11 @@ relay-deploy:
 
 ## relay-dev — run the relay locally, for testing the app against it
 ##
+## Meters into memory (services/relay/local.mjs), never the real usage table.
 ##   make relay-dev
 ##   DEIKO_RELAY_URL=http://localhost:8787 open build/Deiko.app
 relay-dev:
-	@set -a; [ -f .env ] && . ./.env; set +a; node services/relay/server.mjs
+	@set -a; [ -f .env ] && . ./.env; set +a; node services/relay/local.mjs
 
 ## site-deploy — the landing site onto S3 + CloudFront
 ##

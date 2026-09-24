@@ -38,7 +38,7 @@ for s in $STAMPS; do
 done
 [ -d "$SRC/personas" ] && cp -R "$SRC/personas" "$BOARD/"
 
-(set -a; [ -f "$ENV_FILE" ] && . "$ENV_FILE"; set +a; PORT=$PORT exec node "$REPO/services/relay/server.mjs") >"$TMP/relay.log" 2>&1 &
+(set -a; [ -f "$ENV_FILE" ] && . "$ENV_FILE"; set +a; PORT=$PORT exec node "$REPO/services/relay/local.mjs") >"$TMP/relay.log" 2>&1 &
 RELAY=$!
 for _ in $(seq 1 50); do
   curl -s -o /dev/null "http://127.0.0.1:$PORT/health" && break
@@ -88,6 +88,8 @@ EOF
 # inside the relay are not.
 grep -E "^unhandled" "$TMP/relay.log" | head -5 && fail=1 || true
 grep -cE " 5[0-9][0-9] " "$TMP/relay.log" | awk '$1 > 0 { print "· the relay answered " $1 " request(s) with a 5xx (retried)" }' || true
+# What the upstream said when it failed — status and host only, never a body.
+grep -E "^upstream .* answered" "$TMP/relay.log" | sort | uniq -c | sed 's/^/· /' || true
 
 if [ "$fail" = 0 ]; then echo "✓ flow intact"; else echo "✗ flow broken — see above"; fi
 exit "$fail"
