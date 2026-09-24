@@ -131,7 +131,7 @@ struct SessionContext: Codable, Equatable {
 /// asking `context.json` "was this filed?" can answer "no" for a session
 /// whose words already left — exactly the understatement `SessionClaims`
 /// exists to prevent. `classify.mjs` writes `classify.sent` immediately
-/// before its first POST for that reason; this only checks it exists.
+/// before its first POST for that reason, and here it is read back.
 ///
 /// The marker also says whether the request carried a summary, because the
 /// card's summary can arrive after the request left without one. A marker

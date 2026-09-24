@@ -74,8 +74,8 @@ func summaryThroughRelay() {
 func filedAddsTheSortingClaim() {
     // `filed` means the request WENT OUT, not that an answer came back or a
     // task was assigned — `context.json` can be absent or unplaced and this
-    // still be true. See `ClassifyRequest.wasSent` (DeikoCapture) for where
-    // the caller actually gets this boolean from.
+    // still be true. See `ClassifyRequest.sentSummary` (DeikoCapture) for
+    // where the caller actually gets this boolean, and `filedSummary`, from.
     let line = SessionClaims.trustLine(
         transcriber: "deiko", degradedReason: nil,
         seconds: 30, uploadedChunks: 2, hasSummary: true, ownGroqKey: false, filed: true, filedSummary: true
