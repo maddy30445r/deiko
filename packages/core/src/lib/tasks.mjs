@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { join } from "node:path";
 
 import { redact } from "./redact.mjs";
-import { STAMP, briefDate, readBriefLine } from "./context.mjs";
+import { COULD_NOT_TELL, STAMP, briefDate, readBriefLine } from "./context.mjs";
 
 export const TASK_ID = /^t-\d{8}-\d{6}$/;
 /// How many tasks Jev chooses among.
@@ -80,9 +80,6 @@ export function parseOutcome(text) {
   }
   return out;
 }
-
-/// What `summarize.mjs` tells Groq to say when it cannot tell.
-const COULD_NOT_TELL = /too (short|garbled)/i;
 
 const TITLE_CAP = 80;
 

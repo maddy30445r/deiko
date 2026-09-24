@@ -145,3 +145,26 @@ test("a joined brief nothing else placed takes its task's collection", async () 
   assert.equal(context.task, "t-20260918-090000");
   assert.equal(context.collection, "shop");
 });
+
+test("a brief the summary could not tell is not sent", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
+  const dir = filed(root, "20260918-100000", { narration: "hello hello can you hear me now", summary: "The transcript is too short to determine a request." });
+  const stub = await relay();
+  const { stderr } = await classify(dir, stub.url);
+  stub.close();
+  assert.equal(stub.bodies.length, 0);
+  assert.equal(existsSync(join(dir, "classify.sent")), false);
+  assert.match(stderr, /could not tell .* skipping/);
+});
+
+test("briefs with nothing to place are never a shortlisted task", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
+  filed(root, "20260918-090000", { narration: "." });
+  filed(root, "20260918-091000", { narration: "testing testing one two three", summary: "The transcript is too garbled to determine a coding task." });
+  filed(root, "20260918-092000", { narration: "the price still shows 99 after I save", summary: "Fix the price display after saving." });
+  const dir = filed(root, "20260918-100000", { narration: "the price bug is back on the listing", summary: "The listing page shows the old price." });
+  const stub = await relay();
+  await classify(dir, stub.url);
+  stub.close();
+  assert.deepEqual(stub.bodies[0].tasks.map((t) => t.id), ["t-20260918-092000"]);
+});

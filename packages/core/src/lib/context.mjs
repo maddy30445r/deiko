@@ -73,6 +73,19 @@ export function briefDate(id, now = new Date()) {
 /// is a question with no answer.
 export const MIN_NARRATION = 12;
 
+/// What `summarize.mjs` tells Groq to say when it cannot tell.
+export const COULD_NOT_TELL = /too (short|garbled)/i;
+
+/** Why a brief has nothing to place — too little said, or a summary that
+ *  could not tell what was asked — or null when it can be placed. One rule
+ *  for the brief being classified and for the board it is scored against,
+ *  so a mic test is neither filed nor a task to file into. */
+export function unplaceable(b) {
+  if ((b.narration ?? "").trim().length < MIN_NARRATION) return "narration too short to place";
+  if (COULD_NOT_TELL.test(b.summaryLine ?? "")) return "the summary could not tell what was asked";
+  return null;
+}
+
 /**
  * The classifier's answers, turned into a `context.json`.
  *
@@ -197,8 +210,6 @@ export function wantsQuickHint(context, optimizeCosts) {
     && context?.tier === "quick"
     && (context?.confidence?.tier ?? 0) >= FLOORS.quickHint;
 }
-
-const COULD_NOT_TELL = /too (short|garbled)/i;
 
 /// Lines kept per outcome section. The file itself is parsed whole, so a
 /// long Did cannot push Open out of reach.

@@ -40,7 +40,7 @@ import { homedir } from "node:os";
 
 import { loadEvents } from "./lib/session-io.mjs";
 import { redact } from "./lib/redact.mjs";
-import { MIN_NARRATION, decide, readBriefLine } from "./lib/context.mjs";
+import { decide, readBriefLine, unplaceable } from "./lib/context.mjs";
 import {
   groupTasks, readBoard, readTasks, scoreTasks, stampTime, taskState, taskText, titleFor,
 } from "./lib/tasks.mjs";
@@ -112,8 +112,10 @@ async function main() {
     return;
   }
   const narration = (summary?.narration ?? "").trim();
-  if (narration.length < MIN_NARRATION) {
-    console.error("· narration too short to place — skipping");
+  const me = readBriefLine(dir);
+  const why = unplaceable(me);
+  if (why) {
+    console.error(`· ${why} — skipping`);
     return;
   }
 
@@ -130,8 +132,9 @@ async function main() {
 
   const collections = readCollections(root);
 
-  const me = readBriefLine(dir);
-  const board = readBoard(root).filter((b) => b.id < id);   // older only: a re-run over history must not see the future
+  // Older only: a re-run over history must not see the future. And nothing
+  // with nothing to place, or a mic test tops the shortlist as a task.
+  const board = readBoard(root).filter((b) => b.id < id && !unplaceable(b));
   const taskTitles = readTasks(root);
   const groups = groupTasks(board);
   const now = stampTime(id);
