@@ -117,7 +117,7 @@ final class ReviewModel: ObservableObject {
     var joinedTask: String? {
         let store = SessionsStore.shared
         guard let id = context?.task, id != ownTask,
-              store.items.contains(where: { $0.task == id && $0.id != sessionID })
+              store.items.contains(where: { $0.task == id && !$0.odds && $0.id != sessionID })
         else { return nil }
         return store.title(ofTask: id)
     }
@@ -132,7 +132,7 @@ final class ReviewModel: ObservableObject {
         guard let context, context.task == nil || context.task == ownTask else { return [] }
         let store = SessionsStore.shared
         return (context.candidates ?? []).filter { id in
-            id != ownTask && store.items.contains { $0.task == id }
+            id != ownTask && store.items.contains { $0.task == id && !$0.odds }
         }
     }
 
@@ -1297,7 +1297,7 @@ struct ReviewView: View {
     @ViewBuilder private func candidateChips(_ known: [String]) -> some View {
         ForEach(known, id: \.self) { id in
             let title = store.title(ofTask: id)
-            let count = store.items.filter { $0.task == id }.count
+            let count = store.items.filter { $0.task == id && !$0.odds }.count
             let briefs = "\(count) \(count == 1 ? "brief" : "briefs")"
             Button { model.setTask(id) } label: {
                 // The count tells two tasks with the same few words apart.

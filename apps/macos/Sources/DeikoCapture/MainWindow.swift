@@ -314,7 +314,9 @@ final class SessionsStore: ObservableObject {
         /// All three come from the same detached pass that reads the manifest,
         /// so the memory costs the board one more small decode per session.
         let collection: String?
-        /// The task this brief belongs to; its own when nobody moved it.
+        /// The task this brief belongs to; its own when nobody moved it. An
+        /// odds brief still carries its own id here but is in no task, so
+        /// every lookup by task id skips it.
         let task: String
         /// In odds and ends: in no task, shown together at the board's end.
         let odds: Bool
@@ -359,7 +361,7 @@ final class SessionsStore: ObservableObject {
 
     func title(ofTask id: String) -> String {
         taskTitles[id]
-            ?? items.filter { $0.task == id }.min { $0.date < $1.date }?.title
+            ?? items.filter { $0.task == id && !$0.odds }.min { $0.date < $1.date }?.title
             ?? "A task"
     }
 
