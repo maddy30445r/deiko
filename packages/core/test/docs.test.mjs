@@ -69,6 +69,8 @@ const KNOWN_GONE = new Map([
     "scripts/generate_session_summary_backfill.py",
     "a path in ANOTHER repo, quoted verbatim inside a captured agent transcript",
   ],
+  ["site/two-languages.html", "a page of the old site, retired when the new site shipped on 2026-09-24"],
+  ["build/Deiko.app", "a build output: present only after `make app`, never in a clean checkout"],
 ]);
 
 function referencedPaths(text, fromDir) {
