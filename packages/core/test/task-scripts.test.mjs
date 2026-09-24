@@ -89,6 +89,16 @@ test("repo hints keep names that merely contain an app's name", async () => {
   assert.deepEqual(repoHints.sort(), ["acme-portal", "research", "search-api"]);
 });
 
+test("a render writes the brief's labels beside its summary", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-render-"));
+  const dir = session(root, "20260918-100000", { said: "fix ENG-142 on the price page", windows: ["Price.tsx — acme-portal"] });
+  await render(dir);
+  const { keys } = JSON.parse(readFileSync(join(dir, "brief.json"), "utf8")).summary;
+  assert.deepEqual(keys.files, ["Price.tsx"]);
+  assert.deepEqual(keys.repo, ["acme-portal"]);
+  assert.deepEqual(keys.tickets, ["ENG-142"]);
+});
+
 // ── classify ────────────────────────────────────────────────────────────────
 
 /** A sibling as `render-brief.mjs` leaves it: `brief.json`, and whatever else it has. */

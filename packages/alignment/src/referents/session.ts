@@ -1,5 +1,5 @@
 import { ReferentStack } from "./stack.js";
-import type { Referent } from "./types.js";
+import type { Referent, ReferentPage } from "./types.js";
 
 /**
  * Build a stack from a recorded session's `events.jsonl`.
@@ -90,6 +90,7 @@ export function loadSession(events: RawEvent[]): ReferentStack {
       text: extractText(probe),
       cropPath: probe?.crop?.path,
       mark: probe?.mark,
+      ...extractPage(probe),
       // Carried through verbatim: these are the recorder's honest notes on how
       // suspicious the settle was, and the aligner is what decides.
       capture: candidate.features,
@@ -122,6 +123,7 @@ export function loadSession(events: RawEvent[]): ReferentStack {
         text: extractText(probe),
         cropPath: probe.crop?.path,
         mark: probe?.mark,
+        ...extractPage(probe),
       });
       continue;
     }
@@ -146,6 +148,7 @@ export function loadSession(events: RawEvent[]): ReferentStack {
       text: extractText(probe),
       cropPath: probe.crop?.path,
       mark: probe?.mark,
+      ...extractPage(probe),
     });
   }
 
@@ -165,6 +168,23 @@ function recoverDragStart(probe: any, cursors: any[]): number {
     else if (dragStart !== probe.t) break;
   }
   return dragStart;
+}
+
+function extractPage(probe: any): { page?: ReferentPage } {
+  const nonEmpty = (s: unknown): s is string => typeof s === "string" && s.trim().length > 0;
+  const els: any[] = probe?.snapshot?.elements ?? [];
+  const web = [...els, ...els.flatMap((e) => e?.ancestors ?? [])]
+    .find((e) => e?.role === "AXWebArea" && nonEmpty(e.title));
+  const headings = els.filter((e) => e?.role === "AXHeading").map((e) => e.title || e.value).filter(nonEmpty);
+  const domIds = els.map((e) => e?.domIdentifier).filter(nonEmpty);
+  const page: ReferentPage = {
+    ...(web ? { title: web.title as string } : {}),
+    ...(nonEmpty(probe?.pageURL) ? { url: probe.pageURL as string } : {}),
+    ...(nonEmpty(probe?.document) ? { document: probe.document as string } : {}),
+    ...(headings.length ? { headings } : {}),
+    ...(domIds.length ? { domIds } : {}),
+  };
+  return Object.keys(page).length ? { page } : {};
 }
 
 function extractText(probe: any): { ax: string[]; ocr: string[]; axStart?: string[] } {

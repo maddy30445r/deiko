@@ -39,6 +39,15 @@ export interface ReferentText {
   axStart?: string[];
 }
 
+/** What a page or document calls itself — see `Referent.page`. */
+export interface ReferentPage {
+  title?: string;
+  url?: string;
+  document?: string;
+  headings?: string[];
+  domIds?: string[];
+}
+
 export interface Referent {
   /**
    * Stable within a session: "r1", "r2", … Cited by the brief, and assigned in
@@ -73,6 +82,15 @@ export interface Referent {
    *  its crop and the classified gesture kind (point/lasso/connector/trace/
    *  emphasis — or newer values this build has never heard of). */
   mark?: { kind: string; number: number };
+
+  /**
+   * What the page or document itself is called, where the app said so: the
+   * browser's web-area title ("Signups — build"), its address (host and path
+   * only — the recorder never keeps a query), the window's open document, and
+   * headings and element ids under the pointer. Labels for filing, read by
+   * `scripts/lib/labels.mjs`. Absent when none of it was captured.
+   */
+  page?: ReferentPage;
 
   /**
    * How the pointing act itself happened — recorded at capture, never judged

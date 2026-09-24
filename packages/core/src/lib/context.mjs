@@ -17,6 +17,7 @@
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 
+import { KINDS } from "./labels.mjs";
 import { TASK_ID, parseOutcome } from "./tasks.mjs";
 
 /// Where a probability becomes a decision.
@@ -254,6 +255,11 @@ export function readBriefLine(sessionDir) {
     windows: Array.isArray(summary.windows) ? summary.windows : [],
     screenTerms: Array.isArray(summary.screenTerms) ? summary.screenTerms : [],
     repoHints: Array.isArray(summary.repoHints) ? summary.repoHints : [],
+    // Labels (`labels.mjs`). A brief rendered before labels existed has only
+    // its repo hints, which were the first label.
+    keys: Object.fromEntries(KINDS.map((k) => [k,
+      Array.isArray(summary.keys?.[k]) ? summary.keys[k]
+        : k === "repo" && Array.isArray(summary.repoHints) ? summary.repoHints : []])),
     outcome,
   };
 }

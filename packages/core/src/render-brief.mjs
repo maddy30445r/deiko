@@ -27,40 +27,11 @@ import { loadSession } from "../packages/alignment/dist/src/referents/session.js
 import { toCandidates } from "../packages/alignment/dist/src/referents/candidates.js";
 import { loadEvents } from "./lib/session-io.mjs";
 import { carriesSecret, assertNoSecrets, redact, redactBlock } from "./lib/redact.mjs";
+import { briefKeys, repoHints } from "./lib/labels.mjs";
 import { buildPrompt, quoteSurvives } from "./lib/prompt.mjs";
 import { degradedReason as cloudDegradedReason } from "./lib/cloud.mjs";
 import { wantsQuickHint } from "./lib/context.mjs";
 import { groupTasks, readBoard, readTasks, taskIdFor, taskState, titleFor, tokens, writeTaskNotes } from "./lib/tasks.mjs";
-
-// ── Repo identity ───────────────────────────────────────────────────────────
-
-/** App/browser names that are never a repo, so they can be discarded. */
-/// Whole words, so `search-api` and `research` are not "Arc".
-const NOT_A_REPO =
-  /\b(google chrome|safari|firefox|arc|bitbucket|github|gitlab|jira|discord|slack|visual studio code|cursor|finder|terminal|iterm2?|warp|screen recording)\b/i;
-
-/**
- * Guess repo names from window titles. Editors render `App.tsx — acme-portal`
- * (EM dash, U+2014); browsers render `Pull requests — acme-api-service —
- * Bitbucket - Google Chrome – Alex`, where the trailing en dash is the Chrome
- * profile. So: split on em dashes, drop segments naming an app, take what's left.
- */
-function repoHints(titles) {
-  const hints = new Map();
-  for (const title of titles) {
-    if (!title) continue;
-    const parts = title
-      .split("—")
-      .map((p) => p.trim())
-      .filter((p) => p && !NOT_A_REPO.test(p));
-    if (parts.length < 2) continue;
-    // The last surviving segment is the workspace; earlier ones are the file.
-    const name = parts[parts.length - 1].replace(/\s*\(.*\)\s*$/, "").trim();
-    if (!name || name.includes(" ")) continue; // repo names do not have spaces
-    hints.set(name, (hints.get(name) ?? 0) + 1);
-  }
-  return [...hints.entries()].sort((a, b) => b[1] - a[1]).map(([name]) => name);
-}
 
 // ── Rendering ───────────────────────────────────────────────────────────────
 
@@ -420,6 +391,11 @@ const manifest = {
     // none. Only kept referents: a removed screenshot's words are not evidence.
     windows: [...new Set(kept.map((r) => r.window).filter(Boolean).map(redact))].slice(0, 5),
     screenTerms: screenTerms(kept),
+    // THE BRIEF'S LABELS — page, site, address, file, project, document,
+    // error, ticket — cleaned so the next visit to the same page matches.
+    // Kept referents only, like everything here. All but `components` may
+    // travel to the classifier, redacted, as the window titles do.
+    keys: briefKeys({ referents: kept, narration }),
     referentCount: kept.length,
     wordCount: words.length,
     // COUNTED OVER `kept`, like `referentCount`. `align` runs over every

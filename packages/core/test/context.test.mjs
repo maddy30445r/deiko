@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { COULD_NOT_TELL, FLOORS, TIERS, briefDate, decide, readBriefLine, slug, unplaceable, wantsQuickHint } from "../lib/context.mjs";
+import { EMPTY_KEYS } from "../lib/labels.mjs";
 
 // ── Names and dates ─────────────────────────────────────────────────────────
 
@@ -187,8 +188,24 @@ test("a sibling is read with its summary line, task, windows, terms and outcome"
     line: "Fix the drag on the board.",
     collection: "deiko", task: "t-20260915-100000", odds: false,
     apps: ["Deiko"], windows: ["Orb.swift — Deiko"], screenTerms: ["drag"], repoHints: ["Deiko"],
+    keys: { ...EMPTY_KEYS, repo: ["Deiko"] },
     outcome: { did: ["Moved the threshold."], decided: [], open: ["Test on a trackpad."], files: [] },
   });
+});
+
+test("a brief's labels are read back, and an old brief's repo hints stand in for them", () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-keys-"));
+  const make = (id, summary) => {
+    mkdirSync(join(root, id));
+    writeFileSync(join(root, id, "brief.json"), JSON.stringify({ summary }));
+    return join(root, id);
+  };
+  const fresh = readBriefLine(make("20260918-100000", { narration: "x", keys: { pages: ["Signups"], repo: ["build"] } }));
+  assert.deepEqual(fresh.keys.pages, ["Signups"]);
+  assert.deepEqual(fresh.keys.tickets, []);
+  const old = readBriefLine(make("20260918-110000", { narration: "y", repoHints: ["acme-portal"] }));
+  assert.deepEqual(old.keys.repo, ["acme-portal"]);
+  assert.deepEqual(old.keys.pages, []);
 });
 
 test("a long outcome is read whole and each section capped", () => {
