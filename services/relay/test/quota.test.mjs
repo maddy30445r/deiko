@@ -23,6 +23,7 @@ import {
   monthKey,
   subjectFrom,
   usageKey,
+  isPolarKey,
 } from "../quota.mjs";
 
 // ── Who is calling ──────────────────────────────────────────────────────────
@@ -285,4 +286,15 @@ test("an IPv4-mapped address is its IPv4 however it is spelled, and ::1 is nobod
   assert.notEqual(ipBucket("::ffff:198.51.100.1"), ipBucket("::ffff:cb00:7107"), "two IPv4 callers are two callers");
   assert.notEqual(ipBucket("::1"), ipBucket("::2"), "the zero /64 is not one subscriber");
   assert.notEqual(ipBucket("::1"), ipBucket("::ffff:0:1"));
+});
+
+test("a licence key is Polar-shaped with a UUID or with Deiko's prefix, never junk", () => {
+  assert.equal(isPolarKey("1C285B2D-6CE6-4BC7-B8BE-ADB6A7E304DA"), true);
+  assert.equal(isPolarKey("DEIKO-1c285b2d-6ce6-4bc7-b8be-adb6a7e304da"), true);
+  // The body Polar's settings page masks as XXXX-XXXX-XXXX, in case it is literal.
+  assert.equal(isPolarKey("DEIKO-1A2B-3C4D-5E6F"), true);
+  assert.equal(isPolarKey("deiko-1a2b-3c4d-5e6f"), true);
+  assert.equal(isPolarKey("DEIKO-ABC"), false);
+  assert.equal(isPolarKey("junk"), false);
+  assert.equal(isPolarKey("OTHER-1A2B-3C4D-5E6F"), false);
 });

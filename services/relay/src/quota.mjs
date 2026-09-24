@@ -215,11 +215,19 @@ export function audioSeconds(byteLength) {
 /// v4-shaped UUIDs every build up to 0.3.0 sent unprefixed.
 const ID_ALLOWED = /^[A-Za-z0-9_-]{1,128}$/;
 
-/// WHAT EVERY POLAR LICENCE KEY ENDS WITH: an optional brand prefix, then a
-/// UUID4 (polar.sh/docs/features/benefits/license-keys, "MYAPP_<UUID4>").
-/// A `lic_` id without one cannot be a key Polar issued.
+/// WHAT A POLAR LICENCE KEY LOOKS LIKE, two ways, because getting this wrong
+/// reads every buyer as Free: Polar's docs describe an optional brand prefix
+/// followed by a UUID4 ("MYAPP_<UUID4>"), and Deiko's own benefit is set up
+/// with the prefix `DEIKO-` (its settings page shows the key as
+/// `DEIKO-XXXX-XXXX-XXXX`, a mask whose real body has not been seen yet). So a
+/// key is accepted if it ends in a UUID, OR if it carries Deiko's prefix and
+/// a plausible body. Anything else is junk and is refused without a Polar
+/// call. Change the prefix here if it is ever changed in Polar.
+const UUID_SUFFIX = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const DEIKO_PREFIXED = /^DEIKO-[A-Za-z0-9-]{12,}$/i;
 export function isPolarKey(id) {
-  return /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(id));
+  const s = String(id);
+  return UUID_SUFFIX.test(s) || DEIKO_PREFIXED.test(s);
 }
 
 export function subjectFrom(token) {
