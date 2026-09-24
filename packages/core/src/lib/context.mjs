@@ -305,6 +305,11 @@ export function readBriefLine(sessionDir) {
     line: summaryLine && !COULD_NOT_TELL.test(summaryLine) ? summaryLine : said,
     collection: context.collection ?? null,
     task: TASK_ID.test(context.task ?? "") ? context.task : null,
+    // How it was filed — `firm` in tasks.mjs reads these to decide whether
+    // this brief may describe its task.
+    decidedBy: typeof context.decidedBy === "string" ? context.decidedBy : null,
+    classifier: typeof context.classifier === "string" ? context.classifier : null,
+    confidence: context.confidence && typeof context.confidence === "object" ? context.confidence : {},
     // In odds and ends: too little said, or nothing Groq could make sense
     // of, and no task — see `classify.mjs`.
     odds: context.pile === "odds",

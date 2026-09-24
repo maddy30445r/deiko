@@ -8,7 +8,10 @@ import { readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import { COULD_NOT_TELL, decide, readBriefLine, unplaceable } from "./context.mjs";
-import { groupTasks, readBoard, scoreTasks, stampTime, taskState, taskText, titleFor } from "./tasks.mjs";
+import {
+  bm25, firm, groupTasks, readBoard, shortlist as rankTasks, stampTime, taskLabels, taskState, taskText, timeWindow,
+  titleFor, tokens,
+} from "./tasks.mjs";
 import { loadEvents } from "./session-io.mjs";
 import { KINDS } from "./labels.mjs";
 import { redact } from "./redact.mjs";
@@ -78,43 +81,55 @@ export function olderBoard(root, id) {
   return readBoard(root).filter((b) => b.id < id && !unplaceable(b));
 }
 
-export function prepare({ id, me, summary, windowTitles, board, taskTitles, collections }) {
+export function prepare({ id, me, summary, windowTitles, board, taskTitles, collections, vectors = null }) {
   const groups = groupTasks(board);
-  const now = stampTime(id);
-  const scored = scoreTasks({
-    query: [me.summaryLine, me.narration, ...windowTitles, ...(summary.repoHints ?? []), ...me.screenTerms].join(" "),
+  // A TASK'S FACE: its firm briefs only. One guessed join must never become
+  // what the task is matched against — or what Jev is told it is.
+  const faces = new Map([...groups].map(([tid, bs]) => {
+    const f = bs.filter((b) => firm(b, tid));
+    return [tid, f.length ? f : [bs.at(-1)]];
+  }));
+  const titleOf = (tid) => taskTitles.get(tid) ?? titleFor(groups.get(tid).at(-1));
+  const query = [me.summaryLine, me.narration, ...windowTitles, ...(summary.repoHints ?? []), ...me.screenTerms].join(" ");
+  const scored = rankTasks({
+    query,
+    queryKeys: me.keys ?? {},
+    // Time words seat tasks; they never reach `decide`.
+    window: timeWindow([me.narration, me.summaryLine].join(" "), stampTime(id)),
+    queryVec: vectors?.query ?? null,
     tasks: [...groups].map(([tid, bs]) => ({
       id: tid,
-      text: taskText(taskTitles.get(tid) ?? titleFor(bs.at(-1)), bs),
+      text: taskText(titleOf(tid), faces.get(tid)),
+      labels: taskLabels(bs),
+      times: bs.map((b) => stampTime(b.id)),
       lastActive: stampTime(bs[0].id),
-      repoHints: bs.flatMap((b) => b.repoHints),
+      vecs: vectors ? faces.get(tid).map((b) => vectors.byBrief.get(b.id)).filter(Boolean) : [],
     })),
-    repoHints: summary.repoHints ?? [],
-    now,
   });
+  // THE SHORT-BRIEF PATH keeps its old yardstick: word BM25 over every member.
+  const all = [...groups];
+  const wordScores = bm25(tokens(query), all.map(([tid, bs]) => tokens(taskText(titleOf(tid), bs))));
+  const local = all.map(([tid], i) => ({ id: tid, score: wordScores[i] })).sort((a, b) => b.score - a.score);
 
   const shortlist = scored.map((s) => {
-    const bs = groups.get(s.id);
-    const last = bs.find((b) => b.outcome)?.outcome;
-    const title = taskTitles.get(s.id) ?? titleFor(bs.at(-1));
+    const face = faces.get(s.id);
+    const last = face.find((b) => b.outcome)?.outcome;
+    const title = titleOf(s.id);
     return {
       id: s.id,
       title: redact(title),
-      // The newest ask LAST here, unlike a prompt: the relay describes a
-      // task by this field's first line, and the newest brief is the one
-      // most likely filed here by mistake. What is open, or was done, says
-      // what the task is. A stable sort keeps the rest in order.
-      now: [...taskState(bs, title).now]
-        .sort((a, b) => a.startsWith("Last asked: ") - b.startsWith("Last asked: "))
-        .join("\n"),
-      decided: bs.flatMap((b) => b.outcome?.decided ?? []).slice(0, 5).map(redact).join("\n"),
-      // Its most frequent windows, not its newest: one brief filed here by
+      // The newest ask is dropped here, unlike a prompt: the relay describes
+      // a task by this field, and the newest brief is the one most likely
+      // filed here by mistake. What is open, or was done, says what the task is.
+      now: taskState(face, title).now.filter((l) => !l.startsWith("Last asked: ")).join("\n"),
+      decided: face.flatMap((b) => b.outcome?.decided ?? []).slice(0, 5).map(redact).join("\n"),
+      // Its face's windows, not every member's: one brief filed here by
       // mistake must not become the face the classifier matches against.
-      windows: byCount(bs.flatMap((b) => b.windows)).slice(0, 5).map(redact),
-      apps: [...new Set(bs.flatMap((b) => b.apps))].slice(0, 5).map(redact),
-      files: [...new Set(bs.flatMap((b) => b.outcome?.files ?? []))].slice(0, 10).map(redact),
+      windows: byCount(face.flatMap((b) => b.windows)).slice(0, 5).map(redact),
+      apps: [...new Set(face.flatMap((b) => b.apps))].slice(0, 5).map(redact),
+      files: [...new Set(face.flatMap((b) => b.outcome?.files ?? []))].slice(0, 10).map(redact),
       outcome: last ? redact([...last.did, ...last.open].join(" ")).slice(0, 600) : "",
-      keys: Object.fromEntries(["pages", "sites", "files", "tickets"].map((k) => [k, topLabels(bs.map((b) => b.keys?.[k] ?? []), 3)])),
+      keys: Object.fromEntries(["pages", "sites", "files", "tickets"].map((k) => [k, topLabels(face.map((b) => b.keys?.[k] ?? []), 3)])),
     };
   });
 
@@ -141,7 +156,7 @@ export function prepare({ id, me, summary, windowTitles, board, taskTitles, coll
     version: 3,
   };
 
-  return { groups, scored, local: scored, shortlist, body };
+  return { groups, scored, local, shortlist, body };
 }
 
 export function decideLocally({ me, why, local, groups, collections }) {

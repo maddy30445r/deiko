@@ -5,9 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
-  SHORTLIST, TASK_ID, groupTasks, parseOutcome, renderTaskNote, scoreTasks,
-  stampTime, taskIdFor, taskState, taskText, titleFor, tokens,
-  readBoard, readTasks, writeTaskNotes,
+  COMMON_LABEL, FIRM_SAME, RRF_K, SEAT_KINDS, SHORTLIST, TASK_ID, TIME_SEATS, bm25, cosine, firm, groupTasks,
+  parseOutcome, renderTaskNote, rrf, shortlist, stampTime, taskIdFor, taskLabels, taskState, terms,
+  timeWindow, titleFor, tokens, readBoard, readTasks, writeTaskNotes,
 } from "../lib/tasks.mjs";
 
 const brief = (id, line, extra = {}) => ({
@@ -137,57 +137,126 @@ test("a Last asked line that only repeats the title is dropped", () => {
   assert.deepEqual(taskState([first], "Renamed by hand").now, [`Last asked: ${first.line}`]);
 });
 
-const asTasks = (groups, lastActive) => [...groups].map(([id, bs]) => ({
-  id, text: taskText(bs.at(-1).line, bs), lastActive: lastActive ?? stampTime(bs[0].id),
-}));
+// ── The shortlist ───────────────────────────────────────────────────────────
 
-test("the price bug is shortlisted first for another brief about it", () => {
-  const tasks = asTasks(groupTasks([...price, ...chart, ...sitemap]));
-  const top = scoreTasks({ query: "same price bug again, it still shows $99 after save", tasks, now: stampTime("20260920-100000") });
-  assert.equal(top[0].id, "t-20260918-155836");
+test("the starting values are the ones the owner agreed", () => {
+  assert.equal(SHORTLIST, 20);
+  assert.equal(TIME_SEATS, 5);
+  assert.equal(COMMON_LABEL, 5);
+  assert.equal(RRF_K, 60);
+  assert.equal(FIRM_SAME, 0.9);
 });
 
-test("recency and repo add to a match; they do not replace one", () => {
-  const now = stampTime("20260920-100000");
+test("terms add 3-grams so a speech-to-text slip still meets its word", () => {
+  assert.deepEqual(terms("the pricng"), ["the", "pricng", "~pri", "~ric", "~icn", "~cng"]);
+  const [pricing, signup] = bm25(terms("the pricng bug"), [terms("pricing page"), terms("signup chart")]);
+  assert.ok(pricing > 0);
+  assert.equal(signup, 0);
+});
+
+test("reciprocal rank fusion blends by position, and an unranked doc adds nothing", () => {
+  const fused = rrf([{ scores: [3, 2, null], weight: 1 }, { scores: [0.1, 0.9, 0.5], weight: 1 }], 60);
+  assert.ok(Math.abs(fused[0] - (1 / 61 + 1 / 63)) < 1e-12);
+  assert.ok(Math.abs(fused[1] - (1 / 62 + 1 / 61)) < 1e-12);
+  assert.ok(Math.abs(fused[2] - 1 / 62) < 1e-12);
+  assert.deepEqual(rrf([{ scores: [1, null], weight: 2 }], 60), [2 / 61, 0]);
+  assert.deepEqual(rrf([{ scores: [1, 1], weight: 1 }], 60), [1 / 61, 1 / 61], "a tie stays a tie");
+});
+
+test("time words name a window, English and Hinglish, from the brief's own stamp", () => {
+  const stamp = new Date(2026, 8, 25, 10, 0, 0).getTime(); // a Friday
+  const day = (d, h = 0) => new Date(2026, 8, d, h).getTime();
+  assert.deepEqual(timeWindow("same bug as yesterday", stamp), { from: day(24), to: day(25) });
+  assert.deepEqual(timeWindow("kal wala chart", stamp), { from: day(24), to: day(25) });
+  assert.deepEqual(timeWindow("parso ka bug", stamp), { from: day(23), to: day(24) });
+  assert.deepEqual(timeWindow("this morning", stamp), { from: day(25), to: day(25, 12) });
+  assert.deepEqual(timeWindow("aaj ka kaam", stamp), { from: day(25), to: stamp });
+  assert.deepEqual(timeWindow("last week", stamp), { from: day(18), to: day(25) });
+  assert.deepEqual(timeWindow("pichle hafte wala", stamp), { from: day(18), to: day(25) });
+  assert.deepEqual(timeWindow("the thing on Monday", stamp), { from: day(21), to: day(22) });
+  assert.deepEqual(timeWindow("friday's bug", stamp), { from: day(18), to: day(19) }, "today is Friday: last Friday");
+  assert.deepEqual(timeWindow("yesterday, or maybe Monday", stamp), { from: day(21), to: day(25) });
+  assert.equal(timeWindow("fix the signup chart", stamp), null);
+  assert.equal(timeWindow("the kalman filter", stamp), null, "whole words only");
+});
+
+test("a task is described by its founder, hand placements and sure v3 joins only", () => {
+  const T = "t-20260918-100000";
+  assert.equal(firm({ id: "20260918-100000", task: T }, T), true, "the founder");
+  assert.equal(firm({ id: "20260918-100000", task: null }, T), true, "a founder never moved");
+  assert.equal(firm({ id: "20260918-110000", task: T, decidedBy: "you" }, T), true);
+  assert.equal(firm({ id: "20260918-120000", task: T, decidedBy: "jev", classifier: "v3.0", confidence: { task: 0.72 } }, T), true,
+    "a v3 join, whatever its confidence — JOIN's own thresholds already gated it");
+  assert.equal(firm({ id: "20260918-130000", task: T, decidedBy: "jev", classifier: "v3.0", confidence: { gate: 1 } }, T), false,
+    "a v3 filing that only asked or started fresh, not a join");
+  assert.equal(firm({ id: "20260918-140000", task: T, decidedBy: "jev", confidence: { task: 0.95 } }, T), false, "an old 0.5.0 join has no classifier");
+  assert.equal(firm({ id: "20260918-150000", task: T, decidedBy: "local", confidence: { task: null } }, T), false);
+});
+
+const noLabels = () => Object.fromEntries(SEAT_KINDS.map((k) => [k, new Set()]));
+const t = (id, text, over = {}) => ({ id, text, labels: { ...noLabels(), ...over.labels }, times: over.times ?? [], lastActive: over.lastActive ?? 0, vecs: over.vecs ?? [] });
+const idsOf = (n) => Array.from({ length: n }, (_, i) => `t-20260901-10${String(i).padStart(4, "0")}`);
+
+test("a task's labels are its briefs' labels, lower-cased, by kind", () => {
+  const labels = taskLabels([{ keys: { pages: ["Signups"], files: ["App.tsx"] } }, { keys: { pages: ["Pricing"] } }, {}]);
+  assert.deepEqual([...labels.pages].sort(), ["pricing", "signups"]);
+  assert.deepEqual([...labels.files], ["app.tsx"]);
+  assert.deepEqual([...labels.tickets], []);
+});
+
+test("a shared exact page seats a task however few words it shares", () => {
+  const ids = idsOf(25);
+  const tasks = ids.map((id, i) => (i === 24 ? t(id, "zzz", { labels: { pages: new Set(["signups"]) } }) : t(id, "price bug listing")));
+  const out = shortlist({ query: "price bug listing", queryKeys: { pages: ["Signups"] }, tasks });
+  assert.equal(out.length, 20);
+  assert.equal(out[0].id, ids[24]);
+  assert.equal(out[0].seat, "label");
+});
+
+test("a label on more than five tasks seats nobody", () => {
+  const ids = idsOf(8);
+  const tasks = ids.map((id, i) => (i < 7 ? t(id, `word${i}`, { labels: { files: new Set(["app.tsx"]) } }) : t(id, "chart week")));
+  const out = shortlist({ query: "chart week", queryKeys: { files: ["App.tsx"] }, tasks });
+  assert.equal(out.some((r) => r.seat === "label"), false);
+  assert.equal(out[0].id, ids[7]);
+});
+
+test("time words seat at most five tasks, best words first, and the rest compete", () => {
+  const ids = idsOf(9);
+  const tasks = ids.map((id, i) => (i < 8
+    ? t(id, i >= 6 ? "chart" : `alpha${i}`, { times: [150] })
+    : t(id, "chart chart", { times: [999] })));
+  const out = shortlist({ query: "chart", window: { from: 100, to: 200 }, tasks });
+  const timed = out.filter((r) => r.seat === "time");
+  assert.equal(timed.length, 5);
+  assert.deepEqual(out.slice(0, 2).map((r) => r.id).sort(), [ids[6], ids[7]]);
+  assert.equal(out[5].id, ids[8], "the best words outside the window come next");
+  assert.equal(out[5].seat, "score");
+});
+
+test("recency never outranks words; it only breaks a tie", () => {
+  const [old, fresh, a, b] = idsOf(4);
+  assert.equal(shortlist({ query: "pricing bug", tasks: [t(old, "pricing page bug", { lastActive: 1 }), t(fresh, "signup chart", { lastActive: 9e12 })] })[0].id, old);
+  assert.equal(shortlist({ query: "pricing bug", tasks: [t(a, "pricing bug", { lastActive: 1 }), t(b, "pricing bug", { lastActive: 2 })] })[0].id, b);
+});
+
+test("twenty seats, or every task on a small board", () => {
+  assert.equal(shortlist({ query: "x", tasks: idsOf(25).map((id) => t(id, "x")) }).length, 20);
+  assert.equal(shortlist({ query: "x", tasks: idsOf(12).map((id) => t(id, "x")) }).length, 12);
+  assert.deepEqual(shortlist({ query: "x", tasks: [] }), []);
+});
+
+test("meaning finds a paraphrase words miss, from the task's closest brief", () => {
+  const [cards, sitemap] = idsOf(2);
   const tasks = [
-    { id: "t-20260918-155836", text: taskText("price", price), lastActive: stampTime("20260918-162340"), repoHints: ["acme-portal"] },
-    { id: "t-20260920-095000", text: "the week 32 signup chart", lastActive: now - 10 * 60e3 },
+    t(cards, "reorder cards", { vecs: [Float32Array.from([0, 1]), Float32Array.from([0.9, 0.436])] }),
+    t(sitemap, "sitemap xml", { vecs: [Float32Array.from([0, 1])], lastActive: 2 }),
   ];
-  const top = scoreTasks({ query: "the price toast still shows $99 after save", tasks, now });
-  assert.equal(top[0].id, "t-20260918-155836");
-  const repo = scoreTasks({ query: "unrelated words", tasks, now: now + 3 * 86400e3, repoHints: ["Acme-Portal"] });
-  assert.equal(repo.find((t) => t.id === "t-20260918-155836").sameRepo, true);
-});
-
-test("same repo is an exact repo hint, never a word somewhere in the task", () => {
-  const tasks = [{ id: "t-20260918-155836", text: "Deiko app window deiko-site", lastActive: 0, repoHints: ["deiko-site"] }];
-  for (const hint of ["Deiko", "app", "site"]) {
-    assert.equal(scoreTasks({ query: "x", tasks, repoHints: [hint], now: 0 })[0].sameRepo, false, hint);
-  }
-  assert.equal(scoreTasks({ query: "x", tasks, repoHints: ["Deiko-Site"], now: 0 })[0].sameRepo, true);
-});
-
-test("the shortlist is capped", () => {
-  const many = Array.from({ length: 20 }, (_, i) => ({ id: `t-202609${String(i + 10)}-100000`, text: "price", lastActive: 0 }));
-  assert.equal(scoreTasks({ query: "price", tasks: many, now: 0 }).length, SHORTLIST);
-});
-
-test("the two most recently active tasks keep a place on the shortlist whatever they score", () => {
-  const now = stampTime("20260920-100000");
-  const matching = Array.from({ length: 10 }, (_, i) => ({
-    id: `t-202609${String(i + 1).padStart(2, "0")}-100000`, text: "the price bug", lastActive: now - 10 * 86400e3,
-  }));
-  const recent = [
-    { id: "t-20260919-080000", text: "signup chart", lastActive: now - 26 * 3600e3 },
-    { id: "t-20260919-090000", text: "sitemap xml", lastActive: now - 25 * 3600e3 },
-  ];
-  const top = scoreTasks({ query: "the price bug", tasks: [...recent, ...matching], now });
-  assert.equal(top.length, SHORTLIST);
-  assert.deepEqual(top.slice(0, 6).map((t) => t.id), matching.slice(0, 6).map((t) => t.id), "the best six by score stay");
-  assert.deepEqual(top.slice(6).map((t) => t.id).sort(), recent.map((t) => t.id), "the lowest two give way");
-  const scored = scoreTasks({ query: "signup chart sitemap xml", tasks: [...recent, ...matching], now });
-  assert.deepEqual(scored.slice(0, 2).map((t) => t.id).sort(), recent.map((t) => t.id));
-  assert.deepEqual(scored.slice(2).map((t) => t.id), matching.slice(0, 6).map((t) => t.id), "already in, they take no extra slot");
+  const blended = shortlist({ query: "the drag thing", queryVec: Float32Array.from([1, 0]), tasks });
+  assert.equal(blended[0].id, cards);
+  assert.ok(Math.abs(blended[0].meaning - 0.9) < 1e-6, "the closest brief, not the average");
+  assert.equal(shortlist({ query: "the drag thing", tasks })[0].id, sitemap, "without vectors: a tie, broken by recency");
+  assert.equal(cosine(Float32Array.from([0.6, 0.8]), Float32Array.from([0.6, 0.8])).toFixed(6), "1.000000");
 });
 
 test("the note is deterministic, capped and names two files, never a folder", () => {

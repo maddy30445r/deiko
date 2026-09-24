@@ -143,7 +143,7 @@ const join1 = (task) => () => [200, {
   second: { [task]: { same_task: { noul: 0.95 }, relation: { score: 2 } } },
 }];
 
-test("a task is described by its most frequent windows, never by when it was active", async () => {
+test("a task's face is its firm briefs: a guessed join adds nothing to it", async () => {
   const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
   const task = "t-20260918-090000";
   filed(root, "20260918-090000", { narration: "the price still shows 99 after I save", windows: ["Price.tsx — acme-portal"], repoHints: ["acme-portal"] });
@@ -155,12 +155,12 @@ test("a task is described by its most frequent windows, never by when it was act
   await classify(dir, stub.url);
   stub.close();
   const sent = Object.fromEntries(stub.bodies[0].tasks.map((t) => [t.id, t]));
-  assert.deepEqual(sent[task].windows, ["Price.tsx — acme-portal", "Chart.tsx — analytics"]);
+  assert.deepEqual(sent[task].windows, ["Price.tsx — acme-portal"]);
   assert.equal("sameRepo" in sent[task], false);
   assert.equal("lastActive" in sent[task], false);
 });
 
-test("the classifier reads what a task is before its newest, maybe mis-filed, ask", async () => {
+test("a task is described by where it stands, never by its newest ask", async () => {
   const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
   const task = "t-20260918-090000";
   filed(root, "20260918-090000", {
@@ -174,10 +174,23 @@ test("the classifier reads what a task is before its newest, maybe mis-filed, as
   const stub = await relay();
   await classify(dir, stub.url);
   stub.close();
-  assert.deepEqual(stub.bodies[0].tasks[0].now.split("\n"), [
-    "Still open from Sep 18: The listing page still caches the old price.",
-    "Last asked: Explain the week-32 drop in the signup chart.",
-  ]);
+  assert.equal(stub.bodies[0].tasks[0].now, "The listing page still caches the old price.");
+});
+
+test("a shared page seats a task, and a firm join describes it", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
+  const task = "t-20260918-090000";
+  filed(root, "20260918-090000", { narration: "the pricing page shows 99", keys: { pages: ["Pricing"] } });
+  filed(root, "20260918-091000", {
+    narration: "and the pricing toggle is stuck", summary: "Fix the stuck pricing toggle.", windows: ["Pricing — build"],
+    context: { task, decidedBy: "jev", classifier: "v3.0", confidence: { task: 0.95 } },
+  });
+  const dir = filed(root, "20260918-100000", { narration: "completely different words here", keys: { pages: ["Pricing"] } });
+  const stub = await relay();
+  await classify(dir, stub.url);
+  stub.close();
+  assert.equal(stub.bodies[0].tasks[0].id, task);
+  assert.deepEqual(stub.bodies[0].tasks[0].windows, ["Pricing — build"], "a sure v3 join is part of the face");
 });
 
 test("a joined brief nothing else placed takes its task's collection", async () => {
