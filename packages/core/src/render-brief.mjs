@@ -30,7 +30,8 @@ import { carriesSecret, assertNoSecrets, redact, redactBlock } from "./lib/redac
 import { briefKeys, repoHints } from "./lib/labels.mjs";
 import { buildPrompt, quoteSurvives } from "./lib/prompt.mjs";
 import { degradedReason as cloudDegradedReason } from "./lib/cloud.mjs";
-import { wantsQuickHint } from "./lib/context.mjs";
+import { readBriefLine, wantsQuickHint } from "./lib/context.mjs";
+import { briefText, loadModel, vectorIsCurrent, writeVector } from "./lib/meaning.mjs";
 import { groupTasks, readBoard, readTasks, taskIdFor, taskState, titleFor, tokens, writeTaskNotes } from "./lib/tasks.mjs";
 
 // ── Rendering ───────────────────────────────────────────────────────────────
@@ -446,6 +447,22 @@ try {
   writeTaskNotes(root);
 } catch (err) {
   console.error(`  ⚠ task notes not written — ${String(err?.message ?? err).slice(0, 80)}`);
+}
+
+// THIS BRIEF'S MEANING, ON THIS MAC ONLY, for matching the briefs after it.
+// From what was said and the window titles — never the screen's words. No
+// model, or any failure, and there is simply no vector: words carry on alone.
+try {
+  const model = await loadModel();
+  if (model) {
+    const text = briefText(readBriefLine(dir));
+    if (text.trim() && !vectorIsCurrent(dir, model.key, text)) {
+      const vec = await model.embed(text, "doc");
+      if (vec) writeVector(dir, model.key, vec, text);
+    }
+  }
+} catch (err) {
+  console.error(`  ⚠ meaning vector not written — ${String(err?.message ?? err).slice(0, 80)}`);
 }
 
 const shots = manifest.referents.filter((r) => r.cropPath).length;

@@ -1,4 +1,4 @@
-.PHONY: dev build test probe watch region clean setup bundle install icon dmg release guard-clean relay-deploy relay-dev site-deploy resources dist record transcribe align ground brief summarize signing-setup reset-permissions reclassify flow-check eval
+.PHONY: dev build test probe watch region clean setup bundle install icon dmg release guard-clean relay-deploy relay-dev site-deploy resources dist record transcribe align ground brief summarize signing-setup reset-permissions reclassify meaning-backfill flow-check eval
 
 # Code-signing identity for the bundle.
 #
@@ -575,6 +575,14 @@ reclassify:
 		$(SORT_BRIEFS) node scripts/classify.mjs "$$d"; \
 		node scripts/render-brief.mjs "$$d" >/dev/null 2>&1 || true; \
 	done
+
+## meaning-backfill — write each brief's meaning vector where it is missing or stale
+##
+## WRITES INTO THE BOARD (<session>/meaning.f32 + meaning.json). Run it only
+## when you mean to; `make reclassify` also fills gaps, as each render writes
+## its own brief's vector.
+meaning-backfill:
+	@node scripts/meaning.mjs backfill "$(ROOT)"
 
 ## eval — score filing against the hand-made answer key (read-only)
 ##

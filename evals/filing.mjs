@@ -5,6 +5,7 @@
  *   node scripts/eval-filing.mjs [--board ~/Documents/Deiko]
  *     [--labels ~/Documents/Deiko-eval/filing-labels.json]
  *     [--shortlist-only] [--relay <url>] [--pace <ms>] [--all] [--draft]
+ *     [--model <key>|off]
  *
  * READ-ONLY. Nothing under --board is written, ever. Briefs are replayed oldest
  * first against an in-memory board on which every earlier brief sits where the
@@ -18,6 +19,13 @@
  * same code) and spends one classify per brief from the caller's daily
  * allowance: --relay, else DEIKO_CLASSIFY_URL, else DEIKO_RELAY_URL; the token
  * is DEIKO_CLASSIFY_TOKEN or DEIKO_RELAY_TOKEN. --draft prints a starting key.
+ *
+ * --model picks which meaning model blends into the shortlist (default
+ * whatever DEIKO_MEANING_MODEL names; "off" turns it off for this run
+ * whatever the environment says) — THE BAKE-OFF. Vectors are computed in
+ * memory only, from this run's own briefs; nothing is read from or written to
+ * a brief's meaning.f32, so either model can be compared without touching
+ * the board.
  */
 import { readdirSync } from "node:fs";
 import { homedir } from "node:os";
@@ -26,6 +34,7 @@ import { join, resolve } from "node:path";
 import { STAMP, readBriefLine, unplaceable } from "./lib/context.mjs";
 import { decideLocally, place, prepare, requestClassify, sessionInputs } from "./lib/filing.mjs";
 import { draftLabels, expectations, formatReport, outcomeOf, rankOf, readLabels } from "./lib/eval.mjs";
+import { briefText, currentModel, loadModel } from "./lib/meaning.mjs";
 import { titleFor } from "./lib/tasks.mjs";
 
 const args = process.argv.slice(2);
@@ -78,22 +87,41 @@ const readable = (stamp) => {
   return inputsOf.get(stamp) != null;
 };
 const exp = expectations(readLabels(home(value("--labels", "~/Documents/Deiko-eval/filing-labels.json"))).briefs, readable);
+
+// THE BAKE-OFF. --model off forces none whatever the environment says;
+// otherwise the flag names a model, or DEIKO_MEANING_MODEL does. Loaded once,
+// up front, never written to the board — vectors live only in `docs` below.
+const modelArg = value("--model");
+const modelKey = modelArg === undefined ? currentModel() : modelArg === "off" ? null : modelArg;
+const model = modelKey ? await loadModel(modelKey) : null;
+
 const rows = [];
 let errored = 0;
 const done = [];
 const taskTitles = new Map();
 const collections = [];
+const docs = new Map();
 for (const [stamp, e] of exp) {
   const { me, summary, windowTitles } = inputsOf.get(stamp);
   const board = done.filter((b) => b.line && !b.odds && !unplaceable(b));
   const prep = prepare({ id: stamp, me, summary, windowTitles, board, taskTitles, collections });
-  const row = { stamp, exp: e, ranks: { words: e.want === "join" ? rankOf(prep.shortlist.map((t) => t.id), e.task) : null } };
+  const query = model ? await model.embed(briefText(me), "query") : null;
+  const vectors = query ? { query, byBrief: docs } : null;
+  const blended = vectors ? prepare({ id: stamp, me, summary, windowTitles, board, taskTitles, collections, vectors }) : null;
+  const row = {
+    stamp, exp: e,
+    ranks: {
+      words: e.want === "join" ? rankOf(prep.shortlist.map((t) => t.id), e.task) : null,
+      ...(blended && { blended: e.want === "join" ? rankOf(blended.shortlist.map((t) => t.id), e.task) : null }),
+    },
+  };
   if (!shortlistOnly) {
     const why = unplaceable(me);
+    const use = blended ?? prep;
     try {
       const decision = why
         ? decideLocally({ me, why, local: prep.local, groups: prep.groups, collections })
-        : place({ answer: await ask(prep.body, paceMs), id: stamp, me, summary, groups: prep.groups, shortlist: prep.shortlist, collections });
+        : place({ answer: await ask(use.body, paceMs), id: stamp, me, summary, groups: use.groups, shortlist: use.shortlist, collections });
       if (decision.newCollection && !collections.some((c) => c.id === decision.newCollection.id)) {
         collections.push({ ...decision.newCollection, hint: "" });
       }
@@ -110,9 +138,14 @@ for (const [stamp, e] of exp) {
     }
   }
   rows.push(row);
+  if (model) {
+    const vec = await model.embed(briefText(me), "doc");
+    if (vec) docs.set(stamp, vec);
+  }
   // THE KEY, NOT THE GUESS, goes on the in-memory board. A placement the key makes is a hand placement — which is also what lets
   // it describe its task (`firm` in tasks.mjs), as a corrected brief would.
   done.push({ ...me, task: e.task, odds: e.want === "odds", decidedBy: "you" });
   if (e.want === "new") taskTitles.set(e.task, titleFor(me));
 }
-process.stdout.write(formatReport({ rows, shortlistOnly, errored, all: flag("--all") }) + "\n");
+const report = formatReport({ rows, shortlistOnly, errored, all: flag("--all") });
+process.stdout.write(`meaning model: ${model ? model.key : "none (word matching only)"}\n${report}\n`);

@@ -51,6 +51,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 
 import { CLASSIFIER, unplaceable } from "./lib/context.mjs";
+import { briefText, loadModel, readVector } from "./lib/meaning.mjs";
 import { readTasks, titleFor } from "./lib/tasks.mjs";
 import {
   decideLocally, olderBoard, place, prepare, readCollections, requestClassify, sessionInputs,
@@ -134,9 +135,24 @@ async function main() {
   }
 
   const collections = readCollections(root);
+  const board = olderBoard(root, id);
+
+  // MEANING, WHEN THE MODEL IS HERE: this brief as a query, earlier briefs by
+  // the vectors their renders wrote. Absent — words alone, as always.
+  let vectors = null;
+  if (!why) {
+    const model = await loadModel();
+    const query = model ? await model.embed(briefText(me), "query") : null;
+    if (query) {
+      vectors = {
+        query,
+        byBrief: new Map(board.map((b) => [b.id, readVector(b.dir, model.key)]).filter(([, v]) => v)),
+      };
+    }
+  }
 
   const { groups, scored, local, shortlist, body } = prepare({
-    id, me, summary, windowTitles, board: olderBoard(root, id), taskTitles: readTasks(root), collections,
+    id, me, summary, windowTitles, board, taskTitles: readTasks(root), collections, vectors,
   });
 
   if (why) {

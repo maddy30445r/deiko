@@ -37,7 +37,9 @@ function session(root, id, { said, windows = [], summary, context, outcome } = {
   return dir;
 }
 
-const render = (dir) => run(process.execPath, [join(scripts, "render-brief.mjs"), dir]);
+const render = (dir) => run(process.execPath, [join(scripts, "render-brief.mjs"), dir], {
+  env: { ...process.env, DEIKO_MEANING_MODEL: "off" },
+});
 const prompt = (dir, name = "prompt.txt") => readFileSync(join(dir, name), "utf8");
 
 // ── render-brief ────────────────────────────────────────────────────────────
@@ -134,7 +136,11 @@ async function relay(respond = () => [200, { model: "stub", answers: {} }]) {
 const classify = (dir, url, env = {}) => run(process.execPath, [join(scripts, "classify.mjs"), dir], {
   // A script stuck on a pipe (the board-walk test below) fails the test, never hangs the run.
   timeout: 10_000,
-  env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("DEIKO_"))), ...(url && { DEIKO_CLASSIFY_URL: url }), ...env },
+  env: {
+    ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("DEIKO_"))),
+    DEIKO_MEANING_MODEL: "off",
+    ...(url && { DEIKO_CLASSIFY_URL: url }), ...env,
+  },
 });
 const json = (path) => JSON.parse(readFileSync(path, "utf8"));
 const join1 = (task) => () => [200, {
@@ -534,4 +540,15 @@ test("a hand placement or a newer decision made here while the request was out s
     assert.equal(existsSync(join(root, "collections.json")), false);
     assert.equal(existsSync(join(root, "tasks.json")), false);
   }
+});
+
+test("with the model switched on but not on this Mac, classify still sends, on words alone", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
+  filed(root, "20260918-090000", { narration: "the price still shows 99 after I save" });
+  const dir = filed(root, "20260918-100000", { narration: "the price bug is back on the listing" });
+  const stub = await relay();
+  await classify(dir, stub.url, { DEIKO_MEANING_MODEL: "harrier-oss-v1-270m", DEIKO_MODEL_DIR: mkdtempSync(join(tmpdir(), "deiko-models-")) });
+  stub.close();
+  assert.equal(stub.bodies.length, 1);
+  assert.equal(stub.bodies[0].tasks[0].id, "t-20260918-090000");
 });
