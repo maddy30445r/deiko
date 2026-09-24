@@ -46,7 +46,9 @@ const section = (heading) => {
 /**
  * An agent's `outcome.md`, by its four headings; text before any heading is
  * what it did. A markdown heading that is none of the four starts a section
- * that is dropped — a "## Summary" is not what is still open. A label alone
+ * that is dropped — a "## Summary" is not what is still open — except a
+ * top-level one ("# Outcome"), which is the file's own title and changes
+ * nothing. A "#" needs a space after it: "#2 still flaky" is text. A label alone
  * on its line ("**Did:**", "Files changed:") is a heading only when it names
  * one of the four; otherwise it is text. Code fences are skipped whole,
  * headings inside them included.
@@ -65,9 +67,10 @@ export function parseOutcome(text) {
       fence = marker;
       continue;
     }
-    const heading = raw.match(/^#{1,6}\s*(.+)$/)?.[1];
+    const heading = raw.match(/^(#{1,6})\s+(.+)$/);
     if (heading) {
-      into = section(heading);
+      const named = section(heading[2]);
+      if (named || heading[1].length > 1) into = named;
       continue;
     }
     const label = raw.trim().replace(/[*_]/g, "");

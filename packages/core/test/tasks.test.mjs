@@ -67,6 +67,12 @@ test("an unknown heading's lines are dropped, not added to the section before it
     ["Fixed it.", "Notes:", "kept, a plain label that is not a heading"]);
 });
 
+test("a hash with no space is text, and an unknown top heading keeps the section", () => {
+  assert.deepEqual(parseOutcome("## Open\n#2 still flaky on CI\n").open, ["#2 still flaky on CI"]);
+  assert.deepEqual(parseOutcome("# Outcome\nFixed the thing.\n").did, ["Fixed the thing."]);
+  assert.deepEqual(parseOutcome("# Outcome\n## Did\nOne.\n## Open\nTwo.\n"), { did: ["One."], decided: [], open: ["Two."], files: [] });
+});
+
 test("a code fence in an outcome is skipped whole, headings inside it included", () => {
   const o = parseOutcome("## Did\nFixed it.\n```md\n## Open\n- not open\n```\n~~~\n## Files\n~~~\n## Open\nReal open.\n");
   assert.deepEqual(o, { did: ["Fixed it."], decided: [], open: ["Real open."], files: [] });
