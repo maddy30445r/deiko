@@ -122,6 +122,8 @@ async function relay(respond = () => [200, { model: "stub", answers: {} }]) {
 
 /** Only the relay URL, or none, and `env`: never a token from the environment running the tests. */
 const classify = (dir, url, env = {}) => run(process.execPath, [join(scripts, "classify.mjs"), dir], {
+  // A script stuck on a pipe (the board-walk test below) fails the test, never hangs the run.
+  timeout: 10_000,
   env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("DEIKO_"))), ...(url && { DEIKO_CLASSIFY_URL: url }), ...env },
 });
 const json = (path) => JSON.parse(readFileSync(path, "utf8"));
@@ -393,17 +395,25 @@ test("a hand placement made while the board is read stands over a decision made 
   assert.match(stderr, /placed by hand while we were looking/);
 });
 
-test("a decision made here after the request went out stands over its answer", async () => {
-  const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
-  filed(root, "20260918-090000", { narration: "the price still shows 99 after I save it" });
-  const dir = filed(root, "20260918-100000", { narration: "same price bug on the listing page" });
-  // Its words were cut short and it was filed here again while this was out.
-  const stub = await relay(() => {
-    writeFileSync(join(dir, "context.json"), JSON.stringify(ODDS));
-    return join1("t-20260918-090000")();
-  });
-  const { stderr } = await classify(dir, stub.url);
-  stub.close();
-  assert.deepEqual(json(join(dir, "context.json")), ODDS);
-  assert.match(stderr, /decided here since we asked/);
+test("a hand placement or a newer decision made here while the request was out stands, and leaves no rows", async () => {
+  for (const [landed, said] of [
+    [{ task: "t-20260918-090000", decidedBy: "you" }, /placed by hand while we were asking/],
+    // Its words were cut short and it was filed here again while this was out.
+    [ODDS, /decided here since we asked/],
+  ]) {
+    const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
+    filed(root, "20260918-090000", { narration: "the price still shows 99 after I save it" });
+    const dir = filed(root, "20260918-100000", { narration: "same price bug on the listing page", repoHints: ["shop"] });
+    // An answer that would make a new project and a new task.
+    const stub = await relay(() => {
+      writeFileSync(join(dir, "context.json"), JSON.stringify(landed));
+      return [200, { model: "stub", answers: { collection: { choice: "none", confidence: 0.9 } } }];
+    });
+    const { stderr } = await classify(dir, stub.url);
+    stub.close();
+    assert.deepEqual(json(join(dir, "context.json")), landed);
+    assert.match(stderr, said);
+    assert.equal(existsSync(join(root, "collections.json")), false);
+    assert.equal(existsSync(join(root, "tasks.json")), false);
+  }
 });

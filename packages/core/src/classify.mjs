@@ -346,6 +346,26 @@ async function main() {
     return;
   }
 
+  // CHECKED AGAIN, NOW. The check at the top of this script happened before a
+  // network round trip that can take fifteen seconds, and the board's "Move
+  // to" can file this very session in the meantime. Writing then would undo a
+  // choice somebody had already made, which is the one thing `decidedBy` is
+  // for. Before any write — a project or task row made for an answer that is
+  // then left would outlive it.
+  const placed = current();
+  if (placed?.decidedBy === "you") {
+    console.error("· placed by hand while we were asking — leaving it");
+    return;
+  }
+  // DECIDED ON THIS MAC SINCE WE ASKED: the words changed while this request
+  // was out, and a newer run placed the brief here. A local decision leaves no
+  // marker for the check above to see, so its file's time says it is newer.
+  if (placed?.decidedBy === "local"
+    && (statSync(contextPath, { throwIfNoEntry: false })?.mtimeMs ?? 0) > Date.parse(mine.at)) {
+    console.error("· decided here since we asked — leaving it");
+    return;
+  }
+
   const decision = decide({
     answers: answer?.answers ?? {},
     collections,
@@ -368,10 +388,10 @@ async function main() {
     // `acme-portal` when the list already holds one called `Acme Portal`, and
     // two rows with one id give the board two identical chips, a rename that
     // moves one of them and a delete that takes both.
-    const current = readCollections(root);
-    if (!current.some((c) => c.id === decision.newCollection.id)) {
-      current.push({ ...decision.newCollection, hint: "" });
-      writeFileSync(join(root, "collections.json"), JSON.stringify(current, null, 2) + "\n");
+    const listed = readCollections(root);
+    if (!listed.some((c) => c.id === decision.newCollection.id)) {
+      listed.push({ ...decision.newCollection, hint: "" });
+      writeFileSync(join(root, "collections.json"), JSON.stringify(listed, null, 2) + "\n");
     } else {
       decision.collection = decision.newCollection.id;
     }
@@ -387,25 +407,6 @@ async function main() {
       list.push({ ...decision.newTask, from: me.summaryLine ? "summary" : "narration" });
       writeFileSync(join(root, "tasks.json"), JSON.stringify(list, null, 2) + "\n");
     }
-  }
-
-  // CHECKED AGAIN, NOW. The check at the top of this script happened before a
-  // network round trip that can take fifteen seconds, and the board's "Move
-  // to" can file this very session in the meantime. Writing then would undo a
-  // choice somebody had already made, which is the one thing `decidedBy` is
-  // for.
-  const placed = current();
-  if (placed?.decidedBy === "you") {
-    console.error("· placed by hand while we were asking — leaving it");
-    return;
-  }
-  // DECIDED ON THIS MAC SINCE WE ASKED: the words changed while this request
-  // was out, and a newer run placed the brief here. A local decision leaves no
-  // marker for the check above to see, so its file's time says it is newer.
-  if (placed?.decidedBy === "local"
-    && (statSync(contextPath, { throwIfNoEntry: false })?.mtimeMs ?? 0) > Date.parse(mine.at)) {
-    console.error("· decided here since we asked — leaving it");
-    return;
   }
 
   // A TITLE MADE FROM WHAT WAS SAID gives way to the first summary line that
