@@ -39,20 +39,23 @@ struct SessionContext: Codable, Equatable {
     /// tasks existed.
     var task: String?
     /// The earlier tasks `classify.mjs` could not choose between, likeliest
-    /// first, while this brief sits on its own — what the review card's
-    /// "Which one?" offers. Gone the moment anybody places it by hand.
+    /// first, while this brief is a new task — what the review card's
+    /// "Carries on from which?" offers. Gone the moment somebody places the
+    /// TASK by hand (`setTask`, the board's "Move to task"); picking a
+    /// project answers a different question and leaves them.
     var candidates: [String]?
     /// `quick` / `medium` / `complex` / `reasoning` — see `TIERS` in
     /// `scripts/lib/context.mjs`.
     var tier: String?
     var confidence = Confidence()
-    /// `"jev"` or `"you"`. A person's answer is final — and it settles the
-    /// question `candidates` was asking, so every hand placement (card or
-    /// board, task or collection) drops them here rather than at each caller.
-    var decidedBy: String = "you" {
-        didSet { if decidedBy == "you" { candidates = nil } }
-    }
+    /// `"jev"` or `"you"`. A person's answer is final: the classifier never
+    /// re-sorts a brief somebody placed, task or project.
+    var decidedBy: String = "you"
     var model: String?
+    /// `"you"` once somebody picked the project by hand. Separate from
+    /// `decidedBy` because tapping a task chip is a hand placement too, and it
+    /// must not turn Deiko's guess at the project into a stated answer.
+    var collectionBy: String?
 
     static func path(sessionDir: String) -> URL {
         URL(fileURLWithPath: sessionDir).appendingPathComponent("context.json")
@@ -79,7 +82,7 @@ struct SessionContext: Codable, Equatable {
     static let sureEnough = 0.85
 
     var isGuess: Bool {
-        decidedBy != "you" && collection != nil && (confidence.collection ?? 1) < Self.sureEnough
+        collectionBy != "you" && collection != nil && (confidence.collection ?? 1) < Self.sureEnough
     }
 
     /// The tier, in the words the card uses.

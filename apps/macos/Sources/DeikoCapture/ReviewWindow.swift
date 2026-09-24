@@ -90,19 +90,25 @@ final class ReviewModel: ObservableObject {
     /// Place this brief somewhere else, and re-render so the prompt says so.
     /// Marked as the developer's decision, which the classifier never
     /// overwrites — a correction that got re-guessed would be no correction.
+    ///
+    /// ONE QUESTION AT A TIME. The candidates ask which task this carries on,
+    /// and a project answers something else, so they stay.
     func setCollection(_ id: String?) {
         var next = context ?? SessionContext()
         next.collection = id
         next.decidedBy = "you"
+        next.collectionBy = "you"
         apply(next)
     }
 
-    /// Which task this brief belongs to. Its own id is "starts fresh", which
-    /// is a real answer and not an absence.
+    /// Which task this brief belongs to. Its own id is "a new task", which
+    /// is a real answer and not an absence — and either answer settles the
+    /// question the candidates were asking.
     func setTask(_ id: String) {
         var next = context ?? SessionContext()
         next.task = id
         next.decidedBy = "you"
+        next.candidates = nil
         apply(next)
     }
 
@@ -815,6 +821,10 @@ final class ReviewModel: ObservableObject {
 
 struct ReviewView: View {
     @ObservedObject var model: ReviewModel
+    /// Observed because the rows below name tasks by their titles, and a
+    /// title — one just typed into "Start a new task and name it…" — lands
+    /// when the board reloads, after the model has already published.
+    @ObservedObject private var store = SessionsStore.shared
     /// Which thumbnail the cursor is over, so only that one shows its ×.
     @State private var hoveredCrop: String?
     /// Reopening the session is the orb controller's job — it owns the window
@@ -1038,9 +1048,9 @@ struct ReviewView: View {
     ///
     /// Appears when the classifier answers, which is a moment after the card
     /// — deliberately, because the brief is what somebody is waiting for.
-    /// Two menus and a chip, in the same 11pt register as the persona line
-    /// above: a correction here is an ordinary thing to do, not an error
-    /// being fixed.
+    /// Two menus and a word on the work, in the same 11pt register as the
+    /// persona line above: a correction here is an ordinary thing to do, not
+    /// an error being fixed.
     @ViewBuilder private var contextRow: some View {
         if let context = model.context {
             HStack(spacing: 6) {
@@ -1066,7 +1076,7 @@ struct ReviewView: View {
                         }
                     }
                     Divider()
-                    Button("New collection…") { newCollection() }
+                    Button("New project…") { newCollection() }
                 } label: {
                     // FROM THE MODEL, NOT THE DISK. `Collections.name(for:)`
                     // reads and decodes the file; this body re-runs on every
@@ -1082,28 +1092,27 @@ struct ReviewView: View {
 
                 Text("·").font(.system(size: 11)).foregroundStyle(DeikoStyle.ink2)
 
-                // A BRIEF THAT CONTINUES NOTHING STILL SAYS SO, quietly.
+                // A BRIEF THAT CARRIES ON NOTHING STILL SAYS SO, quietly.
                 //
                 // Hiding this menu until there is a link would leave no way
-                // to make one; labelling it "carries on from nothing" is a
-                // sentence nobody needs to read. So the unlinked state is two
-                // words in the second voice — present, clickable, silent —
-                // and linking it promotes the whole phrase to indigo.
-                if let earlier = taskLabel(context) {
+                // to make one. So the unlinked state is a few words in the
+                // second voice — present, clickable, and naming the task once
+                // somebody has — and linking it promotes the phrase to indigo.
+                if let earlier = model.joinedTask {
                     Text("carries on from")
                         .font(.system(size: 11))
                         .foregroundStyle(DeikoStyle.ink2)
-                    taskMenu(context, label: earlier, linked: true)
+                    taskMenu(context, label: clipped(earlier), linked: true)
                 } else {
-                    taskMenu(context, label: "on its own", linked: false)
+                    taskMenu(context, label: model.ownTaskTitle.map { "new task: \(clipped($0))" } ?? "a new task", linked: false)
                 }
 
+                // Plain words, not a pill: a capsule on this row reads as one
+                // more thing to press, and this is only a reading.
                 if let tier = context.tierLabel {
-                    Text(tier)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(DeikoStyle.mark)
-                        .padding(.horizontal, 8).padding(.vertical, 3)
-                        .background(DeikoStyle.accentSoft, in: Capsule())
+                    Text("· \(tier)")
+                        .font(.system(size: 11))
+                        .foregroundStyle(DeikoStyle.ink2)
                         .help("How much work this looks like. Your agent still decides for itself.")
                 }
             }
@@ -1125,10 +1134,10 @@ struct ReviewView: View {
     ) -> some View {
         Menu {
             if let own = model.ownTask {
-                // Already its own task: there is nothing to start fresh from.
-                Button("Nothing — it starts fresh") { model.setTask(own) }
+                // Already its own task: there is nothing new to start.
+                Button("Start a new task") { model.setTask(own) }
                     .disabled((context.task ?? own) == own)
-                Button("New task…") {
+                Button("Start a new task and name it…") {
                     guard let title = Collections.askText(
                         title: "Name this task",
                         informative: "The next brief about the same work joins it.",
@@ -1140,13 +1149,13 @@ struct ReviewView: View {
                     model.setTask(own)
                 }
             }
-            let others = SessionsStore.shared.recentTasks(excluding: model.ownTask)
+            let others = store.recentTasks(excluding: model.ownTask)
             if !others.isEmpty { Divider() }
             ForEach(others) { group in
                 Button {
                     model.setTask(group.id)
                 } label: {
-                    let title = SessionsStore.shared.title(ofTask: group.id)
+                    let title = store.title(ofTask: group.id)
                     Text(group.id == context.task ? "✓ \(title)" : "   \(title)")
                 }
             }
@@ -1161,14 +1170,6 @@ struct ReviewView: View {
         .help("The piece of work this brief carries on. Where it stands travels with this brief, so your agent picks up from there.")
     }
 
-    /// The task in a few words, or nil when this brief is on its own.
-    private func taskLabel(_ context: SessionContext) -> String? {
-        guard let id = context.task, id != model.ownTask,
-              SessionsStore.shared.items.contains(where: { $0.task == id && $0.id != model.sessionID })
-        else { return nil }
-        return clipped(SessionsStore.shared.title(ofTask: id))
-    }
-
     private func clipped(_ title: String) -> String {
         title.count > 28 ? title.prefix(28).trimmingCharacters(in: .whitespaces) + "…" : title
     }
@@ -1178,49 +1179,54 @@ struct ReviewView: View {
     /// `candidates`, and one tap here settles it before the throw. Left
     /// untapped, the prompt lists them and tells the agent to ask.
     ///
-    /// Only while the brief is still on its own and nobody has placed it.
-    /// Either chip is a hand placement, which drops the candidates — and so
-    /// this row — and re-renders the prompt without them.
+    /// Only while the brief is still a new task. Picking a project leaves it
+    /// up — that answers a different question; any chip here is a hand
+    /// placement of the task, which drops the candidates, and so this row.
+    ///
+    /// The label on its own line and the chips under it, in a row when they
+    /// fit and a column when they do not: three near-identical titles
+    /// squeezed into one line used to clip to the same few words.
     @ViewBuilder private var whichOneRow: some View {
-        if let context = model.context, context.decidedBy != "you",
-           context.task == nil || context.task == model.ownTask {
-            let store = SessionsStore.shared
-            // Only tasks the board still has — a candidate deleted or merged
-            // away since has nothing to carry on from.
-            let known = (context.candidates ?? []).filter { id in
-                id != model.ownTask && store.items.contains { $0.task == id }
-            }
-            if !known.isEmpty {
-                HStack(spacing: 6) {
-                    Text("Which one?")
-                        .font(.system(size: 11))
-                        .foregroundStyle(DeikoStyle.ink2)
-                        .fixedSize()
-                    ForEach(known, id: \.self) { id in
-                        let title = store.title(ofTask: id)
-                        let count = store.items.filter { $0.task == id }.count
-                        Button { model.setTask(id) } label: {
-                            Text(clipped(title))
-                                .font(.system(size: 11, weight: .medium))
-                                .lineLimit(1)
-                        }
-                        .buttonStyle(ChipButtonStyle(on: true))
-                        .deikoFocusRing(Capsule())
-                        .help("\(title) · \(count) \(count == 1 ? "brief" : "briefs")")
-                    }
-                    Button {
-                        if let own = model.ownTask { model.setTask(own) }
-                    } label: {
-                        Text("Something new").font(.system(size: 11))
-                    }
-                    .buttonStyle(ChipButtonStyle(on: false))
-                    .deikoFocusRing(Capsule())
-                    .fixedSize()
-                    .help("None of these. This brief starts its own task.")
+        let known = model.openCandidates
+        if !known.isEmpty {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Carries on from which?")
+                    .font(.system(size: 11))
+                    .foregroundStyle(DeikoStyle.ink2)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 6) { candidateChips(known) }
+                    VStack(alignment: .leading, spacing: 5) { candidateChips(known) }
                 }
-                .padding(.top, 1)
             }
+            .padding(.top, 3)
         }
+    }
+
+    @ViewBuilder private func candidateChips(_ known: [String]) -> some View {
+        ForEach(known, id: \.self) { id in
+            let title = store.title(ofTask: id)
+            let count = store.items.filter { $0.task == id }.count
+            let briefs = "\(count) \(count == 1 ? "brief" : "briefs")"
+            Button { model.setTask(id) } label: {
+                // The count tells two tasks with the same few words apart.
+                (Text(clipped(title)).font(.system(size: 11, weight: .medium))
+                    + Text(" · \(briefs)").font(.system(size: 11)))
+                    .lineLimit(1)
+            }
+            .buttonStyle(ChipButtonStyle(on: true))
+            .deikoFocusRing(Capsule())
+            .fixedSize()
+            .help("\(title) · \(briefs)")
+        }
+        Button {
+            if let own = model.ownTask { model.setTask(own) }
+        } label: {
+            Text("Start a new task").font(.system(size: 11))
+        }
+        .buttonStyle(ChipButtonStyle(on: false))
+        .deikoFocusRing(Capsule())
+        .fixedSize()
+        .help("None of these. This brief starts a new task.")
     }
 
     /// Named by hand, and nothing is created until somebody types something.

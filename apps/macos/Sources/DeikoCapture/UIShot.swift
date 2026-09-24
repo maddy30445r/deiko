@@ -154,12 +154,14 @@ enum UIShot {
             model.digest = try? BriefPipeline.digest(sessionDir: newest.dir)
             model.narration = model.digest?.summary.narration ?? ""
         }
-        // Posed unsure between two earlier tasks, so "Which one?" is in the
-        // shot: the brief sits on its own and the row offers the likely ones.
+        // Posed unsure between two earlier tasks, so "Carries on from which?"
+        // is in the shot: the brief is a new task and the row offers the
+        // likely ones.
         let others = SessionsStore.shared.groups(of: items).map(\.id).filter { $0 != items.first?.task }
         model.context = SessionContext(
             collection: Collections.all().first?.id,
-            candidates: Array(others.prefix(2)),
+            // Three, the most `classify.mjs` leaves: the widest the row gets.
+            candidates: Array(others.prefix(3)),
             tier: "quick",
             confidence: .init(collection: 0.72, task: 0.4, tier: 0.91),
             decidedBy: "jev",
