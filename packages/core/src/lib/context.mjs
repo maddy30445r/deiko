@@ -88,8 +88,11 @@ export const MIN_NARRATION = 12;
  * is up to three of those ids, likeliest first, when the brief joined none
  * and Jev did not confidently call it new — the tasks it MIGHT carry on, for
  * somebody to be asked about. Absent, not empty, when there are none.
+ *
+ * `taskCollections` maps a shortlisted task id to its latest collection, so
+ * a brief that joins a task and was placed by nothing else inherits it.
  */
-export function decide({ answers = {}, collections = [], repoHints = [], shortlist = [], scores = [], sessionId = null, title = null } = {}) {
+export function decide({ answers = {}, collections = [], repoHints = [], shortlist = [], scores = [], taskCollections = {}, sessionId = null, title = null } = {}) {
   const out = {
     collection: null,
     task: null,
@@ -130,6 +133,15 @@ export function decide({ answers = {}, collections = [], repoHints = [], shortli
   } else if (sessionId) {
     out.task = `t-${sessionId}`;
     out.newTask = { id: out.task, title: title ?? "A brief" };
+  }
+
+  // A JOINED BRIEF NOTHING ELSE PLACED keeps its task's collection, or one
+  // task ends up split across two chips. As sure as the join, and only a
+  // collection that still exists.
+  const inherited = out.task && !out.newTask && out.collection == null ? taskCollections[out.task] : null;
+  if (inherited && known.has(inherited)) {
+    out.collection = inherited;
+    out.confidence.collection = out.confidence.task;
   }
 
   // WHICH ONES IT MIGHT BE, unless it joined one or is confidently new work.

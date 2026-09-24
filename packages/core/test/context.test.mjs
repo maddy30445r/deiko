@@ -116,6 +116,20 @@ test("without probabilities, Jev's pick then the local score, down to half the t
   assert.equal(decide({ ...unsure, scores: [0, 0, 0, 0, 0], answers: { task: { choice: "new", confidence: 0.5 } } }).candidates, undefined);
 });
 
+test("a joined brief nothing else placed takes its task's collection, as sure as the join", () => {
+  const args = { collections, shortlist: [A], scores: [10], sessionId: "20260920-100000", taskCollections: { [A]: "site" } };
+  const joined = decide({ ...args, answers: { task: { choice: A, confidence: 0.8 } } });
+  assert.equal(joined.collection, "site");
+  assert.equal(joined.confidence.collection, 0.8);
+  const own = decide({ ...args, answers: { collection: { choice: "deiko", confidence: 0.9 }, task: { choice: A, confidence: 0.8 } } });
+  assert.equal(own.collection, "deiko", "its own answer wins");
+  assert.equal(decide({ ...args, repoHints: ["Deiko"], answers: { task: { choice: A, confidence: 0.8 } } }).collection, "deiko",
+    "so does a repo on its window");
+  assert.equal(decide({ ...args, answers: { task: { choice: "new", confidence: 0.9 } } }).collection, null, "a new task inherits nothing");
+  assert.equal(decide({ ...args, taskCollections: { [A]: "gone" }, answers: { task: { choice: A, confidence: 0.8 } } }).collection, null,
+    "a collection since deleted is not brought back");
+});
+
 test("the tier is the most likely level, or the rounded score without probabilities", () => {
   const byProb = decide({ answers: { tier: { score: 0.4, probabilities: [0.2, 0.6, 0.15, 0.05], confidence: 0.6 } } });
   assert.equal(byProb.tier, "medium");

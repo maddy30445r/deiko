@@ -132,3 +132,16 @@ test("a task is described by its most frequent windows, and same repo is an exac
   assert.equal(sent[task].sameRepo, true);
   assert.equal(sent["t-20260918-093000"].sameRepo, false, "a screen word is not a repo");
 });
+
+test("a joined brief nothing else placed takes its task's collection", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
+  writeFileSync(join(root, "collections.json"), JSON.stringify([{ id: "shop", name: "Shop", hint: "" }]));
+  filed(root, "20260918-090000", { narration: "the price still shows 99 after I save", context: { collection: "shop" } });
+  const dir = filed(root, "20260918-100000", { narration: "the price bug is back on the listing" });
+  const stub = await relay(join1("t-20260918-090000"));
+  await classify(dir, stub.url);
+  stub.close();
+  const context = json(join(dir, "context.json"));
+  assert.equal(context.task, "t-20260918-090000");
+  assert.equal(context.collection, "shop");
+});

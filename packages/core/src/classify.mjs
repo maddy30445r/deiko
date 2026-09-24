@@ -234,6 +234,8 @@ async function main() {
     repoHints: summary.repoHints ?? [],
     shortlist: shortlist.map((t) => t.id),
     scores: scored.map((s) => s.score),
+    // Each shortlisted task's latest collection, for a join nothing else placed.
+    taskCollections: Object.fromEntries(scored.map((s) => [s.id, groups.get(s.id).find((b) => b.collection)?.collection ?? null])),
     sessionId: id,
     title: titleFor(me),
   });
