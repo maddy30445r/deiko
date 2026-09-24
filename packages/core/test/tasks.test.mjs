@@ -45,6 +45,33 @@ test("an outcome is read by its four headings; no headings is all Did", () => {
   assert.deepEqual(parseOutcome("").did, []);
 });
 
+test("an outcome's headings are read the ways agents write them", () => {
+  const o = parseOutcome([
+    "## Changes", "- one",
+    "## **Decisions**", "- two",
+    "## Next steps", "- three",
+    "**Did:**", "- four",
+    "Files changed:", "- a.ts",
+    "## TODO", "- five",
+    "### Remaining", "- six",
+    "What I did:", "- seven",
+  ].join("\n"));
+  assert.deepEqual(o, { did: ["one", "four", "seven"], decided: ["two"], open: ["three", "five", "six"], files: ["a.ts"] });
+});
+
+test("an unknown heading's lines are dropped, not added to the section before it", () => {
+  const o = parseOutcome("## Open\nTest on a trackpad.\n## Summary\nA long recap.\n## Notes\nMore recap.\n");
+  assert.deepEqual(o.open, ["Test on a trackpad."]);
+  assert.deepEqual(o.did, []);
+  assert.deepEqual(parseOutcome("## Did\nFixed it.\nNotes:\nkept, a plain label that is not a heading").did,
+    ["Fixed it.", "Notes:", "kept, a plain label that is not a heading"]);
+});
+
+test("a code fence in an outcome is skipped whole, headings inside it included", () => {
+  const o = parseOutcome("## Did\nFixed it.\n```md\n## Open\n- not open\n```\n~~~\n## Files\n~~~\n## Open\nReal open.\n");
+  assert.deepEqual(o, { did: ["Fixed it."], decided: [], open: ["Real open."], files: [] });
+});
+
 test("a title is the summary, never Groq saying it could not tell", () => {
   assert.equal(titleFor({ summaryLine: "Fix the price", narration: "hey so" }), "Fix the price");
   assert.equal(titleFor({ summaryLine: "The transcript is too short to determine a request.", narration: "fix the drag on the board please now" }),

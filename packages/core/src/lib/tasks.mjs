@@ -31,21 +31,52 @@ export function stampTime(stamp) {
 
 export const tokens = (text) => String(text ?? "").toLowerCase().match(/[a-z0-9$]{2,}/g) ?? [];
 
-const HEADS = { did: /^did\b/i, decided: /^decided\b/i, open: /^open\b/i, files: /^files\b/i };
+/// The four headings, as agents actually title them.
+const HEADS = {
+  decided: /^decisions?\b|^decided\b/i,
+  open: /^(open|next( steps)?|todo|to do|remaining)\b/i,
+  did: /^(did|done|changes?|what i did)\b/i,
+  files: /^files?( touched| changed)?\b/i,
+};
+const section = (heading) => {
+  const name = heading.replace(/[*_`]/g, "").trim();
+  return Object.keys(HEADS).find((k) => HEADS[k].test(name)) ?? null;
+};
 
-/** An agent's `outcome.md`, by its four headings. Unknown headings are
- *  skipped; text before any heading is what it did. */
+/**
+ * An agent's `outcome.md`, by its four headings; text before any heading is
+ * what it did. A markdown heading that is none of the four starts a section
+ * that is dropped — a "## Summary" is not what is still open. A label alone
+ * on its line ("**Did:**", "Files changed:") is a heading only when it names
+ * one of the four; otherwise it is text. Code fences are skipped whole,
+ * headings inside them included.
+ */
 export function parseOutcome(text) {
   const out = { did: [], decided: [], open: [], files: [] };
   let into = "did";
+  let fence = null;
   for (const raw of String(text ?? "").split("\n")) {
-    const heading = raw.match(/^#{1,6}\s*(.+)$/);
+    const marker = raw.match(/^\s*(`{3,}|~{3,})/)?.[1];
+    if (fence) {
+      if (marker?.[0] === fence[0] && marker.length >= fence.length) fence = null;
+      continue;
+    }
+    if (marker) {
+      fence = marker;
+      continue;
+    }
+    const heading = raw.match(/^#{1,6}\s*(.+)$/)?.[1];
     if (heading) {
-      into = Object.keys(HEADS).find((k) => HEADS[k].test(heading[1].trim())) ?? into;
+      into = section(heading);
+      continue;
+    }
+    const label = raw.trim().replace(/[*_]/g, "");
+    if (/^[a-z][a-z ]*:?$/i.test(label) && (label.endsWith(":") || /^\s*(\*\*|__)/.test(raw)) && section(label)) {
+      into = section(label);
       continue;
     }
     const line = raw.replace(/^\s*[-*]\s*/, "").trim();
-    if (line) out[into].push(line);
+    if (line && into) out[into].push(line);
   }
   return out;
 }
