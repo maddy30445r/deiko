@@ -1189,3 +1189,27 @@ test("a playground clip whose answer dies halfway keeps its CORS headers and its
     assert.equal(r.headers["access-control-allow-origin"], "https://deiko.app");
     assert.equal(rows.get(playgroundClipKey(Date.now())).audioSeconds, 0, "the clip is given back");
   }));
+
+test("the upload the app's own FormData encodes is accepted, in both modes", async () => {
+  // `sttForm` in scripts/transcribe.mjs, field for field, through the same
+  // encoder Node's fetch uses — so a relay that refuses what the app actually
+  // sends fails here, not on somebody's first session.
+  for (const native of [false, true]) {
+    const fd = new FormData();
+    fd.append("file", new Blob([wav(4)], { type: "audio/wav" }), "audio.wav");
+    fd.append("model", "whisper-large-v3");
+    fd.append("response_format", "verbose_json");
+    if (native) {
+      fd.append("timestamp_granularities[]", "word");
+      fd.append("timestamp_granularities[]", "segment");
+      fd.append("language", "hi-IN".split("-")[0]);
+    }
+    const encoded = new Response(fd);
+    const r = await handle({
+      method: "POST", path: "/v1/transcribe", query: native ? "task=transcribe" : "", token: `dev_fd${native}`,
+      contentType: encoded.headers.get("content-type"), body: Buffer.from(await encoded.arrayBuffer()),
+    });
+    assert.equal(r.status, 200, `native=${native}: ${r.body}`);
+    assert.equal(rows.get(`dev:fd${native}`).audioSeconds, MIN_SECONDS_PER_REQUEST);
+  }
+});
