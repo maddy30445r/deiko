@@ -38,12 +38,20 @@ struct SessionContext: Codable, Equatable {
     /// it. Nil reads as its own task, which is what every brief was before
     /// tasks existed.
     var task: String?
+    /// The earlier tasks `classify.mjs` could not choose between, likeliest
+    /// first, while this brief sits on its own — what the review card's
+    /// "Which one?" offers. Gone the moment anybody places it by hand.
+    var candidates: [String]?
     /// `quick` / `medium` / `complex` / `reasoning` — see `TIERS` in
     /// `scripts/lib/context.mjs`.
     var tier: String?
     var confidence = Confidence()
-    /// `"jev"` or `"you"`. A person's answer is final.
-    var decidedBy: String = "you"
+    /// `"jev"` or `"you"`. A person's answer is final — and it settles the
+    /// question `candidates` was asking, so every hand placement (card or
+    /// board, task or collection) drops them here rather than at each caller.
+    var decidedBy: String = "you" {
+        didSet { if decidedBy == "you" { candidates = nil } }
+    }
     var model: String?
 
     static func path(sessionDir: String) -> URL {

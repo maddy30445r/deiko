@@ -874,6 +874,7 @@ struct ReviewView: View {
                 repoRow(d)
                 personaRow
                 contextRow
+                whichOneRow
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1037,8 +1038,61 @@ struct ReviewView: View {
         guard let id = context.task, id != model.ownTask,
               SessionsStore.shared.items.contains(where: { $0.task == id && $0.id != model.sessionID })
         else { return nil }
-        let title = SessionsStore.shared.title(ofTask: id)
-        return title.count > 28 ? String(title.prefix(28)) + "…" : title
+        return clipped(SessionsStore.shared.title(ofTask: id))
+    }
+
+    private func clipped(_ title: String) -> String {
+        title.count > 28 ? title.prefix(28).trimmingCharacters(in: .whitespaces) + "…" : title
+    }
+
+    /// WHEN DEIKO COULDN'T TELL which earlier task this carries on, it asks
+    /// instead of guessing: `classify.mjs` left the likely ones in
+    /// `candidates`, and one tap here settles it before the throw. Left
+    /// untapped, the prompt lists them and tells the agent to ask.
+    ///
+    /// Only while the brief is still on its own and nobody has placed it.
+    /// Either chip is a hand placement, which drops the candidates — and so
+    /// this row — and re-renders the prompt without them.
+    @ViewBuilder private var whichOneRow: some View {
+        if let context = model.context, context.decidedBy != "you",
+           context.task == nil || context.task == model.ownTask {
+            let store = SessionsStore.shared
+            // Only tasks the board still has — a candidate deleted or merged
+            // away since has nothing to carry on from.
+            let known = (context.candidates ?? []).filter { id in
+                id != model.ownTask && store.items.contains { $0.task == id }
+            }
+            if !known.isEmpty {
+                HStack(spacing: 6) {
+                    Text("Which one?")
+                        .font(.system(size: 11))
+                        .foregroundStyle(DeikoStyle.ink2)
+                        .fixedSize()
+                    ForEach(known, id: \.self) { id in
+                        let title = store.title(ofTask: id)
+                        let count = store.items.filter { $0.task == id }.count
+                        Button { model.setTask(id) } label: {
+                            Text(clipped(title))
+                                .font(.system(size: 11, weight: .medium))
+                                .lineLimit(1)
+                        }
+                        .buttonStyle(ChipButtonStyle(on: true))
+                        .deikoFocusRing(Capsule())
+                        .help("\(title) · \(count) \(count == 1 ? "brief" : "briefs")")
+                    }
+                    Button {
+                        if let own = model.ownTask { model.setTask(own) }
+                    } label: {
+                        Text("Something new").font(.system(size: 11))
+                    }
+                    .buttonStyle(ChipButtonStyle(on: false))
+                    .deikoFocusRing(Capsule())
+                    .fixedSize()
+                    .help("None of these. This brief starts its own task.")
+                }
+                .padding(.top, 1)
+            }
+        }
     }
 
     /// Named by hand, and nothing is created until somebody types something.

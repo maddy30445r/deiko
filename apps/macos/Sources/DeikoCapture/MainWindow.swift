@@ -802,7 +802,8 @@ private struct BoardPane: View {
 /// that works is either a menu or a custom `ButtonStyle` (`InkButtonStyle` on
 /// the Dashboard). The chip was the only `.plain` button in a scrolling pane,
 /// and the only dead one. So it is built the way the ones that work are built.
-private struct ChipButtonStyle: ButtonStyle {
+/// The review card's "Which one?" row borrows it, for the same reason.
+struct ChipButtonStyle: ButtonStyle {
     let on: Bool
 
     func makeBody(configuration: Configuration) -> some View {

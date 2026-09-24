@@ -133,11 +133,14 @@ enum UIShot {
             model.digest = try? BriefPipeline.digest(sessionDir: newest.dir)
             model.narration = model.digest?.summary.narration ?? ""
         }
+        // Posed unsure between two earlier tasks, so "Which one?" is in the
+        // shot: the brief sits on its own and the row offers the likely ones.
+        let others = SessionsStore.shared.groups(of: items).map(\.id).filter { $0 != items.first?.task }
         model.context = SessionContext(
             collection: Collections.all().first?.id,
-            task: items.dropFirst().first?.task,
+            candidates: Array(others.prefix(2)),
             tier: "quick",
-            confidence: .init(collection: 0.72, task: 0.88, tier: 0.91),
+            confidence: .init(collection: 0.72, task: 0.4, tier: 0.91),
             decidedBy: "jev",
             model: "jev-1.13.0"
         )
