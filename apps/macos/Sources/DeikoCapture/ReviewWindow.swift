@@ -1141,7 +1141,7 @@ struct ReviewView: View {
     }
 
     /// Shared with the collapsed card, which says "Not filed" too.
-    static let notFiledHelp = "Deiko couldn't reach its sorter, so this brief starts a new task."
+    static let notFiledHelp = "Deiko couldn't file this one, so it starts a new task."
 
     @ViewBuilder private func taskMenu(
         _ context: SessionContext, label: String, linked: Bool
