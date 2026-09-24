@@ -1385,13 +1385,15 @@ export async function handle({ method, path, query = "", token, contentType, bod
     }
 
     // THE WHOLE V3 CALL HAS A BUDGET, NOT JUST EACH REQUEST. The client
-    // aborts at 15s (`scripts/lib/filing.mjs`); round 1 alone may take up to
-    // `UPSTREAM_TIMEOUT_MS`, so round 2 gets only what is left of
+    // aborts at 15s (`scripts/lib/filing.mjs`); round 1 is held to the
+    // budget below, and round 2 gets only what is left of
     // `V3_BUDGET_MS` — and is skipped outright once under a second remains,
     // rather than starting a request that cannot finish before the client
     // has already given up.
     const budgetStart = Date.now();
-    const first = await askJev(request);
+    // Round 1 is held to the same budget: a Jev that answers after the client
+    // has given up is a timeout (refunded), not a classify nobody receives.
+    const first = await askJev(request, V3_BUDGET_MS);
     if (first.providerFault) await uncountCalls(spent.rows).catch(() => {});
     if (first.status !== 200) return first;
     let parsed;
