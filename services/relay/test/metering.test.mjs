@@ -105,6 +105,9 @@ let upstreamTypes = [];
 let licenseValid = true;
 /// When set, the classifier upstream answers 502, for the refund path.
 let jevDown = false;
+/// What the stubbed TypeSafe answers, per request body. `null` answers 502.
+const JEV_DEFAULT = () => ({ model: "jev-1.13.0", answers: {} });
+let jevReply = JEV_DEFAULT;
 
 function stubFetch() {
   globalThis.fetch = async (url, init) => {
@@ -130,7 +133,9 @@ function stubFetch() {
     }
     if (href.includes("api.typesafe.ai")) {
       if (jevDown) return new Response("boom", { status: 502 });
-      return new Response(JSON.stringify({ model: "jev-1.13.0", answers: {} }), {
+      const reply = jevReply(JSON.parse(typeof init?.body === "string" ? init.body : "{}"));
+      if (reply == null) return new Response("boom", { status: 502 });
+      return new Response(JSON.stringify(reply), {
         status: 200, headers: { "content-type": "application/json" },
       });
     }
@@ -207,6 +212,7 @@ beforeEach(() => {
   upstreamTypes = [];
   licenseValid = true;
   jevDown = false;
+  jevReply = JEV_DEFAULT;
   stubFetch();
 });
 
@@ -546,7 +552,11 @@ test("a classification is counted on its own row and never on the audio ceiling"
     "nor the summary's");
 });
 
-test("the relay builds the classifier request itself: pinned model, pinned questions", async () => {
+// A body with no `version` (or one below 3) is what every 0.5.0 app still
+// sends. It must keep working exactly as it does today: one request, the
+// old "which task" Choice, and the old response shape untouched.
+
+test("a legacy body (no version) still gets today's request: pinned model, pinned questions", async () => {
   const tasks = Array.from({ length: 10 }, (_, i) => ({
     id: `t-202609${String(i + 10)}-100000`, title: `task ${i}`, now: "where it stands",
     windows: ["Orb.swift — Deiko"], lastActive: "2 days ago", sameRepo: i === 0,
@@ -578,10 +588,129 @@ test("the relay builds the classifier request itself: pinned model, pinned quest
   assert.deepEqual([...new Set(Object.values(sent.questions).map((q) => q.type))].sort(), ["choice", "score"]);
 });
 
-test("with an empty board only the tier is asked", async () => {
+test("a legacy body with an empty board only asks the tier", async () => {
   await classify("dev_first");
   const sent = JSON.parse(upstreamBodies.at(-1));
   assert.deepEqual(Object.keys(sent.questions), ["tier"]);
+});
+
+test("a legacy body never gets a second look, and its answer passes straight through", async () => {
+  const legacyAnswers = { task: { type: "choice", choice: "t-20260910-100000", confidence: 0.9 }, tier: { type: "score", score: 2 } };
+  jevReply = () => ({ model: "jev-1.13.0", answers: legacyAnswers });
+  const r = await classify("dev_legacy", { narration: "fix the drag on the board" });
+  assert.equal(r.status, 200);
+  assert.equal(upstreamBodies.length, 1, "never a second look");
+  assert.deepEqual(JSON.parse(r.body), { model: "jev-1.13.0", answers: legacyAnswers }, "the old response shape, untouched");
+});
+
+// A body with `version: 3` gets round 1 (every question in one request) and,
+// for the ≤ 2 finalists, round 2 (the brief and that task, alone).
+
+const tasksOf = (n) => Array.from({ length: n }, (_, i) => ({
+  id: `t-202609${String(i + 10).padStart(2, "0")}-100000`, title: `task ${i}`, now: "where it stands",
+  windows: ["Orb.swift — Deiko"], keys: { pages: ["Signups"], files: ["Orb.swift"], components: ["never sent"] },
+  lastActive: "2 days ago", sameRepo: true,
+}));
+const [A, B, C] = ["t-20260910-100000", "t-20260911-100000", "t-20260912-100000"];
+
+test("round one asks every question in one request, and the caller cannot add any", async () => {
+  const tasks = tasksOf(22);
+  tasks.push({ id: "t-../etc", title: "not a task" }, { id: "new", title: "not a task either" });
+  await classify("dev_greedy", {
+    version: 3,
+    model: "some-expensive-model",
+    questions: { steal: { type: "choice", criteria: { a: "b" } } },
+    narration: "the week 32 signup chart drops",
+    summary: "Explain the week-32 drop.",
+    titles: ["Signups — build - Google Chrome"],
+    keys: { pages: ["Signups"], sites: ["build"], components: ["Weekly signups"] },
+    collections: [{ id: "build", name: "build", hint: "", labels: ["Signups", "Pricing"] }, { id: "Bad Id", name: "x" }],
+    tasks,
+    screenTerms: ["must", "never", "travel"],
+  });
+  assert.equal(upstreamBodies.length, 1, "nothing scored 0.35, so there is no second look");
+  const sent = JSON.parse(upstreamBodies[0]);
+  assert.equal(sent.model, "jev-1.13.0");
+  const same = Object.keys(sent.questions).filter((k) => k.startsWith("same_"));
+  assert.equal(same.length, 20, "twenty tasks at most");
+  assert.equal(same.some((k) => k.includes("..") || k === "same_new"), false);
+  assert.deepEqual(Object.keys(sent.questions).filter((k) => !k.startsWith("same_")).sort(), ["collection", "is_work_brief", "tier"]);
+  assert.equal("task" in sent.questions, false, "a v3 body never gets a task question");
+  assert.equal(sent.questions.is_work_brief.type, "noul");
+  assert.match(sent.questions.is_work_brief.instructions, /testing, testing/);
+  assert.equal(sent.questions[`same_${A}`].type, "noul");
+  assert.match(sent.questions[`same_${A}`].instructions, /topical similarity alone is insufficient/);
+  assert.equal(sent.questions.collection.criteria.build, "build — usual labels: Signups, Pricing");
+  assert.equal(sent.questions.collection.criteria.none, "None of these — a different project");
+  assert.equal(Object.keys(sent.state.tasks).length, 20, "tasks are keyed by id");
+  assert.deepEqual(sent.state.tasks[A].keys, { pages: ["Signups"], sites: [], files: ["Orb.swift"], tickets: [] });
+  assert.equal(sent.state.tasks[A].lastActive, undefined, "recency is not a clue");
+  assert.equal(sent.state.tasks[A].sameRepo, undefined, "nor is the project name");
+  assert.deepEqual(sent.state.brief.keys.pages, ["Signups"]);
+  assert.equal("components" in sent.state.brief.keys, false);
+  assert.equal(JSON.stringify(sent).includes("travel"), false, "screen terms never leave");
+  assert.equal(JSON.stringify(sent).includes("never sent"), false, "nor do components");
+  assert.deepEqual([...new Set(Object.values(sent.questions).map((q) => q.type))].sort(), ["choice", "noul", "score"]);
+});
+
+test("with an empty board only the gate and the tier are asked", async () => {
+  await classify("dev_first", { version: 3, narration: "fix the drag on the board" });
+  const sent = JSON.parse(upstreamBodies.at(-1));
+  assert.deepEqual(Object.keys(sent.questions).sort(), ["is_work_brief", "tier"]);
+});
+
+test("round two looks again at the best two, each alone, and it is still one classify", async () => {
+  jevReply = (sent) => (sent.questions.is_work_brief
+    ? { model: "jev-1.13.0", answers: { is_work_brief: { noul: 0.9 }, [`same_${A}`]: { noul: 0.8 }, [`same_${B}`]: { noul: 0.5 }, [`same_${C}`]: { noul: 0.36 } } }
+    : { model: "jev-1.13.0", answers: { same_task: { noul: sent.state.task.id === A ? 0.95 : 0.2 }, relation: { score: 2 } } });
+  const r = await classify("dev_second", { version: 3, narration: "the pricing bug again", tasks: tasksOf(3) });
+  assert.equal(r.status, 200);
+  assert.equal(upstreamBodies.length, 3, "one round-one request and two second looks");
+  const looks = upstreamBodies.slice(1).map((b) => JSON.parse(b));
+  assert.deepEqual(looks.map((l) => l.state.task.id).sort(), [A, B], "the best two, not the third");
+  for (const l of looks) {
+    assert.equal(l.model, "jev-1.13.0");
+    assert.deepEqual(Object.keys(l.state).sort(), ["brief", "task"], "no other task can sway it");
+    assert.deepEqual(Object.keys(l.questions).sort(), ["relation", "same_task"]);
+    assert.equal(l.questions.same_task.type, "noul");
+    assert.equal(l.questions.relation.type, "score");
+    assert.equal(l.questions.relation.criteria.length, 3);
+  }
+  const back = JSON.parse(r.body);
+  assert.equal(back.model, "jev-1.13.0");
+  assert.equal(back.answers[`same_${A}`].noul, 0.8);
+  assert.deepEqual(Object.keys(back.second).sort(), [A, B]);
+  assert.equal(back.second[A].same_task.noul, 0.95);
+  assert.equal(rows.get(classifyDay())?.audioSeconds, 1, "metered as one classify");
+});
+
+test("no second look when it is not a real request, or nothing came close", async () => {
+  for (const answers of [
+    { is_work_brief: { noul: 0.2 }, [`same_${A}`]: { noul: 0.9 } },
+    { is_work_brief: { noul: 0.9 }, [`same_${A}`]: { noul: 0.34 } },
+  ]) {
+    upstreamBodies = [];
+    jevReply = () => ({ model: "jev-1.13.0", answers });
+    const r = await classify("dev_mic", { version: 3, narration: "testing testing can you hear me", tasks: tasksOf(3) });
+    assert.equal(upstreamBodies.length, 1);
+    assert.deepEqual(JSON.parse(r.body).second, {});
+  }
+});
+
+test("a missing gate does not stop the second look", async () => {
+  jevReply = (sent) => (sent.questions.is_work_brief
+    ? { model: "jev-1.13.0", answers: { [`same_${A}`]: { noul: 0.9 } } }
+    : { model: "jev-1.13.0", answers: { same_task: { noul: 0.9 }, relation: { score: 2 } } });
+  const r = await classify("dev_nogate", { version: 3, narration: "the pricing bug again", tasks: tasksOf(3) });
+  assert.deepEqual(Object.keys(JSON.parse(r.body).second), [A]);
+});
+
+test("a failed second look drops that task's answer, not the brief", async () => {
+  jevReply = (sent) => (sent.questions.is_work_brief ? { model: "jev-1.13.0", answers: { [`same_${A}`]: { noul: 0.9 } } } : null);
+  const r = await classify("dev_flaky", { version: 3, narration: "the pricing bug again", tasks: tasksOf(3) });
+  assert.equal(r.status, 200);
+  assert.deepEqual(JSON.parse(r.body).second, {});
+  assert.equal(rows.get(classifyDay())?.audioSeconds, 1, "round one answered, so the classify counts");
 });
 
 test("a classification without a narration is refused", async () => {
@@ -682,7 +811,7 @@ test("with no classifier configured at all the route says so", async () => {
 test("an oversized classification body is refused before it is parsed", async () => {
   const r = await handle({
     method: "POST", path: "/v1/classify", token: "dev_big",
-    contentType: "application/json", body: Buffer.alloc(97 * 1024, "x"),
+    contentType: "application/json", body: Buffer.alloc(193 * 1024, "x"),
   });
   assert.equal(r.status, 413);
 });
