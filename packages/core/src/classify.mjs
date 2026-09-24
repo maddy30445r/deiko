@@ -141,10 +141,11 @@ async function main() {
   const shortlist = scored.map((s) => {
     const bs = groups.get(s.id);
     const last = bs.find((b) => b.outcome)?.outcome;
+    const title = taskTitles.get(s.id) ?? titleFor(bs.at(-1));
     return {
       id: s.id,
-      title: redact(taskTitles.get(s.id) ?? titleFor(bs.at(-1))),
-      now: taskState(bs).now.join("\n"),
+      title: redact(title),
+      now: taskState(bs, title).now.join("\n"),
       decided: bs.flatMap((b) => b.outcome?.decided ?? []).slice(0, 5).map(redact).join("\n"),
       windows: [...new Set(bs.flatMap((b) => b.windows))].slice(0, 5).map(redact),
       apps: [...new Set(bs.flatMap((b) => b.apps))].slice(0, 5).map(redact),

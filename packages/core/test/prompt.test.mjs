@@ -648,6 +648,30 @@ test("a browser gets where it stands and what was done, inline, no path", () => 
   assert.equal(attached.text.includes("/tasks/"), false);
 });
 
+test("a task with nothing new to say where it stands keeps both forms grammatical", () => {
+  const bare = { ...priceTask(), count: 1, now: [], lastDid: [] };
+  const plain = buildPrompt(oneShot());
+  assert.equal(
+    buildPrompt({ ...oneShot(), task: bare }).text.slice(plain.text.length - 1),
+    "\n\nThis carries on from \"Price display doesn't update after editing\" (1 brief so far).\n"
+      + "The full history is in /Users/dev/Documents/Deiko/tasks/t-20260918-155836.md — read what you need.\n",
+  );
+  const attachedPlain = buildPrompt({ ...oneShot(), attached: true });
+  assert.equal(
+    buildPrompt({ ...oneShot(), attached: true, task: bare }).text.slice(attachedPlain.text.length - 1),
+    "\n\nThis carries on from \"Price display doesn't update after editing\".\n",
+  );
+});
+
+test("a browser is not told the same thing done twice", () => {
+  const finished = { ...priceTask(), now: ["Last done: Synced the price after save."], lastDid: ["Synced the price after save.", "Added a test."] };
+  const attached = buildPrompt({ ...oneShot(), attached: true, task: finished });
+  assert.ok(attached.text.endsWith(
+    "\n\nThis carries on from \"Price display doesn't update after editing\". "
+      + "Where it stands: Last done: Synced the price after save. Last time: Added a test.\n",
+  ));
+});
+
 test("the task's words are evidence; its path is not", () => {
   const plain = buildPrompt(oneShot());
   const withTask = buildPrompt({ ...oneShot(), task: priceTask() });

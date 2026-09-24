@@ -334,12 +334,16 @@ export function buildPrompt({
     const did = task.lastDid.map(clean).filter(Boolean);
     earlierSpoken.push(title, ...now, ...did);
     if (attached) {
-      out.push("", `This carries on from "${title}". Where it stands: ${now.join(" ")}`
-        + (did.length ? ` Last time: ${did.join(" ")}` : ""));
+      // "Last done: X" already said X; say only what it did besides.
+      const more = did.filter((d) => !now.some((n) => n.includes(d)));
+      out.push("", `This carries on from "${title}".`
+        + (now.length ? ` Where it stands: ${now.join(" ")}` : "")
+        + (more.length ? ` Last time: ${more.join(" ")}` : ""));
     } else {
       out.push(
         "",
-        `This carries on from "${title}" (${task.count} brief${task.count === 1 ? "" : "s"} so far). Where it stands:`,
+        `This carries on from "${title}" (${task.count} brief${task.count === 1 ? "" : "s"} so far).`
+          + (now.length ? " Where it stands:" : ""),
         ...now,
         `The full history is in ${task.notePath} — read what you need.`,
       );

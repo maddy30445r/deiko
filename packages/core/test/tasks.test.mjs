@@ -71,7 +71,37 @@ test("where a task stands is the newest outcome's Open, else what was last asked
   const state = taskState([...price].reverse());
   assert.deepEqual(state.now, ["The listing page still caches the old price."]);
   assert.deepEqual(state.lastDid, ["Synced the price after save."]);
-  assert.deepEqual(taskState(chart).now, [`Asked: ${chart[0].line}`]);
+  assert.deepEqual(taskState(chart).now, [`Last asked: ${chart[0].line}`]);
+});
+
+test("a newest outcome with nothing open says what was last done, not what was asked", () => {
+  const done = brief("20260918-170000", "Fix the price", {
+    outcome: parseOutcome("## Did\nSynced the price after save.\nAdded a test.\n## Open\n"),
+  });
+  const state = taskState([done, ...[...price].reverse()]);
+  assert.deepEqual(state.now, ["Last done: Synced the price after save."]);
+  assert.deepEqual(state.lastDid, ["Synced the price after save.", "Added a test."]);
+});
+
+test("a newer brief with no outcome leads where it stands; an older outcome's Open follows, dated", () => {
+  const next = brief("20260919-090000", "Now the listing page shows $99 too.");
+  const state = taskState([next, ...[...price].reverse()]);
+  assert.deepEqual(state.now, [
+    "Last asked: Now the listing page shows $99 too.",
+    "Still open from Sep 18: The listing page still caches the old price.",
+  ]);
+  assert.deepEqual(state.lastDid, ["Synced the price after save."], "what was done is still the latest outcome's");
+  const finished = brief("20260918-170000", "x", { outcome: parseOutcome("## Did\nDone it.") });
+  assert.deepEqual(taskState([next, finished]).now, ["Last asked: Now the listing page shows $99 too."],
+    "an older outcome with nothing open adds nothing");
+});
+
+test("a Last asked line that only repeats the title is dropped", () => {
+  const [first, second] = price;
+  const title = titleFor(first);
+  assert.deepEqual(taskState([first], title).now, []);
+  assert.deepEqual(taskState([second, first], title).now, [`Last asked: ${second.line}`]);
+  assert.deepEqual(taskState([first], "Renamed by hand").now, [`Last asked: ${first.line}`]);
 });
 
 const asTasks = (groups, lastActive) => [...groups].map(([id, bs]) => ({
@@ -112,6 +142,13 @@ test("the note is deterministic, capped and names two files, never a folder", ()
   assert.equal(/20260918-\d{6}(?!\/(prompt\.txt|outcome\.md))\b/.test(note.split("## Briefs")[1].replace(/updated from \S+/, "")), false);
   const fifty = Array.from({ length: 60 }, (_, i) => brief(`202609${String(10 + (i % 18)).padStart(2, "0")}-${String(100000 + i)}`, `brief ${i}`));
   assert.match(renderTaskNote({ id: "t-x", title: "big", briefs: fifty }), /- … and 10 earlier\n$/);
+});
+
+test("a note whose only Now line would repeat its title has no Now section", () => {
+  const [first, second] = price;
+  const note = renderTaskNote({ id: "t-20260918-155836", title: titleFor(second), briefs: [second, first] });
+  assert.equal(note.includes("## Now"), false);
+  assert.match(note, /\n\n## Briefs\n/);
 });
 
 test("app names and collections are redacted when they contain secrets", () => {

@@ -296,11 +296,12 @@ const myTask = context?.task ?? taskIdFor(basename(dir));
 const groups = groupTasks(readBoard(root).filter((b) => b.id !== basename(dir)));
 const taskTitles = readTasks(root);
 const mates = groups.get(myTask) ?? [];
+const myTitle = mates.length ? taskTitles.get(myTask) ?? titleFor(mates.at(-1)) : null;
 const task = mates.length
   ? {
-    title: taskTitles.get(myTask) ?? titleFor(mates.at(-1)),
+    title: myTitle,
     count: mates.length,
-    ...taskState(mates),
+    ...taskState(mates, myTitle),
     notePath: join(root, "tasks", `${myTask}.md`),
   }
   : null;
@@ -311,9 +312,10 @@ const task = mates.length
 const maybe = !task && context?.decidedBy !== "you" && Array.isArray(context?.candidates)
   ? context.candidates.filter((id) => groups.has(id)).map((id) => {
     const bs = groups.get(id);
+    const title = taskTitles.get(id) ?? titleFor(bs.at(-1));
     return {
-      title: taskTitles.get(id) ?? titleFor(bs.at(-1)),
-      now: taskState(bs).now,
+      title,
+      now: taskState(bs, title).now,
       // A task of one has no note (`writeTaskNotes` skips it), so its history
       // is that brief's own file — by name, never the folder.
       notePath: bs.length > 1

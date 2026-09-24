@@ -85,12 +85,28 @@ export function groupTasks(briefs) {
   return groups;
 }
 
-/** Newest-first briefs → where the task stands and what was done last. */
-export function taskState(briefs) {
+/**
+ * Newest-first briefs → where the task stands and what was done last.
+ *
+ * Only the NEWEST brief's outcome says where things stand: an older one
+ * describes work a later ask has moved past, so it follows that ask, dated.
+ * An outcome with nothing open is finished work and says what was done. A
+ * "Last asked" line that only repeats `title` is dropped — the prompt and
+ * the note both name the title already.
+ */
+export function taskState(briefs, title = null) {
+  const [newest] = briefs;
   const last = briefs.find((b) => b.outcome);
-  const now = last?.outcome.open.length
-    ? last.outcome.open
-    : briefs[0] ? [`Asked: ${briefs[0].line}`] : [];
+  const same = (a, b) => trimTitle(a).toLowerCase() === trimTitle(b).toLowerCase();
+  const asked = newest && !(title && same(newest.line, title)) ? [`Last asked: ${newest.line}`] : [];
+  let now;
+  if (newest?.outcome) {
+    const { open, did } = newest.outcome;
+    now = open.length ? open : did.length ? [`Last done: ${did[0]}`] : asked;
+  } else {
+    const open = last?.outcome.open ?? [];
+    now = [...asked, ...open.map((o, i) => (i ? o : `Still open from ${briefDate(last.id)}: ${o}`))];
+  }
   return {
     now: now.slice(0, CAP.now).map(redact),
     lastDid: (last?.outcome.did ?? []).slice(0, CAP.now).map(redact),
@@ -154,8 +170,9 @@ export function renderTaskNote({ id, title, collection = null, briefs }) {
   const out = [
     `# ${redact(title)}`,
     `${redact(collection ?? "Unsorted")} · ${n} brief${n === 1 ? "" : "s"} · ${first}${last !== first ? `–${last}` : ""} · updated from ${briefs[0].id}`,
-    "", "## Now", ...taskState(briefs).now,
   ];
+  const now = taskState(briefs, title).now;
+  if (now.length) out.push("", "## Now", ...now);
   const decided = briefs
     .flatMap((b) => (b.outcome?.decided ?? []).map((d) => `- ${briefDate(b.id)}: ${redact(d)}`))
     .slice(0, CAP.decided);
