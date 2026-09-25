@@ -400,6 +400,22 @@ test("classify writes the brief's own meaning, so the re-render after it embeds 
     assert.equal(statSync(join(dir, "meaning.f32")).mtimeMs, before);
   });
 
+test("a first render leaves the meaning to classify when classify follows, and writes it when nothing does",
+  { skip: !isReady(DEFAULT_MODEL) && "model not downloaded on this Mac" }, async () => {
+    const root = mkdtempSync(join(tmpdir(), "deiko-render-"));
+    const said = { said: "the price still shows 99 after I save it", windows: ["Price.tsx — acme-portal"] };
+    const base = { ...process.env, DEIKO_MEANING_MODEL: DEFAULT_MODEL, DEIKO_RELAY_URL: "", DEIKO_SORT_BRIEFS: "" };
+    const sorted = session(root, "20260918-100000", said);
+    await run(process.execPath, [join(scripts, "render-brief.mjs"), sorted], { env: { ...base, DEIKO_CLASSIFY_URL: "http://127.0.0.1:1" } });
+    assert.ok(!existsSync(join(sorted, "meaning.f32")), "classify embeds it once the summary exists");
+    const off = session(root, "20260918-110000", said);
+    await run(process.execPath, [join(scripts, "render-brief.mjs"), off], { env: { ...base, DEIKO_CLASSIFY_URL: "http://127.0.0.1:1", DEIKO_SORT_BRIEFS: "0" } });
+    assert.ok(existsSync(join(off, "meaning.f32")), "sorting off: no classify load follows");
+    const alone = session(root, "20260918-120000", said);
+    await run(process.execPath, [join(scripts, "render-brief.mjs"), alone], { env: { ...base, DEIKO_CLASSIFY_URL: "" } });
+    assert.ok(existsSync(join(alone, "meaning.f32")), "no relay: no classify load follows");
+  });
+
 const ODDS = { pile: "odds", decidedBy: "local", classifier: "v3.0" };
 
 test("a brief the summary could not tell goes to odds and ends, sending nothing, relay or none", async () => {

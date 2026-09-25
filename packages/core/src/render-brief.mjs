@@ -498,13 +498,20 @@ try {
 // THIS BRIEF'S MEANING, ON THIS MAC ONLY, for matching the briefs after it.
 // From what was said and the window titles — never the screen's words. No
 // model, or any failure, and there is simply no vector: words carry on alone.
-// CHECKED BEFORE THE MODEL LOADS (~0.6 s): a re-render whose text did not
-// change, and one after `classify.mjs` already wrote it, load nothing.
-// ponytail: the first render of a brief still pays the load once.
+// CHECKED BEFORE THE MODEL LOADS (~0.6 s, ~500 MB): a re-render whose text
+// did not change, and one after `classify.mjs` already wrote it, load nothing.
+// Nor does a first render that classify follows: classify loads the model for
+// its query anyway and embeds this brief once the summary line exists, so a
+// vector written here was replaced minutes later. Sorting off, no relay, or a
+// brief placed by hand — no classify load follows, and this one writes it.
+const sorting = !/^(0|no|false)$/i.test(process.env.DEIKO_SORT_BRIEFS ?? "");
+const classifyEmbeds = sorting && Boolean(process.env.DEIKO_CLASSIFY_URL || process.env.DEIKO_RELAY_URL)
+  && !existsSync(join(dir, "review-summary.txt"))
+  && context?.decidedBy !== "you";
 try {
   const key = currentModel();
   const text = briefText(readBriefLine(dir));
-  if (isReady(key) && text.trim() && !vectorIsCurrent(dir, key, text)) {
+  if (!classifyEmbeds && isReady(key) && text.trim() && !vectorIsCurrent(dir, key, text)) {
     const model = await loadModel(key);
     const vec = model ? await model.embed(text, "doc") : null;
     if (vec) writeVector(dir, key, vec, text);
