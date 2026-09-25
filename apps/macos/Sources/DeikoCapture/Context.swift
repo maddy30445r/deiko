@@ -374,6 +374,8 @@ enum Collections {
 struct BriefTask: Decodable, Identifiable, Equatable {
     let id: String
     var title: String
+    /// "you" when you named it; the scripts write "summary" or "narration".
+    var from: String?
 }
 
 /// Task titles, beside the collections. Membership is not here — it is each

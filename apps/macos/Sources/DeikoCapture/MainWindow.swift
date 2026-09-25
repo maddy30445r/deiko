@@ -355,6 +355,9 @@ final class SessionsStore: ObservableObject {
         let crops: [String]
         let apps: [String]
         let repo: String?
+        /// The pages and files the brief is about — what its work is named after.
+        var pages: [String] = []
+        var files: [String] = []
         /// Where this brief sits in what Deiko remembers — see `Context.swift`.
         /// All three come from the same detached pass that reads the manifest,
         /// so the memory costs the board one more small decode per session.
@@ -392,7 +395,10 @@ final class SessionsStore: ObservableObject {
     }
 
     @Published private(set) var items: [Item] = [] {
-        didSet { workCounts = BoardTimeline.workCounts(items.map { $0.setAside ? nil : $0.task }) }
+        didSet {
+            workCounts = BoardTimeline.workCounts(items.map { $0.setAside ? nil : $0.task })
+            nameWork()
+        }
     }
     /// Briefs per task, set-aside ones in none. A card wears its task's tag
     /// only where this is 2 or more.
@@ -414,7 +420,23 @@ final class SessionsStore: ObservableObject {
 
     func count(of id: String) -> Int { counts[id] ?? 0 }
 
-    @Published private(set) var taskTitles: [String: String] = [:]
+    @Published private(set) var taskTitles: [String: String] = [:] { didSet { nameWork() } }
+    /// Tasks you named yourself: their names are used as given.
+    private var namedByYou: Set<String> = []
+    /// Task id → the short name its tag wears — see `BoardTimeline.workNames`.
+    @Published private(set) var workNames: [String: String] = [:]
+
+    private func nameWork() {
+        workNames = BoardTimeline.workNames(groups(of: items).map { group in
+            .init(id: group.id, title: taskTitles[group.id] ?? group.items.last?.title,
+                  named: namedByYou.contains(group.id),
+                  pages: group.items.flatMap(\.pages), files: group.items.flatMap(\.files))
+        })
+    }
+
+    /// What a tag, "Added to …" and the work header call a task: short.
+    /// `title(ofTask:)` is the whole title, for a tooltip or a subtitle.
+    func workName(ofTask id: String) -> String { workNames[id] ?? title(ofTask: id) }
 
     struct Group: Identifiable {
         let id: String
@@ -618,6 +640,8 @@ final class SessionsStore: ObservableObject {
                     crops: digest?.cropPaths ?? [],
                     apps: digest?.summary.apps ?? [],
                     repo: digest?.summary.repoHints.first,
+                    pages: digest?.summary.keys?.pages ?? [],
+                    files: digest?.summary.keys?.files ?? [],
                     collection: context?.collection,
                     task: stored?.task ?? own,
                     odds: odds,
@@ -636,7 +660,9 @@ final class SessionsStore: ObservableObject {
         seedSeen(read)
         items = read
         collections = Collections.all()
-        taskTitles = Dictionary(Tasks.all().map { ($0.id, $0.title) }, uniquingKeysWith: { a, _ in a })
+        let tasks = Tasks.all()
+        namedByYou = Set(tasks.filter { $0.from == "you" }.map(\.id))
+        taskTitles = Dictionary(tasks.map { ($0.id, $0.title) }, uniquingKeysWith: { a, _ in a })
         counts = read.reduce(into: [:]) { tally, item in
             if let id = item.collection { tally[id, default: 0] += 1 }
         }
@@ -832,6 +858,7 @@ private struct BoardPane: View {
         // — `title(ofTask:)` walks the board for an untitled task.
         let named = Set(sessions.groups(of: inFilter).filter { group in
             (sessions.taskTitles[group.id] ?? group.items.last?.title ?? "").lowercased().contains(q)
+                || (sessions.workNames[group.id] ?? "").lowercased().contains(q)
         }.map(\.id))
         return inFilter.filter {
             (!$0.setAside && named.contains($0.task))
@@ -1294,7 +1321,7 @@ private struct BoardCard: View {
             // FILING IS VISIBLE. Deiko put this with earlier work on its own;
             // said once, beside the way to take it back.
             HStack(spacing: 8) {
-                WorkTag(text: "Added to \(store.title(ofTask: item.task))") { openWork(item.task) }
+                WorkTag(text: "Added to \(store.workName(ofTask: item.task))") { openWork(item.task) }
                     .help("Deiko put this with \(count - 1) earlier brief\(count == 2 ? "" : "s") in “\(store.title(ofTask: item.task))”. Click to see them together.")
                 let own = Tasks.own(item.id)
                 let taken = store.hasOthers(inTask: own, besides: item.id)
@@ -1315,8 +1342,8 @@ private struct BoardCard: View {
                       ? "Too short or unclear to file — a mic check, a thank-you. Drag it onto a brief to put it with that work."
                       : "This recording never became a brief.")
         } else if showsTag, count >= 2 {
-            WorkTag(text: store.title(ofTask: item.task), count: count) { openWork(item.task) }
-                .help("Show this work on its own, oldest first")
+            WorkTag(text: store.workName(ofTask: item.task), count: count) { openWork(item.task) }
+                .help("“\(store.title(ofTask: item.task))”. Click to see this work on its own, oldest first.")
         }
     }
 
@@ -1422,9 +1449,18 @@ private struct WorkNotes: View {
         let briefs = store.items.filter { $0.task == task && !$0.setAside }
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(store.title(ofTask: task))
+                let name = store.workName(ofTask: task), title = store.title(ofTask: task)
+                Text(name)
                     .deikoTitle(19)
                     .fixedSize(horizontal: false, vertical: true)
+                // The whole title under the short name, when they differ.
+                if title.trimmingCharacters(in: .punctuationCharacters) != name.trimmingCharacters(in: .punctuationCharacters) {
+                    Text(title)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(DeikoStyle.ink2)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 Text(span(briefs))
                     .font(.system(size: 11.5))
                     .foregroundStyle(DeikoStyle.ink2)

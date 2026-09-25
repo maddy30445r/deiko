@@ -60,6 +60,14 @@ struct BriefSummary: Codable {
     var labelsDropped: Int?
     /// Screenshots the developer took out by hand in the review window.
     var cropsRemoved: Int?
+    /// What the brief is about, by name — the board names work after the
+    /// page or file. Optional: older briefs have no keys.
+    var keys: Keys?
+
+    struct Keys: Codable {
+        var pages: [String]?
+        var files: [String]?
+    }
 }
 
 private struct BriefManifest: Codable {
