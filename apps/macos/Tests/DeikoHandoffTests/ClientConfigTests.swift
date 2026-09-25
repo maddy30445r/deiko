@@ -266,17 +266,3 @@ func removeAfterMergeKeepsTheContainer() throws {
     #expect(servers.isEmpty)
 }
 
-// ── The container key is a parameter, not a constant (merge side) ──────────
-
-@Test("VS Code's own MCP config uses `servers`, not `mcpServers`, on merge too")
-func mergeContainerKeyIsConfigurable() throws {
-    let after = try ClientConfig.merge(
-        into: ["servers": ["playwright": ["command": "npx"]]],
-        serverKey: "fovea",
-        entry: foveaEntry(),
-        containerKey: "servers"
-    )
-    let servers = try #require(after["servers"] as? [String: Any])
-    #expect(servers.count == 2)
-    #expect(after["mcpServers"] == nil, "must not invent the other spelling")
-}

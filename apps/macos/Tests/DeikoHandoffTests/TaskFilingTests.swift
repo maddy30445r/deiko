@@ -27,11 +27,28 @@ func correctedRank() {
 
 @Test("an app rewrite keeps the classifier's log and replaces only its own keys")
 func mergeKeepsTheLog() {
-    let disk: [String: Any] = ["task": "t-20260918-100000", "candidates": ["t-1"], "jev": ["gate": 0.9], "classifier": "v3.0"]
-    let mine: [String: Any] = ["task": "t-20260918-110000", "decidedBy": "you", "classifier": "v3.0"]
-    let merged = TaskFiling.merge(disk: disk, mine: mine, ownKeys: ["task", "candidates", "decidedBy", "classifier"])
+    let disk: [String: Any] = ["task": "t-20260918-100000", "candidates": ["t-1"], "jev": ["gate": 0.9], "tier": "quick"]
+    let mine: [String: Any] = ["task": "t-20260918-110000", "decidedBy": "you", "tier": "quick"]
+    let merged = TaskFiling.merge(disk: disk, mine: mine, ownKeys: ["task", "candidates", "decidedBy", "tier"])
     #expect(merged["task"] as? String == "t-20260918-110000")
     #expect(merged["decidedBy"] as? String == "you")
     #expect(merged["candidates"] == nil, "a hand placement clears Which one?")
     #expect((merged["jev"] as? [String: Any])?["gate"] as? Double == 0.9, "the log survives")
+}
+
+@Test("a hand TASK placement writes taskBy: you; a collection-only change never does")
+func mergeWritesTaskByOnlyForHandTaskPlacement() {
+    let disk: [String: Any] = ["task": "t-old", "decidedBy": "jev"]
+    let ownKeys = ["task", "decidedBy", "collection", "taskBy"]
+
+    // `placeTask` models `taskBy` in `mine`, so it lands on disk.
+    let handTask: [String: Any] = ["task": "t-new", "decidedBy": "you", "taskBy": "you"]
+    let afterTask = TaskFiling.merge(disk: disk, mine: handTask, ownKeys: ownKeys)
+    #expect(afterTask["taskBy"] as? String == "you")
+
+    // `placeCollection` never sets it, so it is absent from `mine` — which
+    // `merge` reads as removed, same as any other own key nobody modelled.
+    let collectionOnly: [String: Any] = ["task": "t-old", "decidedBy": "jev", "collection": "acme"]
+    let afterCollection = TaskFiling.merge(disk: disk, mine: collectionOnly, ownKeys: ownKeys)
+    #expect(afterCollection["taskBy"] == nil, "a collection-only change never sets taskBy")
 }

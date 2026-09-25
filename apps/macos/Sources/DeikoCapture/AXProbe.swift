@@ -824,9 +824,12 @@ enum AXProbe {
             }
         }
         if typeID == CFURLGetTypeID() {
-            // AXURL and AXDocument arrive as CFURL; they used to be dropped here.
+            // AXURL and AXDocument arrive as CFURL; they used to be dropped
+            // here. Query, fragment and userinfo can carry a session token or
+            // a reset code, so they come off here too — not only from the
+            // page address that already goes through `PageURL.trim`.
             let url = ref as! CFURL   // a CF cast; cannot fail after the type check
-            return (url as URL).absoluteString
+            return PageURL.withoutQuery((url as URL).absoluteString)
         }
         if typeID == CFArrayGetTypeID() {
             // AXDOMClassList arrives as an array of strings.

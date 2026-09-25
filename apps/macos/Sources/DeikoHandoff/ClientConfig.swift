@@ -22,7 +22,6 @@ import Foundation
 public enum ClientConfig {
 
     public enum MergeError: Error, Equatable {
-        case notAnObject
         case mcpServersNotAnObject
     }
 
@@ -32,11 +31,6 @@ public enum ClientConfig {
     ///   - existing: the parsed config, or nil when the file does not exist yet.
     ///   - serverKey: the name the server is registered under (`"deiko-memory"`).
     ///   - entry: the server definition to write.
-    ///   - containerKey: which top-level key holds the servers. Claude Code and
-    ///     most clients use `mcpServers`; VS Code's own MCP support uses
-    ///     `servers`. A parameter rather than a constant because the difference
-    ///     is one word and hard-coding it is how the second connector becomes a
-    ///     copy of the first.
     ///
     /// Returns the merged document. Every key the caller did not ask about is
     /// carried across untouched — that is the property this function exists to
@@ -44,9 +38,9 @@ public enum ClientConfig {
     public static func merge(
         into existing: [String: Any]?,
         serverKey: String,
-        entry: [String: Any],
-        containerKey: String = "mcpServers"
+        entry: [String: Any]
     ) throws -> [String: Any] {
+        let containerKey = "mcpServers"
         var document = existing ?? [:]
 
         // A missing container is normal — a config with no MCP servers yet.
@@ -94,18 +88,17 @@ public enum ClientConfig {
 
     /// Whether a config already registers this server with exactly this entry.
     ///
-    /// Drives both "is it connected?" in the UI and the self-heal at launch.
-    /// Compared by VALUE, not by presence: an entry pointing at a runtime or a
-    /// server path that no longer exists — an app moved, a Node upgraded — is
-    /// worse than no entry at all, because the client keeps trying to spawn it
-    /// and the failure surfaces inside Claude Code rather than here.
+    /// Drives "is it connected?" in the UI. Compared by VALUE, not by
+    /// presence: an entry pointing at a runtime or a server path that no
+    /// longer exists — an app moved, a Node upgraded — is worse than no entry
+    /// at all, because the client keeps trying to spawn it and the failure
+    /// surfaces inside Claude Code rather than here.
     public static func isRegistered(
         in existing: [String: Any]?,
         serverKey: String,
-        matching entry: [String: Any],
-        containerKey: String = "mcpServers"
+        matching entry: [String: Any]
     ) -> Bool {
-        guard let servers = existing?[containerKey] as? [String: Any],
+        guard let servers = existing?["mcpServers"] as? [String: Any],
               let found = servers[serverKey] as? [String: Any]
         else { return false }
         return NSDictionary(dictionary: found).isEqual(to: entry)

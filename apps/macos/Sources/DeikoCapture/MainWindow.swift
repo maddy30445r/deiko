@@ -278,6 +278,12 @@ final class SessionsStore: ObservableObject {
     /// heard by the time you first opened the window.
     static let shared = SessionsStore()
 
+    /// The session being recorded right now, if any. Set once at launch
+    /// alongside `Collections.root` (see `MenuBar`). `load` skips this
+    /// session entirely — never "Unfinished recording", never a card, never
+    /// a "Delete…" on the brief that is still being made.
+    nonisolated(unsafe) static var openSessionDir: (() -> String?)?
+
     struct Item: Identifiable, Sendable {
         let id: String
         let dir: String
@@ -291,6 +297,7 @@ final class SessionsStore: ObservableObject {
         /// ("Thank you." is a real transcript, and a real board is full of
         /// them). The app it was captured from beats an apology.
         var title: String {
+            if unreadable { return "Couldn't read this brief" }
             if unfinished { return "Unfinished recording" }
             if let line, line.count > 12 { return Self.trimmedTitle(line) }
             if let app = apps.first { return "Something in \(app)" }
@@ -328,6 +335,11 @@ final class SessionsStore: ObservableObject {
         /// ponytail: a brief mid-pipeline reads as unfinished for the seconds
         /// before its first render; the board reloads when it lands.
         let unfinished: Bool
+        /// A brief.json exists but this build could not decode it — an older
+        /// schema, or a write that was cut short. Distinct from `unfinished`:
+        /// the recording finished, this build just can't read what it wrote.
+        /// Shown alongside it in odds and ends, as "Couldn't read this brief".
+        let unreadable: Bool
         /// The likeliest task the classifier asked "Which one?" about, while
         /// this brief is still its own task — the board's "Looks like …?".
         let maybe: String?
@@ -366,7 +378,7 @@ final class SessionsStore: ObservableObject {
     /// none of these, and never a task to move a brief into; nor is a
     /// recording that never finished.
     func groups(of items: [Item]) -> [Group] {
-        Dictionary(grouping: items.filter { !$0.odds && !$0.unfinished }, by: \.task)
+        Dictionary(grouping: items.filter { !$0.odds && !$0.unfinished && !$0.unreadable }, by: \.task)
             .map { Group(id: $0.key, items: $0.value.sorted { $0.date > $1.date }) }
             .sorted { $0.items[0].date > $1.items[0].date }
     }
@@ -440,7 +452,7 @@ final class SessionsStore: ObservableObject {
             id: item.id, dir: item.dir, date: item.date, line: item.line,
             crops: item.crops, apps: item.apps, repo: item.repo,
             collection: collection, task: item.task, odds: item.odds, outcome: item.outcome,
-            unfinished: item.unfinished, maybe: item.maybe, related: item.related
+            unfinished: item.unfinished, unreadable: item.unreadable, maybe: item.maybe, related: item.related
         )
     }
 
@@ -473,12 +485,21 @@ final class SessionsStore: ObservableObject {
         Collections.root = root
         let known = Set(Collections.all().map(\.id))
         let names = Sessions.list(root: root)
+        // The session being recorded right now, if any — computed on the main
+        // actor (it asks the recorder) and captured by value, because it must
+        // never appear on the board at all: no card means no "Delete…" for it.
+        // By name, matching `Sessions.deleteAll(keeping:)`, not by full path.
+        let openName = Self.openSessionDir?().map { ($0 as NSString).lastPathComponent }
         // Manifests are small but there can be hundreds; read them off the main
         // actor so opening the window never stutters.
         let read = await Task.detached(priority: .userInitiated) { () -> [Item] in
             names.compactMap { name in
+                guard name != openName else { return nil }
                 let dir = (root as NSString).appendingPathComponent(name)
                 guard let date = Sessions.stamp(name) else { return nil }
+                let hasBrief = FileManager.default.fileExists(
+                    atPath: (dir as NSString).appendingPathComponent("brief.json")
+                )
                 let digest = try? BriefPipeline.digest(sessionDir: dir)
                 let narration = digest?.summary.narration.trimmingCharacters(in: .whitespacesAndNewlines)
                 // An id no collection claims any more — its collection was
@@ -497,6 +518,8 @@ final class SessionsStore: ObservableObject {
                     .map { $0.replacingOccurrences(
                         of: "^[-*]\\s*", with: "", options: .regularExpression) }
                     .first { !$0.isEmpty }
+                let own = Tasks.own(name)
+                let isOwnTask = stored?.task == nil || stored?.task == own
                 return Item(
                     id: name,
                     dir: dir,
@@ -506,12 +529,13 @@ final class SessionsStore: ObservableObject {
                     apps: digest?.summary.apps ?? [],
                     repo: digest?.summary.repoHints.first,
                     collection: context?.collection,
-                    task: stored?.task ?? Tasks.own(name),
+                    task: stored?.task ?? own,
                     odds: stored?.isOdds == true,
                     outcome: outcome,
-                    unfinished: digest == nil,
-                    maybe: (stored?.task == nil || stored?.task == Tasks.own(name)) ? stored?.candidates?.first : nil,
-                    related: stored?.related
+                    unfinished: !hasBrief,
+                    unreadable: hasBrief && digest == nil,
+                    maybe: isOwnTask ? stored?.candidates?.first : nil,
+                    related: isOwnTask ? stored?.related : nil
                 )
             }
         }.value
@@ -793,7 +817,7 @@ private struct BoardPane: View {
                         // fixed band escaped.
                         let groups = sessions.groups(of: shown)
                         let alone = groups.filter { $0.items.count == 1 }.flatMap(\.items)
-                        let odds = shown.filter { $0.odds || $0.unfinished }.sorted { $0.date > $1.date }
+                        let odds = shown.filter { $0.odds || $0.unfinished || $0.unreadable }.sorted { $0.date > $1.date }
                         LazyVStack(alignment: .leading, spacing: 22) {
                             ForEach(groups.filter { $0.items.count > 1 }) { group in
                                 TaskShelf(group: group, store: sessions)

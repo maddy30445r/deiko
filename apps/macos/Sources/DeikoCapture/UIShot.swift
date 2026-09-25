@@ -206,8 +206,7 @@ enum UIShot {
             confidence: .init(collection: 0.9, task: nil, tier: 0.7),
             decidedBy: "jev",
             model: "jev-1.13.0",
-            related: others.first,
-            classifier: "v3.0"
+            related: others.first
         ) : !Credentials.sortsBriefs ? nil : SessionContext(
             collection: Collections.all().first?.id,
             // Three, the most `classify.mjs` leaves: the widest the row gets.

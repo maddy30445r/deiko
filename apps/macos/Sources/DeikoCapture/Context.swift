@@ -66,8 +66,12 @@ struct SessionContext: Codable, Equatable {
     /// An earlier task this brief is RELATED to but not part of — linked by
     /// the classifier instead of merged. The card says "Related to …".
     var related: String?
-    /// Which filing rules placed it ("v3.0"), so a re-sort can say what moved.
-    var classifier: String?
+    /// Whether a person put this brief in its task BY HAND — the task
+    /// picker, the "Which one?" chip, "None of these", or "Move to task" on
+    /// the board. Scripts treat a brief as firm filing on this, separately
+    /// from `decidedBy`: a collection-only change never sets it. See
+    /// `placeTask`, the one place that does.
+    var taskBy: String?
 
     var isOdds: Bool { pile == "odds" }
 
@@ -86,6 +90,7 @@ struct SessionContext: Codable, Equatable {
         collectionBy = collectionBy ?? (decidedBy == "you" ? "you" : "jev")
         task = id
         decidedBy = "you"
+        taskBy = "you"
         candidates = nil
         pile = nil
         if related == id { related = nil }
@@ -106,7 +111,7 @@ struct SessionContext: Codable, Equatable {
     /// that log on the floor.
     private static let ownKeys = [
         "collection", "task", "candidates", "tier", "confidence", "decidedBy",
-        "model", "collectionBy", "pile", "related", "classifier",
+        "model", "collectionBy", "pile", "related", "taskBy",
     ]
 
     func write(sessionDir: String) throws {
@@ -185,7 +190,7 @@ extension SessionContext {
         collectionBy = try c.decodeIfPresent(String.self, forKey: .collectionBy)
         pile = try c.decodeIfPresent(String.self, forKey: .pile)
         related = try c.decodeIfPresent(String.self, forKey: .related)
-        classifier = try c.decodeIfPresent(String.self, forKey: .classifier)
+        taskBy = try c.decodeIfPresent(String.self, forKey: .taskBy)
     }
 }
 

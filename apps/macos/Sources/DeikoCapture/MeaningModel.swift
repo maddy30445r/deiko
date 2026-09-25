@@ -25,8 +25,16 @@ final class MeaningModel: ObservableObject {
 
     @Published private(set) var state: State = .checking
     private var running = false
+    /// The board this launch is recording to — `recorder.sessionRoot`, not
+    /// necessarily `Sessions.defaultRoot` (`--out` can point elsewhere). Set
+    /// by the first `start(root:)` call and reused afterwards, including by
+    /// Settings' "Try again", which has no recorder of its own to ask.
+    private var root: String?
+    /// One retry per launch after a failed download — see `retryAfterFailure`.
+    private var retriedAfterFailure = false
 
-    func start() {
+    func start(root: String? = nil) {
+        if let root { self.root = root }
         guard !running else { return }
         running = true
         state = .checking
@@ -48,46 +56,68 @@ final class MeaningModel: ObservableObject {
             }.last ?? "failed no answer"
             guard last.hasPrefix("ready ") else {
                 state = .failed(last.hasPrefix("failed ") ? String(last.dropFirst(7)) : "no answer")
+                retryAfterFailure()
                 return
             }
             key = String(last.dropFirst(6))
         }
         state = .ready
-        // OLD BRIEFS, ONCE PER MODEL. Writes <session>/meaning.f32 beside each.
+        // OLD BRIEFS, ONCE PER MODEL. Writes <session>/meaning.f32 beside each,
+        // under the root THIS launch is actually recording to — never the
+        // default one, which may not be where `--out` put this session.
         let flag = "meaningBackfilled.\(key ?? "")"
         if !UserDefaults.standard.bool(forKey: flag) {
-            let done = await Self.lines(["backfill", Sessions.defaultRoot]).last ?? ""
+            let done = await Self.lines(["backfill", root ?? Sessions.defaultRoot]).last ?? ""
             if done.hasPrefix("backfilled ") { UserDefaults.standard.set(true, forKey: flag) }
+        }
+    }
+
+    /// Launch at Login can start Deiko before Wi-Fi is up, and that shouldn't
+    /// need a trip to Settings to fix itself. One retry, about ten minutes
+    /// later — `retriedAfterFailure` stops a second failure from stacking a
+    /// second one on top.
+    private func retryAfterFailure() {
+        guard !retriedAfterFailure else { return }
+        retriedAfterFailure = true
+        Task {
+            try? await Task.sleep(for: .seconds(600))
+            start()
         }
     }
 
     /// Run `node scripts/meaning.mjs <args>` and collect its stdout lines,
     /// handing each to `each` as it arrives. Never throws: no Node, no script
     /// or a crash is an empty list, which reads as "failed".
-    private static func lines(_ args: [String], each: (@Sendable (String) -> Void)? = nil) async -> [String] {
+    ///
+    /// `nonisolated`, off the main actor: reading the process to EOF and then
+    /// `waitUntilExit()` (which blocks the thread it runs on) must not run on
+    /// the UI's. Sequential reading with `bytes.lines` also fixes the race the
+    /// old readabilityHandler/terminationHandler pair had — the handoff
+    /// between them could drop the final "ready" line.
+    nonisolated private static func lines(_ args: [String], each: (@Sendable (String) -> Void)? = nil) async -> [String] {
         guard let node = NodeRuntime.resolve(), let script = scriptURL() else { return [] }
-        return await withCheckedContinuation { continuation in
-            let process = Process()
-            process.executableURL = node
-            process.arguments = [script.path] + args
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = FileHandle.nullDevice
-            let collected = LineCollector(each: each)
-            pipe.fileHandleForReading.readabilityHandler = { handle in
-                let chunk = handle.availableData
-                if !chunk.isEmpty { collected.append(chunk) }
+        let process = Process()
+        process.executableURL = node
+        process.arguments = [script.path] + args
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch { return [] }
+        var collected: [String] = []
+        do {
+            for try await line in pipe.fileHandleForReading.bytes.lines {
+                collected.append(line)
+                each?(line)
             }
-            process.terminationHandler = { _ in
-                pipe.fileHandleForReading.readabilityHandler = nil
-                collected.append(pipe.fileHandleForReading.readDataToEndOfFile())
-                continuation.resume(returning: collected.finish())
-            }
-            do { try process.run() } catch { continuation.resume(returning: []) }
+        } catch {
+            // A read error ends the stream early; whatever came through still
+            // stands, same as a crash mid-output did before this.
         }
+        process.waitUntilExit()
+        return collected
     }
 
-    private static func scriptURL() -> URL? {
+    nonisolated private static func scriptURL() -> URL? {
         switch Layout.resolve() {
         case .development(let repo): return repo.appendingPathComponent("scripts/meaning.mjs")
         case .bundled(let resources): return resources.appendingPathComponent("scripts/meaning.mjs")
@@ -104,35 +134,5 @@ final class MeaningModel: ObservableObject {
         case nil: return nil
         }
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
-    }
-}
-
-/// Splits a byte stream into lines, thread-safely, as the pipe delivers it.
-private final class LineCollector: @unchecked Sendable {
-    private let lock = NSLock()
-    private var buffer = Data()
-    private var lines: [String] = []
-    private let each: (@Sendable (String) -> Void)?
-
-    init(each: (@Sendable (String) -> Void)?) { self.each = each }
-
-    func append(_ data: Data) {
-        lock.lock()
-        buffer.append(data)
-        var ready: [String] = []
-        while let newline = buffer.firstIndex(of: 0x0A) {
-            let line = String(decoding: buffer[buffer.startIndex..<newline], as: UTF8.self)
-            buffer.removeSubrange(buffer.startIndex...newline)
-            if !line.isEmpty { lines.append(line); ready.append(line) }
-        }
-        lock.unlock()
-        ready.forEach { each?($0) }
-    }
-
-    func finish() -> [String] {
-        lock.lock(); defer { lock.unlock() }
-        let tail = String(decoding: buffer, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-        if !tail.isEmpty { lines.append(tail) }
-        return lines
     }
 }

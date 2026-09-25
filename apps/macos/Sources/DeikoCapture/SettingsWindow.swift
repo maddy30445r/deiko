@@ -282,11 +282,11 @@ final class SettingsModel: ObservableObject {
             // this sentence exists to avoid, just moved one line down.
             let goesToGroq = "Your narration goes straight to Groq with your key. \(narration.comesBackAs)"
             guard sortBriefs, Credentials.relayURL != nil else { return goesToGroq }
-            return goesToGroq + " To sort each brief into its task, what you said, a one-line summary, your window titles and notes on earlier work go to Deiko, which passes them to a sorting model and keeps nothing."
+            return goesToGroq + " To sort each brief into its task, what you said, a one-line summary, your window and page titles, web addresses (just the host and path, never what's after the ?), open document names and notes on earlier work go to Deiko, which passes them to a sorting model and keeps nothing."
         }
         if Credentials.relayURL != nil {
             let ownKey = sortBriefs
-                ? "Add your own key below and transcription and the summary happen at Groq instead; sorting still sends what you said, a one-line summary, your window titles and notes on earlier work through Deiko, which keeps nothing."
+                ? "Add your own key below and transcription and the summary happen at Groq instead; sorting still sends what you said, a one-line summary, your window and page titles, web addresses (just the host and path, never what's after the ?), open document names and notes on earlier work through Deiko, which keeps nothing."
                 : "Add your own key below and transcription and the summary happen at Groq instead."
             return isPro
                 ? "Your narration goes to Deiko, which passes it to a transcription service and keeps nothing. \(narration.comesBackAs) \(ownKey)"
@@ -443,7 +443,7 @@ struct SettingsView: View {
                     set: { model.setSortBriefs($0) }
                 ))
                 .font(.system(size: 13))
-                Text("Files each brief with the earlier work it belongs to. To do that, what you said, a one-line summary, your window and page titles and notes on earlier work go to Deiko's relay, which keeps nothing. Off: nothing is sent to file them, and a new brief joins earlier work only when you move it there or it's a short follow-up on the same window.")
+                Text("Files each brief with the earlier work it belongs to. To do that, what you said, a one-line summary, your window and page titles, web addresses (just the host and path, never what's after the ?), open document names and notes on earlier work go to Deiko's relay, which keeps nothing. Off: nothing is sent to file them, and a new brief joins earlier work only when you move it there or it's a short follow-up on the same window.")
                     .font(.system(size: 11))
                     .foregroundStyle(DeikoStyle.ink2)
                     .fixedSize(horizontal: false, vertical: true)
@@ -498,7 +498,7 @@ struct SettingsView: View {
                         await MainActor.run { helperMessage = message; helperConnected = connected }
                     }
                 }
-                Text(helperMessage ?? "A small helper that runs only on this Mac. Your agent can search past briefs and open a task's history. It hands back only what your briefs already share: prompts, outcome notes, task notes, scrubbed screen text and the screenshots you kept.")
+                Text(helperMessage ?? "A small helper that runs only on this Mac. Your agent can search past briefs and open a task's history. It hands back only what your briefs already share: prompts, outcome notes, task notes and the screenshots you kept — never ones you removed.")
                     .font(.system(size: 11))
                     .foregroundStyle(DeikoStyle.ink2)
                     .fixedSize(horizontal: false, vertical: true)

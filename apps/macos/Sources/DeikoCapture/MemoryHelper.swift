@@ -30,14 +30,21 @@ enum MemoryHelper {
     }
 
     /// The clients that exist on this Mac: a config file, or a config folder.
+    ///
+    /// `resolvingSymlinksInPath()`, so a dotfiles setup that symlinks
+    /// `~/.claude.json` elsewhere gets written through to the real file —
+    /// read, backed up and replaced there — rather than at the link. Writing
+    /// AT the link left a stray copy of the whole config, unwritten and
+    /// world-readable, sitting in $HOME next to the symlink whenever
+    /// `replaceItemAt` refused to follow it.
     static func targets() -> [(name: String, url: URL)] {
         let home = URL(fileURLWithPath: NSHomeDirectory())
         var found: [(String, URL)] = []
-        let claude = AgentConfigs.claudeConfig()
+        let claude = AgentConfigs.claudeConfig().resolvingSymlinksInPath()
         if FileManager.default.fileExists(atPath: claude.path) { found.append(("Claude Code", claude)) }
         let cursorDir = home.appendingPathComponent(".cursor")
         if FileManager.default.fileExists(atPath: cursorDir.path) {
-            found.append(("Cursor", cursorDir.appendingPathComponent("mcp.json")))
+            found.append(("Cursor", cursorDir.appendingPathComponent("mcp.json").resolvingSymlinksInPath()))
         }
         return found
     }
@@ -107,11 +114,22 @@ enum MemoryHelper {
         let directory = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let temp = directory.appendingPathComponent(".deiko-\(UUID().uuidString).json")
-        try data.write(to: temp, options: .atomic)
-        if FileManager.default.fileExists(atPath: url.path) {
-            _ = try FileManager.default.replaceItemAt(url, withItemAt: temp)
-        } else {
-            try FileManager.default.moveItem(at: temp, to: url)
+        // No `.atomic` here: `temp` IS the scratch file the rename below makes
+        // atomic, so `.atomic` would only make Foundation write a temp file
+        // for this temp file. 0600, matching what `~/.claude.json` itself is.
+        try data.write(to: temp)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temp.path)
+        do {
+            if FileManager.default.fileExists(atPath: url.path) {
+                _ = try FileManager.default.replaceItemAt(url, withItemAt: temp)
+            } else {
+                try FileManager.default.moveItem(at: temp, to: url)
+            }
+        } catch {
+            // The rename failed — nothing landed at `url`. Don't leave the
+            // scratch file (a full copy of the config) behind in $HOME.
+            try? FileManager.default.removeItem(at: temp)
+            throw error
         }
     }
 }
