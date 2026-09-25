@@ -1684,10 +1684,8 @@ private struct WorkNotes: View {
                 }
             }
             HStack(spacing: 10) {
-                Text(task)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(DeikoStyle.ink2)
-                    .textSelection(.enabled)
+                // No raw task id here: it is plumbing, not something a person
+                // reads. The history file carries it for whoever needs it.
                 let file = Tasks.notePath(for: task)
                 if FileManager.default.fileExists(atPath: file.path) {
                     Button("Open the history file") { NSWorkspace.shared.open(file) }
