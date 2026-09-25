@@ -1013,7 +1013,7 @@ private struct BoardPane: View {
             if let work { WorkNotes(task: work, store: sessions) }
             ForEach(sections, id: \.title) { section in
                 let fold = BoardTimeline.fold(section.items, setAside: \.setAside)
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 14) {
                     if !section.title.isEmpty {
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
                             Text(section.title).deikoTitle(15)
@@ -1030,6 +1030,11 @@ private struct BoardPane: View {
                             }
                         }
                         .accessibilityAddTraits(.isHeader)
+                        // ABOVE THE GRID, ALWAYS. A hovered card grows 2% and
+                        // lifts a point, and the grid comes later in the stack
+                        // so it was drawn — and hit-tested — on top: the card
+                        // below took the "set aside" chip's clicks.
+                        .zIndex(1)
                     }
                     if unfolded.contains(section.title) { grid(fold.folded).padding(.bottom, 8) }
                     grid(fold.cards)
@@ -1073,6 +1078,8 @@ private struct BoardPane: View {
                 }
             }
             .buttonStyle(ChipButtonStyle(on: false))
+            // The whole capsule takes the click, not just its letters.
+            .contentShape(Capsule())
             .deikoFocusRing(Capsule())
             .help(open ? "Fold them away again" : "Mic checks, thank-yous and recordings that never finished. Click to show them.")
             .accessibilityLabel("\(count) briefs set aside")
