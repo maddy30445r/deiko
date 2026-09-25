@@ -1058,8 +1058,10 @@ private struct BoardPane: View {
         }
     }
 
-    /// "3 set aside", a hairline chip on a hairline rule beside the day's
-    /// heading: the quietest thing on the board until it is clicked.
+    /// "3 mic checks & scraps", a hairline chip on a hairline rule beside the
+    /// day's heading: the quietest thing on the board until it is clicked.
+    /// Named for what is in it — "set aside" said only that something was
+    /// hidden, never what.
     private func foldLine(_ key: String, count: Int) -> some View {
         let open = unfolded.contains(key)
         return HStack(spacing: 10) {
@@ -1070,15 +1072,17 @@ private struct BoardPane: View {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 8, weight: .bold))
                         .rotationEffect(.degrees(open ? 90 : 0))
-                    Text("\(count) set aside").font(.system(size: 11, weight: .medium))
+                    Text("\(count) mic checks & scraps").font(.system(size: 11, weight: .medium))
                 }
             }
             .buttonStyle(ChipButtonStyle(on: false))
             // The whole capsule takes the click, not just its letters.
             .contentShape(Capsule())
             .deikoFocusRing(Capsule())
-            .help(open ? "Fold them away again" : "Mic checks, thank-yous and recordings that never finished. Click to show them.")
-            .accessibilityLabel("\(count) briefs set aside")
+            .help(open
+                  ? "Tuck them away again"
+                  : "Recordings too short or too broken to be a brief: mic checks, thank-yous, ones that never finished. Tucked here so they don't bury your work. Click to see them.")
+            .accessibilityLabel("\(count) mic checks and scraps")
             .accessibilityValue(open ? "Shown" : "Folded")
             Rectangle().fill(DeikoStyle.hairline).frame(height: 1)
         }
@@ -1383,14 +1387,14 @@ private struct BoardCard: View {
                 VStack(alignment: .leading, spacing: 4) { suggestionButtons(target) }
             }
         } else if item.setAside {
-            Text("Set aside")
+            Text("Scrap")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(DeikoStyle.ink2)
                 .padding(.horizontal, 9)
                 .padding(.vertical, 3)
                 .overlay(Capsule().strokeBorder(DeikoStyle.hairline, lineWidth: 1))
                 .help(item.odds
-                      ? "Too short or unclear to file — a mic check, a thank-you. Drag it onto a brief to put it with that work."
+                      ? "Too short or unclear to be a brief — a mic check, a thank-you. Drag it onto a brief to put it with that work."
                       : "This recording never became a brief.")
         } else if showsTag, count >= 2 {
             WorkTag(text: store.workName(ofTask: item.task), count: count) { openWork(item.task) }
