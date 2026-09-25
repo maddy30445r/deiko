@@ -207,12 +207,10 @@ enum DeikoStyle {
         dark: NSColor(srgbRed: 38 / 255, green: 40 / 255, blue: 56 / 255, alpha: 1)
     )
 
-    /// The tooltip: ink on paper, so it never melts into the white cards it
-    /// explains; in the dark, a raised grey a step above the cards.
-    static let tipFillNS = dynamic(
-        light: NSColor(srgbRed: 29 / 255, green: 29 / 255, blue: 34 / 255, alpha: 1),
-        dark: NSColor(srgbRed: 74 / 255, green: 76 / 255, blue: 92 / 255, alpha: 1)
-    )
+    /// The tooltip: one slate with a lean towards the mark's indigo, the same
+    /// in Light and Dark, so a tip looks like a tip wherever it pops. Dark
+    /// enough to stand off white cards, light enough to lift off dark ones.
+    static let tipFillNS = NSColor(srgbRed: 74 / 255, green: 76 / 255, blue: 92 / 255, alpha: 1)
     static let tipTextNS = NSColor(white: 1, alpha: 0.94)
     /// The mark's dot, lifted so it reads on the tooltip's dark fill.
     static let tipDotNS = NSColor(srgbRed: 160 / 255, green: 172 / 255, blue: 255 / 255, alpha: 1)

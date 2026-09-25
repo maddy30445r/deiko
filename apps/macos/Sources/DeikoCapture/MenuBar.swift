@@ -186,6 +186,8 @@ enum Relauncher {
 @MainActor
 final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
+    /// The menu-bar icon's hover hint, in the same bubble as every other tip.
+    private let iconTip = HoverTip()
     private let recorder: Recorder
 
     /// Set once the event tap is up. Not a user-facing concept and deliberately
@@ -245,6 +247,10 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // window come up already in the appearance somebody chose.
         Appearance.selected.apply()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem.button?.addTrackingArea(NSTrackingArea(
+            rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: iconTip, userInfo: nil
+        ))
         screenRecordingMissingAtLaunch = !Permission.screenRecording.isGranted
 
         // Any change in the recorder — hold started, hold ended, session
@@ -467,9 +473,11 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // only signal"). Recording keeps its red, because red MEANS recording
         // here — but a fixed bright one that reads on any bar.
         button.contentTintColor = recording ? DeikoStyle.menuBarRecordingNS : nil
-        // Read aloud by VoiceOver, and shown on hover — the only place the
-        // reason is available without opening the menu.
-        button.toolTip = blocked ? "Deiko needs permission to work — click to grant" : nil
+        // Shown on hover in the app's own tip, and read aloud by VoiceOver —
+        // the only place the reason is available without opening the menu.
+        let hint = blocked ? "Deiko needs permission to work — click to grant" : nil
+        iconTip.text = hint
+        button.setAccessibilityHelp(hint)
     }
 
     private func rebuildMenu() {

@@ -11,7 +11,7 @@ import SwiftUI
 // away the moment you click, type, scroll or move off. Reduce Motion gets a
 // plain fade.
 //
-// Ink on paper, so it never melts into the white cards it explains, with the
+// One slate bubble in Light and Dark, standing off both white and dark cards, with the
 // dot from Deiko's mark in front — "I'm pointing at that". The tail points at
 // the pointer, below it, or above it near the bottom of the screen.
 //
@@ -43,6 +43,24 @@ private struct TipModifier: ViewModifier {
                 .onDisappear { Tips.shared.cancel(owner) }
                 .accessibilityHint(text)
         }
+    }
+}
+
+/// `.tip()` for an AppKit view SwiftUI doesn't draw, such as the menu-bar
+/// icon: own its tracking area, set `text`, and it pops the same bubble.
+@MainActor
+final class HoverTip: NSResponder {
+    var text: String? {
+        didSet { if text == nil { Tips.shared.cancel(id) } }
+    }
+    private let id = UUID()
+
+    override func mouseEntered(with event: NSEvent) {
+        if let text { Tips.shared.schedule(text, for: id) }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        Tips.shared.cancel(id)
     }
 }
 
@@ -214,12 +232,12 @@ private struct TipBubble: View {
                 .frame(width: 5, height: 5)
                 .alignmentGuide(.firstTextBaseline) { $0[.bottom] + 1 }
             Text(text)
-                .font(.system(size: 12))
+                .font(.system(size: Self.fontSize))
                 .foregroundStyle(DeikoStyle.tipText)
                 .lineSpacing(2)
                 .fixedSize(horizontal: false, vertical: true)
+                .frame(width: Self.textWidth(text), alignment: .leading)
         }
-        .frame(maxWidth: 264, alignment: .leading)
         .padding(.horizontal, 12)
         .padding(.top, 8 + (tailUp ? t.height : 0))
         .padding(.bottom, 9 + (tailUp ? 0 : t.height))
@@ -241,6 +259,22 @@ private struct TipBubble: View {
             value: state.shown
         )
         .padding(Tips.margin)
+    }
+
+    static let fontSize: CGFloat = 12
+    /// Past this, a tip wraps.
+    static let maxTextWidth: CGFloat = 252
+
+    /// The width the text will actually take: its one-line width, capped.
+    ///
+    /// PINNED, NOT `maxWidth`. The panel is sized from `fittingSize`, which
+    /// asks for the ideal size with no width proposed; under a `maxWidth`
+    /// frame the text then reports its ONE-LINE height, the frame clamps the
+    /// width, and the text wraps to four lines inside a one-line bubble. With
+    /// the width pinned, the height is measured at the wrapped width.
+    static func textWidth(_ s: String) -> CGFloat {
+        let one = (s as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: fontSize)]).width
+        return min(ceil(one) + 1, maxTextWidth)
     }
 
     /// The tail's tip, as a point in the bubble's own frame.
