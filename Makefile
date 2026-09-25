@@ -633,6 +633,16 @@ meaning-backfill:
 eval:
 	@set -a; [ -f .env ] && . ./.env; set +a; $(SORT_BRIEFS) node scripts/eval-filing.mjs $(ARGS)
 
+## models-publish — upload the meaning model's files to R2 for the app to download
+##
+## Checks every file against MODELS' SHA-256 first, uploads to
+## download/models/<key>/, then fetches each URL back. Needs the R2_* credentials
+## publish-release.sh uses, and the model on this Mac
+## (`node scripts/meaning.mjs download --from-hf`). Run before `make release`,
+## whose preflight refuses to ship while the mirror is incomplete.
+models-publish:
+	@set -a; [ -f .env ] && . ./.env; set +a; ./scripts/publish-models.sh
+
 ## flow-check — render → classify → render on a throwaway copy of real briefs
 ##
 ## Starts this checkout's relay on a local port with .env's keys, files a
