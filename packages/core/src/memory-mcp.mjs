@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
  * DEIKO MEMORY, FOR A CODING AGENT — a stdio MCP server that runs only on
- * this Mac. Claude Code or Cursor spawns it (Settings → "Give Claude Code /
- * Cursor your Deiko memory") and can then search past briefs, open a task's
- * history, or open one brief.
+ * this Mac. Your agent spawns it (Settings → "Give your agent your Deiko
+ * memory", or "Copy setup" for any other MCP agent) and can then search past
+ * briefs, open a task's history, or open one brief.
  *
  * SEARCH SEES EVERYTHING HERE, EXCEPT A REMOVED SCREENSHOT; ANSWERS CARRY
  * LITTLE. The index covers the screen text and the event log, redacted the
