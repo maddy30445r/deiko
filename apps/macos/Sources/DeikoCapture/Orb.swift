@@ -1208,7 +1208,7 @@ struct OrbRootView: View {
                 .deikoFocusRing(Circle())
                 .foregroundStyle(DeikoStyle.ink2)
                 .padding(10)
-                .help("Put the orb away. The session stays on disk.")
+                .tip("Put the orb away. The session stays on disk.")
             }
         }
         .opacity(state.isAiming ? 0.35 : 1)
@@ -1284,7 +1284,7 @@ struct OrbRootView: View {
                 .accessibilityLabel(accessibilitySummary)
                 .accessibilityAddTraits(.isButton)
                 .accessibilityAction(named: Text("Send to \(state.sendTo ?? "your agent")")) { actions.onSend() }
-                .help("Drag the coin onto the window running Claude Code to hand the brief over. Click to review.")
+                .tip("Drag the coin onto the window running Claude Code to hand the brief over. Click to review.")
             if state.isAiming {
                 Circle()
                     .strokeBorder(
@@ -1390,7 +1390,7 @@ struct OrbRootView: View {
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
                     .background(DeikoStyle.accentSoft, in: Capsule())
-                    .help("Your brief will be written up as a \(persona). Change it in Deiko's Personas.")
+                    .tip("Your brief will be written up as a \(persona). Change it in Deiko's Personas.")
             }
         }
         if let summary = model.summary {
@@ -1412,7 +1412,7 @@ struct OrbRootView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(DeikoStyle.ink2)
                 .lineLimit(1)
-                .help(model.notFiled ? ReviewView.notFiledHelp : "")
+                .tip(model.notFiled ? ReviewView.notFiledHelp : "")
         }
         // ONCE, for somebody on their own key: filing now sends what they
         // said to the relay. Here because every brief passes this card, and
@@ -1531,7 +1531,7 @@ struct OrbRootView: View {
                 .buttonStyle(.plain)
                 .deikoFocusRingLoose(radius: 10)
                 .foregroundStyle(.tertiary)
-                .help("Put the orb away. The session stays on disk.")
+                .tip("Put the orb away. The session stays on disk.")
             }
             .padding(.horizontal, 20)
             .padding(.top, 14)

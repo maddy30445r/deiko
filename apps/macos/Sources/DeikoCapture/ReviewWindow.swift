@@ -1151,7 +1151,7 @@ struct ReviewView: View {
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
-                .help("Write this brief up as a different persona. Only this one — your default does not change.")
+                .tip("Write this brief up as a different persona. Only this one — your default does not change.")
             }
             .padding(.top, 1)
         }
@@ -1212,7 +1212,7 @@ struct ReviewView: View {
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
-                .help("Which project this brief belongs to. Deiko files the next one beside it.")
+                .tip("Which project this brief belongs to. Deiko files the next one beside it.")
 
                 Text("·").font(.system(size: 11)).foregroundStyle(DeikoStyle.ink2)
 
@@ -1247,7 +1247,7 @@ struct ReviewView: View {
                     Text("· \(tier)")
                         .font(.system(size: 11))
                         .foregroundStyle(DeikoStyle.ink2)
-                        .help(context.tierHelp ?? "How much work this looks like. Your agent still decides for itself.")
+                        .tip(context.tierHelp ?? "How much work this looks like. Your agent still decides for itself.")
                 }
             }
             .padding(.top, 1)
@@ -1255,7 +1255,7 @@ struct ReviewView: View {
             Text("Not filed")
                 .font(.system(size: 11))
                 .foregroundStyle(DeikoStyle.ink2)
-                .help(Self.notFiledHelp)
+                .tip(Self.notFiledHelp)
                 .padding(.top, 1)
         }
     }
@@ -1276,7 +1276,7 @@ struct ReviewView: View {
                     && store.hasOthers(inTask: own, besides: model.sessionID ?? "")
                 Button("Start a new task") { model.setTask(own) }
                     .disabled(taken || (!context.isOdds && (context.task ?? own) == own))
-                    .help(taken ? SessionsStore.ownTaskTakenHelp : "")
+                    .tip(taken ? SessionsStore.ownTaskTakenHelp : "")
                 Button("Start a new task and name it…") {
                     guard let title = Collections.askText(
                         title: "Name this task",
@@ -1289,7 +1289,7 @@ struct ReviewView: View {
                     model.setTask(own)
                 }
                 .disabled(taken)
-                .help(taken ? SessionsStore.ownTaskTakenHelp : "")
+                .tip(taken ? SessionsStore.ownTaskTakenHelp : "")
             }
             // An odds brief is in no task, so every task is somewhere to go —
             // its own id's included, once other briefs are in it.
@@ -1311,7 +1311,7 @@ struct ReviewView: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .help("The piece of work this brief carries on. Where it stands travels with this brief, so your agent picks up from there.")
+        .tip("The piece of work this brief carries on. Where it stands travels with this brief, so your agent picks up from there.")
     }
 
     private func clipped(_ title: String) -> String {
@@ -1364,7 +1364,7 @@ struct ReviewView: View {
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
-                .help("Deiko thinks this is connected to that task but a separate piece of work.")
+                .tip("Deiko thinks this is connected to that task but a separate piece of work.")
             }
             .padding(.top, 1)
         }
@@ -1384,7 +1384,7 @@ struct ReviewView: View {
             .buttonStyle(ChipButtonStyle(on: true))
             .deikoFocusRing(Capsule())
             .fixedSize()
-            .help("\(title) · \(briefs)")
+            .tip("\(title) · \(briefs)")
         }
         Button {
             if let own = model.ownTask { model.setTask(own) }
@@ -1394,7 +1394,7 @@ struct ReviewView: View {
         .buttonStyle(ChipButtonStyle(on: false))
         .deikoFocusRing(Capsule())
         .fixedSize()
-        .help("None of these. This brief starts its own task.")
+        .tip("None of these. This brief starts its own task.")
     }
 
     /// Named by hand, and nothing is created until somebody types something.
@@ -1675,7 +1675,7 @@ struct ReviewView: View {
                         .buttonStyle(.plain)
                         .deikoFocusRing(Circle())
                         .offset(x: 5, y: -5)
-                        .help("Leave this screenshot out of the brief")
+                        .tip("Leave this screenshot out of the brief")
                     }
                 }
                 .onHover { inside in hoveredCrop = inside ? path : nil }
@@ -1815,21 +1815,21 @@ struct ReviewView: View {
             Button("Delete session…", role: .destructive) { onDelete() }
                 .fixedSize()
                 .disabled(!isApprovable)
-                .help("Move this session's brief and screenshots to the Trash.")
+                .tip("Move this session's brief and screenshots to the Trash.")
             // Left of the primary action and unstyled, because it is the rarer
             // choice — but it must be reachable from the same place you decide
             // the brief is not complete.
             Button("Point at more") { onExtend() }
                 .fixedSize()
                 .disabled(!isApprovable)
-                .help("Reopen this session and record more — talk and point again, then tap \(SessionKey.selected.name) to stop.")
+                .tip("Reopen this session and record more — talk and point again, then tap \(SessionKey.selected.name) to stop.")
             if let sendTo {
                 // `onSend` approves on its way out, as a fling does.
                 Button("Send to \(sendTo)") { onSend() }
                 .keyboardShortcut(.return, modifiers: .command)
                 .fixedSize()
                 .disabled(!isApprovable)
-                .help("Apply your correction and paste the brief into \(sendTo) (⌘↩).")
+                .tip("Apply your correction and paste the brief into \(sendTo) (⌘↩).")
             }
             Button("Good to go") {
                 model.approve()
@@ -1838,7 +1838,7 @@ struct ReviewView: View {
             .keyboardShortcut(.defaultAction)
             .tint(DeikoStyle.accent)
             .disabled(!isApprovable)
-            .help("Apply your correction and return to the coin. Nothing goes to your agent until you throw it.")
+            .tip("Apply your correction and return to the coin. Nothing goes to your agent until you throw it.")
         }
         .padding(20)
     }

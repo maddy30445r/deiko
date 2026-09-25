@@ -505,7 +505,7 @@ struct SettingsView: View {
                             ? "Copied the command and a JSON entry. Paste either into your agent's MCP settings."
                             : MemoryHelper.Failure.noRuntime.localizedDescription
                     }
-                    .help("For any agent that takes MCP servers: copies the helper's command and a ready JSON entry.")
+                    .tip("For any agent that takes MCP servers: copies the helper's command and a ready JSON entry.")
                 }
                 captionLine(helperMessage ?? Self.found(helper))
                 captionLine("A small helper that runs only on this Mac. Your agent can search past briefs and open a task's history. It hands back only what your briefs already share: prompts, outcome notes, task notes and the screenshots you kept — never ones you removed. Using another agent? Copy setup gives you what to paste into its MCP settings.")
@@ -636,7 +636,7 @@ struct SettingsView: View {
                     .deikoFocusRingLoose()
                     .foregroundStyle(DeikoStyle.ink2)
                     .disabled(model.checking)
-                    .help("Ask Deiko again how much is left")
+                    .tip("Ask Deiko again how much is left")
                 }
 
                 // HOW MUCH IS LEFT, as a quantity rather than a sentence.
@@ -707,7 +707,7 @@ struct SettingsView: View {
                         .buttonStyle(.plain)
                         .deikoFocusRingLoose()
                         .foregroundStyle(DeikoStyle.ink2)
-                        .help("Copy the key — to put it on another Mac")
+                        .tip("Copy the key — to put it on another Mac")
                     }
                 }
 
@@ -757,7 +757,7 @@ struct SettingsView: View {
                         }
                         .buttonStyle(.link)
                         .foregroundStyle(DeikoStyle.ink2)
-                        .help("Forgets the key and its cached plan. Nothing is cancelled — "
+                        .tip("Forgets the key and its cached plan. Nothing is cancelled — "
                             + "your subscription is between you and Polar.")
                     }
                 }
@@ -871,7 +871,7 @@ struct SettingsView: View {
                     // stuck reading "Copied" the next time somebody needs it.
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
                 }
-                .help("Version, permissions and where the log is — no session content.")
+                .tip("Version, permissions and where the log is — no session content.")
                 Button("Reveal log") { Diagnostics.revealLog() }
                 // Only when this build knows where feedback goes. Copying
                 // diagnostics with nowhere to send them was the whole of the old
@@ -893,7 +893,7 @@ struct SettingsView: View {
                     if let folder = MeaningModel.licencesFolder() { NSWorkspace.shared.open(folder) }
                 }
                 .disabled(MeaningModel.licencesFolder() == nil)
-                .help("The licences of the model and the libraries Deiko runs it with.")
+                .tip("The licences of the model and the libraries Deiko runs it with.")
             }
         }
     }

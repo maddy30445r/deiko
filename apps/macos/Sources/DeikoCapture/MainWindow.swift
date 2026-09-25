@@ -314,7 +314,7 @@ private struct SidebarRow: View {
         .padding(.horizontal, 6)
         .onHover { hovering = $0 }
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
-        .help("\(section.title) (⌘\(String(describing: shortcut.character)))")
+        .tip("\(section.title) (⌘\(String(describing: shortcut.character)))")
     }
 }
 
@@ -821,7 +821,7 @@ private struct DashboardPane: View {
         )
         .contentShape(RoundedRectangle(cornerRadius: DeikoStyle.insetRadius))
         .onTapGesture { MainNav.shared.open(brief: item.id) }
-        .help("Click to open this brief")
+        .tip("Click to open this brief")
     }
 
     /// The same text the fling would paste. Read from disk, because the review
@@ -944,7 +944,7 @@ private struct BoardPane: View {
             .menuStyle(.borderlessButton)
             .fixedSize()
             .tint(filter == .all ? DeikoStyle.ink2 : DeikoStyle.mark)
-            .help("Show one project's briefs, or edit a project")
+            .tip("Show one project's briefs, or edit a project")
         }
     }
 
@@ -971,7 +971,7 @@ private struct BoardPane: View {
                 .buttonStyle(ChipButtonStyle(on: false))
                 .deikoFocusRing(Capsule())
                 .keyboardShortcut(.cancelAction)
-                .help("Back to every brief, newest first (Esc)")
+                .tip("Back to every brief, newest first (Esc)")
                 (Text("Everything about \(sessions.workName(ofTask: work))").font(.system(size: 12, weight: .semibold))
                     + Text("  ·  oldest first").font(.system(size: 11)).foregroundColor(DeikoStyle.ink2))
                     .lineLimit(1)
@@ -985,7 +985,7 @@ private struct BoardPane: View {
                 .menuIndicator(.hidden)
                 .fixedSize()
                 .tint(DeikoStyle.ink2)
-                .help("Rename this work or open its note")
+                .tip("Rename this work or open its note")
             }
         }
     }
@@ -1012,7 +1012,7 @@ private struct BoardPane: View {
             .buttonStyle(ChipButtonStyle(on: false))
             .deikoFocusRing(Capsule())
             .keyboardShortcut(.cancelAction)
-            .help("Back to the board (Esc)")
+            .tip("Back to the board (Esc)")
             Spacer()
             if !item.unfinished, !item.unreadable {
                 Button(copiedBrief == item.id ? "Copied" : "Copy the brief") {
@@ -1026,7 +1026,7 @@ private struct BoardPane: View {
                     }
                 }
                 .buttonStyle(InkButtonStyle())
-                .help("Put this brief on the clipboard, ready to paste into any agent")
+                .tip("Put this brief on the clipboard, ready to paste into any agent")
             }
             Menu {
                 SessionMenu(item: item, store: sessions)
@@ -1037,7 +1037,7 @@ private struct BoardPane: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .tint(DeikoStyle.ink2)
-            .help("Open folder, move, or delete this brief")
+            .tip("Open folder, move, or delete this brief")
         }
     }
 
@@ -1202,7 +1202,7 @@ private struct BoardPane: View {
             }
             .buttonStyle(ChipButtonStyle(on: false))
             .deikoFocusRing(Capsule())
-            .help(open
+            .tip(open
                   ? "Tuck them away again"
                   : "Recordings too short or too broken to be a brief: mic checks, thank-yous, ones that never finished. Tucked here so they don't bury your work. Click to see them.")
             .accessibilityLabel("\(count) mic checks and scraps")
@@ -1448,7 +1448,7 @@ private struct BoardCard: View {
                 // briefs arranged around them. Quiet until the card is under
                 // the cursor.
                 .tint(hovering ? DeikoStyle.mark : DeikoStyle.ink2)
-                .help("Copy, open, file or delete this brief")
+                .tip("Copy, open, file or delete this brief")
             }
             if let link {
                 Text(link)
@@ -1512,7 +1512,7 @@ private struct BoardCard: View {
         // Kept beside the button: somebody who already reaches for a
         // right-click should not have to learn a new way to do it.
         .contextMenu { SessionMenu(item: item, store: store) }
-        .help("Click to open this brief · drag onto another to group them")
+        .tip("Click to open this brief · drag onto another to group them")
         .onAppear { store.sawFiling(item) }
         .draggable(item.id) { preview }
         .dropDestination(for: String.self) { ids, _ in
@@ -1537,13 +1537,13 @@ private struct BoardCard: View {
             // said once, beside the way to take it back.
             HStack(spacing: 8) {
                 WorkTag(text: "Added to \(store.workName(ofTask: item.task))") { openWork(item.task) }
-                    .help("Deiko put this with \(count - 1) earlier brief\(count == 2 ? "" : "s") in “\(store.title(ofTask: item.task))”. Click to see everything about it.")
+                    .tip("Deiko put this with \(count - 1) earlier brief\(count == 2 ? "" : "s") in “\(store.title(ofTask: item.task))”. Click to see everything about it.")
                 let own = Tasks.own(item.id)
                 let taken = store.hasOthers(inTask: own, besides: item.id)
                 Button("Undo") { store.move(item, toTask: own) }
                     .buttonStyle(TextButtonStyle())
                     .disabled(taken)
-                    .help(taken ? SessionsStore.ownTaskTakenHelp : "Make it its own work again")
+                    .tip(taken ? SessionsStore.ownTaskTakenHelp : "Make it its own work again")
                     .fixedSize()
             }
         } else if let target = suggestion {
@@ -1561,12 +1561,12 @@ private struct BoardCard: View {
                 .padding(.horizontal, 9)
                 .padding(.vertical, 3)
                 .overlay(Capsule().strokeBorder(DeikoStyle.hairline, lineWidth: 1))
-                .help(item.odds
+                .tip(item.odds
                       ? "Too short or unclear to be a brief — a mic check, a thank-you. Drag it onto a brief to put it with that work."
                       : "This recording never became a brief.")
         } else if showsTag, count >= 2 {
             WorkTag(text: store.workName(ofTask: item.task), count: count) { openWork(item.task) }
-                .help("See everything about \(store.workName(ofTask: item.task)): its briefs, where it stands, what was decided")
+                .tip("See everything about \(store.workName(ofTask: item.task)): its briefs, where it stands, what was decided")
         }
     }
 
@@ -1581,13 +1581,13 @@ private struct BoardCard: View {
         }
         .buttonStyle(ChipButtonStyle(on: false))
         .deikoFocusRing(Capsule())
-        .help("Deiko thinks this carries on “\(store.title(ofTask: target))”. Click to put it there, or drag it onto any brief.")
+        .tip("Deiko thinks this carries on “\(store.title(ofTask: target))”. Click to put it there, or drag it onto any brief.")
         let own = Tasks.own(item.id)
         let taken = store.hasOthers(inTask: own, besides: item.id)
         Button("Not this one") { store.move(item, toTask: own) }
             .buttonStyle(TextButtonStyle(quiet: true))
             .disabled(taken)
-            .help(taken ? SessionsStore.ownTaskTakenHelp : "Keep it as its own work. Deiko won't ask again.")
+            .tip(taken ? SessionsStore.ownTaskTakenHelp : "Keep it as its own work. Deiko won't ask again.")
             .fixedSize()
     }
 
@@ -1770,7 +1770,7 @@ private struct WorkNotes: View {
             }
             VStack(alignment: .leading, spacing: 12) {
                 toggle("Full history", open: history) { history.toggle() }
-                    .help("Every brief in this work, and everything agents wrote back, in full")
+                    .tip("Every brief in this work, and everything agents wrote back, in full")
                 if history { fullHistory }
             }
         }
@@ -1861,7 +1861,7 @@ private struct WorkNotes: View {
                 if FileManager.default.fileExists(atPath: file.path) {
                     Button("Open the history file") { NSWorkspace.shared.open(file) }
                         .buttonStyle(TextButtonStyle())
-                        .help(file.path)
+                        .tip(file.path)
                 }
             }
         }
@@ -2039,10 +2039,10 @@ private struct BriefView: View {
                 quietChip("Scrap")
             } else if count >= 2 {
                 WorkTag(text: store.workName(ofTask: item.task), count: count) { openWork(item.task) }
-                    .help("See everything about \(store.workName(ofTask: item.task))")
+                    .tip("See everything about \(store.workName(ofTask: item.task))")
             } else {
                 quietChip("On its own")
-                    .help("This brief isn't part of any piece of work yet — Deiko didn't find earlier briefs it carries on. When the next brief about the same thing arrives, they're grouped into one task, and each brief then carries the other's story. Group it yourself with Move to task, or drag it onto another brief.")
+                    .tip("This brief isn't part of any piece of work yet — Deiko didn't find earlier briefs it carries on. When the next brief about the same thing arrives, they're grouped into one task, and each brief then carries the other's story. Group it yourself with Move to task, or drag it onto another brief.")
                 if let target = live(item.maybe) {
                     Button {
                         store.move(item, toTask: target)
@@ -2054,7 +2054,7 @@ private struct BriefView: View {
                     }
                     .buttonStyle(ChipButtonStyle(on: false))
                     .deikoFocusRing(Capsule())
-                    .help("Deiko thinks this carries on “\(store.title(ofTask: target))”. Click to put it there.")
+                    .tip("Deiko thinks this carries on “\(store.title(ofTask: target))”. Click to put it there.")
                 } else if let related = live(item.related) {
                     Text("Related to \(store.workName(ofTask: related))")
                         .font(.system(size: 11))
@@ -2071,7 +2071,7 @@ private struct BriefView: View {
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
                     .background(DeikoStyle.accentSoft, in: Capsule())
-                    .help(detail?.context?.tierHelp ?? "")
+                    .tip(detail?.context?.tierHelp ?? "")
             }
         }
     }
@@ -2115,7 +2115,7 @@ private struct BriefView: View {
                                 LargeCrop(path: crop.path)
                             }
                             .buttonStyle(.plain)
-                            .help("Open it large (Quick Look)")
+                            .tip("Open it large (Quick Look)")
                             if let said = crop.said, !said.isEmpty {
                                 Text("while you said “\(said)”")
                                     .font(.system(size: 11))
@@ -2180,7 +2180,7 @@ private struct BriefView: View {
         if let prompt = d.prompt {
             VStack(alignment: .leading, spacing: 10) {
                 NoteStyle.toggle("The brief as your agent got it", open: showPrompt) { showPrompt.toggle() }
-                    .help("Exactly what Copy the brief puts on the clipboard")
+                    .tip("Exactly what Copy the brief puts on the clipboard")
                 if showPrompt {
                     Text(prompt)
                         .font(.system(size: 11.5, design: .monospaced))
@@ -2382,7 +2382,7 @@ struct SessionMenu: View {
             let taken = (item.odds || item.task != own) && store.hasOthers(inTask: own, besides: item.id)
             Button("Start a new task") { store.move(item, toTask: own) }
                 .disabled(taken || (item.task == own && !item.odds))
-                .help(taken ? SessionsStore.ownTaskTakenHelp : "")
+                .tip(taken ? SessionsStore.ownTaskTakenHelp : "")
             let others = store.recentTasks(excluding: item.odds ? nil : item.task)
             if !others.isEmpty { Divider() }
             // The short name a tag wears ("Sitemap · 3"), not the sentence
@@ -2508,13 +2508,13 @@ private struct SessionRow: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .tint(DeikoStyle.ink2)
-            .help("Copy, open, file or delete this brief")
+            .tip("Copy, open, file or delete this brief")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .contentShape(Rectangle())
         .onTapGesture { MainNav.shared.open(brief: item.id) }
-        .help("Click to open this brief")
+        .tip("Click to open this brief")
         .contextMenu { SessionMenu(item: item, store: store) }
     }
 }
