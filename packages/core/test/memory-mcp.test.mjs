@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import {
-  chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync,
+  chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -168,6 +168,24 @@ test("get_brief never follows a symlink or hands back a path outside the board",
     assert.equal(brief.value.outcome, null, "a symlinked outcome.md must not be followed");
     assert.equal(brief.value.screenshots.includes(secretFile), false, "a cropPath outside the board must be dropped");
     assert.equal(s.raw.join("\n").includes("TOP-SECRET-OUTSIDE-THE-BOARD"), false, "the outside file's contents must never reach the agent");
+  } finally {
+    s.close();
+  }
+});
+
+test("get_brief never reads a hard link to a file outside the board", async () => {
+  const root = board();
+  const dir = join(root, "20260918-100000");
+  const secretFile = join(mkdtempSync(join(tmpdir(), "deiko-outside-")), "secret.txt");
+  writeFileSync(secretFile, "TOP-SECRET-HARD-LINKED\n");
+  rmSync(join(dir, "prompt.txt"));
+  linkSync(secretFile, join(dir, "prompt.txt"));
+
+  const s = await session(root);
+  try {
+    const brief = await s.tool("get_brief", { id: "20260918-100000" });
+    assert.equal(brief.value.prompt, null, "a hard-linked prompt.txt must not be read");
+    assert.equal(s.raw.join("\n").includes("TOP-SECRET-HARD-LINKED"), false);
   } finally {
     s.close();
   }

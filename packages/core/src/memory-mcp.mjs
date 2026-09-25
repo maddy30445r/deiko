@@ -54,13 +54,17 @@ const PROTOCOL_VERSION = "2025-06-18";
 
 const readJSON = (p) => { try { return JSON.parse(readFileSync(p, "utf8")); } catch { return null; } };
 
-/** A real file, no symlink, that resolves to somewhere under the board root.
+/** A real file, no symlink and no hard link, that resolves to somewhere under
+ *  the board root. A hard link passes every path check — it IS a plain file
+ *  under the root — while being the same file as one outside it; nothing Deiko
+ *  writes has a second name, so a count above one is refused.
  *  Returns its resolved path, or null. Every read of a path found on disk
  *  (prompt.txt, outcome.md, a crop) goes through this — a coding agent can
  *  write inside the board, so a symlink planted there is not trustworthy. */
 function insideRoot(p) {
   try {
-    if (!lstatSync(p).isFile()) return null;
+    const st = lstatSync(p);
+    if (!st.isFile() || st.nlink > 1) return null;
     const real = realpathSync(p);
     return real === ROOT_REAL || real.startsWith(ROOT_REAL + sep) ? real : null;
   } catch {
