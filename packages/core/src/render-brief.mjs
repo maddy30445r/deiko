@@ -482,6 +482,10 @@ const manifest = {
     cropPath: r.cropPath,
     cropWithheld: r.cropWithheld,
     mark: r.mark ?? null,
+    // The screenshot's caption — what was said while it was drawn — for the
+    // board's brief view. Only on a released crop; the prompt already
+    // carries it, so this puts nothing on disk the brief did not.
+    said: r.cropPath ? r.said ?? null : null,
   })),
 };
 const withheld = manifest.referents.filter((r) => r.cropWithheld).length;

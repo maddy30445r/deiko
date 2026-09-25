@@ -63,10 +63,14 @@ struct BriefSummary: Codable {
     /// What the brief is about, by name — the board names work after the
     /// page or file. Optional: older briefs have no keys.
     var keys: Keys?
+    /// The windows the brief was recorded over, titles redacted — the brief
+    /// view's "Details". Optional: older briefs have none.
+    var windows: [String]?
 
     struct Keys: Codable {
         var pages: [String]?
         var files: [String]?
+        var tickets: [String]?
     }
 }
 
@@ -74,6 +78,9 @@ private struct BriefManifest: Codable {
     struct Referent: Codable {
         let cropPath: String?
         let cropWithheld: String?
+        /// What was said while this screenshot was drawn. Absent on briefs
+        /// rendered before it was kept.
+        let said: String?
     }
     let summary: BriefSummary
     let referents: [Referent]
@@ -98,6 +105,8 @@ struct BriefDigest {
     /// rather than a count of it. A count cannot be wrong in a way anybody
     /// notices; a thumbnail can.
     let cropPaths: [String]
+    /// Each screenshot's caption, by path — what was said while it was drawn.
+    var captions: [String: String] = [:]
 }
 
 enum BriefPipelineError: LocalizedError {
@@ -620,7 +629,11 @@ enum BriefPipeline {
             cropsWithheld: manifest.referents.filter { $0.cropWithheld != nil }.count,
             withheldReasons: NSOrderedSet(array: manifest.referents.compactMap(\.cropWithheld))
                 .array as? [String] ?? [],
-            cropPaths: manifest.referents.compactMap(\.cropPath)
+            cropPaths: manifest.referents.compactMap(\.cropPath),
+            captions: Dictionary(
+                manifest.referents.compactMap { r in r.cropPath.flatMap { path in r.said.map { (path, $0) } } },
+                uniquingKeysWith: { first, _ in first }
+            )
         )
     }
 

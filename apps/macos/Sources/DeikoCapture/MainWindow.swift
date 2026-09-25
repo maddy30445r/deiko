@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import QuickLook
 import DeikoGesture
 import DeikoHandoff
 
@@ -51,6 +52,15 @@ final class MainNav: ObservableObject {
     /// Here rather than in the board, so the sidebar's Board row can clear it:
     /// clicking "Board" while inside a work must show all briefs again.
     @Published var work: String?
+    /// The one brief the board is showing, by session id, or nil.
+    @Published var brief: String?
+
+    /// Show one brief on the board, from wherever it was picked.
+    func open(brief id: String) {
+        section = .board
+        work = nil
+        brief = id
+    }
 }
 
 @MainActor
@@ -216,7 +226,7 @@ struct MainWindowView: View {
                     shortcut: KeyEquivalent(Character("\(index + 1)"))
                 ) {
                     nav.section = section
-                    if section == .board { nav.work = nil }
+                    if section == .board { nav.work = nil; nav.brief = nil }
                 }
             }
 
@@ -809,6 +819,9 @@ private struct DashboardPane: View {
                 )
                 .shadow(color: DeikoStyle.shadow, radius: 13, x: 0, y: 7)
         )
+        .contentShape(RoundedRectangle(cornerRadius: DeikoStyle.insetRadius))
+        .onTapGesture { MainNav.shared.open(brief: item.id) }
+        .help("Click to open this brief")
     }
 
     /// The same text the fling would paste. Read from disk, because the review
@@ -977,7 +990,59 @@ private struct BoardPane: View {
         }
     }
 
+    /// The brief open on the board, while it still exists. A brief deleted
+    /// or trashed while open simply isn't found, and the list comes back.
+    private var openBrief: SessionsStore.Item? {
+        nav.brief.flatMap { id in sessions.items.first { $0.id == id } }
+    }
+
+    @State private var copiedBrief: String?
+
+    /// Back, and the brief's two actions: Copy (the one thing a brief is
+    /// for) and everything else behind ⋯ — the card's own menu.
+    private func briefRow(_ item: SessionsStore.Item) -> some View {
+        HStack(spacing: 10) {
+            Button { nav.brief = nil } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "chevron.left").font(.system(size: 9, weight: .semibold))
+                    Text(work.map { "Back to \(sessions.workName(ofTask: $0))" } ?? "Show all briefs")
+                        .font(.system(size: 11, weight: .medium))
+                }
+            }
+            .buttonStyle(ChipButtonStyle(on: false))
+            .deikoFocusRing(Capsule())
+            .keyboardShortcut(.cancelAction)
+            .help("Back to the board (Esc)")
+            Spacer()
+            if !item.unfinished, !item.unreadable {
+                Button(copiedBrief == item.id ? "Copied" : "Copy the brief") {
+                    Task {
+                        guard let prompt = await sessions.freshPrompt(sessionDir: item.dir) else { return }
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(prompt.text, forType: .string)
+                        copiedBrief = item.id
+                        try? await Task.sleep(for: .seconds(1.5))
+                        if copiedBrief == item.id { copiedBrief = nil }
+                    }
+                }
+                .buttonStyle(InkButtonStyle())
+                .help("Put this brief on the clipboard, ready to paste into any agent")
+            }
+            Menu {
+                SessionMenu(item: item, store: sessions)
+            } label: {
+                Image(systemName: "ellipsis.circle").font(.system(size: 13))
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .tint(DeikoStyle.ink2)
+            .help("Open folder, move, or delete this brief")
+        }
+    }
+
     private var lede: String {
+        if openBrief != nil { return "One brief, as your agent got it." }
         if overCard != nil { return "Let go and they're one piece of work." }
         if overSpace { return "Let go and it stands on its own." }
         if work != nil { return "Drag one out onto empty space and it stands on its own." }
@@ -1004,12 +1069,14 @@ private struct BoardPane: View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 16) {
                 PaneHeader(title: "Board", lede: lede) {
-                    HStack(spacing: 14) {
-                        projectMenu
-                        searchField
+                    if openBrief == nil {
+                        HStack(spacing: 14) {
+                            projectMenu
+                            searchField
+                        }
                     }
                 }
-                workRow
+                if let item = openBrief { briefRow(item) } else { workRow }
             }
             .padding(.horizontal, 26)
             .padding(.top, 44)
@@ -1018,15 +1085,23 @@ private struct BoardPane: View {
 
             Divider()
 
+            ScrollViewReader { scroller in
             ScrollView {
+                Color.clear.frame(height: 0).id("top")
                 Group {
-                    if shown.isEmpty {
+                    if shown.isEmpty && openBrief == nil {
                         EmptyPane(
                             title: sessions.items.isEmpty ? "The board is empty" : "Nothing here yet",
                             line: sessions.items.isEmpty
                                 ? "Briefs pin themselves here as you record them. Nothing is uploaded — they live in a folder on this Mac."
                                 : "Try another project, a task name, an app name, or a word you said."
                         )
+                    } else if let item = openBrief {
+                        BriefView(item: item, store: sessions) { task in
+                            nav.brief = nil
+                            query = ""
+                            work = task
+                        }
                     } else {
                         timeline
                     }
@@ -1038,6 +1113,9 @@ private struct BoardPane: View {
             }
             .onAppear { sessions.undoManager = undoManager }
             .onChange(of: undoManager) { _, manager in sessions.undoManager = manager }
+            // A brief opens at its top, whatever depth of board it came from.
+            .onChange(of: nav.brief) { _, _ in scroller.scrollTo("top", anchor: .top) }
+            }
             // EMPTY SPACE IS A PLACE TO DROP. A card's own destination wins
             // over this one, so only a drop between or below cards lands here.
             .dropDestination(for: String.self) { ids, _ in
@@ -1097,6 +1175,7 @@ private struct BoardPane: View {
                         query = ""
                         work = task
                     },
+                    openBrief: { nav.brief = item.id },
                     dropped: { join($0, onto: item) },
                     targeted: { overCard = $0 ? item.id : (overCard == item.id ? nil : overCard) }
                 )
@@ -1257,6 +1336,7 @@ private struct BoardCard: View {
     /// Off inside one piece of work, where every card would wear the same one.
     let showsTag: Bool
     let openWork: (String) -> Void
+    let openBrief: () -> Void
     let dropped: ([String]) -> Bool
     let targeted: (Bool) -> Void
     @State private var hovering = false
@@ -1365,17 +1445,16 @@ private struct BoardCard: View {
         .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: hovering)
         .animation(reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.8), value: lit)
         .onHover { hovering = $0 }
-        // THE BRIEF, as a Mac opens a document on double-click — not Finder,
-        // which is one item away in the menu. A brief that never rendered has
-        // only its folder to show.
-        .onTapGesture(count: 2) {
-            let brief = URL(fileURLWithPath: item.dir).appendingPathComponent("prompt.txt")
-            NSWorkspace.shared.open(FileManager.default.fileExists(atPath: brief.path) ? brief : URL(fileURLWithPath: item.dir))
-        }
+        // A CLICK OPENS THE BRIEF, in the app — as a card opens on any board.
+        // The card's own controls (its tag, ⋯, "Put with…?", Undo) are buttons
+        // and keep their clicks; a drag still groups. A double-click is two
+        // clicks, so it opens it too.
+        .contentShape(RoundedRectangle(cornerRadius: DeikoStyle.insetRadius))
+        .onTapGesture { openBrief() }
         // Kept beside the button: somebody who already reaches for a
         // right-click should not have to learn a new way to do it.
         .contextMenu { SessionMenu(item: item, store: store) }
-        .help("Double-click to open the brief · drag onto another brief to group them")
+        .help("Click to open this brief · drag onto another to group them")
         .onAppear { store.sawFiling(item) }
         .draggable(item.id) { preview }
         .dropDestination(for: String.self) { ids, _ in
@@ -1740,35 +1819,10 @@ private struct WorkNotes: View {
         }
     }
 
-    private func heading(_ title: String, meta: String?) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(title).font(.system(size: 12, weight: .semibold))
-            if let meta {
-                Text(meta).font(.system(size: 11)).foregroundStyle(DeikoStyle.ink2)
-            }
-        }
-    }
-
-    private func note(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 12))
-            .foregroundStyle(DeikoStyle.ink2)
-            .fixedSize(horizontal: false, vertical: true)
-            .textSelection(.enabled)
-    }
-
+    private func heading(_ title: String, meta: String?) -> some View { NoteStyle.heading(title, meta: meta) }
+    private func note(_ text: String) -> some View { NoteStyle.note(text) }
     private func toggle(_ label: String, open: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 4) {
-                Text(label)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .bold))
-                    .rotationEffect(.degrees(open ? 180 : 0))
-            }
-        }
-        .buttonStyle(TextButtonStyle())
-        .deikoFocusRingLoose()
-        .accessibilityValue(open ? "Open" : "Closed")
+        NoteStyle.toggle(label, open: open, action: action)
     }
 
     /// "19 Sep · Claude Code", or just the day when no agent signed it.
@@ -1798,6 +1852,409 @@ private struct WorkNotes: View {
             parts.append(project)
         }
         return parts.joined(separator: " · ")
+    }
+}
+
+// ── One brief ──────────────────────────────────────────────────────────────
+
+/// Everything the brief view shows, read off disk once, off the main thread.
+/// Only reads: opening a brief never re-runs the pipeline the way the review
+/// panel's `load` does.
+private struct BriefDetail: Sendable {
+    var asked: String?
+    var narration: String?
+    var edited = false
+    var crops: [(path: String, said: String?)] = []
+    var digest: BriefDigest?
+    var summary: BriefSummary?
+    var context: SessionContext?
+    var outcome: BoardTimeline.Outcome?
+    var wroteBack: Date?
+    var persona: String?
+    var prompt: String?
+
+    static func load(dir: String, line: String?) -> BriefDetail {
+        let url = URL(fileURLWithPath: dir)
+        let read = { (name: String) in try? String(contentsOf: url.appendingPathComponent(name), encoding: .utf8) }
+        var d = BriefDetail()
+        let digest = try? BriefPipeline.digest(sessionDir: dir)
+        d.digest = digest
+        d.summary = digest?.summary
+        d.asked = BoardTimeline.asked(summary: read("review-summary.txt"), narration: line)
+        let override = read("narration.override.txt")?.trimmingCharacters(in: .whitespacesAndNewlines)
+        d.narration = override.flatMap { $0.isEmpty ? nil : $0 } ?? line
+        d.edited = override?.isEmpty == false || digest?.summary.narrationEdited == true
+        d.crops = (digest?.cropPaths ?? []).map { ($0, digest?.captions[$0]) }
+        d.context = SessionContext.read(sessionDir: dir)
+        let outcomeFile = url.appendingPathComponent("outcome.md")
+        if let text = read("outcome.md") {
+            let o = BoardTimeline.outcome(text)
+            if !(o.did.isEmpty && o.decided.isEmpty && o.open.isEmpty && o.files.isEmpty) {
+                d.outcome = o
+                d.wroteBack = (try? FileManager.default.attributesOfItem(atPath: outcomeFile.path))?[.modificationDate] as? Date
+            }
+        }
+        d.persona = Personas.name(forSession: dir)
+        d.prompt = read("prompt.txt")
+        return d
+    }
+}
+
+/// ONE BRIEF, READ LIKE THE HANDOFF IT WAS: what you asked, what you said,
+/// what you pointed at (each screenshot with the sentence said over it),
+/// what came back, and the brief itself behind a disclosure. The work view
+/// explains a task; this is the only place a brief in no task is explained
+/// at all. A reading column, not panes: narrations run long, and a
+/// screenshot is only worth opening at a size you can read.
+private struct BriefView: View {
+    let item: SessionsStore.Item
+    @ObservedObject var store: SessionsStore
+    let openWork: (String) -> Void
+    @State private var detail: BriefDetail?
+    @State private var showPrompt = UIShotPose.promptOpen
+    @State private var allCrops = false
+    /// Screenshots shown before "Show all": a page of twelve full-size
+    /// images buries everything under them.
+    private static let firstCrops = 4
+    /// The screenshot Quick Look is showing, or nil.
+    @State private var preview: URL?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 26) {
+            header
+            if item.unfinished || item.unreadable {
+                NoteStyle.note(item.unfinished
+                    ? "This recording never became a brief — there is nothing here but the audio's folder."
+                    : "Deiko couldn't read this brief's file. Its folder is still there to open.")
+            } else if let detail {
+                // Not twice: a short brief's title IS what was said.
+                if !Self.same(detail.narration, detail.asked ?? item.title) { said(detail) }
+                pointedAt(detail)
+                // A mic check has nobody to write back.
+                if !item.setAside { cameBack(detail) }
+                details(detail)
+                briefAsSent(detail)
+            }
+        }
+        .frame(maxWidth: 640, alignment: .leading)
+        .quickLookPreview($preview, in: (detail?.crops ?? []).map { URL(fileURLWithPath: $0.path) })
+        .task(id: item.id) {
+            let dir = item.dir, line = item.line
+            detail = await Task.detached(priority: .userInitiated) { BriefDetail.load(dir: dir, line: line) }.value
+        }
+    }
+
+    // ── Header ──────────────────────────────────────────────────────────────
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(detail?.asked ?? item.title)
+                    .deikoTitle(19)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                Text(meta)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(DeikoStyle.ink2)
+            }
+            filing
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18)
+        .background(DeikoStyle.wall, in: RoundedRectangle(cornerRadius: DeikoStyle.insetRadius))
+    }
+
+    /// "Tue 16 Sep at 01:39 · 43s · Chrome · Pricing"
+    private var meta: String {
+        var parts = [BoardCard.stamp(item.date)]
+        if let ms = detail?.summary?.durationMs, ms > 0 { parts.append(Self.duration(ms)) }
+        if !item.apps.isEmpty { parts.append(item.apps.prefix(2).joined(separator: ", ")) }
+        if let page = item.pages.first ?? item.repo { parts.append(page) }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Where it is filed, in the chips the board already uses.
+    @ViewBuilder private var filing: some View {
+        let count = store.workCounts[item.task] ?? 0
+        HStack(spacing: 8) {
+            if item.setAside {
+                quietChip("Scrap")
+            } else if count >= 2 {
+                WorkTag(text: store.workName(ofTask: item.task), count: count) { openWork(item.task) }
+                    .help("See everything about \(store.workName(ofTask: item.task))")
+            } else {
+                quietChip("On its own")
+                    .help("No other brief is part of this work yet")
+                if let target = live(item.maybe) {
+                    Button {
+                        store.move(item, toTask: target)
+                    } label: {
+                        Label("Put with \(store.workName(ofTask: target))?", systemImage: "plus")
+                            .font(.system(size: 11, weight: .medium))
+                            .labelStyle(TightLabel())
+                            .lineLimit(1)
+                    }
+                    .buttonStyle(ChipButtonStyle(on: false))
+                    .deikoFocusRing(Capsule())
+                    .help("Deiko thinks this carries on “\(store.title(ofTask: target))”. Click to put it there.")
+                } else if let related = live(item.related) {
+                    Text("Related to \(store.workName(ofTask: related))")
+                        .font(.system(size: 11))
+                        .foregroundStyle(DeikoStyle.ink2)
+                }
+            }
+            if let project = store.collections.first(where: { $0.id == item.collection })?.name {
+                Text(project).font(.system(size: 11)).foregroundStyle(DeikoStyle.ink2)
+            }
+            if let tier = detail?.context?.tierLabel {
+                Text(tier)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(DeikoStyle.mark)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(DeikoStyle.accentSoft, in: Capsule())
+            }
+        }
+    }
+
+    private func quietChip(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(DeikoStyle.ink2)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 3)
+            .overlay(Capsule().strokeBorder(DeikoStyle.hairline, lineWidth: 1))
+    }
+
+    private func live(_ id: String?) -> String? {
+        id.flatMap { id in store.items.contains { $0.task == id && !$0.odds } ? id : nil }
+    }
+
+    // ── Sections ────────────────────────────────────────────────────────────
+
+    @ViewBuilder private func said(_ d: BriefDetail) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            NoteStyle.heading("What you said", meta: d.edited ? "edited" : nil)
+            Text(d.narration ?? "Nothing was said — only pointed.")
+                .font(.system(size: 13))
+                .lineSpacing(3)
+                .foregroundStyle(d.narration == nil ? DeikoStyle.ink2 : .primary)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+        }
+    }
+
+    @ViewBuilder private func pointedAt(_ d: BriefDetail) -> some View {
+        let withheld = (d.digest?.cropsWithheld ?? 0) > 0
+        if !d.crops.isEmpty || withheld {
+            VStack(alignment: .leading, spacing: 10) {
+                NoteStyle.heading("What you pointed at", meta: d.crops.isEmpty ? nil : "\(d.crops.count)")
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 280), spacing: 14, alignment: .top)],
+                          alignment: .leading, spacing: 16) {
+                    ForEach(allCrops ? d.crops : Array(d.crops.prefix(Self.firstCrops)), id: \.path) { crop in
+                        VStack(alignment: .leading, spacing: 6) {
+                            Button { preview = URL(fileURLWithPath: crop.path) } label: {
+                                LargeCrop(path: crop.path)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Open it large (Quick Look)")
+                            if let said = crop.said, !said.isEmpty {
+                                Text("while you said “\(said)”")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(DeikoStyle.ink2)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                    }
+                }
+                if d.crops.count > Self.firstCrops {
+                    NoteStyle.toggle(allCrops ? "Show fewer" : "Show all \(d.crops.count) screenshots", open: allCrops) {
+                        allCrops.toggle()
+                    }
+                }
+                if withheld, let digest = d.digest {
+                    NoteStyle.note(ReviewView.withheldSentence(digest))
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func cameBack(_ d: BriefDetail) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let o = d.outcome {
+                NoteStyle.heading("What came back", meta: [o.agent, d.wroteBack.map { Self.day.string(from: $0) }]
+                    .compactMap { $0 }.joined(separator: " · "))
+                NoteStyle.lines("Did", o.did)
+                NoteStyle.lines("Decided", o.decided)
+                NoteStyle.lines("Still open", o.open)
+                NoteStyle.lines("Files", o.files)
+            } else {
+                NoteStyle.heading("What came back", meta: nil)
+                NoteStyle.note("Nothing back yet — when your agent finishes, its notes land here.")
+            }
+        }
+        .frame(maxWidth: 560, alignment: .leading)
+    }
+
+    @ViewBuilder private func details(_ d: BriefDetail) -> some View {
+        let rows = Self.detailRows(d, repo: item.repo)
+        if !rows.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                NoteStyle.heading("Details", meta: nil)
+                Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 5) {
+                    ForEach(rows, id: \.0) { row in
+                        GridRow(alignment: .firstTextBaseline) {
+                            Text(row.0).foregroundStyle(DeikoStyle.ink2)
+                            Text(row.1)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .textSelection(.enabled)
+                        }
+                        .font(.system(size: 11.5))
+                    }
+                }
+            }
+            .frame(maxWidth: 560, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder private func briefAsSent(_ d: BriefDetail) -> some View {
+        if let prompt = d.prompt {
+            VStack(alignment: .leading, spacing: 10) {
+                NoteStyle.toggle("The brief as your agent got it", open: showPrompt) { showPrompt.toggle() }
+                    .help("Exactly what Copy the brief puts on the clipboard")
+                if showPrompt {
+                    Text(prompt)
+                        .font(.system(size: 11.5, design: .monospaced))
+                        .lineSpacing(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(14)
+                        .background(DeikoStyle.card, in: RoundedRectangle(cornerRadius: DeikoStyle.controlRadius))
+                        .overlay(RoundedRectangle(cornerRadius: DeikoStyle.controlRadius).strokeBorder(DeikoStyle.hairline, lineWidth: 1))
+                }
+            }
+        }
+    }
+
+    /// Label and value for each detail the brief has; empty ones are left out.
+    static func detailRows(_ d: BriefDetail, repo: String?) -> [(String, String)] {
+        let summary = d.summary
+        let keys = summary?.keys
+        var rows: [(String, String)] = []
+        rows.append(("Windows", (summary?.windows ?? []).prefix(3).joined(separator: "\n")))
+        rows.append(("Pages", (keys?.pages ?? []).joined(separator: ", ")))
+        rows.append(("Files", (keys?.files ?? []).joined(separator: ", ")))
+        rows.append(("Tickets", (keys?.tickets ?? []).joined(separator: ", ")))
+        rows.append(("Repo", repo ?? ""))
+        rows.append(("Written as", d.persona ?? ""))
+        rows.append(("Transcribed by", transcriber(summary?.transcriber)))
+        if let summary {
+            let note = ReviewView.degradedSentence(summary.degradedReason, degraded: summary.degraded ?? false)
+            rows.append(("Note", note ?? ""))
+        }
+        return rows.filter { !$0.1.isEmpty }
+    }
+
+    // ── Formatting ──────────────────────────────────────────────────────────
+
+    /// The same words, ignoring case, spacing and a closing full stop.
+    static func same(_ a: String?, _ b: String) -> Bool {
+        let norm = { (s: String) in
+            s.lowercased().trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+        }
+        return a.map { norm($0) == norm(b) } ?? true
+    }
+
+    static func duration(_ ms: Double) -> String {
+        let s = Int((ms / 1000).rounded())
+        return s < 60 ? "\(s)s" : "\(s / 60)m \(s % 60)s"
+    }
+
+    static func transcriber(_ name: String?) -> String {
+        guard let name else { return "" }
+        if name == "on-device" { return "This Mac" }
+        if name.hasPrefix("groq") { return "Groq, with your key" }
+        if name == "deiko" { return "Deiko's service" }
+        return name.capitalized
+    }
+
+    private static let day: DateFormatter = {
+        let f = DateFormatter()
+        f.setLocalizedDateFormatFromTemplate("d MMM")
+        return f
+    }()
+}
+
+/// A screenshot whole — `.fit`, never the card's cropped `.fill` — at a size
+/// it can be read, decoded off the main thread through the shared cache.
+private struct LargeCrop: View {
+    let path: String
+    @State private var image: NSImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+            } else {
+                DeikoStyle.wall.aspectRatio(16 / 10, contentMode: .fit)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: 320, alignment: .topLeading)
+        .clipShape(RoundedRectangle(cornerRadius: 9))
+        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(DeikoStyle.hairline, lineWidth: 1))
+        .contentShape(RoundedRectangle(cornerRadius: 9))
+        .task(id: path) { image = await Thumbnails.shared.image(path, maxPoints: 640) }
+        .accessibilityLabel("Screenshot")
+    }
+}
+
+/// The note blocks the work view and the brief view both write in: a 12pt
+/// semibold heading with quiet meta, 12pt ink-2 notes, and the text toggle.
+@MainActor
+private enum NoteStyle {
+    static func heading(_ title: String, meta: String?) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(title).font(.system(size: 12, weight: .semibold))
+            if let meta, !meta.isEmpty {
+                Text(meta).font(.system(size: 11)).foregroundStyle(DeikoStyle.ink2)
+            }
+        }
+    }
+
+    static func note(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12))
+            .foregroundStyle(DeikoStyle.ink2)
+            .fixedSize(horizontal: false, vertical: true)
+            .textSelection(.enabled)
+    }
+
+    /// "Did: …" — one labelled block, nothing when there are no lines.
+    @ViewBuilder static func lines(_ title: String, _ lines: [String]) -> some View {
+        if !lines.isEmpty {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.system(size: 11, weight: .semibold)).foregroundStyle(DeikoStyle.ink2)
+                ForEach(Array(lines.enumerated()), id: \.offset) { note($0.element) }
+            }
+        }
+    }
+
+    static func toggle(_ label: String, open: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Text(label)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+                    .rotationEffect(.degrees(open ? 180 : 0))
+            }
+        }
+        .buttonStyle(TextButtonStyle())
+        .deikoFocusRingLoose()
+        .accessibilityValue(open ? "Open" : "Closed")
     }
 }
 
@@ -1831,6 +2288,7 @@ struct SessionMenu: View {
     let store: SessionsStore
 
     var body: some View {
+        Button("Open brief") { MainNav.shared.open(brief: item.id) }
         Button("Copy the brief") {
             Task {
                 guard let prompt = await store.freshPrompt(sessionDir: item.dir) else { return }
@@ -1996,6 +2454,9 @@ private struct SessionRow: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
+        .contentShape(Rectangle())
+        .onTapGesture { MainNav.shared.open(brief: item.id) }
+        .help("Click to open this brief")
         .contextMenu { SessionMenu(item: item, store: store) }
     }
 }

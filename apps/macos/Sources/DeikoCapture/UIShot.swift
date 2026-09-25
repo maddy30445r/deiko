@@ -115,6 +115,36 @@ enum UIShot {
                 to: "\(out)-board-work-empty-\(name).png"
             )
             MainNav.shared.work = nil
+            // ONE BRIEF: one that came back with notes and screenshots, one in
+            // no task, one set aside, and the first with the sent brief open.
+            let fileExists = { (item: SessionsStore.Item) in
+                FileManager.default.fileExists(atPath: (item.dir as NSString).appendingPathComponent("outcome.md"))
+            }
+            let briefs: [(String, String?)] = [
+                ("brief", (store.items.first { !$0.crops.isEmpty && fileExists($0) } ?? store.items.first { !$0.crops.isEmpty })?.id),
+                ("brief-alone", store.items.first { !$0.setAside && (store.workCounts[$0.task] ?? 0) < 2 && !$0.crops.isEmpty }?.id),
+                ("brief-scrap", store.items.first(where: \.setAside)?.id),
+            ]
+            for (pose, id) in briefs {
+                guard let id else { continue }
+                MainNav.shared.brief = id
+                shoot(
+                    MainWindowView(openSessionDir: nil, sessionRoot: root),
+                    size: NSSize(width: 980, height: 1500), look: look,
+                    to: "\(out)-board-\(pose)-\(name).png"
+                )
+            }
+            if let first = briefs[0].1 {
+                MainNav.shared.brief = first
+                UIShotPose.promptOpen = true
+                shoot(
+                    MainWindowView(openSessionDir: nil, sessionRoot: root),
+                    size: NSSize(width: 980, height: 2200), look: look,
+                    to: "\(out)-board-brief-sent-\(name).png"
+                )
+                UIShotPose.promptOpen = false
+            }
+            MainNav.shared.brief = nil
             shoot(orbCard(), size: NSSize(width: 400, height: 130), look: look, to: "\(out)-orb-\(name).png")
             shoot(orbReady(), size: NSSize(width: 400, height: 190), look: look, to: "\(out)-orbready-\(name).png")
             shoot(orbReady(notice: true), size: NSSize(width: 400, height: 250), look: look,
@@ -154,7 +184,7 @@ enum UIShot {
             }
         }
 
-        Emit.log("wrote \(out)-{welcome,orb,orbready,orbnotice,orbsent,review,review-odds,review-related,dashboard,board,board-full,board-fold,board-drop,board-work,personas,settings,settings-full}-{light,dark}.png")
+        Emit.log("wrote \(out)-{welcome,orb,orbready,orbnotice,orbsent,review,review-odds,review-related,dashboard,board,board-full,board-fold,board-drop,board-work,board-brief,board-brief-alone,board-brief-scrap,board-brief-sent,personas,settings,settings-full}-{light,dark}.png")
     }
 
     /// The collapsed card, mid-session: the state the orb spends most of its
@@ -332,6 +362,8 @@ private final class ShotWindow: NSWindow {
 @MainActor
 enum UIShotPose {
     static var dropTarget: String?
+    /// The brief view with "The brief as your agent got it" open.
+    static var promptOpen = false
     /// Days whose set-aside briefs are shown, by heading.
     static var unfolded: Set<String> = []
     /// The work panel with every note shown, and with its full history open.

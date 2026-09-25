@@ -69,6 +69,21 @@ test("a screenshot of a credential is deleted, and stays withheld on a re-render
   assert.ok(withheld() && withheld().cropPath === null, "a re-render still withholds it");
 });
 
+test("each released screenshot carries its caption in brief.json, for the brief view", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-render-"));
+  const dir = session(root, "20260918-100000", { said: "make this toggle blue please", windows: ["Pricing — Safari"] });
+  mkdirSync(join(dir, "crops"));
+  const shot = join(dir, "crops", "h01-r001.png");
+  writeFileSync(shot, "png");
+  const events = readFileSync(join(dir, "events.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  events.find((e) => e.type === "probe").crop = { path: shot, ocr: [{ text: "Monthly Annual" }], ocrElapsedMs: 1 };
+  writeFileSync(join(dir, "events.jsonl"), events.map((e) => JSON.stringify(e)).join("\n") + "\n");
+  await render(dir);
+  const [referent] = JSON.parse(readFileSync(join(dir, "brief.json"), "utf8")).referents;
+  assert.equal(referent.cropPath, shot);
+  assert.ok("said" in referent, "the caption travels with the screenshot");
+});
+
 test("a re-rendered brief carries on only from briefs older than itself", async () => {
   const root = mkdtempSync(join(tmpdir(), "deiko-render-"));
   const task = "t-20260918-100000";
