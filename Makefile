@@ -201,6 +201,9 @@ endif
 ## `--deep` on VERIFY is the opposite and is correct: it walks the nested code
 ## and checks it, which is what catches a resource added after sealing.
 sign:
+	@find $(RES)/node_modules \( -name '*.node' -o -name '*.dylib' \) -type f 2>/dev/null \
+	  | while read -r f; do codesign --force --sign "$(if $(filter 0,$(SIGN_FOUND)),-,$(SIGN_NAME))" "$$f" 2>/dev/null \
+	  || { echo "✗ could not sign $$f"; exit 1; }; done
 ifeq ($(SIGN_FOUND),0)
 	@codesign --force --sign - $(APP) 2>/dev/null
 	@echo "signed $(APP)  ⚠ AD-HOC"
@@ -445,9 +448,10 @@ icon: $(DEBUG_BIN)
 ## built packages, and a bundle whose Resources lag its binary is a bug you
 ## find in the DMG.
 ##
-## No `node_modules` in the bundle any more. The bridge was the only thing that
-## needed a dependency closure; every remaining script imports node builtins,
-## `packages/*/dist`, or its own sibling in `scripts/lib`.
+## `node_modules` in the bundle is back for exactly one thing: the meaning
+## model's runtime (see scripts/lib/meaning.mjs). Every other script still
+## imports node builtins, `packages/*/dist`, or its own sibling in
+## `scripts/lib` — no dependency closure needed for those.
 resources:
 	@rm -rf $(RES)
 	@mkdir -p $(RES) $(APP)/Contents/MacOS
@@ -457,6 +461,22 @@ resources:
 		--include='*/' --include='dist/***' --include='package.json' --exclude='*' \
 		packages $(RES)/
 	@echo "  resources: scripts + packages/dist"
+	@# THE MEANING MODEL'S RUNTIME — the one dependency the scripts have (see
+	@# scripts/lib/meaning.mjs). macOS arm64 binaries only: the npm package
+	@# carries Linux and Windows builds too, ~100 MB nobody here can run. The
+	@# model itself is downloaded after install, never bundled.
+	@test -f node_modules/onnxruntime-node/bin/napi-v6/darwin/arm64/onnxruntime_binding.node \
+	  || (echo "✗ onnxruntime-node's macOS binary is missing — run npm ci"; exit 1)
+	@mkdir -p $(RES)/node_modules/@huggingface
+	@rsync -a --delete node_modules/onnxruntime-node node_modules/onnxruntime-common $(RES)/node_modules/
+	@rsync -a --delete node_modules/@huggingface/tokenizers $(RES)/node_modules/@huggingface/
+	@find $(RES)/node_modules/onnxruntime-node/bin -mindepth 2 -maxdepth 2 -type d ! -name darwin -exec rm -rf {} +
+	@find $(RES)/node_modules/onnxruntime-node/bin -mindepth 3 -maxdepth 3 -type d ! -name arm64 -exec rm -rf {} +
+	@# The binding links @rpath/libonnxruntime.1.dylib; the package ships a
+	@# byte-identical 44 MB copy under the full version name that nothing loads.
+	@rm -f $(RES)/node_modules/onnxruntime-node/bin/napi-v6/darwin/arm64/libonnxruntime.1.30.0.dylib
+	@rsync -a --delete apps/capture/licenses $(RES)/
+	@echo "  resources: + onnxruntime-node (darwin arm64), tokenizers, licences"
 
 ## dist — the shippable bundle: everything in `bundle`, plus the Node runtime
 ##
