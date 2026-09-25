@@ -824,6 +824,15 @@ private struct BoardPane: View {
     /// timeline's empty space. The lede says which.
     @State private var overCard: String?
     @State private var overSpace = false
+    /// HOVER FROM GEOMETRY, NOT FROM TRACKING AREAS. `.onHover` on a card
+    /// is an AppKit tracking area placed where the card was laid out, and it
+    /// stays there while the card moves: thumbnails load and rows grow, a
+    /// fold opens, a search filters. After that, hovering one card lit the
+    /// card that used to be at that spot. So every card and tag reports its
+    /// real frame, the scroll view (whose own frame never moves) follows the
+    /// pointer, and "hovered" is whichever frames contain the point.
+    @State private var zoneFrames: [String: CGRect] = [:]
+    @State private var hoveredZones: Set<String> = []
     /// Days whose set-aside briefs are shown, by heading.
     @State private var unfolded: Set<String> = UIShotPose.unfolded
     @FocusState private var searching: Bool
@@ -1009,6 +1018,16 @@ private struct BoardPane: View {
             .dropDestination(for: String.self) { ids, _ in
                 standAlone(ids)
             } isTargeted: { overSpace = $0 }
+            .onPreferenceChange(HoverZonesKey.self) { zoneFrames = $0 }
+            .onContinuousHover(coordinateSpace: .global) { phase in
+                let over: Set<String>
+                switch phase {
+                case .active(let point): over = Set(zoneFrames.filter { $0.value.contains(point) }.keys)
+                case .ended: over = []
+                }
+                if over != hoveredZones { hoveredZones = over }
+            }
+            .environment(\.hoveredZones, hoveredZones)
         }
     }
 
@@ -1021,13 +1040,8 @@ private struct BoardPane: View {
         let sections = work == nil
             ? BoardTimeline.sections(shown, date: \.date, now: Date())
             : [(title: "", items: shown)]
-        // NOT LAZY, AND REBUILT ON EVERY LAYOUT CHANGE. A lazy stack keeps
-        // the cards it has built, and a built card's mouse-tracking area is
-        // where the card WAS: after a fold opened or closed, a filter or a
-        // search moved everything, hovering one card lit the one that used to
-        // be there. The board is at most a few hundred cards, so building
-        // them all is cheap, and the identity below makes SwiftUI start the
-        // whole timeline afresh — new tracking areas — whenever it shifts.
+        // Not lazy: the board is at most a few hundred cards, and a lazy stack
+        // gave hover and drop nothing to measure until a row had scrolled in.
         return VStack(alignment: .leading, spacing: 26) {
             // Above the cards, for the reason the day heading is: it must
             // win the click where the two meet.
@@ -1062,13 +1076,6 @@ private struct BoardPane: View {
                 }
             }
         }
-        .id(layoutKey)
-    }
-
-    /// Everything that moves cards around: folds, the project filter, the
-    /// search, the open work, and the set of briefs itself.
-    private var layoutKey: String {
-        "\(unfolded.sorted().joined(separator: "|"))·\(filter)·\(query)·\(work ?? "")·\(shown.count)"
     }
 
     // `.top`, because the default is `.center`: cards of unequal height were
@@ -1107,7 +1114,7 @@ private struct BoardPane: View {
                     Text("\(count) mic checks & scraps").font(.system(size: 11, weight: .medium))
                 }
             }
-            .buttonStyle(ChipButtonStyle(on: false))
+            .buttonStyle(ChipButtonStyle(on: false, zone: "fold:\(key)"))
             // The whole capsule takes the click, not just its letters.
             .contentShape(Capsule())
             .deikoFocusRing(Capsule())
@@ -1200,9 +1207,13 @@ private struct BoardPane: View {
 /// The review card's "Carries on from which?" chips borrow it, for the same reason.
 struct ChipButtonStyle: ButtonStyle {
     let on: Bool
+    /// Named for a chip inside the board's scroll view: its hover then comes
+    /// from the board's geometry (see `BoardPane.zoneFrames`), never from a
+    /// tracking area that the moving layout has left behind.
+    var zone: String? = nil
 
     func makeBody(configuration: Configuration) -> some View {
-        Chip(configuration: configuration, on: on)
+        Chip(configuration: configuration, on: on, zone: zone)
     }
 
     /// Named `Chip`, not `Body`: `Body` is the protocol's own associated type
@@ -1211,9 +1222,12 @@ struct ChipButtonStyle: ButtonStyle {
     private struct Chip: View {
         let configuration: ButtonStyleConfiguration
         let on: Bool
+        let zone: String?
         /// Hover lives with the drawing rather than outside the button, so
         /// nothing between the two can get out of step.
-        @State private var hovering = false
+        @State private var tracked = false
+        @Environment(\.hoveredZones) private var hoveredZones
+        private var hovering: Bool { zone.map { hoveredZones.contains($0) } ?? tracked }
 
         var body: some View {
             configuration.label
@@ -1234,7 +1248,41 @@ struct ChipButtonStyle: ButtonStyle {
                 .contentShape(Capsule())
                 .opacity(configuration.isPressed ? 0.7 : 1)
                 .animation(.easeOut(duration: 0.12), value: hovering)
-                .onHover { hovering = $0 }
+                .hoverZone(zone)
+                .onHover { if zone == nil { tracked = $0 } }
+        }
+    }
+}
+
+// ── Hover from geometry ─────────────────────────────────────────────────────
+
+/// Every hover zone's frame in the window, by id, gathered up the view tree.
+private struct HoverZonesKey: PreferenceKey {
+    static let defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
+private struct HoveredZonesKey: EnvironmentKey { static let defaultValue: Set<String> = [] }
+extension EnvironmentValues {
+    /// The ids of every hover zone under the pointer right now.
+    var hoveredZones: Set<String> {
+        get { self[HoveredZonesKey.self] }
+        set { self[HoveredZonesKey.self] = newValue }
+    }
+}
+
+extension View {
+    /// Reports this view's real frame under `id`, so the board can tell what
+    /// the pointer is over from where things ARE. Nil reports nothing.
+    func hoverZone(_ id: String?) -> some View {
+        background {
+            if let id {
+                GeometryReader { g in
+                    Color.clear.preference(key: HoverZonesKey.self, value: [id: g.frame(in: .global)])
+                }
+            }
         }
     }
 }
@@ -1247,10 +1295,12 @@ private struct BoardCard: View {
     let openWork: (String) -> Void
     let dropped: ([String]) -> Bool
     let targeted: (Bool) -> Void
-    @State private var hovering = false
     @State private var dropping = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.hoveredZones) private var hoveredZones
 
+    /// The pointer is over this card — by its real frame, see `BoardPane`.
+    private var hovering: Bool { hoveredZones.contains("card:\(item.id)") }
     /// A brief is being held over this card.
     private var lit: Bool { dropping || UIShotPose.dropTarget == item.id }
 
@@ -1352,7 +1402,7 @@ private struct BoardCard: View {
         // "drop here" with its border and shadow alone, inside its own frame.
         .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: hovering)
         .animation(reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.8), value: lit)
-        .onHover { hovering = $0 }
+        .hoverZone("card:\(item.id)")
         .onTapGesture(count: 2) { NSWorkspace.shared.open(URL(fileURLWithPath: item.dir)) }
         // Kept beside the button: somebody who already reaches for a
         // right-click should not have to learn a new way to do it.
@@ -1381,7 +1431,7 @@ private struct BoardCard: View {
             // FILING IS VISIBLE. Deiko put this with earlier work on its own;
             // said once, beside the way to take it back.
             HStack(spacing: 8) {
-                WorkTag(text: "Added to \(store.workName(ofTask: item.task))") { openWork(item.task) }
+                WorkTag(text: "Added to \(store.workName(ofTask: item.task))", zone: "tag:\(item.id)") { openWork(item.task) }
                     .help("Deiko put this with \(count - 1) earlier brief\(count == 2 ? "" : "s") in “\(store.title(ofTask: item.task))”. Click to see everything about it.")
                 let own = Tasks.own(item.id)
                 let taken = store.hasOthers(inTask: own, besides: item.id)
@@ -1410,7 +1460,7 @@ private struct BoardCard: View {
                       ? "Too short or unclear to be a brief — a mic check, a thank-you. Drag it onto a brief to put it with that work."
                       : "This recording never became a brief.")
         } else if showsTag, count >= 2 {
-            WorkTag(text: store.workName(ofTask: item.task), count: count) { openWork(item.task) }
+            WorkTag(text: store.workName(ofTask: item.task), count: count, zone: "tag:\(item.id)") { openWork(item.task) }
                 .help("See everything about \(store.workName(ofTask: item.task)): its briefs, where it stands, what was decided")
         }
     }
@@ -1424,7 +1474,7 @@ private struct BoardCard: View {
                 .labelStyle(TightLabel())
                 .lineLimit(1)
         }
-        .buttonStyle(ChipButtonStyle(on: false))
+        .buttonStyle(ChipButtonStyle(on: false, zone: "put:\(item.id)"))
         .deikoFocusRing(Capsule())
         .help("Deiko thinks this carries on “\(store.title(ofTask: target))”. Click to put it there, or drag it onto any brief.")
         let own = Tasks.own(item.id)
@@ -1488,6 +1538,8 @@ private struct BoardCard: View {
 private struct WorkTag: View {
     let text: String
     var count: Int?
+    /// The board's hover zone for this tag (see `ChipButtonStyle.zone`).
+    var zone: String? = nil
     let open: () -> Void
 
     var body: some View {
@@ -1499,7 +1551,7 @@ private struct WorkTag: View {
             }
             .font(.system(size: 11, weight: .medium))
         }
-        .buttonStyle(ChipButtonStyle(on: true))
+        .buttonStyle(ChipButtonStyle(on: true, zone: zone))
         .deikoFocusRing(Capsule())
     }
 }
