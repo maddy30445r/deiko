@@ -1580,14 +1580,16 @@ private struct WorkNotes: View {
                 }
             }
             if let wrote = state.wroteBack {
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .top, spacing: 28) { blocks(state, wrote: wrote) }
-                    VStack(alignment: .leading, spacing: 16) { blocks(state, wrote: wrote) }
-                }
-                let hidden = max(0, state.open.count - Self.folded) + max(0, state.decided.count - Self.folded)
-                if hidden > 0 || expanded {
-                    toggle(expanded ? "Show less" : "Show all \(state.open.count + state.decided.count) notes",
-                           open: expanded) { expanded.toggle() }
+                // One column at a reading measure: two side by side squeezed
+                // each note into a narrow wrap at this window's width.
+                VStack(alignment: .leading, spacing: 16) {
+                    blocks(state, wrote: wrote)
+                    let hidden = max(0, state.open.count - Self.folded) + max(0, state.decided.count - Self.folded)
+                    if hidden > 0 || expanded {
+                        toggle(expanded ? "Show less" : "Show all \(state.open.count + state.decided.count) notes",
+                               open: expanded) { expanded.toggle() }
+                            .padding(.top, -6)
+                    }
                 }
             } else {
                 Text("No notes yet. When an agent finishes work here, what's left and what got decided shows up here.")
@@ -1630,7 +1632,7 @@ private struct WorkNotes: View {
                 ForEach(Array(state.open.prefix(limit).enumerated()), id: \.offset) { note($0.element.text) }
             }
         }
-        .frame(maxWidth: 420, alignment: .leading)
+        .frame(maxWidth: 560, alignment: .leading)
         if !state.decided.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
                 heading("Decided", meta: nil)
@@ -1643,7 +1645,7 @@ private struct WorkNotes: View {
                     }
                 }
             }
-            .frame(maxWidth: 420, alignment: .leading)
+            .frame(maxWidth: 560, alignment: .leading)
         }
     }
 
