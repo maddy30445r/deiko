@@ -93,15 +93,4 @@ public struct SessionGesture: Sendable {
         isCapturing = true
         armedAt = nil
     }
-
-    /// The event tap was disabled and re-enabled. Presses may have gone
-    /// unobserved, so a half-finished double-tap can no longer be trusted.
-    ///
-    /// Capture itself is left alone deliberately: without a held mode there is
-    /// no state that a missed release could strand, and a session the user
-    /// started should survive a tap hiccup. The watchdogs in `Recorder` are
-    /// what stop a session nobody ends.
-    public mutating func tapRecovered() {
-        armedAt = nil
-    }
 }

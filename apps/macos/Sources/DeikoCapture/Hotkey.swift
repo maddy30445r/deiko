@@ -27,12 +27,15 @@ import DeikoGesture
 //
 // This file only reports the key going down and up; the path comes from the
 // Recorder's own 60Hz cursor samples. `mouseMoved` is deliberately not in the
-// tap mask — the tap is always on, and that would put every mouse move on the
-// machine through this callback, session or not.
+// monitors' mask — they are always on, and that would put every mouse move on
+// the machine through this callback, session or not.
 //
-// ponytail: the tap stays `.defaultTap` although it no longer swallows. A
-// listen-only tap is gated by Input Monitoring rather than Accessibility, and
-// swapping a permission is not a free change. Revisit with the onboarding.
+// MONITORS, NOT A TAP. This was an active `CGEvent` tap on the main run loop:
+// every modifier press and every scroll on the Mac waited for Deiko's main
+// thread to hand it back, so a busy Deiko put a hitch in everybody's
+// scrolling. `NSEvent` monitors observe the same events after they are
+// delivered — nothing waits on Deiko — and need the same Accessibility grant.
+// A global monitor sees other apps' events, a local one Deiko's own.
 // ───────────────────────────────────────────────────────────────────────────────
 
 /// WHICH KEY STARTS A SESSION — the user's choice, read live.
@@ -77,14 +80,12 @@ enum HotkeyEvent {
     case scrolled
 }
 
-/// Main-actor isolated, and legitimately so: `start()` adds the tap's run loop
-/// source to the CURRENT run loop, which is the main one, so the callback is
-/// delivered on the main thread. Declaring that lets the overlay be touched
-/// directly from a gesture instead of hopping queues for no reason.
+/// Main-actor isolated, and legitimately so: `NSEvent` monitors call back on
+/// the main thread. Declaring that lets the overlay be touched directly from a
+/// gesture instead of hopping queues for no reason.
 @MainActor
 final class Hotkey {
-    private var tap: CFMachPort?
-    private var runLoopSource: CFRunLoopSource?
+    private var monitors: [Any] = []
 
 
     /// What a Right Option press MEANS lives in `SessionGesture`, which has no
@@ -102,80 +103,31 @@ final class Hotkey {
     /// Called on the main run loop for every gesture transition.
     var onEvent: ((HotkeyEvent) -> Void)?
 
-    /// Starts the tap. Returns false when the process isn't trusted for
-    /// Accessibility — an active tap requires it, and there is no partial mode.
+    /// Starts listening. Returns false when the process isn't trusted for
+    /// Accessibility: without it a global monitor gets no key events at all.
     func start() -> Bool {
-        let mask: CGEventMask =
-            (1 << CGEventType.flagsChanged.rawValue) |
-            (1 << CGEventType.scrollWheel.rawValue)
-
-        let context = Unmanaged.passUnretained(self).toOpaque()
-
-        guard let tap = CGEvent.tapCreate(
-            tap: .cgSessionEventTap,
-            place: .headInsertEventTap,
-            options: .defaultTap,          // see the file header's ponytail note
-            eventsOfInterest: mask,
-            callback: { _, type, event, refcon in
-                guard let refcon else { return Unmanaged.passUnretained(event) }
-
-                // Both the tap object and the event cross into the closure as
-                // raw pointers rather than as their real types: CGEvent isn't
-                // Sendable, and pointers are. Nothing unsafe is happening — the
-                // source lives on the main run loop (see the type's doc
-                // comment), so this callback is already on the main actor and
-                // `assumeIsolated` is asserting a fact, not hoping for one.
-                let eventPointer = Unmanaged.passUnretained(event).toOpaque()
-                MainActor.assumeIsolated {
-                    let hotkey = Unmanaged<Hotkey>.fromOpaque(refcon).takeUnretainedValue()
-                    let cgEvent = Unmanaged<CGEvent>.fromOpaque(eventPointer)
-                        .takeUnretainedValue()
-                    hotkey.handle(type: type, event: cgEvent)
-                }
-                // Always handed back: this tap observes, it never swallows.
-                return Unmanaged.passUnretained(event)
-            },
-            userInfo: context
-        ) else {
-            return false
+        guard AXIsProcessTrusted() else { return false }
+        stop()
+        let mask: NSEvent.EventTypeMask = [.flagsChanged, .scrollWheel]
+        // The CGEvent behind each: the same device bits and the same
+        // top-left-origin location the gesture code has always read.
+        let observe: (NSEvent) -> Void = { [weak self] event in
+            guard let self, let cgEvent = event.cgEvent else { return }
+            handle(type: cgEvent.type, event: cgEvent)
         }
-
-        self.tap = tap
-        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        self.runLoopSource = source
-        CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: true)
+        if let global = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: observe) { monitors.append(global) }
+        if let local = NSEvent.addLocalMonitorForEvents(matching: mask, handler: { observe($0); return $0 }) { monitors.append(local) }
         return true
     }
 
     func stop() {
-        if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
-        if let runLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
-        }
-        tap = nil
-        runLoopSource = nil
+        monitors.forEach(NSEvent.removeMonitor)
+        monitors = []
     }
 
-    // ── Tap callback ────────────────────────────────────────────────────────
+    // ── Event handling ──────────────────────────────────────────────────────
 
     private func handle(type: CGEventType, event: CGEvent) {
-        // The system disables a tap that dawdles in its callback. Re-enable and
-        // carry on rather than dying silently mid-session, then RECONCILE what
-        // went unobserved: a half-finished double-tap can no longer be trusted,
-        // and Left Option may have come up while we were deaf — which would
-        // otherwise leave a stroke open until the next press.
-        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
-            gesture.tapRecovered()
-            let flags = CGEventSource.flagsState(.combinedSessionState)
-            let wasLeftOptionDown = isLeftOptionDown
-            isLeftOptionDown = flags.rawValue & kLeftOptionFlagMask != 0
-            let here = Point(x: event.location.x, y: event.location.y)
-            if wasLeftOptionDown, !isLeftOptionDown { emit(.drawKeyUp(here)) }
-            return
-        }
-
         let location = Point(x: event.location.x, y: event.location.y)
 
         switch type {
@@ -199,8 +151,6 @@ final class Hotkey {
                     emit(isLeftOptionDown ? .drawKeyDown(location) : .drawKeyUp(location))
                 }
             }
-            // Always pass modifiers through: swallowing one would break Option
-            // as a normal modifier everywhere else.
             return
 
         case .scrollWheel:

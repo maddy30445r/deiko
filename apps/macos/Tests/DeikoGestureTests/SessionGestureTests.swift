@@ -90,28 +90,6 @@ func stopClearsTheArmedWindow() {
     #expect(!g.isCapturing)
 }
 
-@Test("a tap lost to a disabled event tap cannot complete a double-tap")
-func tapRecoveryDisarms() {
-    var g = SessionGesture()
-    #expect(g.press(at: 0) == .none)
-    g.tapRecovered()
-    // Presses went unobserved, so the armed half is no longer trustworthy.
-    #expect(g.press(at: 100) == .none)
-    #expect(!g.isCapturing)
-}
-
-@Test("a live session survives a tap hiccup")
-func tapRecoveryKeepsCapturing() {
-    var g = SessionGesture()
-    _ = g.press(at: 0)
-    _ = g.press(at: 200)
-    g.tapRecovered()
-    // No held mode means no stranded state, and a session the user started
-    // should not vanish because the OS restarted our tap.
-    #expect(g.isCapturing)
-    #expect(g.press(at: 3000) == .stopNow)
-}
-
 @Test("a watchdog stop leaves the gesture idle, not stale")
 func externalStopResets() {
     var g = SessionGesture()

@@ -266,10 +266,10 @@ final class Recorder {
         return hotkey.start()
     }
 
-    /// Drop the event tap without ending a session.
+    /// Stop listening for the keys without ending a session.
     ///
     /// The pair to `start()`, for when a permission is revoked while Deiko is
-    /// running: the tap is dead either way, and holding a stale one means the
+    /// running: the listener is dead either way, and holding a stale one means the
     /// grant coming back can never rebuild it.
     func stopListening() {
         hotkey.stop()
