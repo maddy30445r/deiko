@@ -108,3 +108,19 @@ export function degradedReason({ cloud, degradedHolds } = {}) {
   if (degradedHolds?.length) return "timing";
   return null;
 }
+
+/**
+ * ONE RETRY PER CHUNK. A dropped connection or a burst 429 used to cost that
+ * stretch of sentence for good; a second try a moment later usually lands.
+ * `attempt(last)` is told which try it is, so a failure it only reports on
+ * the last one — "the cloud was unavailable" — is not reported by a first try
+ * the retry then rescues.
+ */
+export async function withOneRetry(attempt, delayMs = 1500) {
+  try {
+    return await attempt(false);
+  } catch {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    return attempt(true);
+  }
+}

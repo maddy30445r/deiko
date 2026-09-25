@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { refusalReason, REFUSAL_IS_FINAL, degradedReason } from "../lib/cloud.mjs";
+import { refusalReason, REFUSAL_IS_FINAL, degradedReason, withOneRetry } from "../lib/cloud.mjs";
 
 // The bodies below are the relay's own, copied from services/relay/quota.mjs
 // and relay.mjs. If somebody rewords them there, these fixtures are what fails
@@ -147,4 +147,17 @@ test("on-device outranks timing", () => {
 test("a transcript written before `cloud` existed still reads", () => {
   // Sessions on disk from an older build have neither key.
   assert.equal(degradedReason({ degradedHolds: undefined }), null);
+});
+
+test("a chunk gets one retry, told which try is its last", async () => {
+  const tries = [];
+  const flaky = async (last) => { tries.push(last); if (!last) throw new Error("dropped"); return "words"; };
+  assert.equal(await withOneRetry(flaky, 1), "words");
+  assert.deepEqual(tries, [false, true]);
+
+  const fine = [];
+  assert.equal(await withOneRetry(async (last) => { fine.push(last); return "ok"; }, 1), "ok");
+  assert.deepEqual(fine, [false], "a chunk that lands is sent once");
+
+  await assert.rejects(withOneRetry(async () => { throw new Error("down"); }, 1), /down/, "twice failed is failed");
 });

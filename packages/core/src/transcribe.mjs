@@ -28,7 +28,7 @@ import { fileURLToPath } from "node:url";
 // will match on.
 import { normalizeWord } from "../packages/alignment/dist/src/deictic.js";
 import { awaitPrecomputed, loadEvents } from "./lib/session-io.mjs";
-import { refusalReason, REFUSAL_IS_FINAL } from "./lib/cloud.mjs";
+import { refusalReason, REFUSAL_IS_FINAL, withOneRetry } from "./lib/cloud.mjs";
 
 
 // ── Stage timing ────────────────────────────────────────────────────────────
@@ -129,8 +129,9 @@ function chunkedTranscriber(name, uploadOne, state = {}) {
       const pcm = file.subarray(44);
       const totalSeconds = pcm.length / (SAMPLE_RATE * BYTES_PER_SAMPLE);
 
+      const upload = (data) => withOneRetry((last) => uploadOne(data, language, { last }));
       if (totalSeconds <= CHUNK_SECONDS) {
-        return timed(name, () => uploadOne(pcm, language));
+        return timed(name, () => upload(pcm));
       }
 
       const chunks = splitAtSilence(pcm, CHUNK_SECONDS);
@@ -155,7 +156,7 @@ function chunkedTranscriber(name, uploadOne, state = {}) {
         for (let i = 0; i < chunks.length; i += UPLOAD_CONCURRENCY) {
           const slice = chunks.slice(i, i + UPLOAD_CONCURRENCY);
           const settled = await Promise.allSettled(
-            slice.map((data) => uploadOne(data, language)));
+            slice.map(upload));
           settled.forEach((outcome, n) => {
             // Order is what the join depends on — these are consecutive
             // stretches of one sentence, not a set — so a failed chunk holds
@@ -319,7 +320,7 @@ function relayTranscriber(endpoint, token) {
   // what the review window shows, and "your trial is used up" outranks the
   // rate limit that followed it.
   const state = { refused: null, uploaded: 0 };
-  return chunkedTranscriber("deiko", async (pcm, language) => {
+  return chunkedTranscriber("deiko", async (pcm, language, { last = true } = {}) => {
     if (state.refused && REFUSAL_IS_FINAL.has(state.refused)) {
       return { text: "", refused: true };
     }
@@ -343,13 +344,14 @@ function relayTranscriber(endpoint, token) {
     } catch (err) {
       // The request never landed — a timeout, DNS, no route. Status 0 is how
       // `refusalReason` spells that, and it is `unavailable` like any 503.
-      state.refused ??= refusalReason(0);
+      // Only on the last try: one the retry rescues was never unavailable.
+      if (last) state.refused ??= refusalReason(0);
       throw err;
     }
 
     const reason = refusalReason(response.status, bodyText);
     if (reason) {
-      state.refused ??= reason;
+      if (last || REFUSAL_IS_FINAL.has(reason)) state.refused ??= reason;
       if (REFUSAL_IS_FINAL.has(reason)) {
         process.stderr.write(`· ${REFUSAL_NOTE[reason]} — continuing on on-device words `);
         return { text: "", refused: true };
