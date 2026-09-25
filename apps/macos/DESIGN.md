@@ -198,7 +198,7 @@ The window is 980×660 (minimum 860×560), split into a fixed 198px sidebar on p
 
 The title bar is transparent and its title hidden, so both columns have to leave the room it would have taken: the sidebar's brand row starts 44px down, clear of the traffic lights, and pane content starts 44px down, clear of the bar.
 
-Every pane opens the same way — a 24px title, a 12.5px secondary line under it, then content — and scrolls as one column at a 26px gutter with 16px between blocks. Cards hold rows at 14px horizontal and 11px vertical padding, separated by hairline dividers rather than gaps. The board is the one grid: cards at a 210px minimum, 14px apart, reflowing with the window.
+Every pane opens the same way — a 24px title, a 12.5px secondary line under it, then content — and scrolls as one column at a 26px gutter with 16px between blocks. Cards hold rows at 14px horizontal and 11px vertical padding, separated by hairline dividers rather than gaps. The board is the one grid: cards at a 210px minimum, 14px apart, reflowing with the window. It is a timeline — newest first under day headings (Today, Yesterday, This week, then the month), and nothing on it moves unless somebody drags it.
 
 Floating surfaces are sized to their job, not to the window: the orb card is exactly 400pt wide and as tall as its contents measure, the review panel is 620×640, and the capturing pill is centred 62pt from the top of the screen.
 
@@ -231,6 +231,9 @@ Circles belong to the mark. The Deiko mark is a ring with a centred dot drawn at
 
 ### Chips
 - **Wash chip:** indigo wash, mark-indigo 11px label, pill radius, 3px × 8px. Marks a default, a crop count, a persona name, an agent name or "your own text". Always a capsule — the orb card briefly had a rounded-rectangle chip beside a capsule one, which is two shapes for one idea on the surface people see most.
+- **Work tag:** the wash chip at a board card's foot, naming the task it belongs to and how many briefs it holds ("Price bug · 4"); worn only by work of two or more, and clicking it opens that work alone, oldest first. A brief Deiko filed on its own says "Added to …" in the same chip, with an "Undo" word beside it, the first time it is seen.
+- **Set aside:** a hairline outline chip in ink 2, for odds and ends and recordings that never finished. Their thumbnails fade to 40%; their words keep full contrast.
+- **Drop target:** a board card with a brief held over it takes the indigo wash, a 1.5px accent edge and "Same work as this" at its foot, and grows 2% unless Reduce Motion is on. The pane's lede says what letting go will do.
 - **Glyph tile:** the square exception, and not a chip: a 26×26 wash tile at 8px radius holding one accent symbol. A permission row, not a label.
 
 ### Cards / Containers
