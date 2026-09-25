@@ -19,7 +19,7 @@
  * payload the end user has to read in their own chat.
  */
 
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { resolve, join, basename, dirname } from "node:path";
 
 import { align, joinWords } from "../packages/alignment/dist/src/align.js";
@@ -161,7 +161,16 @@ const cropWasRead = (r) =>
 
 function cropRelease(r) {
   if (!r.cropPath) return { path: null, reason: null };
-  if (carriesSecret(r)) return { path: null, reason: "credential visible in this capture" };
+  if (carriesSecret(r)) {
+    // A SCREENSHOT OF A CREDENTIAL IS DELETED, not just held back: kept, it
+    // sat in the session folder forever, the one unredacted copy of the key.
+    // events.jsonl keeps its path and text, which is what keeps it withheld
+    // on every re-render — scrub that text and the next render would release
+    // a path. ponytail: the raw OCR text stays in events.jsonl, on this Mac,
+    // out of Time Machine; scrub it once the decision is stored in the probe.
+    rmSync(r.cropPath, { force: true });
+    return { path: null, reason: "credential visible in this capture" };
+  }
   if (!cropWasRead(r)) return { path: null, reason: "never OCR'd — contents unverified" };
   return { path: r.cropPath, reason: null };
 }

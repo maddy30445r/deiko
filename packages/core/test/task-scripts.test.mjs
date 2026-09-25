@@ -47,6 +47,28 @@ const prompt = (dir, name = "prompt.txt") => readFileSync(join(dir, name), "utf8
 
 // ── render-brief ────────────────────────────────────────────────────────────
 
+test("a screenshot of a credential is deleted, and stays withheld on a re-render", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-render-"));
+  const dir = session(root, "20260918-100000", { said: "here is the storage account key", windows: ["Azure Portal — Safari"] });
+  mkdirSync(join(dir, "crops"));
+  const shot = join(dir, "crops", "h01-r001.png");
+  writeFileSync(shot, "png");
+  const events = readFileSync(join(dir, "events.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  const probe = events.find((e) => e.type === "probe");
+  probe.snapshot.elements = [{ value: "account key" }, { value: "MQULF+AStdFrlAKxUzvkZx7oHzB3KjQ9wEr==" }];
+  probe.crop = { path: shot, ocr: [], ocrElapsedMs: 1 };
+  writeFileSync(join(dir, "events.jsonl"), events.map((e) => JSON.stringify(e)).join("\n") + "\n");
+  const withheld = () => JSON.parse(readFileSync(join(dir, "brief.json"), "utf8")).referents
+    .find((r) => r.cropWithheld === "credential visible in this capture");
+
+  await render(dir);
+  assert.ok(withheld(), "withheld");
+  assert.equal(withheld().cropPath, null);
+  assert.ok(!existsSync(shot), "and gone from disk");
+  await render(dir);
+  assert.ok(withheld() && withheld().cropPath === null, "a re-render still withholds it");
+});
+
 test("a re-rendered brief carries on only from briefs older than itself", async () => {
   const root = mkdtempSync(join(tmpdir(), "deiko-render-"));
   const task = "t-20260918-100000";
