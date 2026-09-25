@@ -13,7 +13,7 @@
 // be a number with a false air of authority; reading "engine x" where you said
 // "nginx" is the finding. Scores are computed only when a reference exists.
 //
-//   make bakeoff SESSION=~/Documents/Deiko/20260912-143000
+//   make bakeoff SESSION=~/Library/Application\ Support/Deiko/20260912-143000
 //
 // Needs the WAVs, so record with DEIKO_KEEP_AUDIO=1 — the app deletes them the
 // moment a brief renders.

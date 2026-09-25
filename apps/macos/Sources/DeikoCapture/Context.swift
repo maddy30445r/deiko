@@ -7,11 +7,11 @@ import Foundation
 //
 // Flat files, beside the sessions, following `persona.txt`'s arrangement:
 //
-//   ~/Documents/Deiko/collections.json   the projects a brief can land in
-//   ~/Documents/Deiko/tasks.json         what each task is called
-//   ~/Documents/Deiko/tasks/<id>.md      a task's note, compiled by
-//                                        `render-brief.mjs` and never
-//                                        written here
+//   <board>/collections.json   the projects a brief can land in
+//   <board>/tasks.json         what each task is called
+//   <board>/tasks/<id>.md      a task's note, compiled by
+//                              `render-brief.mjs` and never
+//                              written here
 //   <session>/context.json               where this brief landed, which task
 //                                        it belongs to, and how much work it
 //                                        looked like

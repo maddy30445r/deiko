@@ -283,8 +283,8 @@ final class Recorder {
     /// behind with a 0-byte `events.jsonl`, whether or not anything was ever
     /// recorded — three of them accumulated in a single evening.
     ///
-    /// Returns false when the directory cannot be created (denied Documents
-    /// access, read-only volume) — in which case NO session starts, rather than
+    /// Returns false when the directory cannot be created (a full or
+    /// read-only volume) — in which case NO session starts, rather than
     /// a session that silently writes to nowhere.
     /// Reopen a session that has already been closed out, so the next recording
     /// becomes another HOLD of it rather than a new session.
@@ -389,7 +389,7 @@ final class Recorder {
             // explanation sitting in a log file they will never open.
             Emit.problem(
                 "could not create session directory \(dir): \(error.localizedDescription)",
-                hint: "Deiko could not create its session folder in \(sessionRoot). Check that it can write there — System Settings → Privacy & Security → Files and Folders."
+                hint: "Deiko could not create its session folder in \(sessionRoot). Check that the disk has room and that Deiko can write there."
             )
             return false
         }
@@ -397,16 +397,12 @@ final class Recorder {
         // NOT FOR BACKUP. A session folder holds screen text, window titles and
         // crops read off whatever the user pointed at — including, by design,
         // captures the secret detector flagged and withheld from the agent —
-        // and it holds them for thirty days. Marking the root excluded keeps
-        // Time Machine from carrying that to an external disk. Best-effort and
+        // until somebody deletes them. Marking the root excluded keeps Time
+        // Machine from carrying that to an external disk. Best-effort and
         // idempotent, so it runs on every session rather than trusting a
-        // one-time setup that a fresh install would never see.
-        //
-        // What this does NOT do: iCloud's Desktop & Documents sync ignores this
-        // key entirely — it honours only a `.nosync` name suffix — and the root
-        // lives in `~/Documents`. Moving it is a product decision recorded in
-        // mddocs/SECURITY-AUDIT.md (U2), not something to do silently under
-        // people's existing sessions.
+        // one-time setup that a fresh install would never see. iCloud is not
+        // a question: the root is in Application Support, which it never
+        // syncs (see `Sessions.defaultRoot`).
         var rootURL = URL(fileURLWithPath: sessionRoot)
         var exclusion = URLResourceValues()
         exclusion.isExcludedFromBackup = true

@@ -1001,7 +1001,7 @@ private struct BoardPane: View {
                         EmptyPane(
                             title: sessions.items.isEmpty ? "The board is empty" : "Nothing here yet",
                             line: sessions.items.isEmpty
-                                ? "Briefs pin themselves here as you record them. Nothing is uploaded — this is the folder in your Documents."
+                                ? "Briefs pin themselves here as you record them. Nothing is uploaded — they live in a folder on this Mac."
                                 : "Try another project, a task name, an app name, or a word you said."
                         )
                     } else {

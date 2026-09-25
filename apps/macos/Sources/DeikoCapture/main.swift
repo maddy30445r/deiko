@@ -262,7 +262,8 @@ func runApp(_ args: Args) {
 
     // A ROOT, not a session directory. The session folder is minted on the
     // first hold and named `20260728-011253` — see `Recorder.startSessionIfNeeded`.
-    let root = args.string("out") ?? "\(NSHomeDirectory())/Documents/Deiko"
+    if args.string("out") == nil { Sessions.migrateFromDocuments() }
+    let root = args.string("out") ?? Sessions.defaultRoot
 
     let recorder = Recorder(sessionRoot: root, captureCrops: !args.has("no-crop"))
     if let radius = args.double("settle-radius") { recorder.settleRadius = radius }
@@ -596,7 +597,7 @@ deiko-capture \(DeikoVersion.current)
                               when Deiko.app is launched — and launching it that
                               way is what makes macOS attribute permissions to
                               Deiko rather than to your terminal.
-    --out <dir>               Where sessions are minted (~/Documents/Deiko).
+    --out <dir>               Where sessions are minted (~/Library/Application Support/Deiko).
     --no-crop                 Skip the Tier 1 crop + OCR per referent.
 
   hello                       Handshake event on stdout (checks AX trust).

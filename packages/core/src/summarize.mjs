@@ -2,7 +2,7 @@
 /**
  * Three lines saying what a session was about — FOR THE DEVELOPER'S SCREEN ONLY.
  *
- *   node scripts/summarize.mjs ~/Documents/Deiko/<id>
+ *   node scripts/summarize.mjs ~/Library/Application\ Support/Deiko/<id>
  *
  * The review window shows this above the narration so you can tell at a glance
  * whether the thing you are about to send is the thing you meant to record. It

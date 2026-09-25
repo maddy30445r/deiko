@@ -16,7 +16,7 @@
 set -euo pipefail
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
-SRC=${FLOW_BOARD:-$HOME/Documents/Deiko}
+SRC=${FLOW_BOARD:-"$HOME/Library/Application Support/Deiko"}
 ENV_FILE=${FLOW_ENV:-$REPO/.env}
 PORT=${FLOW_PORT:-8791}
 # The pricing thread, the three briefs 0.5.0 mis-joined to it, and one

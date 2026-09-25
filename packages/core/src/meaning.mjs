@@ -21,7 +21,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { STAMP, readBriefLine } from "./lib/context.mjs";
-import { briefText, currentModel, download, isReady, loadModel, vectorIsCurrent, writeVector } from "./lib/meaning.mjs";
+import { DEIKO_HOME, briefText, currentModel, download, isReady, loadModel, vectorIsCurrent, writeVector } from "./lib/meaning.mjs";
 
 const [command, arg] = process.argv.slice(2);
 const key = currentModel();
@@ -51,7 +51,7 @@ if (command === "status") {
     process.exit(1);
   }
 } else if (command === "backfill") {
-  const root = resolve((arg ?? "~/Documents/Deiko").replace(/^~/, homedir()));
+  const root = resolve((arg ?? DEIKO_HOME).replace(/^~/, homedir()));
   const model = await loadModel(key);
   if (!model) {
     console.log("failed no meaning model on this Mac");

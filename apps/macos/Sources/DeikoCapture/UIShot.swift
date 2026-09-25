@@ -14,7 +14,7 @@ import DeikoHandoff
 // that drifts from the app is worse than no preview. The models are the
 // default ones, so what comes out is each window's first paint: the state a
 // person actually meets. `--root` reads another board — a re-sorted copy, say
-// — instead of the one in Documents; only ever read, never written.
+// — instead of the real one; only ever read, never written.
 // ─────────────────────────────────────────────────────────────────────────────
 
 @MainActor

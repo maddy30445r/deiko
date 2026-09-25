@@ -606,10 +606,10 @@ classify:
 ## after. Needs DEIKO_RELAY_URL (and DEIKO_RELAY_TOKEN if you use one) in the
 ## environment — source .env first. Hand-placed briefs are left alone, and
 ## with the app's sorting switch off nothing is sent (see classify).
-ROOT ?= $(HOME)/Documents/Deiko
+ROOT ?= $(HOME)/Library/Application Support/Deiko
 reclassify:
 	@npm run build -w @deiko/alignment --silent
-	@for d in $$(ls -d "$(ROOT)"/2*-* | sort); do \
+	@for d in "$(ROOT)"/2*-*; do \
 		node scripts/render-brief.mjs "$$d" >/dev/null 2>&1 || echo "· $$d did not render"; \
 		$(SORT_BRIEFS) node scripts/classify.mjs "$$d"; \
 		node scripts/render-brief.mjs "$$d" >/dev/null 2>&1 || true; \
@@ -662,7 +662,7 @@ ground:
 ## bakeoff — run every recogniser over one session's audio and compare
 ##
 ##   DEIKO_KEEP_AUDIO=1 open /Applications/Deiko.app   # …record…
-##   make bakeoff SESSION=~/Documents/Deiko/<id> LANGUAGE=hi-IN
+##   make bakeoff SESSION=~/Library/Application\ Support/Deiko/<id> LANGUAGE=hi-IN
 ##
 ## Apple on-device at two locales and with the session's own screen vocabulary,
 ## Sarvam, and both Whisper sizes — over the SAME audio, through the same

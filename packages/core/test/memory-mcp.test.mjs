@@ -236,7 +236,7 @@ test("a board this Mac can't read returns a clear tool error, not an empty list"
     try {
       const r = await s.tool("search_briefs", { query: "anything" });
       assert.equal(r.isError, true);
-      assert.match(r.value, /allow.*access/i);
+      assert.match(r.value, /can.t read .*EACCES/);
     } finally {
       s.close();
     }

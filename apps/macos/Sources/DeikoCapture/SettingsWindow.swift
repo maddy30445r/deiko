@@ -576,7 +576,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text(model.sessionCount == 0
                     ? "No sessions yet."
-                    : "\(model.sessionCount) session\(model.sessionCount == 1 ? "" : "s") · \(model.sessionSize) in ~/Documents/Deiko")
+                    : "\(model.sessionCount) session\(model.sessionCount == 1 ? "" : "s") · \(model.sessionSize) on this Mac")
                     .font(.system(size: 13))
 
                 Text(Sessions.retentionDays > 0

@@ -63,8 +63,12 @@ export function currentModel() {
   return Object.hasOwn(MODELS, want) ? want : null;
 }
 
+/** Deiko's folder on this Mac: the board (sessions, tasks, personas) and the
+ *  models beside it. Never in Documents, which iCloud can sync. */
+export const DEIKO_HOME = join(homedir(), "Library", "Application Support", "Deiko");
+
 export function modelDir(key) {
-  const root = process.env.DEIKO_MODEL_DIR ?? join(homedir(), "Library", "Application Support", "Deiko", "models");
+  const root = process.env.DEIKO_MODEL_DIR ?? join(DEIKO_HOME, "models");
   return join(root, key);
 }
 

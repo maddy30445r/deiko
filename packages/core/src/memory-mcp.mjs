@@ -26,7 +26,7 @@
  * board (it is told to leave `outcome.md`), so this cannot trust a path found
  * on disk the way the app, running under its own sandbox, can.
  *
- * Read-only. The board is DEIKO_ROOT (default ~/Documents/Deiko).
+ * Read-only. The board is DEIKO_ROOT (default ~/Library/Application Support/Deiko).
  */
 import { lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -37,9 +37,9 @@ import { STAMP, briefDate, readBriefLine } from "./lib/context.mjs";
 import { redact, redactBlock, redactNote } from "./lib/redact.mjs";
 import { loadEvents } from "./lib/session-io.mjs";
 import { TASK_ID, bm25, cosine, groupTasks, readTasks, renderTaskNote, rrf, terms, titleFor } from "./lib/tasks.mjs";
-import { loadModel, readVector } from "./lib/meaning.mjs";
+import { DEIKO_HOME, loadModel, readVector } from "./lib/meaning.mjs";
 
-const ROOT = (process.env.DEIKO_ROOT ?? join(homedir(), "Documents", "Deiko")).replace(/^~/, homedir());
+const ROOT = (process.env.DEIKO_ROOT ?? DEIKO_HOME).replace(/^~/, homedir());
 // Resolved once: every path this hands back must stay under this. Falls back
 // to ROOT unresolved if it doesn't exist yet — nothing lives under it either way.
 let ROOT_REAL;
@@ -77,7 +77,7 @@ function stamps() {
     return readdirSync(ROOT).filter((n) => STAMP.test(n)).sort();
   } catch (err) {
     if (err.code === "ENOENT") return []; // no board yet: an empty one, not an error
-    throw new Error(`can't read ${ROOT}: allow Documents access for this app (${err.code ?? err.message})`);
+    throw new Error(`can't read ${ROOT} (${err.code ?? err.message})`);
   }
 }
 const removed = (dir) => new Set(readJSON(join(dir, "crops.excluded.json")) ?? []);

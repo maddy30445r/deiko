@@ -155,7 +155,7 @@ struct PersonasPane: View {
 
             connectedTools
 
-            Text("Each persona is a file in ~/Documents/Deiko/personas. Edit it here, or open it in your own editor — Deiko uses whatever the file says.")
+            Text("Each persona is a file on this Mac. Edit it here, or open it in your own editor — Deiko uses whatever the file says.")
                 .font(.system(size: 11))
                 .foregroundStyle(DeikoStyle.ink2)
                 .fixedSize(horizontal: false, vertical: true)

@@ -2,7 +2,7 @@
 /**
  * Where a brief belongs, and what it remembers.
  *
- *   node scripts/classify.mjs ~/Documents/Deiko/<id>
+ *   node scripts/classify.mjs ~/Library/Application\ Support/Deiko/<id>
  *
  * Scores every earlier task on this machine and sends the best twenty to the
  * classifier — Jev, through Deiko's relay — which answers, per task, whether

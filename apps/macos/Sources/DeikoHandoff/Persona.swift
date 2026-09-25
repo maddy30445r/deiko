@@ -5,7 +5,7 @@ import Foundation
 //
 // A persona is the paragraph a developer would otherwise type at the bottom of
 // every brief: who they are, and what shape they want the answer in. It is a
-// markdown file on disk (`~/Documents/Deiko/personas/<id>.md`) that travels
+// markdown file on disk (`<board>/personas/<id>.md`) that travels
 // with the brief — read by path where the agent can open files, pasted beside
 // it where it cannot.
 //

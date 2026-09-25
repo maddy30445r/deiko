@@ -2,7 +2,7 @@
 /**
  * Score how well a session GROUNDED — and check M1's done-when.
  *
- *   node scripts/ground-report.mjs ~/Documents/Deiko/<id>
+ *   node scripts/ground-report.mjs ~/Library/Application\ Support/Deiko/<id>
  *
  * `align-session.mjs` scores the other half: which utterance bound to which
  * referent. This scores the half underneath it — whether the referent knows

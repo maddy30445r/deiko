@@ -2,7 +2,7 @@
 /**
  * How well Deiko files a board, against a hand-made answer key.
  *
- *   node scripts/eval-filing.mjs [--board ~/Documents/Deiko]
+ *   node scripts/eval-filing.mjs [--board ~/Library/Application\ Support/Deiko]
  *     [--labels ~/Documents/Deiko-eval/filing-labels.json]
  *     [--shortlist-only] [--relay <url>] [--pace <ms>] [--all] [--draft]
  *     [--model <key>|off]
@@ -34,7 +34,7 @@ import { join, resolve } from "node:path";
 import { STAMP, readBriefLine, unplaceable } from "./lib/context.mjs";
 import { decideLocally, place, prepare, rankLocally, requestClassify, sessionInputs } from "./lib/filing.mjs";
 import { draftLabels, expectations, formatReport, outcomeOf, rankOf, readLabels } from "./lib/eval.mjs";
-import { briefText, currentModel, loadModel } from "./lib/meaning.mjs";
+import { DEIKO_HOME, briefText, currentModel, loadModel } from "./lib/meaning.mjs";
 import { titleFor } from "./lib/tasks.mjs";
 
 const args = process.argv.slice(2);
@@ -45,7 +45,7 @@ const value = (name, fallback) => {
 };
 const home = (p) => resolve(String(p).replace(/^~/, homedir()));
 
-const boardDir = home(value("--board", "~/Documents/Deiko"));
+const boardDir = home(value("--board", DEIKO_HOME));
 if (flag("--draft")) {
   const briefs = readdirSync(boardDir).filter((n) => STAMP.test(n)).sort().map((n) => readBriefLine(join(boardDir, n)));
   process.stdout.write(JSON.stringify(draftLabels(briefs), null, 2) + "\n");

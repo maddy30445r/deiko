@@ -2,7 +2,7 @@
 /**
  * Render a recorded session into the message the developer hands over.
  *
- *   node scripts/render-brief.mjs ~/Documents/Deiko/<id>
+ *   node scripts/render-brief.mjs ~/Library/Application\ Support/Deiko/<id>
  *
  * Two outputs. `prompt.txt` is what gets pasted into a chat — the developer's
  * own words, the screenshots they drew, and the exact strings under what they

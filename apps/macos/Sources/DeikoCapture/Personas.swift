@@ -5,7 +5,7 @@ import DeikoHandoff
 // ─────────────────────────────────────────────────────────────────────────────
 // THE PERSONAS FOLDER
 //
-// `~/Documents/Deiko/personas/<id>.md`, one file each, beside the sessions they
+// `<board>/personas/<id>.md`, one file each, beside the sessions they
 // shape. Files rather than a preferences blob because the whole feature is "a
 // prompt you can own": a developer who wants to read one, diff it, put it in a
 // repo or rewrite it in their own editor should not have to go through us.

@@ -1,9 +1,10 @@
 import Foundation
+import DeikoHandoff
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE SESSIONS FOLDER, AND WHAT LIVES IN IT
 //
-// Every session Deiko has ever recorded sits in `~/Documents/Deiko`, one
+// Every session Deiko has ever recorded sits in `Sessions.defaultRoot`, one
 // timestamped folder each, and until now nothing ever removed one. The audio is
 // deleted as soon as the brief exists — that has always been true and is the
 // promise the microphone prompt makes — but the crops are not: they are
@@ -16,7 +17,7 @@ import Foundation
 //
 // A SESSION IS ITS NAME. `stamp` is strict about the `yyyyMMdd-HHmmss` shape
 // the recorder mints, and everything here filters on it, because this file's
-// whole job is deleting things out of a directory inside somebody's Documents.
+// whole job is deleting things out of a folder on somebody's Mac.
 // Anything a person put there by hand is not a session and is never touched.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -24,7 +25,19 @@ enum Sessions {
 
     /// Where sessions live. `main.swift` can still override the root with
     /// `--out`; this is the default both it and Diagnostics resolve to.
-    static let defaultRoot = "\(NSHomeDirectory())/Documents/Deiko"
+    ///
+    /// NOT DOCUMENTS. It used to be `~/Documents/Deiko`, which iCloud's
+    /// Desktop & Documents sync carries off the Mac — screen text, crops and
+    /// all. Application Support is never synced, and it is where the models
+    /// already were (`models/` sits beside the session folders; nothing here
+    /// reads a folder that is not a session stamp).
+    static let defaultRoot = "\(NSHomeDirectory())/Library/Application Support/Deiko"
+
+    /// ONCE: the board moves out of `~/Documents/Deiko` (see `BoardMove`).
+    @discardableResult
+    static func migrateFromDocuments(home: String = NSHomeDirectory()) -> Int {
+        BoardMove.run(from: "\(home)/Documents/Deiko", to: defaultRoot)
+    }
 
     /// How long a finished session is kept before the launch sweep removes it.
     ///
@@ -115,6 +128,11 @@ enum Sessions {
 
         var total: Int64 = 0
         for case let url as URL in enumerator {
+            // The models share the folder; they are not sessions.
+            if enumerator.level == 1, url.lastPathComponent == "models" {
+                enumerator.skipDescendants()
+                continue
+            }
             let values = try? url.resourceValues(
                 forKeys: [.totalFileAllocatedSizeKey, .fileSizeKey]
             )
@@ -172,7 +190,7 @@ enum Sessions {
 
     /// Remove ONE session. Named by its folder, and only if that folder is
     /// shaped like a session (`stamp` is strict for exactly this reason): this
-    /// deletes a directory inside somebody's Documents, and the only thing
+    /// deletes a directory on somebody's Mac, and the only thing
     /// standing between it and an arbitrary path is that check.
     @discardableResult
     static func delete(dir: String) -> Bool {
