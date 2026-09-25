@@ -1,11 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
+
+import { DEFAULT_MODEL, isReady } from "../lib/meaning.mjs";
 
 const script = fileURLToPath(new URL("../memory-mcp.mjs", import.meta.url));
 const FAKE_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
@@ -54,8 +58,9 @@ function snapshot(dir) {
   return out;
 }
 
-async function session(root) {
-  const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("DEIKO_"))), DEIKO_ROOT: root, DEIKO_MEANING_MODEL: "off" };
+async function session(root, { model = false } = {}) {
+  const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("DEIKO_"))), DEIKO_ROOT: root };
+  if (!model) env.DEIKO_MEANING_MODEL = "off";
   const child = spawn(process.execPath, [script], { env, stdio: ["pipe", "pipe", "ignore"] });
   const waiting = new Map();
   const raw = [];
@@ -74,7 +79,7 @@ async function session(root) {
     const r = await call("tools/call", { name, arguments: args });
     return { isError: r.result.isError === true, value: r.result.isError ? r.result.content[0].text : JSON.parse(r.result.content[0].text) };
   };
-  return { call, tool, raw, close: () => child.kill() };
+  return { call, tool, raw, child, close: () => child.kill() };
 }
 
 test("the memory helper speaks MCP and hands back only what a brief already shares", async () => {
@@ -102,7 +107,7 @@ test("the memory helper speaks MCP and hands back only what a brief already shar
     assert.equal(brief.value.prompt, "the price still shows 99 after I save\n");
     assert.match(brief.value.outcome, /Synced the price/);
     assert.deepEqual(brief.value.screenshots, [join(root, "20260918-100000", "crops", "kept.png")]);
-    assert.ok(brief.value.screenText.includes("Price settings"));
+    assert.equal("screenText" in brief.value, false, "the prompt already carries whatever screen text the brief kept — no separate field");
     assert.equal(brief.value.summary.keys.pages[0], "Pricing");
     assert.equal("components" in brief.value.summary.keys, false);
 
@@ -123,3 +128,178 @@ test("the memory helper speaks MCP and hands back only what a brief already shar
   }
   assert.deepEqual(snapshot(root), before, "the helper writes nothing");
 });
+
+test("get_task always compiles its note from the live board, never a stale tasks/<id>.md", async () => {
+  const root = board();
+  mkdirSync(join(root, "tasks"), { recursive: true });
+  // A note left over from before a brief was deleted from the board — it must
+  // never be read, let alone quoted back to the agent.
+  writeFileSync(join(root, "tasks", "t-20260918-100000.md"), "# STALE TITLE FROM A DELETED BRIEF\nSTALE-SECRET-LINE\n");
+  const s = await session(root);
+  try {
+    const task = await s.tool("get_task", { id: "t-20260918-100000" });
+    assert.equal(task.value.note.includes("STALE-SECRET-LINE"), false, "a stale tasks/<id>.md on disk must never be read");
+    assert.match(task.value.note, /^# Fix the price display after saving/, "the note is compiled fresh from the live briefs instead");
+  } finally {
+    s.close();
+  }
+});
+
+test("get_brief never follows a symlink or hands back a path outside the board", async () => {
+  const root = board();
+  const dir = join(root, "20260918-100000");
+  const outsideDir = mkdtempSync(join(tmpdir(), "deiko-outside-"));
+  const secretFile = join(outsideDir, "secret.txt");
+  writeFileSync(secretFile, "TOP-SECRET-OUTSIDE-THE-BOARD\n");
+
+  rmSync(join(dir, "prompt.txt"));
+  symlinkSync(secretFile, join(dir, "prompt.txt"));
+  rmSync(join(dir, "outcome.md"));
+  symlinkSync(secretFile, join(dir, "outcome.md"));
+
+  const manifest = JSON.parse(readFileSync(join(dir, "brief.json"), "utf8"));
+  manifest.referents.push({ cropPath: secretFile });
+  writeFileSync(join(dir, "brief.json"), JSON.stringify(manifest));
+
+  const s = await session(root);
+  try {
+    const brief = await s.tool("get_brief", { id: "20260918-100000" });
+    assert.equal(brief.value.prompt, null, "a symlinked prompt.txt must not be followed");
+    assert.equal(brief.value.outcome, null, "a symlinked outcome.md must not be followed");
+    assert.equal(brief.value.screenshots.includes(secretFile), false, "a cropPath outside the board must be dropped");
+    assert.equal(s.raw.join("\n").includes("TOP-SECRET-OUTSIDE-THE-BOARD"), false, "the outside file's contents must never reach the agent");
+  } finally {
+    s.close();
+  }
+});
+
+test("outcome is redacted as a block, catching a secret on the line after its label, while file paths stay readable", async () => {
+  const root = board();
+  const dir = join(root, "20260918-100000");
+  writeFileSync(join(dir, "outcome.md"), [
+    "## Did",
+    "Rotated the credentials.",
+    "New DB password:",
+    "Xk9mQ2vLp8Rt4Zq",
+    "",
+    "## Files",
+    "- src/components/PricingTable.tsx",
+    "- apps/capture/Sources/DeikoCapture/MemoryHelper.swift",
+  ].join("\n"));
+  const s = await session(root);
+  try {
+    const brief = await s.tool("get_brief", { id: "20260918-100000" });
+    assert.equal(brief.value.outcome.includes("Xk9mQ2vLp8Rt4Zq"), false, "a secret on the line after its label must still be caught");
+    assert.match(brief.value.outcome, /- src\/components\/PricingTable\.tsx/, "a plain file path must stay readable");
+    assert.match(brief.value.outcome, /- apps\/capture\/Sources\/DeikoCapture\/MemoryHelper\.swift/);
+  } finally {
+    s.close();
+  }
+});
+
+test("search cannot be used to confirm a guessed secret", async () => {
+  const root = board();
+  const s = await session(root);
+  try {
+    const guess = await s.tool("search_briefs", { query: FAKE_KEY.slice(0, 13) });
+    assert.equal(guess.value.some((r) => r.brief === "20260918-100000"), false, "a fragment of a secret on screen must not surface its brief");
+  } finally {
+    s.close();
+  }
+});
+
+test("the search index is cached per session and refreshed when its files change", async () => {
+  const root = board();
+  const dir = join(root, "20260918-110000");
+  const s = await session(root);
+  try {
+    const before = await s.tool("search_briefs", { query: "GIZMO-FRESH-TERM" });
+    assert.equal(before.value.some((r) => r.brief === "20260918-110000"), false);
+
+    mkdirSync(join(dir, "crops"), { recursive: true });
+    writeFileSync(join(dir, "events.jsonl"), `${JSON.stringify({ type: "probe", t: 1, windowTitle: "GIZMO-FRESH-TERM window" })}\n`);
+    const future = new Date(Date.now() + 60_000);
+    utimesSync(join(dir, "events.jsonl"), future, future);
+
+    const after = await s.tool("search_briefs", { query: "GIZMO-FRESH-TERM" });
+    assert.ok(after.value.some((r) => r.brief === "20260918-110000"), "a session's new words must be searchable without restarting the helper");
+  } finally {
+    s.close();
+  }
+});
+
+test("a board this Mac can't read returns a clear tool error, not an empty list", async () => {
+  const blocked = mkdtempSync(join(tmpdir(), "deiko-blocked-"));
+  chmodSync(blocked, 0o000);
+  try {
+    const s = await session(blocked);
+    try {
+      const r = await s.tool("search_briefs", { query: "anything" });
+      assert.equal(r.isError, true);
+      assert.match(r.value, /allow.*access/i);
+    } finally {
+      s.close();
+    }
+  } finally {
+    chmodSync(blocked, 0o700);
+  }
+});
+
+test("a null or non-object JSON-RPC line gets an error reply, never a crash", async () => {
+  const root = board();
+  const s = await session(root);
+  try {
+    for (const bad of ["null", "[]", '"str"', "42"]) s.child.stdin.write(`${bad}\n`);
+    // The process must still be alive and answering afterwards.
+    const ping = await s.call("ping", {});
+    assert.deepEqual(ping.result, {});
+    const errs = s.raw.map((l) => JSON.parse(l)).filter((r) => r.id === null && r.error?.code === -32600);
+    assert.equal(errs.length, 4, "each malformed line gets an Invalid Request error, not silence or a crash");
+  } finally {
+    s.close();
+  }
+});
+
+test("tools/call rejects a prototype method name instead of treating it as a tool", async () => {
+  const root = board();
+  const s = await session(root);
+  try {
+    const r = await s.call("tools/call", { name: "constructor", arguments: {} });
+    assert.equal(r.result.isError, true);
+    assert.match(r.result.content[0].text, /unknown tool/);
+  } finally {
+    s.close();
+  }
+});
+
+test("initialize answers with the server's own protocol version, never an echo", async () => {
+  const root = board();
+  const s = await session(root);
+  try {
+    const r = await s.call("initialize", { protocolVersion: "2099-99-99", capabilities: {}, clientInfo: { name: "t", version: "0" } });
+    assert.notEqual(r.result.protocolVersion, "2099-99-99");
+    assert.equal(r.result.protocolVersion, "2025-06-18");
+  } finally {
+    s.close();
+  }
+});
+
+test(
+  "the meaning model loads once per process, not once per search",
+  { skip: !isReady(DEFAULT_MODEL) && "model not downloaded on this Mac" },
+  async () => {
+    const root = board();
+    const s = await session(root, { model: true });
+    try {
+      const t0 = Date.now();
+      await s.tool("search_briefs", { query: "price" });
+      const first = Date.now() - t0;
+      const t1 = Date.now();
+      await s.tool("search_briefs", { query: "listing" });
+      const second = Date.now() - t1;
+      assert.ok(second * 3 < first, `expected the cached load to make the second search much faster: first ${first}ms, second ${second}ms`);
+    } finally {
+      s.close();
+    }
+  },
+);
