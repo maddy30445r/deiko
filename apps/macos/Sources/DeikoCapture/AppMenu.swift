@@ -19,6 +19,10 @@ enum AppMenu {
         let app = NSMenu(title: "Deiko")
         app.addItem(withTitle: "About Deiko", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         app.addItem(.separator())
+        // ⌘, is where every Mac app keeps its settings. Nil target: the app
+        // delegate (`MenuBar`) answers it through the responder chain.
+        app.addItem(withTitle: "Settings…", action: #selector(MenuBar.showSettings(_:)), keyEquivalent: ",")
+        app.addItem(.separator())
         app.addItem(withTitle: "Hide Deiko", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         let others = app.addItem(withTitle: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
         others.keyEquivalentModifierMask = [.command, .option]

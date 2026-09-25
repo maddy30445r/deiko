@@ -353,10 +353,17 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Detached, and nothing waits for it: the menu is already usable, and a
         // slow or absent network must not delay the app coming up. When it
         // finds something the menu rebuilds and grows one item.
-        Task { @MainActor in
-            await Update.check()
-            if Update.available != nil { rebuildMenu() }
+        // And again every six hours: a menu-bar app runs for weeks, and a
+        // check made only at launch never hears of a release after it.
+        let checkForUpdate = { [weak self] in
+            Task { @MainActor in
+                await Update.check()
+                if Update.available != nil { self?.rebuildMenu() }
+            }
         }
+        checkForUpdate()
+        let updates = Timer(timeInterval: 6 * 60 * 60, repeats: true) { _ in checkForUpdate() }
+        RunLoop.main.add(updates, forMode: .common)
 
         // What is left of the plan, so the menu's line is right the first time
         // it is opened rather than after the first session. Detached for the
@@ -562,6 +569,7 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
             ))
         }
         menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "About Deiko", action: #selector(showAbout), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Quit Deiko", action: #selector(quit), keyEquivalent: "q"))
 
         for item in menu.items where item.action != nil { item.target = self }
@@ -850,6 +858,14 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func openSettings() {
         main.present(.settings)
+    }
+
+    /// The app menu's Settings… (⌘,), reached through the responder chain.
+    @objc func showSettings(_ sender: Any?) { openSettings() }
+
+    @objc private func showAbout() {
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.orderFrontStandardAboutPanel(nil)
     }
 
     @objc private func openWelcome() {
