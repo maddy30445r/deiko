@@ -17,6 +17,15 @@
 # codesign signs perfectly well with an untrusted local identity.
 SIGN_NAME  ?= Deiko Local
 SIGN_FOUND := $(shell security find-identity -p codesigning 2>/dev/null | grep -c '"$(SIGN_NAME)"')
+# The identity actually used to sign: "-" (ad-hoc) when SIGN_NAME isn't in the
+# keychain, SIGN_NAME otherwise — the local self-signed cert from
+# `make signing-setup`, or, later, a real "Developer ID Application: …" one.
+SIGN_ID    := $(if $(filter 0,$(SIGN_FOUND)),-,$(SIGN_NAME))
+# A Developer ID identity's signature needs a secure timestamp and the
+# hardened runtime or notarytool rejects it — see `sign` below. Ad-hoc and the
+# local self-signed cert get neither: there's no Apple timestamp server to
+# reach for either one, and asking would just fail.
+SIGN_EXTRA := $(if $(findstring Developer ID,$(SIGN_ID)),--timestamp --options runtime,)
 
 CAPTURE_DIR := apps/capture
 DEBUG_BIN   := $(CAPTURE_DIR)/.build/debug/deiko-capture
@@ -202,7 +211,7 @@ endif
 ## and checks it, which is what catches a resource added after sealing.
 sign:
 	@find $(RES)/node_modules \( -name '*.node' -o -name '*.dylib' \) -type f 2>/dev/null \
-	  | while read -r f; do codesign --force --sign "$(if $(filter 0,$(SIGN_FOUND)),-,$(SIGN_NAME))" "$$f" 2>/dev/null \
+	  | while read -r f; do codesign --force --sign "$(SIGN_ID)" $(SIGN_EXTRA) "$$f" 2>/dev/null \
 	  || { echo "✗ could not sign $$f"; exit 1; }; done
 ifeq ($(SIGN_FOUND),0)
 	@codesign --force --sign - $(APP) 2>/dev/null
@@ -376,6 +385,15 @@ release: guard-clean
 		|| echo "  ! BUY_URL is empty — this build shows no way to buy Pro"
 	@test -n "$(SUPPORT_EMAIL)" \
 		|| echo "  ! SUPPORT_EMAIL is empty — this build shows no way to send feedback"
+	@# THE MODEL MIRROR, CHECKED BEFORE THE DMG IS BUILT. Every install of this
+	@# release runs `scripts/lib/meaning.mjs`'s downloader against the mirror
+	@# as soon as it launches; if the upload there was forgotten, every one of
+	@# them fails the same way forever, on every launch. The file list comes
+	@# from `MODELS` itself, so this can never drift from what the app asks for.
+	@for url in $$(node -e "import('./scripts/lib/meaning.mjs').then(({ MODELS, DEFAULT_MODEL, MODEL_BASE_URL }) => { for (const f of MODELS[DEFAULT_MODEL].files) console.log(MODEL_BASE_URL.replace(/\/+$$/, '') + '/' + DEFAULT_MODEL + '/' + f.path); } )"); do \
+		curl -fsI "$$url" >/dev/null || { echo "✗ model mirror is missing $$url — upload it before releasing"; exit 1; }; \
+	done
+	@echo "  model mirror: all files present"
 	@$(MAKE) --no-print-directory dmg RELAY_URL='$(RELAY_URL)' SITE_URL='$(SITE_URL)' BUY_URL='$(BUY_URL)' SUPPORT_EMAIL='$(SUPPORT_EMAIL)'
 	@# SITE_URL travels in the environment: publish-release.sh stamps it into
 	@# version.json, and without it that falls back to a hostname nobody types.
