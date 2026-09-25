@@ -47,6 +47,10 @@ enum MainSection: String, CaseIterable, Identifiable {
 final class MainNav: ObservableObject {
     static let shared = MainNav()
     @Published var section: MainSection = .dashboard
+    /// The one piece of work the board is opened on, or nil for every brief.
+    /// Here rather than in the board, so the sidebar's Board row can clear it:
+    /// clicking "Board" while inside a work must show all briefs again.
+    @Published var work: String?
 }
 
 @MainActor
@@ -212,6 +216,7 @@ struct MainWindowView: View {
                     shortcut: KeyEquivalent(Character("\(index + 1)"))
                 ) {
                     nav.section = section
+                    if section == .board { nav.work = nil }
                 }
             }
 
@@ -816,10 +821,14 @@ private struct DashboardPane: View {
 
 private struct BoardPane: View {
     @ObservedObject var sessions: SessionsStore
+    @ObservedObject private var nav = MainNav.shared
     @State private var query = ""
     @State private var filter: Filter = .all
     /// One piece of work, oldest first — what a card's tag opens.
-    @State private var work: String? = UIShotPose.work
+    private var work: String? {
+        get { nav.work }
+        nonmutating set { nav.work = newValue }
+    }
     /// Days whose set-aside briefs are shown, by heading.
     @State private var unfolded: Set<String> = UIShotPose.unfolded
     @FocusState private var searching: Bool
@@ -1009,7 +1018,6 @@ private struct BoardPane: View {
         let sections = work == nil
             ? BoardTimeline.sections(shown, date: \.date, now: Date())
             : [(title: "", items: shown)]
-        // Not lazy — see `CardGrid`.
         return VStack(alignment: .leading, spacing: 26) {
             // Above the cards, for the reason the day heading is: it must
             // win the click where the two meet.
@@ -1044,7 +1052,7 @@ private struct BoardPane: View {
     }
 
     private func grid(_ items: [SessionsStore.Item]) -> some View {
-        CardGrid {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), spacing: 14, alignment: .top)], spacing: 14) {
             ForEach(items) { item in
                 BoardCard(item: item, store: sessions, showsTag: work == nil) { task in
                     query = ""
@@ -1149,104 +1157,7 @@ struct ChipButtonStyle: ButtonStyle {
                 .contentShape(Capsule())
                 .opacity(configuration.isPressed ? 0.7 : 1)
                 .animation(.easeOut(duration: 0.12), value: hovering)
-                .trackHover($hovering)
-        }
-    }
-}
-
-/// HOVER THE WAY APPKIT DOES IT. SwiftUI's `.onHover` registers a tracking
-/// area where the view was first laid out and, inside a scroll view whose
-/// content re-lays out without scrolling, leaves it there: a card that
-/// changed height ("Put with Sitemap?" became "Sitemap · 3") moved every card
-/// below it, and hovering the fourth brief lit September's first. An
-/// `NSTrackingArea` with `.inVisibleRect` is recomputed from the view's
-/// current frame on every event — Finder's and Mail's hover — so it cannot go
-/// stale. The view takes no clicks: `hitTest` answers nil.
-private struct HoverTracker: NSViewRepresentable {
-    let onHover: (Bool) -> Void
-
-    func makeNSView(context: Context) -> TrackingView { TrackingView() }
-    func updateNSView(_ view: TrackingView, context: Context) { view.onHover = onHover }
-
-    final class TrackingView: NSView {
-        var onHover: (Bool) -> Void = { _ in }
-
-        override func updateTrackingAreas() {
-            super.updateTrackingAreas()
-            trackingAreas.forEach(removeTrackingArea)
-            addTrackingArea(NSTrackingArea(
-                rect: .zero,
-                options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
-                owner: self
-            ))
-        }
-
-        override func mouseEntered(with event: NSEvent) { onHover(true) }
-        override func mouseExited(with event: NSEvent) { onHover(false) }
-        override func hitTest(_ point: NSPoint) -> NSView? { nil }
-    }
-}
-
-extension View {
-    /// `.onHover`, from a tracking area that follows the view (see `HoverTracker`).
-    func trackHover(_ hovering: Binding<Bool>) -> some View {
-        background(HoverTracker { hovering.wrappedValue = $0 })
-    }
-}
-
-/// Columns of at least 210pt, 14pt apart, each row as tall as its tallest
-/// card, cards top-aligned: `LazyVGrid(.adaptive(minimum: 210))`'s look,
-/// without its laziness.
-///
-/// WHY NOT LAZY. A lazy grid puts a card at an estimated place and moves it
-/// once its row's real height is known, and on macOS the regions its buttons
-/// registered stay at the estimate: clicking the fourth brief reached
-/// September's first card, measured at that spot earlier. This places every
-/// card once, at its final frame (hover is `trackHover`'s job). The board is
-/// a few hundred cards at most; laying them all out is cheap.
-struct CardGrid: SwiftUI.Layout {
-    let minColumn: CGFloat = 210
-    let spacing: CGFloat = 14
-
-    private func columns(_ width: CGFloat) -> (count: Int, width: CGFloat) {
-        let count = max(1, Int((width + spacing) / (minColumn + spacing)))
-        return (count, (width - spacing * CGFloat(count - 1)) / CGFloat(count))
-    }
-
-    /// Each row's cards and its height: the tallest card's, at the column width.
-    private func rows(_ subviews: LayoutSubviews, _ count: Int, _ column: CGFloat) -> [(range: Range<Int>, height: CGFloat)] {
-        let proposal = ProposedViewSize(width: column, height: nil)
-        var rows: [(range: Range<Int>, height: CGFloat)] = []
-        for start in stride(from: 0, to: subviews.count, by: count) {
-            let range = start..<min(start + count, subviews.count)
-            var height: CGFloat = 0
-            for index in range { height = max(height, subviews[index].sizeThatFits(proposal).height) }
-            rows.append((range, height))
-        }
-        return rows
-    }
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: LayoutSubviews, cache: inout ()) -> CGSize {
-        // A scroll view also asks with `.infinity`; three columns then.
-        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? (minColumn * 3 + spacing * 2)
-        let (count, column) = columns(width)
-        let all = rows(subviews, count, column)
-        var height: CGFloat = 0
-        for row in all { height += row.height }
-        height += spacing * CGFloat(max(0, all.count - 1))
-        return CGSize(width: width, height: height)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: LayoutSubviews, cache: inout ()) {
-        let (count, column) = columns(bounds.width)
-        let size = ProposedViewSize(width: column, height: nil)
-        var y = bounds.minY
-        for row in rows(subviews, count, column) {
-            for (i, index) in row.range.enumerated() {
-                let x = bounds.minX + CGFloat(i) * (column + spacing)
-                subviews[index].place(at: CGPoint(x: x, y: y), anchor: UnitPoint.topLeading, proposal: size)
-            }
-            y += row.height + spacing
+                .onHover { hovering = $0 }
         }
     }
 }
@@ -1357,7 +1268,7 @@ private struct BoardCard: View {
         // and took their clicks. A card says "hovered" with its border and
         // shadow alone, inside its own frame.
         .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: hovering)
-        .trackHover($hovering)
+        .onHover { hovering = $0 }
         .onTapGesture(count: 2) { NSWorkspace.shared.open(URL(fileURLWithPath: item.dir)) }
         // Kept beside the button: somebody who already reaches for a
         // right-click should not have to learn a new way to do it.
@@ -1520,7 +1431,7 @@ private struct TextButtonStyle: ButtonStyle {
                 .padding(.vertical, 3)
                 .contentShape(Rectangle())
                 .opacity(configuration.isPressed ? 0.6 : 1)
-                .trackHover($hovering)
+                .onHover { hovering = $0 }
         }
     }
 }
@@ -1834,8 +1745,10 @@ struct SessionMenu: View {
                 .help(taken ? SessionsStore.ownTaskTakenHelp : "")
             let others = store.recentTasks(excluding: item.odds ? nil : item.task)
             if !others.isEmpty { Divider() }
+            // The short name a tag wears ("Sitemap · 3"), not the sentence
+            // the task was summarised as: a menu of sentences is unreadable.
             ForEach(others) { group in
-                Button("\(store.title(ofTask: group.id)) · \(group.items.count)") {
+                Button("\(store.workName(ofTask: group.id)) · \(group.items.count)") {
                     store.move(item, toTask: group.id)
                 }
             }

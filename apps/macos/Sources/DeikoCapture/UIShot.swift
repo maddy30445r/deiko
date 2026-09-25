@@ -76,7 +76,7 @@ enum UIShot {
             UIShotPose.unfolded = []
             // The board opened on the biggest piece of work — not reachable
             // by a still first paint.
-            UIShotPose.work = store.workCounts.max { $0.value < $1.value }?.key
+            MainNav.shared.work = store.workCounts.max { $0.value < $1.value }?.key
             shoot(
                 MainWindowView(openSessionDir: nil, sessionRoot: root),
                 size: NSSize(width: 980, height: 1000), look: look,
@@ -98,7 +98,7 @@ enum UIShot {
             )
             UIShotPose.historyOpen = false
             // A work no agent has written back on yet.
-            UIShotPose.work = store.workCounts.filter { $0.value >= 2 }.keys.sorted().first { task in
+            MainNav.shared.work = store.workCounts.filter { $0.value >= 2 }.keys.sorted().first { task in
                 !store.items.contains { $0.task == task
                     && FileManager.default.fileExists(atPath: ($0.dir as NSString).appendingPathComponent("outcome.md")) }
             }
@@ -107,7 +107,7 @@ enum UIShot {
                 size: NSSize(width: 980, height: 800), look: look,
                 to: "\(out)-board-work-empty-\(name).png"
             )
-            UIShotPose.work = nil
+            MainNav.shared.work = nil
             shoot(orbCard(), size: NSSize(width: 400, height: 130), look: look, to: "\(out)-orb-\(name).png")
             shoot(orbReady(), size: NSSize(width: 400, height: 190), look: look, to: "\(out)-orbready-\(name).png")
             shoot(orbReady(notice: true), size: NSSize(width: 400, height: 250), look: look,
@@ -313,7 +313,6 @@ enum UIShot {
 /// board opened on one piece of work, and the set-aside folds opened.
 @MainActor
 enum UIShotPose {
-    static var work: String?
     /// Days whose set-aside briefs are shown, by heading.
     static var unfolded: Set<String> = []
     /// The work panel with every note shown, and with its full history open.

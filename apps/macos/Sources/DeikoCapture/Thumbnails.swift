@@ -110,6 +110,11 @@ struct CropThumbnail: View {
         .frame(maxWidth: width == nil ? .infinity : nil)
         .clipped()
         .clipShape(RoundedRectangle(cornerRadius: radius))
+        // THE CLIP IS ONLY VISUAL. `.fill` makes the image larger than its
+        // frame, and SwiftUI hit-tests the whole image, not the clipped part:
+        // a tall screenshot reached a hundred points above its card and took
+        // the hover and the clicks meant for the card above it.
+        .contentShape(RoundedRectangle(cornerRadius: radius))
         .overlay(
             RoundedRectangle(cornerRadius: radius)
                 .strokeBorder(DeikoStyle.hairline, lineWidth: 1)
