@@ -151,6 +151,16 @@ export const CLASSIFIES_PER_CALLER_PER_DAY =
 export const TEXT_CALLS_PER_IP_PER_DAY =
   Number(process.env.DEIKO_TEXT_CALLS_PER_IP_PER_DAY ?? 400);
 
+/// FREE AUDIO PER ADDRESS PER DAY. A device token is `dev_` plus whatever
+/// the caller says it is — the relay cannot tell a Mac's hardware digest from
+/// a made-up one — so a fresh trial cost one curl, and twelve of them spent
+/// the free tier's whole daily share before midnight. This row is keyed on
+/// the hashed address, so rotating tokens from one machine spends one
+/// allowance. Three trials' worth: an office behind one NAT is not one
+/// person. Pro licences are not on it.
+export const FREE_SECONDS_PER_IP_PER_DAY =
+  Number(process.env.DEIKO_FREE_SECONDS_PER_IP_PER_DAY ?? 3 * FREE_TRIAL_SECONDS);
+
 /// 16 kHz, mono, 16-bit — so two bytes a sample, 32,000 bytes a second. The
 /// client's chunker uses exactly these constants.
 ///
@@ -479,7 +489,7 @@ export function capFor(tier, kind) {
 /// downstream: `transcribe.mjs` treats 402 as "fall back to on-device and carry
 /// on", which is the free tier working exactly as designed, while a 429 is a
 /// transient condition worth surfacing.
-export function decide({ tier, kind, usedSeconds, globalUsedSeconds }) {
+export function decide({ tier, kind, usedSeconds, globalUsedSeconds, ipUsedSeconds = 0 }) {
   const cap = capFor(tier, kind);
 
   if (globalUsedSeconds > globalCapFor(tier)) {
@@ -487,6 +497,15 @@ export function decide({ tier, kind, usedSeconds, globalUsedSeconds }) {
       allowed: false,
       status: 429,
       error: "the service is at its daily ceiling — try again tomorrow",
+      remainingSeconds: 0,
+    };
+  }
+
+  if (tier !== "pro" && ipUsedSeconds > FREE_SECONDS_PER_IP_PER_DAY) {
+    return {
+      allowed: false,
+      status: 429,
+      error: "free transcription from this network is used up for today — it continues on your Mac",
       remainingSeconds: 0,
     };
   }

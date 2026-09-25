@@ -190,25 +190,24 @@ export async function peek(subject, tier, now = Date.now()) {
 /// re-thrown. Compensation is best-effort: if it also fails, the counter is
 /// over by one chunk, which is the direction the whole file is wrong in
 /// already.
-export async function record({ subject, seconds, tier, now = Date.now() }) {
+export async function record({ subject, seconds, tier, now = Date.now(), ipRow = null }) {
   const key = usageKey(subject, now, tier);
-  const global = globalKey(now);
-  const [subjectWrite, globalWrite] = await Promise.allSettled([
-    addSeconds(key, seconds, key.includes("#") && tier === "pro" ? MONTHLY_TTL_SECONDS : null),
-    addSeconds(global, seconds, DAILY_TTL_SECONDS),
-  ]);
+  const writes = [
+    [key, key.includes("#") && tier === "pro" ? MONTHLY_TTL_SECONDS : null],
+    [globalKey(now), DAILY_TTL_SECONDS],
+    ...(ipRow ? [[ipRow, DAILY_TTL_SECONDS]] : []),
+  ];
+  const results = await Promise.allSettled(writes.map(([row, ttl]) => addSeconds(row, seconds, ttl)));
 
-  if (subjectWrite.status === "rejected" || globalWrite.status === "rejected") {
-    if (subjectWrite.status === "fulfilled") {
-      await addSeconds(key, -seconds, null).catch(() => {});
-    }
-    if (globalWrite.status === "fulfilled") {
-      await addSeconds(global, -seconds, null).catch(() => {});
-    }
-    throw subjectWrite.reason ?? globalWrite.reason;
+  const failed = results.find((r) => r.status === "rejected");
+  if (failed) {
+    await Promise.all(results.map((r, i) =>
+      r.status === "fulfilled" ? addSeconds(writes[i][0], -seconds, null).catch(() => {}) : null));
+    throw failed.reason;
   }
 
-  return { usedSeconds: subjectWrite.value, globalUsedSeconds: globalWrite.value };
+  const [usedSeconds, globalUsedSeconds, ipUsedSeconds = 0] = results.map((r) => r.value);
+  return { usedSeconds, globalUsedSeconds, ipUsedSeconds };
 }
 
 /// Give a request's seconds back, because it bought nothing.
@@ -229,10 +228,11 @@ export async function record({ subject, seconds, tier, now = Date.now() }) {
 /// `now` IS THE RECORD'S, AND HAS NO DEFAULT. A refund that took its own clock
 /// credited the wrong row whenever the upstream answered after midnight: the
 /// new day's counters went negative and the old day's kept the charge.
-export async function refund({ subject, seconds, tier, now }) {
+export async function refund({ subject, seconds, tier, now, ipRow = null }) {
   await Promise.all([
     addSeconds(usageKey(subject, now, tier), -seconds, null),
     addSeconds(globalKey(now), -seconds, null),
+    ...(ipRow ? [addSeconds(ipRow, -seconds, null)] : []),
   ]);
 }
 
