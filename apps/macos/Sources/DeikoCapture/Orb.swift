@@ -63,6 +63,9 @@ final class OrbState: ObservableObject {
     /// What the session captured, for the working readout — known the moment
     /// the recorder closes, long before the pipeline has anything to say.
     @Published var captured: SessionStats?
+    /// The app a brief goes to without a fling — the last one used before
+    /// Deiko — named on the review panel's Send button and the coin's action.
+    @Published var sendTo: String?
     var isAiming: Bool { if case .idle = aim { return false }; return true }
     /// Aiming AND over something a brief can actually go to.
     var isOverTarget: Bool { if case .over = aim { return true }; return false }
@@ -134,6 +137,13 @@ final class OrbController: NSObject {
 
     private var aimPoint: CGPoint?
 
+    /// The last app other than Deiko to come to the front: where ⌘↩ and
+    /// VoiceOver's Send action deliver, since neither can aim at a window.
+    private var lastApp: NSRunningApplication? {
+        didSet { state.sendTo = lastApp?.localizedName }
+    }
+    private var activationObserver: NSObjectProtocol?
+
     // ── Presenting ──────────────────────────────────────────────────────────
 
     /// A session has just closed: show the orb and run the pipeline behind it.
@@ -152,6 +162,7 @@ final class OrbController: NSObject {
         fadeTask?.cancel()
         resizeCount = 0
         state.captured = stats
+        trackLastApp()
         if let extending, extending == sessionDir {
             self.extending = nil
             show()
@@ -276,6 +287,7 @@ final class OrbController: NSObject {
                     },
                     onOpenSettings: { [weak self] in self?.onOpenSettings?() },
                     onDelete: { [weak self] in self?.deleteSession() },
+                    onSend: { [weak self] in self?.sendToLastApp() },
                     onHeightChange: { [weak self] height in self?.fit(cardHeight: height) }
                 )
             )
@@ -504,6 +516,39 @@ final class OrbController: NSObject {
         case .working, .sent:
             return false
         }
+    }
+
+    // ── Sending without a fling ─────────────────────────────────────────────
+
+    private func trackLastApp() {
+        let isOther = { (app: NSRunningApplication?) in
+            app.map { $0.bundleIdentifier != Bundle.main.bundleIdentifier && $0.activationPolicy == .regular } ?? false
+        }
+        if isOther(NSWorkspace.shared.frontmostApplication) { lastApp = NSWorkspace.shared.frontmostApplication }
+        guard activationObserver == nil else { return }
+        activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            guard isOther(app) else { return }
+            MainActor.assumeIsolated { self?.lastApp = app }
+        }
+    }
+
+    /// SENDING IS NOT DRAG-ONLY. The fling is the gesture; this is the same
+    /// send for a keyboard (⌘↩ on the review panel) and for VoiceOver (the
+    /// coin's Send action), into the last app used — its focused field, as a
+    /// fling with no drop point would.
+    private func sendToLastApp() {
+        guard let app = lastApp, !app.isTerminated else { return }
+        switch model.phase {
+        case .ready, .failed: guard model.digest != nil else { return }
+        case .working: guard model.digest == nil else { return }
+        case .sent: return
+        }
+        state.mode = .collapsed
+        applyMode()
+        send(to: HandoffTarget(pid: app.processIdentifier, appName: app.localizedName ?? "the app"))
     }
 
     // ── The fling ───────────────────────────────────────────────────────────
@@ -1050,6 +1095,8 @@ struct OrbActions {
     /// Delete this session's folder outright — the recourse for a session that
     /// should not exist, which until now had none.
     let onDelete: () -> Void
+    /// Send to the last app used, without a fling.
+    let onSend: () -> Void
     /// How tall the collapsed card wants to be, so the panel can be exactly
     /// that and no more.
     let onHeightChange: (CGFloat) -> Void
@@ -1236,6 +1283,7 @@ struct OrbRootView: View {
                 .accessibilityElement()
                 .accessibilityLabel(accessibilitySummary)
                 .accessibilityAddTraits(.isButton)
+                .accessibilityAction(named: Text("Send to \(state.sendTo ?? "your agent")")) { actions.onSend() }
                 .help("Drag the coin onto the window running Claude Code to hand the brief over. Click to review.")
             if state.isAiming {
                 Circle()
@@ -1491,7 +1539,9 @@ struct OrbRootView: View {
                 model: model,
                 onExtend: actions.onExtend,
                 onCollapse: { actions.onSetMode(.collapsed) },
-                onDelete: actions.onDelete
+                onDelete: actions.onDelete,
+                sendTo: state.sendTo,
+                onSend: actions.onSend
             )
         }
         // The design's panel, exactly. Nothing inside may grow it: the content
@@ -1565,7 +1615,7 @@ struct OrbRootView: View {
     private var accessibilitySummary: String {
         switch model.phase {
         case .working: return "Deiko brief, preparing"
-        case .ready: return "Deiko brief, ready. Drag onto your coding agent's window to send, click to review."
+        case .ready: return "Deiko brief, ready. Drag onto your coding agent's window, or use the Send action, to send it. Click to review."
         case .failed: return "Deiko brief, needs attention"
         case .sent: return "Deiko brief, handed over"
         }

@@ -945,6 +945,9 @@ struct ReviewView: View {
     /// Delete the session outright. Owned by the orb, which owns the window
     /// that has to go away with it.
     let onDelete: () -> Void
+    /// The app ⌘↩ sends to (the last one used), and the send itself.
+    var sendTo: String? = nil
+    var onSend: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1799,7 +1802,7 @@ struct ReviewView: View {
                 // unless their own sentence changed, and how many did not is
                 // reported beside the thumbnails, so this line can go back to
                 // saying the one thing that is always true here.
-                Text("Nothing goes to your agent until you throw the coin.")
+                Text("Not sent yet.")
                     .font(.system(size: 12))
                     .foregroundStyle(DeikoStyle.ink2)
             }
@@ -1810,14 +1813,24 @@ struct ReviewView: View {
             // `×` only hides the orb; this is the only way to remove the
             // screenshots.
             Button("Delete session…", role: .destructive) { onDelete() }
+                .fixedSize()
                 .disabled(!isApprovable)
                 .help("Move this session's brief and screenshots to the Trash.")
             // Left of the primary action and unstyled, because it is the rarer
             // choice — but it must be reachable from the same place you decide
             // the brief is not complete.
             Button("Point at more") { onExtend() }
+                .fixedSize()
                 .disabled(!isApprovable)
                 .help("Reopen this session and record more — talk and point again, then tap \(SessionKey.selected.name) to stop.")
+            if let sendTo {
+                // `onSend` approves on its way out, as a fling does.
+                Button("Send to \(sendTo)") { onSend() }
+                .keyboardShortcut(.return, modifiers: .command)
+                .fixedSize()
+                .disabled(!isApprovable)
+                .help("Apply your correction and paste the brief into \(sendTo) (⌘↩).")
+            }
             Button("Good to go") {
                 model.approve()
                 onCollapse()

@@ -168,7 +168,7 @@ enum UIShot {
             actions: OrbActions(
                 onPress: {}, onDrag: { _ in }, onRelease: {}, onDismiss: {},
                 onExtend: {}, onSetMode: { _ in }, onOpenSettings: {},
-                onDelete: {}, onHeightChange: { _ in }
+                onDelete: {}, onSend: {}, onHeightChange: { _ in }
             )
         )
     }
@@ -203,7 +203,7 @@ enum UIShot {
             actions: OrbActions(
                 onPress: {}, onDrag: { _ in }, onRelease: {}, onDismiss: {},
                 onExtend: {}, onSetMode: { _ in }, onOpenSettings: {},
-                onDelete: {}, onHeightChange: { _ in }
+                onDelete: {}, onSend: {}, onHeightChange: { _ in }
             )
         )
     }
@@ -221,7 +221,7 @@ enum UIShot {
             actions: OrbActions(
                 onPress: {}, onDrag: { _ in }, onRelease: {}, onDismiss: {},
                 onExtend: {}, onSetMode: { _ in }, onOpenSettings: {},
-                onDelete: {}, onHeightChange: { _ in }
+                onDelete: {}, onSend: {}, onHeightChange: { _ in }
             )
         )
     }
@@ -269,7 +269,7 @@ enum UIShot {
             decidedBy: "jev",
             model: "jev-1.13.0"
         )
-        return ReviewView(model: model, onExtend: {}, onCollapse: {}, onDelete: {})
+        return ReviewView(model: model, onExtend: {}, onCollapse: {}, onDelete: {}, sendTo: "Claude Code")
             .frame(width: 620, height: 640)
             .background(DeikoStyle.card)
     }
