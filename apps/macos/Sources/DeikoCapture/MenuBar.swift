@@ -218,6 +218,14 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// its clock honest while the user is looking at it.
     private weak var capturingItem: NSMenuItem?
     private var menuClock: Timer?
+    /// ONE menu, refilled in place. A new `NSMenu` built in `menuWillOpen`
+    /// never showed: the menu already opening is the old one, so the items on
+    /// screen were a rebuild behind, and the capturing clock ticked on a copy
+    /// nobody could see.
+    private let menu = NSMenu()
+    /// The permission answers the menu was last built from; the poll rebuilds
+    /// only when they change.
+    private var builtFor: [Bool] = []
     /// Notices a permission granted or revoked in System Settings while Deiko
     /// is running. Lives for the life of the app, unlike `menuClock`.
     private var permissionPoll: Timer?
@@ -399,7 +407,9 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         startListeningIfPermitted()
         setIcon()
-        rebuildMenu()
+        // Every open rebuilds anyway (`menuWillOpen`); a rebuild here is only
+        // for a grant that changed while it was open.
+        if Permission.allCases.map(\.isGranted) != builtFor { rebuildMenu() }
         // The last thing, so the rate follows the state that was just read.
         schedulePermissionPoll()
     }
@@ -455,7 +465,8 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func rebuildMenu() {
-        let menu = NSMenu()
+        menu.removeAllItems()
+        builtFor = Permission.allCases.map(\.isGranted)
         let missing = Permission.allCases.filter { !$0.isGranted }
 
         if !missing.isEmpty {
@@ -559,7 +570,7 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // at launch confidently reports stale facts: it listed Speech
         // Recognition as missing while Settings showed it granted.
         menu.delegate = self
-        statusItem.menu = menu
+        if statusItem.menu !== menu { statusItem.menu = menu }
     }
 
     /// The normal menu: a state block first, then the utility tail. Idle names
