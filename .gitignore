@@ -62,3 +62,6 @@ graphify-out/
 
 # The design tool's working folder (impeccable), never part of the product
 .impeccable/
+
+# Build ledgers and review packages from subagent-driven work, never part of the product
+.superpowers/

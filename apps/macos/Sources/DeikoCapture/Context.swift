@@ -63,6 +63,15 @@ struct SessionContext: Codable, Equatable {
     /// `"odds"` for odds and ends: too little said, or nothing Groq could
     /// make sense of, so no task. Gone once somebody moves it to one.
     var pile: String?
+    /// An earlier task this brief is RELATED to but not part of — linked by
+    /// the classifier instead of merged. The card says "Related to …".
+    var related: String?
+    /// Whether a person put this brief in its task BY HAND — the task
+    /// picker, the "Which one?" chip, "None of these", or "Move to task" on
+    /// the board. Scripts treat a brief as firm filing on this, separately
+    /// from `decidedBy`: a collection-only change never sets it. See
+    /// `placeTask`, the one place that does.
+    var taskBy: String?
 
     var isOdds: Bool { pile == "odds" }
 
@@ -81,8 +90,10 @@ struct SessionContext: Codable, Equatable {
         collectionBy = collectionBy ?? (decidedBy == "you" ? "you" : "jev")
         task = id
         decidedBy = "you"
+        taskBy = "you"
         candidates = nil
         pile = nil
+        if related == id { related = nil }
     }
 
     static func path(sessionDir: String) -> URL {
@@ -94,10 +105,44 @@ struct SessionContext: Codable, Equatable {
         return try? JSONDecoder().decode(SessionContext.self, from: data)
     }
 
+    /// The keys this type owns. Every other key in the file — `jev`, where
+    /// `classify.mjs` logs each probability and the shortlist for tuning —
+    /// is written back exactly as it was read. A hand placement used to drop
+    /// that log on the floor.
+    private static let ownKeys = [
+        "collection", "task", "candidates", "tier", "confidence", "decidedBy",
+        "model", "collectionBy", "pile", "related", "taskBy",
+    ]
+
     func write(sessionDir: String) throws {
+        let url = Self.path(sessionDir: sessionDir)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(self).write(to: Self.path(sessionDir: sessionDir), options: .atomic)
+        let disk = (try? JSONSerialization.jsonObject(with: Data(contentsOf: url))) as? [String: Any] ?? [:]
+        let mine = try JSONSerialization.jsonObject(with: encoder.encode(self)) as? [String: Any] ?? [:]
+        let merged = TaskFiling.merge(disk: disk, mine: mine, ownKeys: Self.ownKeys)
+        let data = try JSONSerialization.data(
+            withJSONObject: merged, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        )
+        try data.write(to: url, options: .atomic)
+    }
+
+    /// Note, in `jev.correctedRank`, where the task somebody picked sat on the
+    /// classifier's shortlist. Only for a v3 filing (one that logged a
+    /// shortlist); anything else is left untouched.
+    static func noteCorrection(sessionDir: String, task: String) {
+        let url = path(sessionDir: sessionDir)
+        guard var doc = (try? JSONSerialization.jsonObject(with: Data(contentsOf: url))) as? [String: Any],
+              var jev = doc["jev"] as? [String: Any],
+              let shortlist = jev["shortlist"] as? [String]
+        else { return }
+        let own = Tasks.own((sessionDir as NSString).lastPathComponent)
+        jev["correctedRank"] = TaskFiling.correctedRank(task: task, own: own, shortlist: shortlist)
+        doc["jev"] = jev
+        guard let data = try? JSONSerialization.data(
+            withJSONObject: doc, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        ) else { return }
+        try? data.write(to: url, options: .atomic)
     }
 
     /// Whether the collection was the classifier's guess rather than a sure
@@ -144,6 +189,8 @@ extension SessionContext {
         model = try c.decodeIfPresent(String.self, forKey: .model)
         collectionBy = try c.decodeIfPresent(String.self, forKey: .collectionBy)
         pile = try c.decodeIfPresent(String.self, forKey: .pile)
+        related = try c.decodeIfPresent(String.self, forKey: .related)
+        taskBy = try c.decodeIfPresent(String.self, forKey: .taskBy)
     }
 }
 

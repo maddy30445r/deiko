@@ -17,6 +17,7 @@
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 
+import { KINDS, normaliseLabel, notAProject } from "./labels.mjs";
 import { TASK_ID, parseOutcome } from "./tasks.mjs";
 
 /// Where a probability becomes a decision.
@@ -26,10 +27,6 @@ import { TASK_ID, parseOutcome } from "./tasks.mjs";
 /// because nothing here ever reads it.
 export const FLOORS = {
   collection: 0.6,
-  task: 0.7,
-  // Worth naming to the agent as "it might be this one" when no task was
-  // joined. Low on purpose: this is a question, not a decision.
-  candidate: 0.15,
   quickHint: 0.8,
 };
 
@@ -68,6 +65,19 @@ export function briefDate(id, now = new Date()) {
   return year === now.getFullYear() ? text : `${text}, ${year}`;
 }
 
+/** "2 days ago", from a gap in milliseconds — plain words for a prompt. */
+export function relativeAge(ms) {
+  const hours = ms / 3600e3;
+  const days = hours / 24;
+  const n = (x, unit) => `${x} ${unit}${x === 1 ? "" : "s"} ago`;
+  if (hours < 1) return "within the hour";
+  if (hours < 24) return n(Math.round(hours), "hour");
+  if (days < 1.5) return "yesterday";
+  if (days < 14) return n(Math.round(days), "day");
+  if (days < 60) return n(Math.round(days / 7), "week");
+  return n(Math.round(days / 30), "month");
+}
+
 /// The shortest narration worth classifying. "Thank you." is a real
 /// transcript, and a board is full of them; asking what project it belongs to
 /// is a question with no answer. Shorter joins its task only on a clear local
@@ -85,127 +95,212 @@ export const COULD_NOT_TELL = /\btoo (short|garbled) to (tell|determine|understa
  *  could not tell what was asked — or null when it can be placed. One rule
  *  for the brief being classified and for the board it is scored against,
  *  so a mic test is neither filed nor a task to file into. */
+/// Words that say nothing on their own — "Thank you.", "I", ".", a mic check.
+/// ponytail: a short list, English and Hinglish; grow it from real boards.
+const FILLER = new Set(["i", "a", "the", "and", "so", "um", "uh", "hmm", "ok", "okay", "yes", "yeah", "no",
+  "hi", "hey", "hello", "thanks", "thank", "you", "test", "testing", "mic", "check", "haan", "acha", "accha", "theek", "hai"]);
+
+/** True when a narration has no word that asks for anything — the owner's
+ *  call (2026-09-25): such a brief goes to odds and ends even on a task's
+ *  screen, while a real short follow-up ("make it blue") still joins. */
+export function saysNothing(narration) {
+  const words = String(narration ?? "").toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+  return words.every((w) => FILLER.has(w));
+}
+
 export function unplaceable(b) {
   if ((b.narration ?? "").trim().length < MIN_NARRATION) return "narration too short to place";
   if (COULD_NOT_TELL.test(b.summaryLine ?? "")) return "the summary could not tell what was asked";
   return null;
 }
 
+/// Filing, v3. Stamped on every context.json this writes, so a re-sort after
+/// the rules change shows exactly which briefs moved and why.
+export const CLASSIFIER = "v3.0";
+/// ponytail: starting values, tuned on the filing eval (scripts/eval-filing.mjs)
+/// and later on real corrections. GATE and ASK are MIRRORED by `GATE` and
+/// `SECOND_LOOK.min` in services/relay/relay.mjs — change both.
+export const GATE = 0.5;
+/// THE JOIN RULE, CALIBRATED ON THE OWNER'S BOARD (2026-09-25, 33 labelled
+/// briefs against live Jev). The first guess — a second look ≥ 0.9 — joined
+/// nothing: on all ten true joins the pairwise look said relation "same" but
+/// its yes sat at 0.43–0.88 (Jev is shy with only one pair in view), while
+/// round one gave those tasks 0.62–0.82 and every correctly-new brief's best
+/// task ≤ 0.23. So a join needs the second look to call it the SAME work
+/// (relation) and not to doubt it (`second`), round one to be clearly for it
+/// (`first`) and clearly ahead of the next task (`gap`). Recent work on the
+/// same page or file needs less from round one (`recent`).
+export const JOIN = { first: 0.6, second: 0.4, gap: 0.2, recent: 0.5, recentMs: 30 * 60e3 };
+export const ASK = 0.35;
+/// The relation levels, in order. MIRRORS `RELATION_RUBRIC` in the relay.
+export const RELATIONS = ["different", "related", "same"];
+
+export function yes(answer) {
+  const p = Number(answer?.noul);
+  return Number.isFinite(p) ? Math.min(1, Math.max(0, p)) : 0;
+}
+
+/** A score answer's level. TWO SHAPES FOR `probabilities`: TypeSafe's docs
+ *  show an array by level; Vercel's gateway returns an object keyed "0", "1",
+ *  … (measured on a live call). Rounding the score is the fallback, which is
+ *  not the same answer when the mass is split. */
+export function level(answer) {
+  if (!answer) return null;
+  const p = answer.probabilities;
+  const probs = Array.isArray(p) ? p
+    : p && typeof p === "object" ? Object.keys(p).sort((a, b) => Number(a) - Number(b)).map((k) => Number(p[k])) : [];
+  if (probs.length) return probs.indexOf(Math.max(...probs));
+  return typeof answer.score === "number" ? Math.round(answer.score) : null;
+}
+
+/** The first code project, site, document or app that can name a project —
+ *  never a tool ("GitHub", "Slack") or a holding folder ("Downloads"). */
+export function projectFromKeys({ keys = {}, apps = [] } = {}) {
+  const first = (list, app) => (Array.isArray(list) ? list.find((s) => typeof s === "string" && !notAProject(s, { app })) : undefined);
+  return first(keys.repo) ?? first(keys.sites) ?? first(keys.docs) ?? first(apps, true) ?? null;
+}
+
+const lowered = (list) => new Set((list ?? []).map((s) => String(s).toLowerCase()));
+const meets = (a, b) => {
+  const theirs = lowered(b);
+  return [...lowered(a)].some((x) => theirs.has(x));
+};
+/// Both sides named one, and none is shared.
+const differ = (a, b) => (a?.length ?? 0) > 0 && (b?.length ?? 0) > 0 && !meets(a, b);
+const trackers = (list) => new Set((list ?? []).map((t) => /^([A-Z][A-Z0-9]*)-\d+$/i.exec(t)?.[1]?.toUpperCase()).filter(Boolean));
+/// ANOTHER TICKET IN THE SAME TRACKER: both name an ENG-n, none the same one.
+/// Never "#n" — an issue and the pull request that fixes it always differ —
+/// and never across trackers, which say nothing about each other.
+const otherTicket = (a, b) => {
+  const theirs = trackers(b);
+  return [...trackers(a)].some((p) => theirs.has(p)) && !meets(a, b);
+};
+
 /**
- * The classifier's answers, turned into a `context.json`.
+ * Jev's percentages → where the brief goes. The only place they become a
+ * decision, and every rule is here:
  *
- * Returns `{ collection, task, newTask, tier, confidence, newCollection }`,
- * plus `candidates` when there are any. `newCollection` is `{ id, name }`
- * when the brief matched no collection but carries a repo hint that is not
- * one yet — the caller creates it. `newTask` is `{ id, title }` when no
- * shortlisted task was confidently chosen — the caller creates it. Never
- * throws on a partial answer: a missing question reads as "no".
+ *   gate < GATE                                   → odds and ends
+ *   the second look says "same" (and its yes ≥ JOIN.second), round one
+ *     ≥ JOIN.first and JOIN.gap ahead of the next  → join
+ *     (round one ≥ JOIN.recent when the task's newest brief is under 30 min
+ *      old AND a page or file label matches — never for old work)
+ *     … but a different page                      → ask instead
+ *   another ticket of the same tracker (ENG-142
+ *     against ENG-150; never "#n")                 → that task is never joined or offered
+ *   anything ≥ ASK not joined, not "different",
+ *     not "related"                               → ask "Which one?" (up to 3)
+ *   the second look says related-but-separate     → new task, `related` link
+ *   otherwise                                     → new task
  *
- * `shortlist` is the task ids Deiko sent, best local score first; `scores` is
- * those local scores, index for index (`scoreTasks`' `score`). `candidates`
- * is up to three of those ids, likeliest first, when the brief joined none
- * and Jev did not confidently call it new — the tasks it MIGHT carry on, for
- * somebody to be asked about. Absent, not empty, when there are none.
- *
- * `taskCollections` maps a shortlisted task id to its latest collection, so
- * a brief that joins a task and was placed by nothing else inherits it.
+ * Round one alone never joins. Time words never reach here.
  */
-export function decide({ answers = {}, collections = [], repoHints = [], shortlist = [], scores = [], taskCollections = {}, sessionId = null, title = null } = {}) {
+export function decide({
+  answers = {}, second = {}, collections = [], keys = {}, apps = [],
+  shortlist = [], taskKeys = {}, newest = {}, now = 0,
+  taskCollections = {}, sessionId = null, title = null,
+} = {}) {
+  // AN UNREADABLE GATE IS A MISSING ONE, as the relay reads it (`finalists`):
+  // `Number(null)` is 0, so coercing first would send a real brief to odds.
+  const g = answers.is_work_brief?.noul;
+  const gate = Number.isFinite(g) ? Math.min(1, Math.max(0, g)) : 1;
+  const same = Object.fromEntries(shortlist.map((id) => [id, yes(answers[`same_${id}`])]));
+  const looks = Object.fromEntries(Object.entries(second ?? {})
+    .filter(([id]) => shortlist.includes(id))
+    .map(([id, a]) => [id, { same: yes(a?.same_task), relation: RELATIONS[level(a?.relation)] ?? null }]));
+  const chosen = answers.collection;
+  const jev = {
+    gate, same, second: looks,
+    collection: chosen ? { choice: chosen.choice ?? null, confidence: chosen.confidence ?? null } : null,
+    shortlist, rank: null, why: null,
+  };
   const out = {
-    collection: null,
-    task: null,
-    newTask: null,
-    tier: null,
-    confidence: {},
-    newCollection: null,
+    pile: null, collection: null, newCollection: null, task: null, newTask: null,
+    tier: null, confidence: { gate }, why: null, jev,
   };
 
-  const known = new Set(collections.map((c) => c.id));
-  const chosen = answers.collection;
-  if (chosen && known.has(chosen.choice) && (chosen.confidence ?? 0) >= FLOORS.collection) {
-    out.collection = chosen.choice;
-    out.confidence.collection = chosen.confidence;
-  } else {
-    const hint = repoHints.find((h) => typeof h === "string" && h.trim());
-    if (hint) {
-      const existing = collections.find((c) => c.name.toLowerCase() === hint.trim().toLowerCase());
-      if (existing) {
-        out.collection = existing.id;
-      } else {
-        out.newCollection = { id: slug(hint), name: hint.trim() };
-        out.collection = out.newCollection.id;
-      }
-      // A repo name on the window is not a guess, and it does not need one.
-      out.confidence.collection = 1;
-    }
+  const tierLevel = level(answers.tier);
+  if (tierLevel != null && TIERS[tierLevel]) {
+    out.tier = TIERS[tierLevel];
+    out.confidence.tier = answers.tier.confidence ?? null;
   }
 
-  // ONE TASK OR A NEW ONE. Only ids Deiko put on the shortlist can be
-  // chosen, so a model that invents an id starts a task rather than joining
-  // one that does not exist.
-  const pick = answers.task;
-  const sure = (pick?.confidence ?? 0) >= FLOORS.task;
-  if (sure && shortlist.includes(pick.choice)) {
-    out.task = pick.choice;
-    out.confidence.task = pick.confidence;
+  if (gate < GATE) {
+    out.pile = "odds";
+    out.why = jev.why = "odds";
+    return out;
+  }
+
+  const open = shortlist.filter((id) => !otherTicket(keys.tickets, taskKeys[id]?.tickets));
+  const p = (id) => same[id] ?? 0;
+  const ranked = open.filter((id) => looks[id]).sort((a, b) => p(b) - p(a));
+  const best = ranked[0];
+  let why = "new";
+  let task = null;
+  let related = null;
+  let candidates = [];
+  if (best) {
+    const first = p(best);
+    const look = looks[best];
+    const theirs = taskKeys[best] ?? {};
+    const next = Math.max(0, ...open.filter((id) => id !== best).map(p));
+    const recent = now - (newest[best] ?? -Infinity) < JOIN.recentMs
+      && (meets(keys.pages, theirs.pages) || meets(keys.files, theirs.files));
+    if (look.relation === "same" && look.same >= JOIN.second
+      && first >= (recent ? JOIN.recent : JOIN.first) && first - next >= JOIN.gap) {
+      // A bug found on one page is often fixed on another: ask, don't block.
+      if (differ(keys.pages, theirs.pages)) {
+        why = "ask-page";
+        candidates = [best];
+      } else {
+        why = first < JOIN.first ? "join-recent" : "join";
+        task = best;
+      }
+    }
+  }
+  if (!task && why !== "ask-page") {
+    related = ranked.find((id) => looks[id].relation === "related") ?? null;
+    candidates = open
+      .filter((id) => p(id) >= ASK && !["different", "related"].includes(looks[id]?.relation))
+      .sort((a, b) => p(b) - p(a))
+      .slice(0, MAX_CANDIDATES);
+    why = candidates.length ? "ask" : related ? "related" : "new";
+  }
+
+  if (task) {
+    out.task = task;
+    out.confidence.task = p(task);
+    jev.rank = shortlist.indexOf(task) + 1;
   } else if (sessionId) {
     out.task = `t-${sessionId}`;
     out.newTask = { id: out.task, title: title ?? "A brief" };
   }
+  if (candidates.length) out.candidates = candidates;
+  if (related) out.related = related;
+  out.why = jev.why = why;
 
-  // A JOINED BRIEF NOTHING ELSE PLACED keeps its task's collection, or one
-  // task ends up split across two chips. As sure as the join, and only a
-  // collection that still exists.
-  const inherited = out.task && !out.newTask && out.collection == null ? taskCollections[out.task] : null;
-  if (inherited && known.has(inherited)) {
-    out.collection = inherited;
+  // THE PROJECT: Jev when sure; a joined task's own; else the strongest label.
+  const known = new Set(collections.map((c) => c.id));
+  if (chosen && known.has(chosen.choice) && (chosen.confidence ?? 0) >= FLOORS.collection) {
+    out.collection = chosen.choice;
+    out.confidence.collection = chosen.confidence;
+  } else if (task && known.has(taskCollections[task])) {
+    out.collection = taskCollections[task];
     out.confidence.collection = out.confidence.task;
-  }
-
-  // WHICH ONES IT MIGHT BE, unless it joined one or is confidently new work.
-  // Jev's own spread when it sent one — a map keyed by option id; the local
-  // score when it did not, behind Jev's pick, and only what scored at least
-  // half the best (a best of 0 matched nothing, so it names nothing).
-  if (!sure || (pick.choice !== "new" && !shortlist.includes(pick.choice))) {
-    const probs = pick?.probabilities;
-    let ids;
-    if (probs && typeof probs === "object" && !Array.isArray(probs)) {
-      ids = shortlist
-        .filter((id) => Number(probs[id]) >= FLOORS.candidate)
-        .sort((a, b) => probs[b] - probs[a]);
-    } else {
-      const top = Math.max(0, ...scores);
-      const near = shortlist.filter((id, i) => top > 0 && (scores[i] ?? 0) >= top / 2);
-      ids = shortlist.includes(pick?.choice) ? [pick.choice, ...near.filter((id) => id !== pick.choice)] : near;
-    }
-    if (ids.length) out.candidates = ids.slice(0, MAX_CANDIDATES);
-  }
-
-  const tier = answers.tier;
-  if (tier) {
-    let level = null;
-    // TWO SHAPES FOR ONE FIELD. TypeSafe's docs show `probabilities` as an
-    // array indexed by level; Vercel's gateway returns it as an object keyed
-    // "0", "1", … — measured on a live call. Without this branch the object
-    // was quietly ignored and the tier fell back to rounding the score, which
-    // is not the same answer when the mass is split.
-    const probs = Array.isArray(tier.probabilities)
-      ? tier.probabilities
-      : tier.probabilities && typeof tier.probabilities === "object"
-        ? Object.keys(tier.probabilities).sort((a, b) => Number(a) - Number(b))
-            .map((k) => Number(tier.probabilities[k]))
-        : [];
-    if (probs.length) {
-      level = probs.indexOf(Math.max(...probs));
-    } else if (typeof tier.score === "number") {
-      level = Math.round(tier.score);
-    }
-    if (level != null && TIERS[level]) {
-      out.tier = TIERS[level];
-      out.confidence.tier = tier.confidence ?? null;
+  } else {
+    const name = projectFromKeys({ keys, apps });
+    if (name) {
+      const existing = collections.find((c) => c.name.toLowerCase() === name.trim().toLowerCase() || c.id === slug(name));
+      if (existing) {
+        out.collection = existing.id;
+      } else {
+        out.newCollection = { id: slug(name), name: name.trim() };
+        out.collection = out.newCollection.id;
+      }
+      // A label on the window is not a guess.
+      out.confidence.collection = 1;
     }
   }
-
   return out;
 }
 
@@ -247,6 +342,15 @@ export function readBriefLine(sessionDir) {
     line: summaryLine && !COULD_NOT_TELL.test(summaryLine) ? summaryLine : said,
     collection: context.collection ?? null,
     task: TASK_ID.test(context.task ?? "") ? context.task : null,
+    // How it was filed — `firm` in tasks.mjs reads these to decide whether
+    // this brief may describe its task.
+    decidedBy: typeof context.decidedBy === "string" ? context.decidedBy : null,
+    // `"you"` when the TASK was placed by hand, `collectionBy` when the
+    // project was (the app writes both).
+    taskBy: typeof context.taskBy === "string" ? context.taskBy : null,
+    collectionBy: typeof context.collectionBy === "string" ? context.collectionBy : null,
+    classifier: typeof context.classifier === "string" ? context.classifier : null,
+    confidence: context.confidence && typeof context.confidence === "object" ? context.confidence : {},
     // In odds and ends: too little said, or nothing Groq could make sense
     // of, and no task — see `classify.mjs`.
     odds: context.pile === "odds",
@@ -254,6 +358,15 @@ export function readBriefLine(sessionDir) {
     windows: Array.isArray(summary.windows) ? summary.windows : [],
     screenTerms: Array.isArray(summary.screenTerms) ? summary.screenTerms : [],
     repoHints: Array.isArray(summary.repoHints) ? summary.repoHints : [],
+    // Labels (`labels.mjs`). A brief rendered before labels existed has only
+    // its repo hints, which were the first label — through the same
+    // `normaliseLabel` a current brief's repo names already went through, so
+    // an old hint is redacted too, not just a fresh one.
+    keys: Object.fromEntries(KINDS.map((k) => [k,
+      Array.isArray(summary.keys?.[k]) ? summary.keys[k]
+        : k === "repo" && Array.isArray(summary.repoHints)
+          ? summary.repoHints.map((h) => normaliseLabel(h, "repo")).filter(Boolean)
+          : []])),
     outcome,
   };
 }

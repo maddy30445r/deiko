@@ -18,9 +18,11 @@
 //     forwarded; there is no upload directory to forget to clean;
 //   • log content — a line is a status, a duration and a token prefix, never a
 //     word of what was said;
-//   • see anything except narration — crops, OCR, window titles and
-//     accessibility text never leave the user's Mac, and no route here accepts
-//     them.
+//   • see raw screen content — crops, OCR, screen text and screenshots never
+//     leave the user's Mac. `/v1/classify` accepts window and page titles and
+//     the labels read from them (pages, sites, web addresses — host and path
+//     only, never the part after "?" — files, repo, docs, tickets) plus
+//     open-document names; every other route still takes narration alone.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
@@ -158,17 +160,29 @@ const summarySystem = (native) => [
 // ── What a classification is allowed to be ──────────────────────────────────
 //
 // Jev (TypeSafe AI) answers typed questions about a piece of state with
-// calibrated probabilities: which collection a brief belongs to, which earlier
-// task it belongs to, and how much work it asks. One request, every question
-// evaluated in parallel.
+// calibrated probabilities: whether a brief is real work, which earlier task
+// it continues, which project it belongs to, and how much work it asks.
 //
 // THE CALLER SENDS FACTS, NOT QUESTIONS. This route spends Deiko's TypeSafe
 // key and takes any bearer, so the request to the model is built here from a
 // capped, coerced body — a stranger with the URL cannot name a model, a
-// question count or a rubric. The model receives a narration, a summary, and
-// digests of at most eight shortlisted tasks — never the raw screen text the
-// client scanned to write them. `classifyRequest` is exported so the shape is
-// testable without a network.
+// question count or a rubric. The model never sees the raw screen text the
+// client scanned to write these facts.
+//
+// TWO ROUNDS, ONE METER. Round 1 is a single request that asks, for every
+// shortlisted task (up to 20), an honest yes/no — "is this the same piece of
+// work as the brief?" — never a pick among them, alongside whether the brief
+// is a real request, which project it belongs to, and how much work it
+// looks like. Round 2 then takes the at most two tasks that scored ≥ 0.35
+// and asks each on its own request, holding only the brief and that task so
+// nothing else can sway it. Either way this is ONE classify on the meter.
+//
+// A RELEASED APP MAY STILL SEND THE OLD BODY. `legacyClassifyRequest` keeps
+// today's single-request "which of these tasks is it" shape working for
+// 0.5.0 installs until they update — chosen by a body with no `version`, or
+// one below 3. `classifyRequest` is the v3 shape, and is exported so it is
+// testable without a network; `secondLookRequest`, `finalists` and
+// `legacyClassifyRequest` stay private, called only from this route.
 // WHO ANSWERS THE QUESTIONS, and why there are two of them.
 //
 // TypeSafe paused new signups two days after opening them, so a key from them
@@ -234,8 +248,25 @@ function jevSpeaker() {
   }
   return null;
 }
-export const MAX_CLASSIFY_BYTES = 96 * 1024;
-const CLASSIFY_LIMITS = {
+/// A task Deiko minted: `t-` and the stamp of the brief that started it.
+const TASK_ID = /^t-\d{8}-\d{6}$/;
+/// The Score levels, in order. MIRRORS `TIERS` in `scripts/lib/context.mjs`,
+/// which names them back to the app by index. Change both.
+const TIER_RUBRIC = [
+  "quick: one small answer or edit, no investigation",
+  "medium: needs an explanation or a light change in one place",
+  "complex: several files, logs or tools, step by step",
+  "reasoning: trade-offs or a design decision across constraints",
+];
+
+// ── Legacy: the pre-v3 single-request, "which task" shape ──────────────────
+//
+// A body with no `version` (or one below 3) is a 0.5.0 app that has not
+// updated yet. It reads `answers.task`, `answers.collection` and
+// `answers.tier` and must keep getting exactly that.
+//
+// ponytail: drop once no 0.5.0 app calls (legacy body has no version).
+const LEGACY_CLASSIFY_LIMITS = {
   narration: 2000,
   summary: 600,
   apps: 10,
@@ -249,20 +280,10 @@ const CLASSIFY_LIMITS = {
   decided: 600,
   outcome: 600,
 };
-/// A task Deiko minted: `t-` and the stamp of the brief that started it.
-const TASK_ID = /^t-\d{8}-\d{6}$/;
-/// The Score levels, in order. MIRRORS `TIERS` in `scripts/lib/context.mjs`,
-/// which names them back to the app by index. Change both.
-const TIER_RUBRIC = [
-  "quick: one small answer or edit, no investigation",
-  "medium: needs an explanation or a light change in one place",
-  "complex: several files, logs or tools, step by step",
-  "reasoning: trade-offs or a design decision across constraints",
-];
 
-export function classifyRequest(sent) {
+function legacyClassifyRequest(sent) {
   if (!sent || typeof sent.narration !== "string" || !sent.narration.trim()) return null;
-  const L = CLASSIFY_LIMITS;
+  const L = LEGACY_CLASSIFY_LIMITS;
   const str = (v, n) => String(v ?? "").slice(0, n);
   const strings = (v, count, n) => (Array.isArray(v) ? v : [])
     .filter((s) => typeof s === "string" && s.trim())
@@ -344,6 +365,152 @@ export function classifyRequest(sent) {
     },
     questions,
   };
+}
+
+// ── v3: round 1 (every question at once) and round 2 (the finalists alone) ─
+
+export const MAX_CLASSIFY_BYTES = 192 * 1024;
+/// Twenty tasks and twenty collections — collections' labels appear TWICE
+/// (once in `state`, once again as a Choice option). MEASURED: plain-ASCII
+/// text at every cap here produces a 162,083-character round-one request (a
+/// 132 KB body, comfortably under `MAX_CLASSIFY_BYTES`) and a
+/// 25,296-character round-two request. At 3-4 characters per token that is
+/// roughly 40-54k tokens, under the design's ~64k-token limit (§ Relay) but
+/// not by a wide margin — token-dense input (punctuation, ids, Devanagari)
+/// that stays under the byte cap can still cross the token one. Honest
+/// boards measure far below these caps; a caller who hits the token limit
+/// pays for a 4xx and gets no refund, which only wastes their own call.
+const CLASSIFY_LIMITS = {
+  narration: 2000, summary: 600, apps: 10, repoHints: 5, titles: 30, title: 200,
+  collections: 20, name: 200, tasks: 20, now: 400, decided: 300, outcome: 300, label: 120,
+};
+/// Labels that may travel — `components` never does (see scripts/lib/labels.mjs).
+/// `errors` never does either: an error line is screen text, not a name.
+const BRIEF_KEYS = ["pages", "sites", "urls", "files", "repo", "docs", "tickets"];
+const TASK_KEYS = ["pages", "sites", "files", "tickets"];
+
+/// ponytail: starting values, tuned on the filing eval (scripts/eval-filing.mjs).
+/// MIRRORED by `GATE` and `ASK` in scripts/lib/context.mjs — change both.
+export const GATE = 0.5;
+export const SECOND_LOOK = { min: 0.35, max: 2 };
+
+/// ponytail: fixed at 12s rather than reading the client's own deadline off
+/// the request — the client (`scripts/lib/filing.mjs`) aborts at 15s, and
+/// this leaves 3s of slack for the two hops home. Revisit both together if
+/// either timeout changes.
+const V3_BUDGET_MS = 12_000;
+
+/// The relation levels, in order. MIRRORS `RELATIONS` in scripts/lib/context.mjs.
+export const RELATION_RUBRIC = [
+  "different: unrelated work, or only the same app, product or topic",
+  "related-separate: connected to the task (same page, feature or area) but a separate goal",
+  "same: the same piece of work, picked up again, corrected or extended",
+];
+
+const GATE_QUESTION = "The current brief is a real request: the speaker asks for something to be built, fixed, changed, checked or explained. Microphone checks (\"testing, testing\", \"can you hear me\"), greetings, thank-yous, and filler with no request in it are not real requests.";
+const SAME_JOB = "the same goal on the same page, feature or bug, picked up again, corrected or extended. Working in the same app, product or project is not enough, and topical similarity alone is insufficient.";
+
+export function classifyRequest(sent) {
+  if (!sent || typeof sent.narration !== "string" || !sent.narration.trim()) return null;
+  const L = CLASSIFY_LIMITS;
+  const str = (v, n) => String(v ?? "").slice(0, n);
+  const strings = (v, count, n) => (Array.isArray(v) ? v : [])
+    .filter((s) => typeof s === "string" && s.trim())
+    .slice(0, count)
+    .map((s) => s.slice(0, n));
+  const keysOf = (v, kinds, count) => Object.fromEntries(kinds.map((k) => [k, strings(v?.[k], count, L.label)]));
+
+  const brief = {
+    narration: sent.narration.slice(0, L.narration),
+    summary: str(sent.summary, L.summary),
+    apps: strings(sent.apps, L.apps, 80),
+    repoHints: strings(sent.repoHints, L.repoHints, 80),
+    windowTitles: strings(sent.titles, L.titles, L.title),
+    keys: keysOf(sent.keys, BRIEF_KEYS, 10),
+  };
+
+  // Ids become question keys and option keys, so each must be unique and none
+  // may be the `none`/`new` options.
+  const seen = new Set(["none", "new"]);
+  const fresh = (id) => (seen.has(id) ? false : (seen.add(id), true));
+  const collections = (Array.isArray(sent.collections) ? sent.collections : [])
+    .filter((c) => c && typeof c.id === "string" && /^[a-z0-9-]{1,80}$/.test(c.id)
+      && typeof c.name === "string" && c.name.trim() && fresh(c.id))
+    .slice(0, L.collections)
+    .map((c) => ({ id: c.id, name: str(c.name, L.name), hint: str(c.hint, L.name), labels: strings(c.labels, 5, 80) }));
+  const tasks = Object.fromEntries((Array.isArray(sent.tasks) ? sent.tasks : [])
+    .filter((t) => t && typeof t.id === "string" && TASK_ID.test(t.id)
+      && typeof t.title === "string" && t.title.trim() && fresh(t.id))
+    .slice(0, L.tasks)
+    .map((t) => [t.id, {
+      title: str(t.title, L.title),
+      now: str(t.now, L.now),
+      decided: str(t.decided, L.decided),
+      keys: keysOf(t.keys, TASK_KEYS, 3),
+      windows: strings(t.windows, 3, L.title),
+      files: strings(t.files, 5, 120),
+      outcome: str(t.outcome, L.outcome),
+      // What its confirmed briefs asked, newest first. Without an agent's
+      // outcome a task is otherwise only its first brief's title.
+      recent: strings(t.recent, 3, 200),
+    }]));
+
+  const questions = {
+    is_work_brief: { type: "noul", instructions: GATE_QUESTION },
+    tier: { type: "score", instructions: "How much work the brief asks of a coding agent", criteria: TIER_RUBRIC },
+  };
+  if (collections.length) {
+    questions.collection = {
+      type: "choice",
+      instructions: "Which project does this brief belong to",
+      criteria: {
+        ...Object.fromEntries(collections.map((c) => [c.id,
+          [c.name, c.hint, c.labels.length ? `usual labels: ${c.labels.join(", ")}` : ""].filter(Boolean).join(" — ")])),
+        none: "None of these — a different project",
+      },
+    };
+  }
+  // ONE YES/NO PER TASK, not one pick among them: a pick always has a winner,
+  // even when nothing fits. Each answer stands alone and need not sum to 1.
+  for (const [id, t] of Object.entries(tasks)) {
+    questions[`same_${id}`] = {
+      type: "noul",
+      instructions: `Earlier task ${id} ("${t.title}", in state.tasks) is the same piece of work as the current brief: ${SAME_JOB}`,
+    };
+  }
+  return { state: { brief, collections, tasks }, questions };
+}
+
+/** The careful second look: the brief and ONE task, nothing else to sway it. */
+function secondLookRequest(request, id) {
+  return {
+    state: { brief: request.state.brief, task: { id, ...request.state.tasks[id] } },
+    questions: {
+      same_task: { type: "noul", instructions: `The task in the state is the same piece of work as the brief: ${SAME_JOB}` },
+      relation: { type: "score", instructions: "How the brief relates to the task in the state", criteria: RELATION_RUBRIC },
+    },
+  };
+}
+
+const yes = (a) => {
+  const p = Number(a?.noul);
+  return Number.isFinite(p) ? p : 0;
+};
+
+/** Which tasks get a second look: at most two, each ≥ 0.35, none when the gate says no. */
+function finalists(answers, ids) {
+  // `Number.isFinite`, NOT `yes()`'s coercing version: a gate Jev answered
+  // with an unreadable noul (`null`, a string, …) must read as MISSING, not
+  // as a confident 0 — `Number(null)` is itself finite (0), so coercing
+  // first would gate everything out on a garbled answer rather than none.
+  const gate = answers?.is_work_brief?.noul;
+  if (Number.isFinite(gate) && gate < GATE) return [];
+  return ids
+    .map((id) => [id, yes(answers?.[`same_${id}`])])
+    .filter(([, p]) => p >= SECOND_LOOK.min)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, SECOND_LOOK.max)
+    .map(([id]) => id);
 }
 
 // ── Burst limiting ──────────────────────────────────────────────────────────
@@ -1199,12 +1366,16 @@ export async function handle({ method, path, query = "", token, contentType, bod
     } catch {
       sent = null;
     }
-    // THE BODY IS REBUILT, NEVER FORWARDED — see `classifyRequest`.
-    const request = classifyRequest(sent);
+    // THE BODY IS REBUILT, NEVER FORWARDED — see `classifyRequest` /
+    // `legacyClassifyRequest`. A body with no `version` (or below 3) is a
+    // 0.5.0 app that has not updated yet.
+    const isV3 = typeof sent?.version === "number" && sent.version >= 3;
+    const request = isV3 ? classifyRequest(sent) : legacyClassifyRequest(sent);
     if (!request) return json(400, { error: "expected { narration: \"…\", … }" });
 
     // Its own day, its own rows, like a summary: a flood of classifications
-    // exhausts classifications and nothing else.
+    // exhausts classifications and nothing else. Round 2, below, spends no
+    // extra rows — both rounds are ONE classify.
     const spent = await spendTextCall({
       route: "classify", day: classifyKey(now), dayCap: CLASSIFIES_PER_DAY,
       callerCap: CLASSIFIES_PER_CALLER_PER_DAY, subject, ip, now,
@@ -1214,11 +1385,68 @@ export async function handle({ method, path, query = "", token, contentType, bod
     if (spent.refusal) return spent.refusal;
 
     const headers = { authorization: `Bearer ${speaker.key}`, "content-type": "application/json" };
-    const out = speaker.wrapped
-      ? unwrapJev(await proxy(speaker.url, headers, JSON.stringify({ model: speaker.model, input: request })))
-      : await proxy(speaker.url, headers, JSON.stringify({ model: speaker.model, ...request }));
-    if (out.providerFault) await uncountCalls(spent.rows).catch(() => {});
-    return out;
+    const askJev = async (req, timeoutMs) => (speaker.wrapped
+      ? unwrapJev(await proxy(speaker.url, headers, JSON.stringify({ model: speaker.model, input: req }), timeoutMs))
+      : proxy(speaker.url, headers, JSON.stringify({ model: speaker.model, ...req }), timeoutMs));
+
+    // ponytail: drop once no 0.5.0 app calls (legacy body has no version).
+    if (!isV3) {
+      const out = await askJev(request);
+      if (out.providerFault) await uncountCalls(spent.rows).catch(() => {});
+      return out;
+    }
+
+    // THE WHOLE V3 CALL HAS A BUDGET, NOT JUST EACH REQUEST. The client
+    // aborts at 15s (`scripts/lib/filing.mjs`); round 1 is held to the
+    // budget below, and round 2 gets only what is left of
+    // `V3_BUDGET_MS` — and is skipped outright once under a second remains,
+    // rather than starting a request that cannot finish before the client
+    // has already given up.
+    // Round 1 is held to the same budget: a Jev that answers after the client
+    // has given up is a timeout (refunded), not a classify nobody receives.
+    const first = await askJev(request, V3_BUDGET_MS);
+    if (first.providerFault) await uncountCalls(spent.rows).catch(() => {});
+    if (first.status !== 200) return first;
+    let parsed;
+    try {
+      parsed = JSON.parse(first.body);
+    } catch {
+      return first;
+    }
+    const answers = parsed?.answers ?? {};
+
+    // ROUND 2, ON THE SAME METER. The one or two tasks that came close each
+    // get a request of their own. A second look that fails is simply absent:
+    // the client then cannot join, and asks instead — never a failed brief.
+    const second = {};
+    const remaining = V3_BUDGET_MS - (Date.now() - now);
+    if (remaining >= 1000) {
+      await Promise.all(finalists(answers, Object.keys(request.state.tasks)).map(async (id) => {
+        const look = secondLookRequest(request, id);
+        let out = await askJev(look, remaining);
+        // ONE RETRY on a provider fault while budget is left: the gateway
+        // drops the odd request (4 × 503 in one 33-brief eval run), and a
+        // lost second look turns a clear join into a "Which one?". A
+        // deterministic caller-fault 4xx (`CALLERS_FAULT`, in `proxy`) is NOT
+        // retried — Jev will answer it the same way again.
+        const left = V3_BUDGET_MS - (Date.now() - now);
+        if (out.providerFault && left >= 1000) out = await askJev(look, left);
+        if (out.status !== 200) return;
+        try {
+          const answered = JSON.parse(out.body);
+          // No `answers` at all is the same as no second look: an object
+          // present in `second` promises a real answer, never an empty one.
+          if (answered?.answers) second[id] = answered.answers;
+        } catch {
+          // A garbled second look is no second look.
+        }
+      }));
+    }
+    return {
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ model: parsed?.model ?? null, answers, second }),
+    };
   }
 
   return json(404, { error: "no such endpoint" });
@@ -1283,7 +1511,7 @@ const UPSTREAM_TIMEOUT_MS = 20_000;
 /// true unless the provider objected to something the caller chose.
 const CALLERS_FAULT = new Set([400, 413, 415, 422]);
 
-async function proxy(url, headers, body) {
+async function proxy(url, headers, body, timeoutMs = UPSTREAM_TIMEOUT_MS) {
   const host = new URL(url).host;
   const failed = (providerFault) => ({
     status: 502,
@@ -1296,7 +1524,7 @@ async function proxy(url, headers, body) {
       method: "POST",
       headers,
       body,
-      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     const text = await upstream.text();
     if (upstream.ok) return { status: 200, body: text, contentType: "application/json" };

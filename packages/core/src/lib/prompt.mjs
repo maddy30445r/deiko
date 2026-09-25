@@ -56,6 +56,10 @@ const MAX_TEXT_LINES = 40;
 /** One rendered line's ceiling — matches what the old renderer's fences used. */
 const MAX_LINE_LENGTH = 500;
 
+/** The memory part of a prompt stays short: where it stands is trimmed before
+ *  the recent briefs or the history line are. */
+const MEMORY_LINES = 20;
+
 /** Whitespace and case folded away — the two differences between "what was
  *  recognised" and "what the developer retyped" that carry no meaning. */
 const normalizeSpoken = (text) => String(text ?? "").toLowerCase().replace(/\s+/g, " ").trim();
@@ -188,7 +192,7 @@ function markLabel(r, endpoints) {
  */
 export function buildPrompt({
   narration, referents, attached = false, personaPath = null,
-  task = null, maybe = null, outcomePath = null, quickHint = false,
+  task = null, maybe = null, related = null, outcomePath = null, quickHint = false,
 }) {
   const narrationRedacted = redact(narration ?? "").trim();
   const out = [narrationRedacted, "", REPLY_LANGUAGE];
@@ -332,7 +336,10 @@ export function buildPrompt({
     const title = clean(task.title);
     const now = task.now.map(clean).filter(Boolean);
     const did = task.lastDid.map(clean).filter(Boolean);
-    earlierSpoken.push(title, ...now, ...did);
+    const recent = (task.recent ?? [])
+      .map((r) => ({ date: r.date, line: clean(r.line).replace(/[.!?]+$/, "") }))
+      .filter((r) => r.line);
+    earlierSpoken.push(title, ...now, ...did, ...recent.map((r) => r.line));
     if (attached) {
       // "Last done: <d>" already named that round of work; "Last time" keeps
       // whatever else isn't already said that way, and drops out only when
@@ -340,14 +347,21 @@ export function buildPrompt({
       const remaining = did.filter((d) => !now.includes(`Last done: ${d}`));
       out.push("", `This carries on from "${title}".`
         + (now.length ? ` Where it stands: ${now.join(" ")}` : "")
-        + (remaining.length ? ` Last time: ${remaining.join(" ")}` : ""));
+        + (remaining.length ? ` Last time: ${remaining.join(" ")}` : "")
+        + (recent.length ? ` Recent briefs: ${recent.map((r) => `${r.date}: ${r.line}`).join("; ")}.` : ""));
     } else {
+      // The memory part stays within MEMORY_LINES: "where it stands" is what
+      // gets trimmed, never the recent briefs or the history/id line.
+      const recentLines = recent.length ? ["Recent briefs:", ...recent.map((r) => `- ${r.date}: ${r.line}.`)] : [];
       out.push(
         "",
         `This carries on from "${title}" (${task.count} brief${task.count === 1 ? "" : "s"} so far).`
           + (now.length ? " Where it stands:" : ""),
-        ...now,
-        `The full history is in ${task.notePath} — read what you need.`,
+        ...now.slice(0, Math.max(0, MEMORY_LINES - 2 - recentLines.length)),
+        ...recentLines,
+        `The full history is in ${task.notePath} — read what you need.`
+          // "If": whether the helper is connected is the destination's to know.
+          + (task.id ? ` Deiko task id: ${task.id} (if the deiko-memory tools are connected, they can open it).` : ""),
       );
     }
   } else if (maybe?.length) {
@@ -361,9 +375,19 @@ export function buildPrompt({
       const now = m.now.map(clean).filter(Boolean);
       earlierSpoken.push(title, ...now);
       const line = `- "${title}"` + (now.length ? ` — where it stands: ${now.join(" ")}` : "");
-      out.push(attached ? line : `${line}${/[.!?]$/.test(line) ? "" : "."} History: ${m.notePath}`);
+      out.push(attached ? line : `${line}${/[.!?]$/.test(line) ? "" : "."} History: ${m.notePath}${m.id ? ` · task id ${m.id}` : ""}`);
     }
     out.push("If the screenshots don't make it clear which one I mean, ask me before you start.");
+  }
+
+  // POSSIBLY RELATED, NOT CONFIRMED: a link `decide` made instead of a merge.
+  // Said as a hint, so the agent never treats it as this brief's history.
+  if (related) {
+    const title = clean(related.title);
+    earlierSpoken.push(title);
+    const why = [related.why, related.age].filter(Boolean).join(", ");
+    const head = `Possibly related, not confirmed: "${title}"${why ? ` (${why})` : ""}.`;
+    out.push("", attached ? head : `${head} History: ${related.notePath}${related.id ? ` · task id ${related.id}` : ""}`);
   }
 
   // No headings, no paths — just the redacted content a secret could actually

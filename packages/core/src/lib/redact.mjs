@@ -140,6 +140,29 @@ export function redactBlock(lines) {
   return stripped.map((l) => redactTokens(l, suspect));
 }
 
+/// A line that is just a file path, bulleted or not.
+/// A line that is only a file path: segments joined by "/", ending in a short
+/// real extension (`.swift`, `.tsx`) — never a JWT, whose last part after a
+/// dot is a long signature. Each segment is checked on its own, so a long
+/// CamelCase folder reads as a folder while a token segment is still caught.
+const PATH_LINE = /^\s*(?:[-*]\s+)?[-\w@./]+\.[A-Za-z][A-Za-z0-9]{0,7}$/;
+const plainPath = (line) => PATH_LINE.test(line)
+  && line.trim().replace(/^[-*]\s+/, "").split("/")
+    .every((seg) => stripStandalone(seg) === seg && !(seg.length >= 20 && looksOpaque(seg)));
+
+/**
+ * Lines an agent wrote (an outcome's sections), redacted as ONE block like
+ * `redactBlock`, so a secret on the line after its label ("API key for
+ * staging:") is still caught — while a line that is only a file path stays
+ * one an agent can open: once the block is suspect, `looksOpaque` reads
+ * `src/…/Foo.tsx` as credential-shaped. A path line still loses a credential
+ * that carries its own signature (a JWT, a key id).
+ */
+export function redactNote(lines) {
+  const scrubbed = redactBlock(lines);
+  return lines.map((l, i) => (plainPath(l) ? l : scrubbed[i]));
+}
+
 /**
  * Was a credential VISIBLE in this referent's capture?
  *

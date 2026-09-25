@@ -124,10 +124,12 @@ export const SUMMARIES_PER_DAY =
 /// SIZED FROM THE BIGGEST REQUEST, NOT THE AVERAGE. The first number here was
 /// 4000, justified as "a Jev decision costs a tenth of a summary" — which is
 /// true of a decision about an empty board and false of the one this client
-/// actually sends. A full request carries eight shortlisted tasks, about 10k
-/// input tokens against a summary's 2k, so it costs a few times a summary rather
-/// than a tenth of one. At Jev's $0.042 per million that is ~$0.0004 each, so
-/// this ceiling is the day's worst case in money: about 40 cents.
+/// actually sends. ONE classify can now be up to three upstream requests —
+/// round 1 (twenty shortlisted tasks) plus up to two second looks — together
+/// roughly 50-65k input tokens against a summary's 2k, several times a
+/// summary rather than a tenth of one. At Jev's $0.042 per million that is
+/// ~$0.0025 each, so this ceiling is the day's worst case in money: a couple
+/// of dollars, not the forty cents a single round-1-only request would cost.
 ///
 /// Like every ceiling here it bounds the blast radius of a stranger with the
 /// URL, not honest use — a thousand briefs a day across everybody is far past

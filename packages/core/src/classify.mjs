@@ -4,12 +4,14 @@
  *
  *   node scripts/classify.mjs ~/Documents/Deiko/<id>
  *
- * Scores every earlier task on this machine, sends the best eight to the
- * classifier — Jev, through Deiko's relay — and asks in one call which
- * collection the brief belongs to, which of those tasks it joins (or none, and
- * it starts a new one), and how much work it looks like. The answers become
- * `context.json` beside the session, and a new task a row in `tasks.json`;
- * `render-brief.mjs` reads both and the board and review card show them.
+ * Scores every earlier task on this machine and sends the best twenty to the
+ * classifier — Jev, through Deiko's relay — which answers, per task, whether
+ * this brief is the same work, then takes a second look at the one or two
+ * likeliest; also which collection it belongs to and how much work it looks
+ * like. `decide` (lib/context.mjs) turns that into a join, a "Which one?", a
+ * related link or a new task. The answers become `context.json` beside the
+ * session, and a new task a row in `tasks.json`; `render-brief.mjs` reads
+ * both and the board and review card show them.
  *
  * RUNS FOR OWN-KEY USERS TOO. Sorting is not transcription: somebody who
  * brought their own Groq key keeps their audio and its transcription off
@@ -24,15 +26,19 @@
  * environment names — the `DEIKO_RELAY_URL` fallback too, which a keyless
  * install carries for its audio. What needs no relay is still decided below.
  *
- * WHAT LEAVES THIS MACHINE: what the developer said, the Groq summary line,
- * the app names, the repo hints, the window titles, the collection names and
- * hints, and for up to eight shortlisted tasks their title, where they stand,
- * their decisions, window titles, apps, the files the agent listed and the
- * last outcome (at most 600 characters). Never a screenshot, never text read
- * off a screen: the screen's words shortlist tasks locally and are never
- * sent. Window titles are the one addition to the summary's rule
- * (`summarize.mjs`), taken deliberately: a title names a file, a repo or a
- * ticket, and that is what places a brief.
+ * WHAT LEAVES THIS MACHINE, redacted: what the developer said, the Groq
+ * summary line, the app names, window and page titles, web addresses (host
+ * and path only, never the part after "?"), open-document and file names,
+ * code-project names and ticket ids — the labels (`labels.mjs`), all read
+ * from titles and addresses — the collection names, hints and usual labels,
+ * and for up to twenty shortlisted tasks their title, where they stand,
+ * their decisions, window titles, apps, the files the agent listed, the last
+ * outcome (at most 300 characters) and what their confirmed briefs asked.
+ * Never a screenshot, never text read off a screen: the screen's words
+ * (`screenTerms`, and the `components` and `errors` labels) shortlist tasks
+ * locally and are never sent. Titles and addresses are the one addition to
+ * the summary's rule (`summarize.mjs`), taken deliberately: a title names a
+ * page, a file, a repo or a ticket, and that is what places a brief.
  *
  * NOTHING LEAVES FOR A BRIEF THERE IS NOTHING TO ASK ABOUT. Too little said,
  * or a summary that could not tell what was asked, is decided here, relay or
@@ -50,25 +56,12 @@ import { readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 
-import { loadEvents } from "./lib/session-io.mjs";
-import { redact } from "./lib/redact.mjs";
-import { COULD_NOT_TELL, decide, readBriefLine, unplaceable } from "./lib/context.mjs";
+import { CLASSIFIER, unplaceable } from "./lib/context.mjs";
+import { briefText, loadModel, readVector, vectorIsCurrent, writeVector } from "./lib/meaning.mjs";
+import { readTasks, titleFor } from "./lib/tasks.mjs";
 import {
-  groupTasks, readBoard, readTasks, scoreTasks, stampTime, taskState, taskText, titleFor,
-} from "./lib/tasks.mjs";
-
-/// Titles are the widest thing sent; thirty distinct ones cover any session.
-const MAX_TITLES = 30;
-
-/// When a short brief's best local match is clear enough to join without
-/// asking: at least `min`, at least `ratio` times the runner-up, and on a
-/// window that task's briefs already had.
-/// ponytail: eyeballed on one real 38-brief board, each brief scored with its
-/// words dropped: min/ratio alone joined 3 of 16 briefs that opened a new
-/// page to an older task in the same app, and no setting stopped that without
-/// losing true joins; the shared window stopped all 3 and kept 13 of 14.
-/// Upgrade: tune on real filing misses once odds and ends has some.
-const SHORT_JOIN = { min: 8, ratio: 2 };
+  decideLocally, olderBoard, place, prepare, rankLocally, readCollections, requestClassify, sessionInputs,
+} from "./lib/filing.mjs";
 
 /// Failures that happen before a connection exists, so nothing was sent.
 const NEVER_CONNECTED = new Set(["ENOTFOUND", "ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "EAI_AGAIN"]);
@@ -78,22 +71,6 @@ function readTaskRows(root) {
   try {
     const list = JSON.parse(readFileSync(join(root, "tasks.json"), "utf8"));
     return Array.isArray(list) ? list : [];
-  } catch {
-    return [];
-  }
-}
-
-/** Most frequent first; ties keep first-seen order, newest first for a task's briefs. */
-function byCount(items) {
-  const counts = new Map();
-  for (const x of items) counts.set(x, (counts.get(x) ?? 0) + 1);
-  return [...counts].sort((a, b) => b[1] - a[1]).map(([x]) => x);
-}
-
-function readCollections(root) {
-  try {
-    const list = JSON.parse(readFileSync(join(root, "collections.json"), "utf8"));
-    return Array.isArray(list) ? list.filter((c) => c && typeof c.id === "string") : [];
   } catch {
     return [];
   }
@@ -150,15 +127,12 @@ async function main() {
     return;
   }
 
-  let summary;
-  try {
-    summary = JSON.parse(readFileSync(join(dir, "brief.json"), "utf8"))?.summary;
-  } catch {
+  const inputs = sessionInputs(dir);
+  if (!inputs) {
     console.error(`· no readable brief.json in ${dir} — skipping the classification`);
     return;
   }
-  const narration = (summary?.narration ?? "").trim();
-  const me = readBriefLine(dir);
+  const { summary, me, windowTitles } = inputs;
   const why = unplaceable(me);
   // Only a relay needs the rest; a brief with nothing to ask decides without one.
   if (!why && !relay) {
@@ -166,58 +140,13 @@ async function main() {
     return;
   }
 
-  let windowTitles = [];
-  try {
-    windowTitles = [...new Set(
-      loadEvents(dir)
-        .filter((e) => e.type === "probe" && typeof e.windowTitle === "string" && e.windowTitle.trim())
-        .map((e) => redact(e.windowTitle).trim()),
-    )].slice(0, MAX_TITLES);
-  } catch {
-    windowTitles = [];
-  }
-
   const collections = readCollections(root);
-
-  // Older only: a re-run over history must not see the future. And nothing
-  // with nothing to place, or a mic test tops the shortlist as a task.
-  const board = readBoard(root).filter((b) => b.id < id && !unplaceable(b));
+  const board = olderBoard(root, id);
   const taskTitles = readTasks(root);
-  const groups = groupTasks(board);
-  const now = stampTime(id);
-  const ago = (ms) => {
-    const m = Math.round((now - ms) / 60e3);
-    return m < 60 ? `${m} min ago` : m < 48 * 60 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} days ago`;
-  };
-  const scored = scoreTasks({
-    query: [me.summaryLine, me.narration, ...windowTitles, ...(summary.repoHints ?? []), ...me.screenTerms].join(" "),
-    tasks: [...groups].map(([tid, bs]) => ({
-      id: tid,
-      text: taskText(taskTitles.get(tid) ?? titleFor(bs.at(-1)), bs),
-      lastActive: stampTime(bs[0].id),
-      repoHints: bs.flatMap((b) => b.repoHints),
-    })),
-    repoHints: summary.repoHints ?? [],
-    now,
-  });
 
   if (why) {
-    const [top, next] = scored;
-    const mine = new Set(me.windows);
-    const joins = !COULD_NOT_TELL.test(me.summaryLine ?? "") && top
-      && top.score >= SHORT_JOIN.min && top.score >= SHORT_JOIN.ratio * (next?.score ?? 0)
-      && groups.get(top.id).some((b) => b.windows.some((w) => mine.has(w)));
-    const inherited = joins && groups.get(top.id).find((b) => b.collection)?.collection;
-    const context = joins
-      ? {
-        collection: collections.some((c) => c.id === inherited) ? inherited : null,
-        task: top.id,
-        tier: null,
-        confidence: { task: null },
-        decidedBy: "local",
-        model: null,
-      }
-      : { pile: "odds", decidedBy: "local" };
+    const { groups, local } = rankLocally({ me, summary, windowTitles, board, taskTitles });
+    const context = decideLocally({ me, local, groups, collections });
     // CHECKED AGAIN, as before the answer's write below: the board walk above
     // reads every brief on the Mac, and a "Move to task" can land meanwhile.
     if (current()?.decidedBy === "you") {
@@ -225,60 +154,39 @@ async function main() {
       return;
     }
     writeFileSync(contextPath, JSON.stringify(context, null, 2) + "\n");
-    console.error(joins ? `✓ context → joins ${top.id} here (${why})` : `· ${why} — odds and ends`);
+    console.error(context.task ? `✓ context → joins ${context.task} here (${why})` : `· ${why} — odds and ends`);
     return;
   }
 
-  const shortlist = scored.map((s) => {
-    const bs = groups.get(s.id);
-    const last = bs.find((b) => b.outcome)?.outcome;
-    const title = taskTitles.get(s.id) ?? titleFor(bs.at(-1));
-    return {
-      id: s.id,
-      title: redact(title),
-      // The newest ask LAST here, unlike a prompt: the relay describes a
-      // task by this field's first line, and the newest brief is the one
-      // most likely filed here by mistake. What is open, or was done, says
-      // what the task is. A stable sort keeps the rest in order.
-      now: [...taskState(bs, title).now]
-        .sort((a, b) => a.startsWith("Last asked: ") - b.startsWith("Last asked: "))
-        .join("\n"),
-      decided: bs.flatMap((b) => b.outcome?.decided ?? []).slice(0, 5).map(redact).join("\n"),
-      // Its most frequent windows, not its newest: one brief filed here by
-      // mistake must not become the face the classifier matches against.
-      windows: byCount(bs.flatMap((b) => b.windows)).slice(0, 5).map(redact),
-      apps: [...new Set(bs.flatMap((b) => b.apps))].slice(0, 5).map(redact),
-      files: [...new Set(bs.flatMap((b) => b.outcome?.files ?? []))].slice(0, 10).map(redact),
-      outcome: last ? redact([...last.did, ...last.open].join(" ")).slice(0, 600) : "",
-      lastActive: ago(stampTime(bs[0].id)),
-      sameRepo: s.sameRepo,
-    };
+  // MEANING, WHEN THE MODEL IS HERE: this brief as a query, earlier briefs by
+  // the vectors their renders wrote — read only for the tasks' faces, which
+  // are all `prepare` asks for. Absent — words alone, as always.
+  let vectors = null;
+  const model = await loadModel();
+  const text = briefText(me);
+  const query = model ? await model.embed(text, "query") : null;
+  if (query) {
+    vectors = { query, byBrief: { get: (bid) => readVector(join(root, bid), model.key) } };
+    // THIS BRIEF'S OWN VECTOR while the model is loaded (~30 ms), so the
+    // re-render after filing finds it current and never loads the model.
+    try {
+      if (!vectorIsCurrent(dir, model.key, text)) {
+        const vec = await model.embed(text, "doc");
+        if (vec) writeVector(dir, model.key, vec, text);
+      }
+    } catch {
+      // The render writes it instead.
+    }
+  }
+
+  const { groups, shortlist, body } = prepare({
+    id, me, summary, windowTitles, board, taskTitles, collections, vectors,
   });
 
-  const body = {
-    narration: redact(narration),
-    summary: me.summaryLine ? redact(me.summaryLine) : "",
-    // REDACTED LIKE THE TITLES THEY COME FROM. `repoHints` is built by
-    // splitting window titles (`render-brief.mjs`), so sending it raw put the
-    // same screen-read string on the wire twice — once cleaned, once not.
-    apps: (summary.apps ?? []).map(redact),
-    repoHints: (summary.repoHints ?? []).map(redact),
-    titles: windowTitles,
-    collections: collections.map((c) => ({ id: c.id, name: c.name, hint: c.hint ?? "" })),
-    tasks: shortlist,
-    // NEVER screenTerms — they scored the shortlist above and stay here.
-  };
-
-  const post = () => fetch(`${relay.replace(/\/+$/, "")}/v1/classify`, {
-    method: "POST",
-    headers: {
-      ...(process.env.DEIKO_CLASSIFY_TOKEN || process.env.DEIKO_RELAY_TOKEN
-        ? { Authorization: `Bearer ${process.env.DEIKO_CLASSIFY_TOKEN || process.env.DEIKO_RELAY_TOKEN}` }
-        : {}),
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(15_000),
+  const debug = process.env.DEIKO_CLASSIFY_DEBUG === "1";
+  if (debug) console.error(`· debug request ${JSON.stringify(body)}`);
+  const post = () => requestClassify({
+    url: relay, token: process.env.DEIKO_CLASSIFY_TOKEN || process.env.DEIKO_RELAY_TOKEN || null, body,
   });
 
   // What an earlier request for this brief left. Put back if this one never
@@ -327,6 +235,7 @@ async function main() {
       return;
     }
     answer = await response.json();
+    if (debug) console.error(`· debug answer ${JSON.stringify(answer)}`);
   } catch (err) {
     // NOTHING LEFT IF NOTHING CONNECTED: no DNS, nothing listening, no route.
     // A timeout or a reset may have carried the body out, so those keep it.
@@ -368,76 +277,75 @@ async function main() {
     return;
   }
 
-  const decision = decide({
-    answers: answer?.answers ?? {},
-    collections,
-    repoHints: summary.repoHints ?? [],
-    shortlist: shortlist.map((t) => t.id),
-    scores: scored.map((s) => s.score),
-    // Each shortlisted task's latest collection, for a join nothing else placed.
-    taskCollections: Object.fromEntries(scored.map((s) => [s.id, groups.get(s.id).find((b) => b.collection)?.collection ?? null])),
-    sessionId: id,
-    title: titleFor(me),
-  });
-  if (decision.newCollection) {
-    // RE-READ, AND CHECK THE ID. Two things happen between the read at the
-    // top of this script and here: a network call, and a user who may have
-    // made a collection from the review card while it was in flight. Writing
-    // the list we read minutes ago would drop theirs.
-    //
-    // The id check mirrors `Collections.add` in the app, which has always had
-    // it. Without it `decide` — which dedupes on NAME — creates a second
-    // `acme-portal` when the list already holds one called `Acme Portal`, and
-    // two rows with one id give the board two identical chips, a rename that
-    // moves one of them and a delete that takes both.
-    const listed = readCollections(root);
-    if (!listed.some((c) => c.id === decision.newCollection.id)) {
-      listed.push({ ...decision.newCollection, hint: "" });
-      writeFileSync(join(root, "collections.json"), JSON.stringify(listed, null, 2) + "\n");
-    } else {
-      decision.collection = decision.newCollection.id;
+  const decision = place({ answer, id, me, summary, groups, shortlist, collections });
+  if (decision.pile !== "odds") {
+    if (decision.newCollection) {
+      // RE-READ, AND CHECK THE ID. Two things happen between the read at the
+      // top of this script and here: a network call, and a user who may have
+      // made a collection from the review card while it was in flight. Writing
+      // the list we read minutes ago would drop theirs.
+      //
+      // The id check mirrors `Collections.add` in the app, which has always had
+      // it. Without it `decide` — which dedupes on NAME — creates a second
+      // `acme-portal` when the list already holds one called `Acme Portal`, and
+      // two rows with one id give the board two identical chips, a rename that
+      // moves one of them and a delete that takes both.
+      const listed = readCollections(root);
+      if (!listed.some((c) => c.id === decision.newCollection.id)) {
+        listed.push({ ...decision.newCollection, hint: "" });
+        writeFileSync(join(root, "collections.json"), JSON.stringify(listed, null, 2) + "\n");
+      } else {
+        decision.collection = decision.newCollection.id;
+      }
     }
-  }
-  if (decision.newTask) {
-    // RE-READ, AND CHECK THE ID. The id is this brief's own stamp, so a
-    // re-classify racing the first ("Forgot something?") finds the row the
-    // first one wrote and leaves it.
-    // `from` says what the title was made from, so a narration title can
-    // give way to the first summary line that joins its task (below).
-    const list = readTaskRows(root);
-    if (!list.some((t) => t?.id === decision.newTask.id)) {
-      list.push({ ...decision.newTask, from: me.summaryLine ? "summary" : "narration" });
-      writeFileSync(join(root, "tasks.json"), JSON.stringify(list, null, 2) + "\n");
+    if (decision.newTask) {
+      // RE-READ, AND CHECK THE ID. The id is this brief's own stamp, so a
+      // re-classify racing the first ("Forgot something?") finds the row the
+      // first one wrote and leaves it.
+      // `from` says what the title was made from, so a narration title can
+      // give way to the first summary line that joins its task (below).
+      const list = readTaskRows(root);
+      if (!list.some((t) => t?.id === decision.newTask.id)) {
+        list.push({ ...decision.newTask, from: me.summaryLine ? "summary" : "narration" });
+        writeFileSync(join(root, "tasks.json"), JSON.stringify(list, null, 2) + "\n");
+      }
+    }
+
+    // A TITLE MADE FROM WHAT WAS SAID gives way to the first summary line that
+    // joins its task. Only a row written from narration: one somebody typed
+    // (`from: "you"`), or one with no `from` at all, is left as it is.
+    if (!decision.newTask && decision.task && me.summaryLine) {
+      const list = readTaskRows(root);
+      const row = list.find((t) => t?.id === decision.task);
+      if (row?.from === "narration") {
+        Object.assign(row, { title: titleFor(me), from: "summary" });
+        writeFileSync(join(root, "tasks.json"), JSON.stringify(list, null, 2) + "\n");
+      }
     }
   }
 
-  // A TITLE MADE FROM WHAT WAS SAID gives way to the first summary line that
-  // joins its task. Only a row written from narration: one somebody typed
-  // (`from: "you"`), or one with no `from` at all, is left as it is.
-  if (!decision.newTask && decision.task && me.summaryLine) {
-    const list = readTaskRows(root);
-    const row = list.find((t) => t?.id === decision.task);
-    if (row?.from === "narration") {
-      Object.assign(row, { title: titleFor(me), from: "summary" });
-      writeFileSync(join(root, "tasks.json"), JSON.stringify(list, null, 2) + "\n");
-    }
-  }
-
-  const context = {
-    collection: decision.collection,
-    task: decision.task,
-    tier: decision.tier,
-    confidence: decision.confidence,
-    decidedBy: "jev",
-    model: typeof answer?.model === "string" ? answer.model : null,
-    // The tasks it might carry on, when it could not tell — only when there
-    // are some. The app clears this on any hand placement.
-    ...(decision.candidates && { candidates: decision.candidates }),
-  };
+  const stamp = { decidedBy: "jev", model: typeof answer?.model === "string" ? answer.model : null, classifier: CLASSIFIER };
+  const context = decision.pile === "odds"
+    ? { pile: "odds", ...stamp, confidence: decision.confidence, jev: decision.jev }
+    : {
+      collection: decision.collection,
+      task: decision.task,
+      tier: decision.tier,
+      confidence: decision.confidence,
+      ...stamp,
+      // "Which one?" — only when there are some. The app clears this on any hand placement.
+      ...(decision.candidates && { candidates: decision.candidates }),
+      // "Related to …" — linked, never merged.
+      ...(decision.related && { related: decision.related }),
+      // Every probability, and the shortlist in the order sent, for tuning.
+      jev: decision.jev,
+    };
   writeFileSync(contextPath, JSON.stringify(context, null, 2) + "\n");
-  console.error(`✓ context → ${context.collection ?? "unsorted"} · `
-    + `${decision.newTask ? "new task" : `joins ${context.task}`}`
-    + `${context.candidates ? ` (maybe ${context.candidates.join(", ")})` : ""} · ${context.tier ?? "?"}`);
+  console.error(decision.pile === "odds"
+    ? `✓ context → odds and ends (not a request, ${decision.jev.gate})`
+    : `✓ context → ${context.collection ?? "unsorted"} · ${decision.newTask ? "new task" : `joins ${context.task}`}`
+      + `${context.candidates ? ` (maybe ${context.candidates.join(", ")})` : ""}`
+      + `${context.related ? ` (related ${context.related})` : ""} · ${decision.why} · ${context.tier ?? "?"}`);
 }
 
 // Even an unexpected throw must not fail the pipeline that called us.

@@ -1,4 +1,4 @@
-.PHONY: dev build test probe watch region clean setup bundle install icon dmg release guard-clean relay-deploy relay-dev site-deploy resources dist record transcribe align ground brief summarize signing-setup reset-permissions reclassify
+.PHONY: dev build test probe watch region clean setup bundle install icon dmg release guard-clean relay-deploy relay-dev site-deploy resources dist record transcribe align ground brief summarize signing-setup reset-permissions reclassify meaning-backfill flow-check eval models-publish
 
 # Code-signing identity for the bundle.
 #
@@ -17,6 +17,15 @@
 # codesign signs perfectly well with an untrusted local identity.
 SIGN_NAME  ?= Deiko Local
 SIGN_FOUND := $(shell security find-identity -p codesigning 2>/dev/null | grep -c '"$(SIGN_NAME)"')
+# The identity actually used to sign: "-" (ad-hoc) when SIGN_NAME isn't in the
+# keychain, SIGN_NAME otherwise — the local self-signed cert from
+# `make signing-setup`, or, later, a real "Developer ID Application: …" one.
+SIGN_ID    := $(if $(filter 0,$(SIGN_FOUND)),-,$(SIGN_NAME))
+# A Developer ID identity's signature needs a secure timestamp and the
+# hardened runtime or notarytool rejects it — see `sign` below. Ad-hoc and the
+# local self-signed cert get neither: there's no Apple timestamp server to
+# reach for either one, and asking would just fail.
+SIGN_EXTRA := $(if $(findstring Developer ID,$(SIGN_ID)),--timestamp --options runtime,)
 
 CAPTURE_DIR := apps/capture
 DEBUG_BIN   := $(CAPTURE_DIR)/.build/debug/deiko-capture
@@ -201,6 +210,9 @@ endif
 ## `--deep` on VERIFY is the opposite and is correct: it walks the nested code
 ## and checks it, which is what catches a resource added after sealing.
 sign:
+	@find $(RES)/node_modules \( -name '*.node' -o -name '*.dylib' \) -type f 2>/dev/null \
+	  | while read -r f; do codesign --force --sign "$(SIGN_ID)" $(SIGN_EXTRA) "$$f" 2>/dev/null \
+	  || { echo "✗ could not sign $$f"; exit 1; }; done
 ifeq ($(SIGN_FOUND),0)
 	@codesign --force --sign - $(APP) 2>/dev/null
 	@echo "signed $(APP)  ⚠ AD-HOC"
@@ -373,6 +385,15 @@ release: guard-clean
 		|| echo "  ! BUY_URL is empty — this build shows no way to buy Pro"
 	@test -n "$(SUPPORT_EMAIL)" \
 		|| echo "  ! SUPPORT_EMAIL is empty — this build shows no way to send feedback"
+	@# THE MODEL MIRROR, CHECKED BEFORE THE DMG IS BUILT. Every install of this
+	@# release runs `scripts/lib/meaning.mjs`'s downloader against the mirror
+	@# as soon as it launches; if the upload there was forgotten, every one of
+	@# them fails the same way forever, on every launch. The file list comes
+	@# from `MODELS` itself, so this can never drift from what the app asks for.
+	@for url in $$(node -e "import('./scripts/lib/meaning.mjs').then(({ MODELS, DEFAULT_MODEL, MODEL_BASE_URL }) => { for (const f of MODELS[DEFAULT_MODEL].files) console.log(MODEL_BASE_URL.replace(/\/+$$/, '') + '/' + DEFAULT_MODEL + '/' + f.path); } )"); do \
+		curl -fsI "$$url" >/dev/null || { echo "✗ model mirror is missing $$url — upload it before releasing"; exit 1; }; \
+	done
+	@echo "  model mirror: all files present"
 	@$(MAKE) --no-print-directory dmg RELAY_URL='$(RELAY_URL)' SITE_URL='$(SITE_URL)' BUY_URL='$(BUY_URL)' SUPPORT_EMAIL='$(SUPPORT_EMAIL)'
 	@# SITE_URL travels in the environment: publish-release.sh stamps it into
 	@# version.json, and without it that falls back to a hostname nobody types.
@@ -409,10 +430,11 @@ relay-deploy:
 
 ## relay-dev — run the relay locally, for testing the app against it
 ##
+## Meters into memory (services/relay/local.mjs), never the real usage table.
 ##   make relay-dev
 ##   DEIKO_RELAY_URL=http://localhost:8787 open build/Deiko.app
 relay-dev:
-	@set -a; [ -f .env ] && . ./.env; set +a; node services/relay/server.mjs
+	@set -a; [ -f .env ] && . ./.env; set +a; node services/relay/local.mjs
 
 ## site-deploy — the landing site onto S3 + CloudFront
 ##
@@ -444,9 +466,10 @@ icon: $(DEBUG_BIN)
 ## built packages, and a bundle whose Resources lag its binary is a bug you
 ## find in the DMG.
 ##
-## No `node_modules` in the bundle any more. The bridge was the only thing that
-## needed a dependency closure; every remaining script imports node builtins,
-## `packages/*/dist`, or its own sibling in `scripts/lib`.
+## `node_modules` in the bundle is back for exactly one thing: the meaning
+## model's runtime (see scripts/lib/meaning.mjs). Every other script still
+## imports node builtins, `packages/*/dist`, or its own sibling in
+## `scripts/lib` — no dependency closure needed for those.
 resources:
 	@rm -rf $(RES)
 	@mkdir -p $(RES) $(APP)/Contents/MacOS
@@ -456,6 +479,22 @@ resources:
 		--include='*/' --include='dist/***' --include='package.json' --exclude='*' \
 		packages $(RES)/
 	@echo "  resources: scripts + packages/dist"
+	@# THE MEANING MODEL'S RUNTIME — the one dependency the scripts have (see
+	@# scripts/lib/meaning.mjs). macOS arm64 binaries only: the npm package
+	@# carries Linux and Windows builds too, ~100 MB nobody here can run. The
+	@# model itself is downloaded after install, never bundled.
+	@test -f node_modules/onnxruntime-node/bin/napi-v6/darwin/arm64/onnxruntime_binding.node \
+	  || (echo "✗ onnxruntime-node's macOS binary is missing — run npm ci"; exit 1)
+	@mkdir -p $(RES)/node_modules/@huggingface
+	@rsync -a --delete node_modules/onnxruntime-node node_modules/onnxruntime-common $(RES)/node_modules/
+	@rsync -a --delete node_modules/@huggingface/tokenizers $(RES)/node_modules/@huggingface/
+	@find $(RES)/node_modules/onnxruntime-node/bin -mindepth 2 -maxdepth 2 -type d ! -name darwin -exec rm -rf {} +
+	@find $(RES)/node_modules/onnxruntime-node/bin -mindepth 3 -maxdepth 3 -type d ! -name arm64 -exec rm -rf {} +
+	@# The binding links @rpath/libonnxruntime.1.dylib; the package ships a
+	@# byte-identical 44 MB copy under the full version name that nothing loads.
+	@rm -f $(RES)/node_modules/onnxruntime-node/bin/napi-v6/darwin/arm64/libonnxruntime.1.30.0.dylib
+	@rsync -a --delete apps/capture/licenses $(RES)/
+	@echo "  resources: + onnxruntime-node (darwin arm64), tokenizers, licences"
 
 ## dist — the shippable bundle: everything in `bundle`, plus the Node runtime
 ##
@@ -575,6 +614,42 @@ reclassify:
 		$(SORT_BRIEFS) node scripts/classify.mjs "$$d"; \
 		node scripts/render-brief.mjs "$$d" >/dev/null 2>&1 || true; \
 	done
+
+## meaning-backfill — write each brief's meaning vector where it is missing or stale
+##
+## WRITES INTO THE BOARD (<session>/meaning.f32 + meaning.json). Run it only
+## when you mean to; `make reclassify` also fills gaps, as each render writes
+## its own brief's vector.
+meaning-backfill:
+	@node scripts/meaning.mjs backfill "$(ROOT)"
+
+## eval — score filing against the hand-made answer key (read-only)
+##
+##   make eval ARGS="--shortlist-only"
+##   make eval                       # full: one classify per brief, via the relay in .env
+##
+## The key lives outside the repo: ~/Documents/Deiko-eval/filing-labels.json.
+## `node scripts/eval-filing.mjs --draft > …` prints a starting one.
+eval:
+	@set -a; [ -f .env ] && . ./.env; set +a; $(SORT_BRIEFS) node scripts/eval-filing.mjs $(ARGS)
+
+## models-publish — upload the meaning model's files to R2 for the app to download
+##
+## Checks every file against MODELS' SHA-256 first, uploads to
+## download/models/<key>/, then fetches each URL back. Needs the R2_* credentials
+## publish-release.sh uses, and the model on this Mac
+## (`node scripts/meaning.mjs download --from-hf`). Run before `make release`,
+## whose preflight refuses to ship while the mirror is incomplete.
+models-publish:
+	@set -a; [ -f .env ] && . ./.env; set +a; ./scripts/publish-models.sh
+
+## flow-check — render → classify → render on a throwaway copy of real briefs
+##
+## Starts this checkout's relay on a local port with .env's keys, files a
+## handful of real sessions from scratch in a temp dir, checks each has a
+## prompt and a filing, and prints how it was filed. The board is only read.
+flow-check:
+	@./scripts/flow-check.sh
 
 ## ground — score how well a session resolved its referents, and check M1
 ##

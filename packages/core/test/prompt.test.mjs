@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { buildPrompt, quoteSurvives } from "../lib/prompt.mjs";
-import { assertNoSecrets, carriesSecret, redact } from "../lib/redact.mjs";
+import { assertNoSecrets, carriesSecret, redact, redactNote } from "../lib/redact.mjs";
 
 /** A referent nobody was talking through: no screenshot, no bound speech. */
 const bare = { cropPath: null, cropWithheld: null, said: null, text: { ax: [], ocr: [] } };
@@ -710,6 +710,62 @@ test("order at the tail: task, persona, cost hint, write-back", () => {
   ));
 });
 
+const recent = [{ date: "Sep 18", line: "Fix the price display." }, { date: "Sep 19", line: "The listing page shows the old price" }];
+
+test("a joined task lists its recent briefs and, for a coding agent, its id", () => {
+  const plain = buildPrompt(oneShot());
+  const withTask = buildPrompt({ ...oneShot(), task: { ...priceTask(), id: "t-20260918-155836", recent } });
+  assert.equal(
+    withTask.text.slice(plain.text.length - 1),
+    "\n\nThis carries on from \"Price display doesn't update after editing\" (3 briefs so far). Where it stands:\n"
+      + "The listing page still caches the old price.\n"
+      + "Recent briefs:\n- Sep 18: Fix the price display.\n- Sep 19: The listing page shows the old price.\n"
+      + "The full history is in /Users/dev/Documents/Deiko/tasks/t-20260918-155836.md — read what you need."
+      + " Deiko task id: t-20260918-155836 (if the deiko-memory tools are connected, they can open it).\n",
+  );
+  assert.ok(withTask.evidence.includes("The listing page shows the old price"), "earlier words are guarded like the rest");
+});
+
+test("a browser gets the recent briefs inline and never the id", () => {
+  const attached = buildPrompt({ ...oneShot(), attached: true, task: { ...priceTask(), id: "t-20260918-155836", recent } });
+  assert.ok(attached.text.endsWith(
+    "Where it stands: The listing page still caches the old price. Last time: Synced the price after save."
+      + " Recent briefs: Sep 18: Fix the price display; Sep 19: The listing page shows the old price.\n",
+  ));
+  assert.equal(attached.text.includes("t-20260918-155836"), false);
+});
+
+test("the memory block stays within twenty lines", () => {
+  const long = { ...priceTask(), now: Array.from({ length: 30 }, (_, i) => `open item ${i}`), recent: [...recent, { date: "Sep 20", line: "Third" }] };
+  const plain = buildPrompt(oneShot());
+  const block = buildPrompt({ ...oneShot(), task: long }).text.slice(plain.text.length - 1).trim().split("\n");
+  assert.ok(block.length <= 20, `${block.length} lines`);
+  assert.equal(block.at(-1).startsWith("The full history is in "), true, "the history line is never the one cut");
+});
+
+test("possibly related work is a hint, with its history for an agent that can read it", () => {
+  const related = {
+    id: "t-20260915-234710", title: "Pricing page", why: "same site", age: "2 days ago",
+    notePath: "/Users/dev/Documents/Deiko/tasks/t-20260915-234710.md",
+  };
+  const plain = buildPrompt(oneShot());
+  const local = buildPrompt({ ...oneShot(), related });
+  assert.equal(local.text.slice(plain.text.length - 1),
+    "\n\nPossibly related, not confirmed: \"Pricing page\" (same site, 2 days ago)."
+      + " History: /Users/dev/Documents/Deiko/tasks/t-20260915-234710.md · task id t-20260915-234710\n");
+  const attachedPlain = buildPrompt({ ...oneShot(), attached: true });
+  assert.equal(buildPrompt({ ...oneShot(), attached: true, related }).text.slice(attachedPlain.text.length - 1),
+    "\n\nPossibly related, not confirmed: \"Pricing page\" (same site, 2 days ago).\n");
+  assert.ok(local.evidence.endsWith("Pricing page"));
+  assert.equal(buildPrompt({ ...oneShot(), related: { ...related, why: null } }).text.includes("(2 days ago)"), true);
+});
+
+test("a maybe with an id names it for a coding agent only", () => {
+  const withIds = maybe().map((m, i) => ({ ...m, id: `t-2026091${i}-100000` }));
+  assert.match(buildPrompt({ ...oneShot(), maybe: withIds }).text, / · task id t-20260910-100000\n/);
+  assert.equal(buildPrompt({ ...oneShot(), attached: true, maybe: withIds }).text.includes("t-20260910-100000"), false);
+});
+
 // ── Might carry on: the candidates, when Deiko couldn't tell ─────────────────
 
 const maybe = () => [
@@ -793,4 +849,18 @@ test("candidates sit where the task would, ahead of persona, hint and write-back
       + "\nThis looks like a quick one and a fast model is probably enough. Judge for yourself.\n"
       + `\n${WRITE_BACK}\n`,
   ));
+});
+
+test("an agent's note keeps plain file paths and scrubs a token, even one shaped like a path", () => {
+  const jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4ifQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
+  const out = redactNote([
+    "- apps/capture/Sources/DeikoCapture/MemoryHelper.swift",
+    "- src/components/PricingTable.tsx",
+    jwt,
+    "- reset/Zx9Qm2Lk8Pw3Rt6Yv1Nb4Hc7Df0Gs5Aj/done.html",
+  ]);
+  assert.equal(out[0], "- apps/capture/Sources/DeikoCapture/MemoryHelper.swift");
+  assert.equal(out[1], "- src/components/PricingTable.tsx");
+  assert.equal(out[2].includes("eyJ"), false, "a JWT is not a path");
+  assert.equal(out[3].includes("Zx9Qm2Lk8Pw3Rt6Yv1Nb4Hc7Df0Gs5Aj"), false, "a token segment is caught");
 });

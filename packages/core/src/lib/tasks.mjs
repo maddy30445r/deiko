@@ -13,12 +13,14 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { redact } from "./redact.mjs";
+import { redact, redactNote } from "./redact.mjs";
 import { COULD_NOT_TELL, STAMP, briefDate, readBriefLine } from "./context.mjs";
 
 export const TASK_ID = /^t-\d{8}-\d{6}$/;
-/// How many tasks Jev chooses among.
-export const SHORTLIST = 8;
+/// How many tasks Jev is asked about, one yes/no each.
+/// ponytail: 20 is the usual starting point for one person's board; the eval
+/// measures recall at 5 and 20, and corrections log where the right task sat.
+export const SHORTLIST = 20;
 const CAP = { now: 12, decided: 20, briefs: 50 };
 
 export const taskIdFor = (stamp) => `t-${stamp}`;
@@ -138,9 +140,10 @@ export function taskState(briefs, title = null) {
     const open = last?.outcome.open ?? [];
     now = [...asked, ...open.map((o, i) => (i ? o : `Still open from ${briefDate(last.id)}: ${o}`))];
   }
+  // As blocks, not line by line: see `redactNote`.
   return {
-    now: now.slice(0, CAP.now).map(redact),
-    lastDid: (last?.outcome.did ?? []).slice(0, CAP.now).map(redact),
+    now: redactNote(now.slice(0, CAP.now)),
+    lastDid: redactNote((last?.outcome.did ?? []).slice(0, CAP.now)),
   };
 }
 
@@ -155,57 +158,157 @@ export function taskText(title, briefs) {
   ].join(" ");
 }
 
-/// Shortlist places kept for the most recently active tasks.
-const RECENT = 2;
+/// ponytail: starting values, tuned on the filing eval (scripts/eval-filing.mjs).
+export const TIME_SEATS = 5;
+/// A label on more than this many tasks ("App.tsx", "index.tsx") seats nobody.
+export const COMMON_LABEL = 5;
+/// Reciprocal-rank fusion. ponytail: try k ∈ {10, 30, 60} and a min-max blend
+/// weighted 0.5–0.7 towards meaning on the eval before changing these.
+export const RRF_K = 60;
+export const RRF_WEIGHTS = { words: 1, meaning: 1 };
+/// The labels that hand out seats. Sites and code projects do not: one site
+/// or one repo holds most of a board, so they say nothing about WHICH task.
+export const SEAT_KINDS = ["pages", "files", "urls", "errors", "tickets"];
 
-/**
- * The shortlist: BM25 over each task's text, plus a nudge for the same repo
- * and for recent work. A nudge, not a gate — a topic switch ten minutes after
- * the last brief must still be able to lose. Same repo is one of this brief's
- * repo hints equal to one of the task's own (`t.repoHints`), not a word
- * found anywhere in its text.
- *
- * ponytail: lexical, so blind to paraphrase ("the drag thing" vs "moving
- * cards"). The weights are eyeballed. Upgrade: on-device sentence embeddings
- * (NaturalLanguage) as a second score, when a wrong shortlist shows up.
- */
-export function scoreTasks({ query, tasks, repoHints = [], now = Date.now(), limit = SHORTLIST }) {
-  if (!tasks.length) return [];
-  const docs = tasks.map((t) => tokens(t.text));
+export function terms(text) {
+  const words = tokens(text);
+  const grams = [];
+  for (const w of words) if (w.length >= 4) for (let i = 0; i + 3 <= w.length; i++) grams.push(`~${w.slice(i, i + 3)}`);
+  return [...words, ...grams];
+}
+
+/** Okapi BM25 of one query against each doc, with Lucene's IDF. */
+export function bm25(query, docs) {
+  if (!docs.length) return [];
   const avg = docs.reduce((s, d) => s + d.length, 0) / docs.length || 1;
   const df = new Map();
   for (const d of docs) for (const w of new Set(d)) df.set(w, (df.get(w) ?? 0) + 1);
-  const q = [...new Set(tokens(query))];
-  const hints = repoHints.filter(Boolean).map((h) => h.toLowerCase());
+  const q = [...new Set(query)];
   const k1 = 1.2, b = 0.75, N = docs.length;
-  const ranked = tasks.map((t, i) => {
+  return docs.map((d) => {
     const tf = new Map();
-    for (const w of docs[i]) tf.set(w, (tf.get(w) ?? 0) + 1);
+    for (const w of d) tf.set(w, (tf.get(w) ?? 0) + 1);
     let score = 0;
     for (const w of q) {
       const f = tf.get(w);
       if (!f) continue;
       const idf = Math.log(1 + (N - df.get(w) + 0.5) / (df.get(w) + 0.5));
-      score += idf * (f * (k1 + 1)) / (f + k1 * (1 - b + (b * docs[i].length) / avg));
+      score += idf * (f * (k1 + 1)) / (f + k1 * (1 - b + (b * d.length) / avg));
     }
-    const sameRepo = (t.repoHints ?? []).some((h) => hints.includes(String(h).toLowerCase()));
-    if (sameRepo) score += 2;
-    const age = now - t.lastActive;
-    if (age < 2 * 3600e3) score += 2;
-    else if (age < 24 * 3600e3) score += 1;
-    return { id: t.id, score, sameRepo };
-  }).sort((x, y) => y.score - x.score);
-  // "Same bug as yesterday" shares few words with yesterday's task once the
-  // board is full of the same page's words, and the recency nudge is noise
-  // beside a BM25 score. So the two most recently active tasks always get a
-  // place, taken from the lowest scores when they did not earn one.
-  // ponytail: a fixed two, whatever they score; a third recent task still has
-  // to win on words. Upgrade: weigh recency into the score itself once real
-  // filing misses say how much.
-  const top = ranked.slice(0, limit);
-  const recent = new Set([...tasks].sort((x, y) => y.lastActive - x.lastActive).slice(0, RECENT).map((t) => t.id));
-  const missing = ranked.filter((r) => recent.has(r.id) && !top.includes(r));
-  return [...top.slice(0, limit - missing.length), ...missing];
+    return score;
+  });
+}
+
+/** Weighted reciprocal rank fusion. Equal scores share a rank, so a tie in
+ *  one list stays a tie (recency breaks it later, not list order). */
+export function rrf(lists, k = RRF_K) {
+  const n = Math.max(0, ...lists.map((l) => l.scores.length));
+  const fused = new Array(n).fill(0);
+  for (const { scores, weight } of lists) {
+    const first = new Map();
+    scores.filter((s) => s != null).sort((a, b) => b - a)
+      .forEach((s, r) => { if (!first.has(s)) first.set(s, r); });
+    scores.forEach((s, i) => { if (s != null) fused[i] += weight / (k + first.get(s) + 1); });
+  }
+  return fused;
+}
+
+export function cosine(a, b) {
+  let s = 0;
+  for (let i = 0; i < Math.min(a.length, b.length); i++) s += a[i] * b[i];
+  return s;
+}
+
+const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+
+/**
+ * The window a brief's time words name, from its own stamp: "today"/"aaj",
+ * "this morning", "yesterday"/"kal", "last night" (the evening before),
+ * "parso"/"day before yesterday", "this week" (from Monday), "last
+ * week"/"pichle hafte", and
+ * weekday names (the most recent one before today). Several words → their
+ * union. "kal" also means tomorrow; said about past work it means yesterday.
+ */
+export function timeWindow(text, stamp) {
+  // "day before yesterday" is parso, and must not also read as yesterday.
+  const said = String(text ?? "").toLowerCase().replace(/\bday before yesterday\b/g, "parso");
+  const at = new Date(stamp);
+  const day = (offset, hour = 0) => new Date(at.getFullYear(), at.getMonth(), at.getDate() + offset, hour).getTime();
+  const spans = [];
+  if (/\b(today|aaj)\b/.test(said)) spans.push([day(0), stamp]);
+  if (/\bthis morning\b/.test(said)) spans.push([day(0), day(0, 12)]);
+  if (/\b(yesterday|kal)\b/.test(said)) spans.push([day(-1), day(0)]);
+  if (/\blast night\b/.test(said)) spans.push([day(-1, 18), day(0, 6)]);
+  if (/\bparso\b/.test(said)) spans.push([day(-2), day(-1)]);
+  if (/\bthis week\b/.test(said)) spans.push([day(-((at.getDay() + 6) % 7)), stamp]);
+  if (/\b(last week|pichle hafte|pichhle hafte|pichle week)\b/.test(said)) spans.push([day(-7), day(0)]);
+  WEEKDAYS.forEach((name, weekday) => {
+    if (!new RegExp(`\\b${name}\\b`).test(said)) return;
+    const back = ((at.getDay() - weekday + 7) % 7) || 7;
+    spans.push([day(-back), day(-back + 1)]);
+  });
+  if (!spans.length) return null;
+  return { from: Math.min(...spans.map((s) => s[0])), to: Math.max(...spans.map((s) => s[1])) };
+}
+
+/** Whether a brief may describe its task: its founder, a hand placement of
+ *  its TASK, or any v3 join. JOIN's own thresholds in context.mjs already
+ *  gate what counts as one, so this asks only whether a join happened, not
+ *  how sure it was. A legacy join (no `classifier`) or a local one is a
+ *  guess, never a face — see `decide` and `decideLocally`. So is a join whose
+ *  PROJECT alone was corrected by hand: that fixes a chip, not the task. */
+export function firm(b, taskId) {
+  if (taskIdFor(b.id) === taskId || b.taskBy === "you") return true;
+  // Before `taskBy`: `decidedBy: "you"` was a task placement unless the
+  // project was what the hand placed.
+  if (b.decidedBy === "you" && b.collectionBy !== "you") return true;
+  return String(b.classifier ?? "").startsWith("v3") && typeof b.confidence?.task === "number";
+}
+
+export function taskLabels(briefs) {
+  return Object.fromEntries(SEAT_KINDS.map((k) => [k,
+    new Set(briefs.flatMap((b) => b.keys?.[k] ?? []).map((s) => String(s).toLowerCase()))]));
+}
+
+/**
+ * THE SHORTLIST — up to twenty tasks Jev is asked about, one yes/no each.
+ * Seats given outright first: a task sharing an exact page, file, address,
+ * error or ticket label with the brief (unless that label is on more than
+ * COMMON_LABEL tasks), then up to TIME_SEATS tasks active in a window the
+ * brief names, best score first. The rest by reciprocal-rank fusion of BM25
+ * over words and 3-grams and, when vectors exist, the cosine to the task's
+ * closest firm brief. Recency only breaks ties; the project gives nothing. A
+ * seat is a chance to be checked, never a join.
+ */
+export function shortlist({ query, queryKeys = {}, window = null, queryVec = null, tasks, limit = SHORTLIST }) {
+  if (!tasks.length) return [];
+  const grams = bm25(terms(query), tasks.map((t) => terms(t.text)));
+  const meaning = tasks.map((t) => (queryVec && t.vecs?.length ? Math.max(...t.vecs.map((v) => cosine(queryVec, v))) : null));
+  const fused = rrf([
+    { scores: grams.map((s) => (s > 0 ? s : null)), weight: RRF_WEIGHTS.words },
+    { scores: meaning, weight: RRF_WEIGHTS.meaning },
+  ]);
+  const count = new Map();
+  for (const t of tasks) {
+    for (const k of SEAT_KINDS) for (const v of t.labels?.[k] ?? []) count.set(`${k}\n${v}`, (count.get(`${k}\n${v}`) ?? 0) + 1);
+  }
+  const mine = SEAT_KINDS
+    .flatMap((k) => (queryKeys[k] ?? []).map((v) => [k, String(v).toLowerCase()]))
+    .filter(([k, v]) => (count.get(`${k}\n${v}`) ?? 0) <= COMMON_LABEL);
+  const rows = tasks.map((t, i) => ({
+    id: t.id, score: fused[i], meaning: meaning[i], lastActive: t.lastActive ?? 0,
+    label: mine.some(([k, v]) => t.labels?.[k]?.has(v)),
+    inWindow: Boolean(window && (t.times ?? []).some((ms) => ms >= window.from && ms < window.to)),
+  }));
+  const byScore = (a, b) => b.score - a.score || b.lastActive - a.lastActive;
+  const labelled = rows.filter((r) => r.label).sort(byScore);
+  const timed = rows.filter((r) => !r.label && r.inWindow).sort(byScore).slice(0, TIME_SEATS);
+  const taken = new Set([...labelled, ...timed].map((r) => r.id));
+  return [
+    ...labelled.map((r) => ({ ...r, seat: "label" })),
+    ...timed.map((r) => ({ ...r, seat: "time" })),
+    ...rows.filter((r) => !taken.has(r.id)).sort(byScore).map((r) => ({ ...r, seat: "score" })),
+  ].slice(0, limit).map(({ id, score, meaning: m, seat }) => ({ id, score, meaning: m, seat }));
 }
 
 /** The compiled note. `briefs` newest first. Every line from another
@@ -222,8 +325,9 @@ export function renderTaskNote({ id, title, collection = null, briefs }) {
   ];
   const now = taskState(briefs, title).now;
   if (now.length) out.push("", "## Now", ...now);
+  // Each brief's decisions as one block, like its Now: see `redactNote`.
   const decided = briefs
-    .flatMap((b) => (b.outcome?.decided ?? []).map((d) => `- ${briefDate(b.id)}: ${redact(d)}`))
+    .flatMap((b) => redactNote(b.outcome?.decided ?? []).map((d) => `- ${briefDate(b.id)}: ${d}`))
     .slice(0, CAP.decided);
   if (decided.length) out.push("", "## Decided", ...decided);
   out.push("", "## Briefs");

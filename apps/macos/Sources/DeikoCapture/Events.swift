@@ -381,6 +381,12 @@ struct AXElement: Codable {
     /// spike: it shows what an app actually offers versus what we thought to
     /// ask for, and it is how per-app quirks get discovered.
     let attributeNames: [String]
+
+    /// Web content only: the element's DOM `id` and classes, as Chrome
+    /// exposes them (`AXDOMIdentifier`, `AXDOMClassList`). Labels for filing
+    /// ("the chart card"); nil everywhere else.
+    var domIdentifier: String? = nil
+    var domClassList: [String]? = nil
 }
 
 /// The result of resolving whatever occupies a shape.
@@ -473,6 +479,12 @@ struct ProbeEvent: Codable {
     /// is the release end — the more deliberate of the two.
     let startSnapshot: AXSnapshot?
 
+    /// Host and path of the page under the pointer — see `PageURL.trim`,
+    /// which drops the query — and the window's open document. Labels for
+    /// filing; nil when the app offers neither.
+    let pageURL: String?
+    let document: String?
+
     init(
         shape: Shape,
         app: AppIdentity?,
@@ -480,7 +492,9 @@ struct ProbeEvent: Codable {
         snapshot: AXSnapshot,
         crop: CropResult? = nil,
         mark: MarkInfo? = nil,
-        startSnapshot: AXSnapshot? = nil
+        startSnapshot: AXSnapshot? = nil,
+        pageURL: String? = nil,
+        document: String? = nil
     ) {
         self.init(
             t: Clock.nowMs(),
@@ -491,7 +505,9 @@ struct ProbeEvent: Codable {
             snapshot: snapshot,
             crop: crop,
             mark: mark,
-            startSnapshot: startSnapshot
+            startSnapshot: startSnapshot,
+            pageURL: pageURL,
+            document: document
         )
     }
 
@@ -504,7 +520,9 @@ struct ProbeEvent: Codable {
         snapshot: AXSnapshot,
         crop: CropResult?,
         mark: MarkInfo? = nil,
-        startSnapshot: AXSnapshot? = nil
+        startSnapshot: AXSnapshot? = nil,
+        pageURL: String? = nil,
+        document: String? = nil
     ) {
         self.type = .probe
         self.t = t
@@ -516,6 +534,8 @@ struct ProbeEvent: Codable {
         self.crop = crop
         self.mark = mark
         self.startSnapshot = startSnapshot
+        self.pageURL = pageURL
+        self.document = document
     }
 
     /// Attach a crop to an already-built probe. Capture is async and AX is not,
@@ -535,7 +555,9 @@ struct ProbeEvent: Codable {
             snapshot: snapshot,
             crop: crop,
             mark: mark,
-            startSnapshot: startSnapshot
+            startSnapshot: startSnapshot,
+            pageURL: pageURL,
+            document: document
         )
     }
 
@@ -550,7 +572,9 @@ struct ProbeEvent: Codable {
             snapshot: snapshot,
             crop: crop,
             mark: mark,
-            startSnapshot: startSnapshot
+            startSnapshot: startSnapshot,
+            pageURL: pageURL,
+            document: document
         )
     }
 }

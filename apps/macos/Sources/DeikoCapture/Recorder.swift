@@ -1011,21 +1011,25 @@ final class Recorder {
                     windowTitle: endProbe.windowTitle ?? startProbe.windowTitle,
                     snapshot: endProbe.snapshot,
                     mark: mark,
-                    startSnapshot: startProbe.snapshot
+                    startSnapshot: startProbe.snapshot,
+                    pageURL: endProbe.pageURL ?? startProbe.pageURL,
+                    document: endProbe.document ?? startProbe.document
                 )
                 loci = [(start, startProbe.snapshot), (end, endProbe.snapshot)]
             case .point:
                 let probe = AXProbe.probePoint(shape.origin)
                 event = ProbeEvent(
                     shape: shape, app: probe.app, windowTitle: probe.windowTitle,
-                    snapshot: probe.snapshot, mark: mark
+                    snapshot: probe.snapshot, mark: mark,
+                    pageURL: probe.pageURL, document: probe.document
                 )
                 loci = [(shape.origin, probe.snapshot)]
             case .lasso, .emphasis:
                 let probe = AXProbe.probeRegion(shape)
                 event = ProbeEvent(
                     shape: shape, app: probe.app, windowTitle: probe.windowTitle,
-                    snapshot: probe.snapshot, mark: mark
+                    snapshot: probe.snapshot, mark: mark,
+                    pageURL: probe.pageURL, document: probe.document
                 )
                 // Emphasis breathes around what was scribbled over; a lasso's
                 // own loop already declares its extent.

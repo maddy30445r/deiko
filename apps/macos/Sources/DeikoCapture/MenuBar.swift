@@ -270,6 +270,9 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Settings has no recorder of its own and should not grow one.
         main.openSessionDir = { [weak self] in self?.recorder.sessionDir }
         main.sessionRoot = recorder.sessionRoot
+        // The board must never show the session being recorded right now as
+        // "Unfinished recording" — see `SessionsStore.load`.
+        SessionsStore.openSessionDir = { [weak self] in self?.recorder.sessionDir }
         // Collections sit beside the sessions, wherever `--out` put them —
         // the scripts resolve the same file from a session's own parent.
         Collections.root = recorder.sessionRoot
@@ -280,6 +283,11 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // session already knows whether Jira is reachable. Off the main
         // thread; a cold answer only ever renders the cautious wording.
         AgentConfigs.warm()
+        // The meaning model, if it isn't already there. Filing works on words
+        // alone until this finishes, so nothing here blocks the app. The
+        // backfill it runs once ready has to land on THIS launch's board, not
+        // the default one — see `MeaningModel.root`.
+        MeaningModel.shared.start(root: recorder.sessionRoot)
 
         // OLD SESSIONS GO. Nothing ever removed one before, and a session is a
         // folder of full-resolution screenshots — the folder grew for as long

@@ -1,0 +1,236 @@
+/**
+ * LABELS — the exact names a brief is about: its page, site, web address,
+ * file, code project, document, component, error and ticket. Read from what
+ * the recorder already captured; no model, no network. Two briefs on page
+ * "Signups" are far likelier the same job than two that both say "chart",
+ * and a label is exact the way an email's reply thread is.
+ *
+ * Every value is cleaned so two visits to the same page match, and passed
+ * through `redact`. `pages/sites/urls/files/repo/docs/tickets` may travel to
+ * the classifier — the same class as the window titles they come from.
+ * `components` (headings and element ids) and `errors` (a line read off the
+ * screen) stay on this Mac: both are screen text.
+ */
+import { homedir } from "node:os";
+import { basename } from "node:path";
+
+import { redact, redactBlock } from "./redact.mjs";
+
+export const KINDS = ["pages", "sites", "urls", "files", "repo", "docs", "components", "errors", "tickets"];
+export const EMPTY_KEYS = Object.freeze(Object.fromEntries(KINDS.map((k) => [k, Object.freeze([])])));
+const ONE = { pages: "page", sites: "site", urls: "url", files: "file", repo: "repo", docs: "doc", components: "component", errors: "error", tickets: "ticket" };
+const CAP = 10;
+
+export const BROWSER = /^(google chrome|chrome|safari|arc|firefox|microsoft edge|brave browser|chromium|opera|vivaldi|zen)$/i;
+export const EDITOR = /^(code|visual studio code|cursor|windsurf|zed|xcode|sublime text|nova|intellij idea|webstorm|pycharm|android studio)$/i;
+export const TERMINAL = /^(terminal|iterm2?|warp|ghostty|kitty|alacritty|wezterm)$/i;
+/// Apps whose window titles name a conversation or the system, never a document.
+/// ponytail: a list; grow it when a real board shows another chat app as a project.
+const NOT_A_DOC = /^(finder|dock|deiko|deiko capture|usernotificationcenter|screenshot|system settings|dictionary|discord|slack|messages|mail|spotlight|control center|notification center|zoom\.us|facetime|microsoft teams|webex)$/i;
+
+const GENERIC = new Set(["new tab", "dashboard", "home", "untitled", "loading", "loading…", "loading...", "index", "start page", "about:blank", "blank"]);
+const SEPARATOR = / (?:—|–|-|\||·) /;
+const COUNT = /^\(\d+\)\s*|\s*\(\d+\)$/g;
+const ID_SEGMENT = /^(\d+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{16,})$/i;
+/// A token in a path — an invite, share or reset token, a webhook secret, a
+/// document key: 12+ characters mixing cases and digits, or a 10+ run of
+/// letters and digits that has both. ponytail: a shape test, so a slug like
+/// "iphone15promax" goes to `*` too; a slug of words and dates stays.
+const isToken = (seg) =>
+  (seg.length >= 12 && /^[\w-]+$/.test(seg) && /\d/.test(seg) && /[a-z]/.test(seg) && /[A-Z]/.test(seg))
+  || seg.split(/[-_.~]/).some((p) => p.length >= 10 && /^[a-z0-9]+$/i.test(p) && /\d/.test(p) && /[a-z]/i.test(p));
+// A real address: localhost/127.0.0.1, a dotted host, or anything with a
+// port — never a bare "word/word" like "N/A" or "TCP/IP", which the old
+// `[\w.-]+/\S*` shape matched by accident (no dot, no port, still "looked
+// like" a path).
+const LOOKS_LIKE_URL = /^(https?:\/\/)?((localhost|127\.0\.0\.1)(:\d+)?|[\w-]+(\.[\w-]+)+(:\d+)?|[\w-]+:\d+)\/\S*/i;
+const TICKET = /\b([A-Z][A-Z0-9]{1,9}-\d{1,6})\b|(?<![\w&])#(\d{1,6})\b/g;
+/// Standards and encodings shaped like tickets. ponytail: a list.
+const NOT_A_TICKET = /^(UTF|ISO|SHA|MD|RFC|TLS|SSL|GPT|ES|IPV|HTTP|COVID|WCAG|PEP|AES|RSA|DES|HMAC|IEEE|ECMA|CVE|MPEG|USB|DDR|WPA)-/;
+/// A line that STARTS with an error's signature — never one that merely
+/// mentions one ("hey getting a TypeError when …" is a message, not an error).
+const ERROR_LINE = /^(Uncaught\b|Traceback\b|panic:|[A-Z]\w*(Error|Exception)\b|(error|Error|ERROR)\b)/;
+const BROWSER_TAIL = /\s[-–—]\s(Google Chrome|Mozilla Firefox|Firefox|Microsoft Edge|Brave|Chromium|Opera|Vivaldi)\b.*$/;
+/// Chrome appends one of these as an extra trailing segment while a tab is
+/// actively capturing camera/mic/audio — not part of the page's own title,
+/// or it reads as the site name. ponytail: a short, known list; grow it when
+/// a real board shows another one.
+const TAB_STATE = /\s[-–—]\s(Camera and microphone recording|Camera recording|Microphone recording|Audio playing|Audio muted|Recording|Sharing your screen|Picture-in-picture)$/i;
+
+export function splitTitle(title) {
+  return String(title ?? "")
+    .replace(COUNT, "")
+    .split(SEPARATOR)
+    .map((s) => s.replace(COUNT, "").trim())
+    .filter(Boolean);
+}
+
+export function browserTitle(windowTitle) {
+  const t = String(windowTitle ?? "").replace(BROWSER_TAIL, "").replace(TAB_STATE, "").trim();
+  return t || null;
+}
+
+function cleanUrl(text) {
+  let s = String(text).trim().replace(/^[a-z][a-z0-9+.-]*:\/\//i, "");
+  s = s.split(/[?#]/)[0];
+  const slash = s.indexOf("/");
+  const hostPort = (slash === -1 ? s : s.slice(0, slash)).toLowerCase();
+  const [name, port] = hostPort.split(":");
+  if (!name || !/^[a-z0-9.-]+$/.test(name)) return null;
+  // The port only where it tells two projects apart: localhost:3000 and :5173.
+  const host = port && (name === "localhost" || name === "127.0.0.1") ? `${name}:${port}` : name;
+  const segments = (slash === -1 ? "" : s.slice(slash)).split("/").filter(Boolean)
+    .map((seg) => (ID_SEGMENT.test(seg) || isToken(seg) ? "*" : seg));
+  return segments.length ? `${host}/${segments.join("/")}` : host;
+}
+
+/** Sentry-style: the first line, no location, no quoted values, no numbers. */
+function cleanError(text) {
+  const line = String(text).split("\n")[0].replace(/\s+at\s.*$/, "");
+  return line
+    .replace(/(^|\s)(['"`])[^'"`]*\2(?=$|[\s.,:;)])/g, "$1…")
+    .replace(/\b0x[0-9a-f]+\b/gi, "")
+    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, "")
+    .replace(/\d+/g, "")
+    .replace(/\s+/g, " ")
+    .replace(/\s+([.,:;])/g, "$1")
+    .trim()
+    .slice(0, 120) || null;
+}
+
+function cleanFile(text) {
+  // VS Code's unsaved-changes dot ("● App.tsx") is chrome round the name, the
+  // same as the "(Working Tree)" suffix below — not part of it.
+  let s = String(text).trim().replace(/^●\s*/, "").split(/[\\/]/).pop() ?? "";
+  while (/\s*\([^()]*\)\s*$/.test(s)) s = s.replace(/\s*\([^()]*\)\s*$/, "");
+  return /^[\w.@+-]+\.[A-Za-z0-9]{1,8}$/.test(s) ? s : null;
+}
+
+export function normaliseLabel(text, kind, { site = null } = {}) {
+  if (typeof text !== "string" || !text.trim()) return null;
+  let out;
+  switch (kind) {
+    case "url": out = cleanUrl(text); break;
+    case "file": out = cleanFile(text); break;
+    case "error": out = cleanError(text); break;
+    case "ticket": out = text.trim().toUpperCase(); break;
+    case "repo": out = /\s/.test(text.trim()) ? null : text.trim(); break;
+    default: {
+      out = text.replace(COUNT, "").replace(/\s+/g, " ").trim();
+      const low = out.toLowerCase();
+      if (GENERIC.has(low) || (site && low === String(site).toLowerCase())) out = null;
+    }
+  }
+  if (!out) return null;
+  // AN ADDRESS IS REDACTED SEGMENT BY SEGMENT. Whole, any path of 24+
+  // characters reads as one opaque run ("/" is base64 punctuation) and the
+  // label is lost; per segment, a token in the path is still caught.
+  return kind === "url" ? out.split("/").map(redact).join("/") : redact(out);
+}
+
+/// Never a project's name: the tools and sites work happens IN, and the
+/// folders a terminal sits in between projects. ponytail: a list; grow it when
+/// a real board names a project after another one.
+const TOOL = /^(github|gitlab|bitbucket|jira|linear|notion|figma|slack|discord|mail|gmail|outlook|messages|calendar|notes|youtube|stack overflow|chatgpt|claude|bing|duckduckgo|google (search|docs|sheets|slides|drive|meet|calendar))$/i;
+const HOLDING_FOLDER = /^(~|desktop|documents|downloads|developer|projects|code|src|repos|personal)$/i;
+const holding = (name) => HOLDING_FOLDER.test(name) || name.toLowerCase() === basename(homedir()).toLowerCase();
+/** An app's name also never names a project when it is a browser, an
+ *  editor, a terminal or a system app — but a repo called "Deiko" can. */
+export const notAProject = (name, { app = false } = {}) => {
+  const s = String(name ?? "").trim();
+  return !s || TOOL.test(s) || holding(s)
+    || (app && (BROWSER.test(s) || EDITOR.test(s) || TERMINAL.test(s) || NOT_A_DOC.test(s)));
+};
+
+/** App/browser names that are never a repo, so they can be discarded. */
+/// Whole words, so `search-api` and `research` are not "Arc".
+const NOT_A_REPO =
+  /\b(google chrome|safari|firefox|arc|bitbucket|github|gitlab|jira|discord|slack|visual studio code|cursor|finder|terminal|iterm2?|warp|screen recording)\b/i;
+
+/**
+ * Guess repo names from window titles. Editors render `App.tsx — acme-portal`
+ * (EM dash, U+2014); browsers render `Pull requests — acme-api-service —
+ * Bitbucket - Google Chrome – Alex`, where the trailing en dash is the Chrome
+ * profile. So: split on em dashes, drop segments naming an app, take what's left.
+ * (Moved here unchanged from render-brief.mjs.)
+ */
+export function repoHints(titles) {
+  const hints = new Map();
+  for (const title of titles) {
+    if (!title) continue;
+    const parts = title
+      .split("—")
+      .map((p) => p.trim())
+      .filter((p) => p && !NOT_A_REPO.test(p));
+    if (parts.length < 2) continue;
+    // The last surviving segment is the workspace; earlier ones are the file.
+    const name = parts[parts.length - 1].replace(/\s*\(.*\)\s*$/, "").trim();
+    if (!name || name.includes(" ")) continue; // repo names do not have spaces
+    hints.set(name, (hints.get(name) ?? 0) + 1);
+  }
+  return [...hints.entries()].sort((a, b) => b[1] - a[1]).map(([name]) => name);
+}
+
+export function briefKeys({ referents = [], narration = "" } = {}) {
+  const found = Object.fromEntries(KINDS.map((k) => [k, []]));
+  const add = (kind, text, opts) => {
+    const v = normaliseLabel(text, ONE[kind], opts);
+    if (!v) return;
+    // A REDACTED PLACEHOLDER IS NEVER A LABEL. `redact` turns a long
+    // mixed-case name (`UserProfileSettingsV2.tsx`) or a secret pattern
+    // (an AWS key id) into "<REDACTED...>" — unrelated briefs would then
+    // share the same fake label. `urls` is the one exception: there a
+    // redacted PATH SEGMENT is a deliberate wildcard, kept the same way an
+    // id segment already is.
+    if (kind !== "urls" && v.includes("<REDACTED")) return;
+    if (!found[kind].some((x) => x.toLowerCase() === v.toLowerCase())) found[kind].push(v);
+  };
+  const pageTitle = (title) => {
+    if (!title) return;
+    if (LOOKS_LIKE_URL.test(title.trim())) return add("urls", title);
+    const parts = splitTitle(title);
+    const site = parts.length > 1 ? parts.at(-1) : null;
+    if (site) add("sites", site);
+    add("pages", parts[0], { site });
+  };
+  for (const r of referents) {
+    const app = r.app?.name ?? "";
+    const window = r.window ?? "";
+    pageTitle(r.page?.title);
+    // The app name comes from the settle's candidate, the window title from
+    // its probe — pairing that can land slightly apart (see `session.ts`), so
+    // an app that lost the race (e.g. a database client) can carry a window
+    // that is plainly a browser's, tail and all. Trust the tail either way.
+    if (BROWSER.test(app) || BROWSER_TAIL.test(window)) {
+      pageTitle(browserTitle(window));
+    } else if (EDITOR.test(app)) {
+      const parts = window.split("—").map((p) => p.trim()).filter(Boolean);
+      if (parts.length > 1) add("files", parts[0]);
+    } else if (TERMINAL.test(app)) {
+      // The path runs to a " — " or " (" or the end — folders can have
+      // spaces ("~/Desktop/personal /Deiko" is Deiko, not "personal").
+      const name = window.match(/(?:~|\/)[^—–:(]*/)?.[0].trim().replace(/\/+$/, "").split("/").pop();
+      if (name && !holding(name)) add("repo", name);
+    } else if (window && !NOT_A_DOC.test(app)) {
+      add("docs", splitTitle(window)[0]);
+    }
+    if (r.page?.url) add("urls", r.page.url);
+    if (r.page?.document) add("files", r.page.document);
+    for (const h of r.page?.headings ?? []) add("components", h);
+    for (const d of r.page?.domIds ?? []) add("components", d);
+    // Never from a chat or mail app: there a line is somebody's message.
+    const err = !NOT_A_DOC.test(app)
+      && redactBlock([...(r.text?.ax ?? []), ...(r.text?.ocr ?? [])]).find((l) => ERROR_LINE.test(l.trim()));
+    if (err) add("errors", err);
+  }
+  // Editor and browser titles only: a terminal's "— -zsh — 80×24" is not a repo.
+  const titled = referents.filter((r) => BROWSER.test(r.app?.name ?? "") || EDITOR.test(r.app?.name ?? ""));
+  for (const name of repoHints(titled.map((r) => r.window).filter(Boolean))) add("repo", name);
+  for (const text of [narration, ...referents.map((r) => r.window ?? "")]) {
+    for (const m of String(text ?? "").matchAll(TICKET)) {
+      const t = m[1] ?? `#${m[2]}`;
+      if (!NOT_A_TICKET.test(t)) add("tickets", t);
+    }
+  }
+  return Object.fromEntries(KINDS.map((k) => [k, found[k].slice(0, CAP)]));
+}
