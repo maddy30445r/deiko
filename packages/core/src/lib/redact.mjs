@@ -141,7 +141,14 @@ export function redactBlock(lines) {
 }
 
 /// A line that is just a file path, bulleted or not.
-const PATH_LINE = /^\s*(?:[-*]\s+)?[-\w@./]+\.\w+$/;
+/// A line that is only a file path: segments joined by "/", ending in a short
+/// real extension (`.swift`, `.tsx`) — never a JWT, whose last part after a
+/// dot is a long signature. Each segment is checked on its own, so a long
+/// CamelCase folder reads as a folder while a token segment is still caught.
+const PATH_LINE = /^\s*(?:[-*]\s+)?[-\w@./]+\.[A-Za-z][A-Za-z0-9]{0,7}$/;
+const plainPath = (line) => PATH_LINE.test(line)
+  && line.trim().replace(/^[-*]\s+/, "").split("/")
+    .every((seg) => stripStandalone(seg) === seg && !(seg.length >= 20 && looksOpaque(seg)));
 
 /**
  * Lines an agent wrote (an outcome's sections), redacted as ONE block like
@@ -153,7 +160,7 @@ const PATH_LINE = /^\s*(?:[-*]\s+)?[-\w@./]+\.\w+$/;
  */
 export function redactNote(lines) {
   const scrubbed = redactBlock(lines);
-  return lines.map((l, i) => (PATH_LINE.test(l) && stripStandalone(l) === l ? l : scrubbed[i]));
+  return lines.map((l, i) => (plainPath(l) ? l : scrubbed[i]));
 }
 
 /**

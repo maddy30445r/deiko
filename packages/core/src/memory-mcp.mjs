@@ -34,7 +34,7 @@ import { basename, dirname, join, sep } from "node:path";
 import { createInterface } from "node:readline";
 
 import { STAMP, briefDate, readBriefLine } from "./lib/context.mjs";
-import { redact, redactBlock } from "./lib/redact.mjs";
+import { redact, redactBlock, redactNote } from "./lib/redact.mjs";
 import { loadEvents } from "./lib/session-io.mjs";
 import { TASK_ID, bm25, cosine, groupTasks, readTasks, renderTaskNote, rrf, terms, titleFor } from "./lib/tasks.mjs";
 import { loadModel, readVector } from "./lib/meaning.mjs";
@@ -45,7 +45,10 @@ const ROOT = (process.env.DEIKO_ROOT ?? join(homedir(), "Documents", "Deiko")).r
 let ROOT_REAL;
 try { ROOT_REAL = realpathSync(ROOT); } catch { ROOT_REAL = ROOT; }
 /// Labels that may leave (see scripts/lib/labels.mjs): all but `components`.
-const SENT_KEYS = ["pages", "sites", "urls", "files", "repo", "docs", "errors", "tickets"];
+/// What a brief's labels may say to an agent — the same as travels for
+/// sorting: never `components`, never `errors` (an error label is a line of
+/// screen text from any app, a chat included).
+const SENT_KEYS = ["pages", "sites", "urls", "files", "repo", "docs", "tickets"];
 /// Protocol version this server actually speaks — never echoed from a client.
 const PROTOCOL_VERSION = "2025-06-18";
 
@@ -192,19 +195,12 @@ function getTask({ id } = {}) {
   return { task: id, title: redact(title), note, briefs: briefs.map((b) => ({ brief: b.id, date: briefDate(b.id), said: said(b.line) })) };
 }
 
-/// A line that is just a file path (bulleted or not) — kept untouched by
-/// `redactOutcome` even inside a block another line made "suspect", because
-/// looksOpaque() reads an ordinary `src/…/Foo.tsx` as a credential-shaped
-/// token once anything nearby smells like a secret.
-const PATH_LINE = /^\s*(?:[-*]\s+)?[-\w@./]+\.\w+$/;
-
 /** `outcome.md`, redacted as ONE block so a secret on the line after its
- *  label is still caught (see `redactBlock`), while a "Files touched" line
- *  stays a path an agent can open. */
+ *  label is still caught, while a "Files touched" line stays a path an agent
+ *  can open — `redactNote`, the same rule the task notes use, which also
+ *  scrubs a line that is nothing but a token (a JWT is not a path). */
 function redactOutcome(text) {
-  const lines = text.split("\n");
-  const scrubbed = redactBlock(lines);
-  return lines.map((l, i) => (PATH_LINE.test(l) ? l : scrubbed[i])).join("\n");
+  return redactNote(text.split("\n")).join("\n");
 }
 
 function getBrief({ id } = {}) {
