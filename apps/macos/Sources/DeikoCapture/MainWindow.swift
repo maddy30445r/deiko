@@ -830,6 +830,8 @@ private struct BoardPane: View {
     /// timeline's empty space. The lede says which.
     @State private var overCard: String?
     @State private var overSpace = false
+    /// Days whose set-aside briefs are shown, by heading.
+    @State private var unfolded: Set<String> = UIShotPose.unfolded
     @FocusState private var searching: Bool
 
     /// Which slice of the board is on screen. Unsorted is its own answer
@@ -1010,6 +1012,7 @@ private struct BoardPane: View {
         return LazyVStack(alignment: .leading, spacing: 26) {
             if let work { WorkNotes(task: work, store: sessions) }
             ForEach(sections, id: \.title) { section in
+                let fold = BoardTimeline.fold(section.items, setAside: \.setAside)
                 VStack(alignment: .leading, spacing: 10) {
                     if !section.title.isEmpty {
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -1017,27 +1020,64 @@ private struct BoardPane: View {
                             Text("· \(section.items.count)")
                                 .font(.system(size: 11))
                                 .foregroundStyle(DeikoStyle.ink2)
+                            // SET ASIDE, FOLDED INTO THE HEADING: mic checks
+                            // and unfinished recordings take no row of their
+                            // own, so they never push the work down or break
+                            // its grid. Opens in place, under the heading.
+                            if !fold.folded.isEmpty {
+                                foldLine(section.title, count: fold.folded.count)
+                                    .padding(.leading, 12)
+                            }
                         }
                         .accessibilityAddTraits(.isHeader)
                     }
-                    // `.top`, because the default is `.center`: cards of
-                    // unequal height were centred in their row, which
-                    // staggered the top edge and read as a rendering fault.
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), spacing: 14, alignment: .top)], spacing: 14) {
-                        ForEach(section.items) { item in
-                            BoardCard(
-                                item: item, store: sessions, showsTag: work == nil,
-                                openWork: { task in
-                                    query = ""
-                                    work = task
-                                },
-                                dropped: { join($0, onto: item) },
-                                targeted: { overCard = $0 ? item.id : (overCard == item.id ? nil : overCard) }
-                            )
-                        }
-                    }
+                    if unfolded.contains(section.title) { grid(fold.folded).padding(.bottom, 8) }
+                    grid(fold.cards)
                 }
             }
+        }
+    }
+
+    // `.top`, because the default is `.center`: cards of unequal height were
+    // centred in their row, which staggered the top edge and read as a
+    // rendering fault.
+    private func grid(_ items: [SessionsStore.Item]) -> some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), spacing: 14, alignment: .top)], spacing: 14) {
+            ForEach(items) { item in
+                BoardCard(
+                    item: item, store: sessions, showsTag: work == nil,
+                    openWork: { task in
+                        query = ""
+                        work = task
+                    },
+                    dropped: { join($0, onto: item) },
+                    targeted: { overCard = $0 ? item.id : (overCard == item.id ? nil : overCard) }
+                )
+            }
+        }
+    }
+
+    /// "3 set aside", a hairline chip on a hairline rule beside the day's
+    /// heading: the quietest thing on the board until it is clicked.
+    private func foldLine(_ key: String, count: Int) -> some View {
+        let open = unfolded.contains(key)
+        return HStack(spacing: 10) {
+            Button {
+                if open { unfolded.remove(key) } else { unfolded.insert(key) }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8, weight: .bold))
+                        .rotationEffect(.degrees(open ? 90 : 0))
+                    Text("\(count) set aside").font(.system(size: 11, weight: .medium))
+                }
+            }
+            .buttonStyle(ChipButtonStyle(on: false))
+            .deikoFocusRing(Capsule())
+            .help(open ? "Fold them away again" : "Mic checks, thank-yous and recordings that never finished. Click to show them.")
+            .accessibilityLabel("\(count) briefs set aside")
+            .accessibilityValue(open ? "Shown" : "Folded")
+            Rectangle().fill(DeikoStyle.hairline).frame(height: 1)
         }
     }
 
@@ -1363,8 +1403,8 @@ private struct BoardCard: View {
         let live = { (id: String?) in
             id.flatMap { id in store.items.contains { $0.task == id && !$0.odds } ? id : nil }
         }
-        if let id = live(item.maybe) { return "Looks like \(store.title(ofTask: id))?" }
-        if let id = live(item.related) { return "Related to \(store.title(ofTask: id))" }
+        if let id = live(item.maybe) { return "Looks like \(store.workName(ofTask: id))?" }
+        if let id = live(item.related) { return "Related to \(store.workName(ofTask: id))" }
         return nil
     }
 

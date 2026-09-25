@@ -35,6 +35,20 @@ public enum BoardTimeline {
         return out
     }
 
+    /// A day's cards, and the set-aside briefs folded out of them: any two
+    /// or more in a row fold into the day's one quiet "N set aside" line, so
+    /// mic checks and unfinished recordings never stack above the work or
+    /// break its grid. A lone one stays a card where it fell.
+    public static func fold<T>(_ items: [T], setAside: (T) -> Bool) -> (cards: [T], folded: [T]) {
+        var cards: [T] = [], folded: [T] = [], run: [T] = []
+        func close() { if run.count >= 2 { folded += run } else { cards += run }; run = [] }
+        for item in items {
+            if setAside(item) { run.append(item) } else { close(); cards.append(item) }
+        }
+        close()
+        return (cards, folded)
+    }
+
     /// Briefs per task. Nil is a brief set aside — odds and ends, or a
     /// recording that never finished — which is in no task. A tag is worn
     /// only where this says 2 or more.

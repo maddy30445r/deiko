@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import DeikoHandoff
 
 // ─────────────────────────────────────────────────────────────────────────────
 // deiko-capture ui-shot --out /tmp/deiko-ui [--root <dir>]
@@ -65,6 +66,14 @@ enum UIShot {
                 size: NSSize(width: 980, height: 2900), look: look,
                 to: "\(out)-board-full-\(name).png"
             )
+            // Every day's set-aside briefs, unfolded.
+            UIShotPose.unfolded = Set(BoardTimeline.sections(store.items, date: \.date, now: Date()).map(\.title))
+            shoot(
+                MainWindowView(openSessionDir: nil, sessionRoot: root),
+                size: NSSize(width: 980, height: 2900), look: look,
+                to: "\(out)-board-fold-\(name).png"
+            )
+            UIShotPose.unfolded = []
             // A brief held over the second card, and the board opened on the
             // biggest piece of work — neither reachable by a still first paint.
             UIShotPose.dropTarget = store.items.dropFirst().first?.id
@@ -120,7 +129,7 @@ enum UIShot {
             }
         }
 
-        Emit.log("wrote \(out)-{welcome,orb,orbready,orbnotice,orbsent,review,review-odds,review-related,dashboard,board,board-full,board-drop,board-work,personas,settings,settings-full}-{light,dark}.png")
+        Emit.log("wrote \(out)-{welcome,orb,orbready,orbnotice,orbsent,review,review-odds,review-related,dashboard,board,board-full,board-fold,board-drop,board-work,personas,settings,settings-full}-{light,dark}.png")
     }
 
     /// The collapsed card, mid-session: the state the orb spends most of its
@@ -283,9 +292,12 @@ enum UIShot {
 }
 
 /// States `ui-shot` poses that no click can reach in a still picture: the
-/// board opened on one piece of work, and a card with a brief held over it.
+/// board opened on one piece of work, a card with a brief held over it, and
+/// the set-aside folds opened.
 @MainActor
 enum UIShotPose {
     static var work: String?
     static var dropTarget: String?
+    /// Days whose set-aside briefs are shown, by heading.
+    static var unfolded: Set<String> = []
 }
