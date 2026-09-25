@@ -1149,8 +1149,48 @@ struct ChipButtonStyle: ButtonStyle {
                 .contentShape(Capsule())
                 .opacity(configuration.isPressed ? 0.7 : 1)
                 .animation(.easeOut(duration: 0.12), value: hovering)
-                .onHover { hovering = $0 }
+                .trackHover($hovering)
         }
+    }
+}
+
+/// HOVER THE WAY APPKIT DOES IT. SwiftUI's `.onHover` registers a tracking
+/// area where the view was first laid out and, inside a scroll view whose
+/// content re-lays out without scrolling, leaves it there: a card that
+/// changed height ("Put with Sitemap?" became "Sitemap · 3") moved every card
+/// below it, and hovering the fourth brief lit September's first. An
+/// `NSTrackingArea` with `.inVisibleRect` is recomputed from the view's
+/// current frame on every event — Finder's and Mail's hover — so it cannot go
+/// stale. The view takes no clicks: `hitTest` answers nil.
+private struct HoverTracker: NSViewRepresentable {
+    let onHover: (Bool) -> Void
+
+    func makeNSView(context: Context) -> TrackingView { TrackingView() }
+    func updateNSView(_ view: TrackingView, context: Context) { view.onHover = onHover }
+
+    final class TrackingView: NSView {
+        var onHover: (Bool) -> Void = { _ in }
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            trackingAreas.forEach(removeTrackingArea)
+            addTrackingArea(NSTrackingArea(
+                rect: .zero,
+                options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                owner: self
+            ))
+        }
+
+        override func mouseEntered(with event: NSEvent) { onHover(true) }
+        override func mouseExited(with event: NSEvent) { onHover(false) }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+}
+
+extension View {
+    /// `.onHover`, from a tracking area that follows the view (see `HoverTracker`).
+    func trackHover(_ hovering: Binding<Bool>) -> some View {
+        background(HoverTracker { hovering.wrappedValue = $0 })
     }
 }
 
@@ -1159,11 +1199,11 @@ struct ChipButtonStyle: ButtonStyle {
 /// without its laziness.
 ///
 /// WHY NOT LAZY. A lazy grid puts a card at an estimated place and moves it
-/// once its row's real height is known, and on macOS the tracking areas the
-/// card's `.onHover` and buttons registered stay at the estimate: hovering
-/// or clicking the fourth brief reached September's first card, measured at
-/// that spot earlier. This places every card once, at its final frame. The
-/// board is a few hundred cards at most; laying them all out is cheap.
+/// once its row's real height is known, and on macOS the regions its buttons
+/// registered stay at the estimate: clicking the fourth brief reached
+/// September's first card, measured at that spot earlier. This places every
+/// card once, at its final frame (hover is `trackHover`'s job). The board is
+/// a few hundred cards at most; laying them all out is cheap.
 struct CardGrid: SwiftUI.Layout {
     let minColumn: CGFloat = 210
     let spacing: CGFloat = 14
@@ -1317,7 +1357,7 @@ private struct BoardCard: View {
         // and took their clicks. A card says "hovered" with its border and
         // shadow alone, inside its own frame.
         .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: hovering)
-        .onHover { hovering = $0 }
+        .trackHover($hovering)
         .onTapGesture(count: 2) { NSWorkspace.shared.open(URL(fileURLWithPath: item.dir)) }
         // Kept beside the button: somebody who already reaches for a
         // right-click should not have to learn a new way to do it.
@@ -1480,7 +1520,7 @@ private struct TextButtonStyle: ButtonStyle {
                 .padding(.vertical, 3)
                 .contentShape(Rectangle())
                 .opacity(configuration.isPressed ? 0.6 : 1)
-                .onHover { hovering = $0 }
+                .trackHover($hovering)
         }
     }
 }
