@@ -70,7 +70,6 @@ const KNOWN_GONE = new Map([
     "a path in ANOTHER repo, quoted verbatim inside a captured agent transcript",
   ],
   ["site/two-languages.html", "a page of the old site, retired when the new site shipped on 2026-09-24"],
-  ["build/Deiko.app", "a build output: present only after `make app`, never in a clean checkout"],
 ]);
 
 function referencedPaths(text, fromDir) {
@@ -97,6 +96,9 @@ for (const doc of docs()) {
     const missing = referencedPaths(text, dirname(doc))
       .filter((p) => !existsSync(p))
       .map((p) => p.slice(repo.length + 1))
+      // Build outputs exist after a build and not in a clean checkout, so they
+      // are neither stale nor gone — whether they exist says nothing about a doc.
+      .filter((p) => !p.startsWith("build/"))
       .filter((p) => !KNOWN_GONE.has(p));
 
     assert.deepEqual(
