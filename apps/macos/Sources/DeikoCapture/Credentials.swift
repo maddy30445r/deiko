@@ -36,6 +36,13 @@ enum Credentials {
     /// thing the pipeline cannot work out for itself.
     static func childEnvironment() -> [String: String] {
         var env = ProcessInfo.processInfo.environment
+        // NOT NODE'S LOADER SETTINGS. The scripts run with this app's
+        // Screen Recording, Microphone and Accessibility grants behind them,
+        // and `NODE_OPTIONS=--require …` (set by a login shell, or by anything
+        // that can launch this app) would load arbitrary code into every one.
+        // `NODE_EXTRA_CA_CERTS` stays: behind a company proxy it is how the
+        // relay is reachable at all.
+        for name in ["NODE_OPTIONS", "NODE_PATH"] { env[name] = nil }
 
         // BRINGING YOUR OWN KEY IS FREE, so this passes one whenever there is
         // one to pass. It was gated on a licence until the vendor changed: the
