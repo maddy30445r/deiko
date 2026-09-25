@@ -1374,6 +1374,14 @@ private struct BoardCard: View {
                     .help(taken ? SessionsStore.ownTaskTakenHelp : "Make it its own work again")
                     .fixedSize()
             }
+        } else if let target = suggestion {
+            // ONE CLICK TO ANSWER. "Looks like Sitemap?" was a question with
+            // no way to say yes but a drag. Yes files it by hand, exactly as
+            // a drag would; no makes it its own work, as Undo does.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) { suggestionButtons(target) }
+                VStack(alignment: .leading, spacing: 4) { suggestionButtons(target) }
+            }
         } else if item.setAside {
             Text("Set aside")
                 .font(.system(size: 11, weight: .medium))
@@ -1390,6 +1398,27 @@ private struct BoardCard: View {
         }
     }
 
+    @ViewBuilder private func suggestionButtons(_ target: String) -> some View {
+        Button {
+            store.move(item, toTask: target)
+        } label: {
+            Label("Put with \(store.workName(ofTask: target))?", systemImage: "plus")
+                .font(.system(size: 11, weight: .medium))
+                .labelStyle(TightLabel())
+                .lineLimit(1)
+        }
+        .buttonStyle(ChipButtonStyle(on: false))
+        .deikoFocusRing(Capsule())
+        .help("Deiko thinks this carries on “\(store.title(ofTask: target))”. Click to put it there, or drag it onto any brief.")
+        let own = Tasks.own(item.id)
+        let taken = store.hasOthers(inTask: own, besides: item.id)
+        Button("Not this one") { store.move(item, toTask: own) }
+            .buttonStyle(TextButtonStyle(quiet: true))
+            .disabled(taken)
+            .help(taken ? SessionsStore.ownTaskTakenHelp : "Keep it as its own work. Deiko won't ask again.")
+            .fixedSize()
+    }
+
     private var preview: some View {
         Text(item.title)
             .font(.system(size: 12.5))
@@ -1399,16 +1428,18 @@ private struct BoardCard: View {
             .background(DeikoStyle.card, in: RoundedRectangle(cornerRadius: DeikoStyle.insetRadius))
     }
 
-    /// Which task this brief might belong to, or is linked to — only while
-    /// that task still has briefs on the board. "Looks like" wins: it is the
-    /// question still open.
+    /// A task id, while that task still has briefs on the board.
+    private func live(_ id: String?) -> String? {
+        id.flatMap { id in store.items.contains { $0.task == id && !$0.odds } ? id : nil }
+    }
+
+    /// The work Deiko thinks this brief carries on — asked at the card's
+    /// foot as "Put with …?". While that question is open, "Related to" waits.
+    private var suggestion: String? { live(item.maybe) }
+
     private var link: String? {
-        let live = { (id: String?) in
-            id.flatMap { id in store.items.contains { $0.task == id && !$0.odds } ? id : nil }
-        }
-        if let id = live(item.maybe) { return "Looks like \(store.workName(ofTask: id))?" }
-        if let id = live(item.related) { return "Related to \(store.workName(ofTask: id))" }
-        return nil
+        guard suggestion == nil, let id = live(item.related) else { return nil }
+        return "Related to \(store.workName(ofTask: id))"
     }
 
     /// Day and time, because six sessions from one afternoon were
@@ -1451,6 +1482,16 @@ private struct WorkTag: View {
         }
         .buttonStyle(ChipButtonStyle(on: true))
         .deikoFocusRing(Capsule())
+    }
+}
+
+/// Icon and title 4pt apart: the system's gap is wide for an 11pt chip.
+private struct TightLabel: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 4) {
+            configuration.icon.font(.system(size: 8, weight: .bold))
+            configuration.title
+        }
     }
 }
 
