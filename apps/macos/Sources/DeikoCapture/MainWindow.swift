@@ -864,32 +864,50 @@ private struct BoardPane: View {
         }
     }
 
-    /// The chips, in the order they are useful: everything, then the projects
-    /// with the most in them, then whatever has not been filed.
+    /// THE PROJECT, AS ONE QUIET MENU. Projects were a row of chips over the
+    /// timeline, a third way of grouping briefs beside days and works, and
+    /// the loudest of the three. A filter somebody uses now and then reads
+    /// as a filter: "Project: All", its choices ordered by size.
     ///
-    /// These sit in the pane's fixed band, not in the scroll view with the
-    /// cards — see `body` for why that is the whole of the fix. They spent a
-    /// day being blamed for it: as a plain button, then as one with its own
-    /// `ButtonStyle`, neither took a click, and the cause was never the chip.
-    @ViewBuilder private var filterRow: some View {
+    /// It sits in the pane's fixed band, not in the scroll view with the
+    /// cards — see `body` for why that is the whole of the fix.
+    @ViewBuilder private var projectMenu: some View {
         if !sessions.collections.isEmpty {
-            HStack(spacing: 7) {
-                chip("All", count: sessions.items.count, filter: .all)
-                ForEach(sessions.collections.sorted { sessions.count(of: $0.id) > sessions.count(of: $1.id) }) { collection in
-                    chip(collection.name, count: sessions.count(of: collection.id),
-                         filter: .collection(collection.id))
-                        .contextMenu { CollectionMenu(collection: collection, store: sessions) }
+            let sorted = sessions.collections.sorted { sessions.count(of: $0.id) > sessions.count(of: $1.id) }
+            Menu {
+                Picker("Project", selection: $filter) {
+                    Text("All projects · \(sessions.items.count)").tag(Filter.all)
+                    ForEach(sorted) { collection in
+                        Text("\(collection.name) · \(sessions.count(of: collection.id))")
+                            .tag(Filter.collection(collection.id))
+                    }
+                    if sessions.unsortedCount > 0 {
+                        Text("Unsorted · \(sessions.unsortedCount)").tag(Filter.unsorted)
+                    }
                 }
-                if sessions.unsortedCount > 0 {
-                    chip("Unsorted", count: sessions.unsortedCount, filter: .unsorted)
+                .pickerStyle(.inline)
+                .labelsHidden()
+                Divider()
+                Menu("Edit a project") {
+                    ForEach(sorted) { collection in
+                        Menu(collection.name) { CollectionMenu(collection: collection, store: sessions) }
+                    }
                 }
+            } label: {
+                Text("Project: \(projectName)").font(.system(size: 12))
             }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .tint(filter == .all ? DeikoStyle.ink2 : DeikoStyle.mark)
+            .help("Show one project's briefs, or edit a project")
         }
     }
 
-    private func chip(_ name: String, count: Int, filter target: Filter) -> some View {
-        ChipButton(name: name, count: count, on: filter == target) {
-            filter = filter == target ? .all : target
+    private var projectName: String {
+        switch filter {
+        case .all: return "All"
+        case .unsorted: return "Unsorted"
+        case .collection(let id): return sessions.collections.first { $0.id == id }?.name ?? "All"
         }
     }
 
@@ -954,12 +972,12 @@ private struct BoardPane: View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 16) {
                 PaneHeader(title: "Board", lede: lede) {
-                    searchField
+                    HStack(spacing: 14) {
+                        projectMenu
+                        searchField
+                    }
                 }
-                VStack(alignment: .leading, spacing: 10) {
-                    filterRow
-                    workRow
-                }
+                workRow
             }
             .padding(.horizontal, 26)
             .padding(.top, 44)
@@ -1152,9 +1170,9 @@ private struct BoardPane: View {
     }
 }
 
-/// One filter chip. The selected one is the wash chip the system already has
-/// (DESIGN.md §Chips); the rest are hairline outlines, so the row reads as one
-/// thing with one answer chosen rather than as a bank of buttons.
+/// A chip that is a button. `on` is the wash chip the system already has
+/// (DESIGN.md §Chips), with an accent edge under the pointer; off is a hairline
+/// outline that takes a faint wash.
 ///
 /// THE WHOLE LOOK LIVES IN A `ButtonStyle`, and that is the point rather than
 /// a tidying. This was built the way `SidebarRow` is — `.buttonStyle(.plain)`
@@ -1204,28 +1222,6 @@ struct ChipButtonStyle: ButtonStyle {
                 .animation(.easeOut(duration: 0.12), value: hovering)
                 .onHover { hovering = $0 }
         }
-    }
-}
-
-private struct ChipButton: View {
-    let name: String
-    let count: Int
-    let on: Bool
-    let tap: () -> Void
-
-    var body: some View {
-        Button(action: tap) {
-            HStack(spacing: 5) {
-                Text(name).font(.system(size: 11, weight: .medium))
-                // The count is the quiet half of the chip in both states —
-                // it is the reason to click, never the label.
-                Text("\(count)")
-                    .font(.system(size: 11))
-                    .opacity(0.65)
-            }
-        }
-        .buttonStyle(ChipButtonStyle(on: on))
-        .deikoFocusRing(Capsule())
     }
 }
 
