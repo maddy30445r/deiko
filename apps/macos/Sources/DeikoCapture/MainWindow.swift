@@ -1167,7 +1167,7 @@ private struct BoardPane: View {
     }
 
     private func grid(_ items: [SessionsStore.Item]) -> some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), spacing: 14, alignment: .top)], spacing: 14) {
+        CardGrid {
             ForEach(items) { item in
                 BoardCard(
                     item: item, store: sessions, showsTag: work == nil,
@@ -1329,6 +1329,64 @@ struct ChipButtonStyle: ButtonStyle {
         }
     }
 }
+
+/// Columns of at least `minColumn`, 14pt apart, each row as tall as its
+/// tallest card, cards top-aligned: `LazyVGrid(.adaptive(minimum:))`'s look,
+/// without its laziness.
+///
+/// WHY NOT LAZY. A lazy grid guesses the height of every row it has not
+/// drawn yet, and corrects the guess as the row scrolls in. With an open
+/// "mic checks & scraps" fold — a second grid above the day's cards — each
+/// correction moved everything below it, and scrolling past it jittered
+/// back and forth. This lays every card out once, at its real height. The
+/// board is a few hundred cards at most; laying them all out is cheap.
+struct CardGrid: SwiftUI.Layout {
+    var minColumn: CGFloat = 210
+    var spacing: CGFloat = 14
+
+    private func columns(_ width: CGFloat) -> (count: Int, width: CGFloat) {
+        let count = max(1, Int((width + spacing) / (minColumn + spacing)))
+        return (count, (width - spacing * CGFloat(count - 1)) / CGFloat(count))
+    }
+
+    /// Each row's cards and its height: the tallest card's, at the column width.
+    private func rows(_ subviews: LayoutSubviews, _ count: Int, _ column: CGFloat) -> [(range: Range<Int>, height: CGFloat)] {
+        let proposal = ProposedViewSize(width: column, height: nil)
+        var rows: [(range: Range<Int>, height: CGFloat)] = []
+        for start in stride(from: 0, to: subviews.count, by: count) {
+            let range = start..<min(start + count, subviews.count)
+            var height: CGFloat = 0
+            for index in range { height = max(height, subviews[index].sizeThatFits(proposal).height) }
+            rows.append((range, height))
+        }
+        return rows
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: LayoutSubviews, cache: inout ()) -> CGSize {
+        // A scroll view also asks with `.infinity`; three columns then.
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? (minColumn * 3 + spacing * 2)
+        let (count, column) = columns(width)
+        let all = rows(subviews, count, column)
+        var height: CGFloat = 0
+        for row in all { height += row.height }
+        height += spacing * CGFloat(max(0, all.count - 1))
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: LayoutSubviews, cache: inout ()) {
+        let (count, column) = columns(bounds.width)
+        let size = ProposedViewSize(width: column, height: nil)
+        var y = bounds.minY
+        for row in rows(subviews, count, column) {
+            for (i, index) in row.range.enumerated() {
+                let x = bounds.minX + CGFloat(i) * (column + spacing)
+                subviews[index].place(at: CGPoint(x: x, y: y), anchor: UnitPoint.topLeading, proposal: size)
+            }
+            y += row.height + spacing
+        }
+    }
+}
+
 
 private struct BoardCard: View {
     let item: SessionsStore.Item
@@ -2049,8 +2107,7 @@ private struct BriefView: View {
         if !d.crops.isEmpty || withheld {
             VStack(alignment: .leading, spacing: 10) {
                 NoteStyle.heading("What you pointed at", meta: d.crops.isEmpty ? nil : "\(d.crops.count)")
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 280), spacing: 14, alignment: .top)],
-                          alignment: .leading, spacing: 16) {
+                CardGrid(minColumn: 280) {
                     ForEach(allCrops ? d.crops : Array(d.crops.prefix(Self.firstCrops)), id: \.path) { crop in
                         VStack(alignment: .leading, spacing: 6) {
                             Button { preview = URL(fileURLWithPath: crop.path) } label: {
