@@ -48,20 +48,14 @@ enum UIShot {
                 size: NSSize(width: 980, height: 1500), look: look,
                 to: "\(out)-settings-full-\(name).png"
             )
-            // THE BOARD, BOTH SHELF STYLES, for the owner to pick one. Tall
-            // enough for the whole board: the choice is about how shelves,
-            // "On their own" and odds and ends sit together, and 900pt showed
-            // two shelves and nothing else.
-            for style in [BoardStyle.shelf, .spine] {
-                BoardStyle.current = style
-                MainNav.shared.section = .board
-                shoot(
-                    MainWindowView(openSessionDir: nil, sessionRoot: root),
-                    size: NSSize(width: 980, height: 2900), look: look,
-                    to: "\(out)-board-\(style)-\(name).png"
-                )
-            }
-            BoardStyle.current = .shelf
+            // THE WHOLE BOARD, tall enough to show shelves, "On their own" and
+            // odds and ends together — 900pt showed two shelves and nothing else.
+            MainNav.shared.section = .board
+            shoot(
+                MainWindowView(openSessionDir: nil, sessionRoot: root),
+                size: NSSize(width: 980, height: 2900), look: look,
+                to: "\(out)-board-full-\(name).png"
+            )
             shoot(orbCard(), size: NSSize(width: 400, height: 130), look: look, to: "\(out)-orb-\(name).png")
             shoot(orbReady(), size: NSSize(width: 400, height: 190), look: look, to: "\(out)-orbready-\(name).png")
             shoot(orbReady(notice: true), size: NSSize(width: 400, height: 250), look: look,

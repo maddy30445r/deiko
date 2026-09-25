@@ -831,7 +831,11 @@ private struct BoardPane: View {
                                 BoardPart(title: "Odds and ends", count: odds.count,
                                           help: "Briefs too short or unclear to file, and recordings that never finished. Move one to a task from its menu.",
                                           items: odds, store: sessions)
-                                    .opacity(0.6)
+                                    // SET ASIDE BY ITS PICTURES, NOT ITS WORDS:
+                                    // the thumbnails fade, the text keeps full
+                                    // contrast (an opacity of 0.6 on the whole
+                                    // part put it under AA).
+                                    .environment(\.setAside, true)
                             }
                         }
                     }
@@ -938,6 +942,7 @@ private struct ChipButton: View {
 }
 
 private struct BoardCard: View {
+    @Environment(\.setAside) private var setAside
     let item: SessionsStore.Item
     let store: SessionsStore
     @State private var hovering = false
@@ -946,6 +951,7 @@ private struct BoardCard: View {
         VStack(alignment: .leading, spacing: 9) {
             if let first = item.crops.first {
                 CropThumbnail(path: first, height: 74)
+                    .opacity(setAside ? 0.4 : 1)
             }
             // EVERYTHING THIS CARD CAN DO, VISIBLE AT REST.
             //
@@ -1074,11 +1080,13 @@ private struct BoardCard: View {
     }
 }
 
-/// The two looks a task's shelf can take, both built so the owner can pick
-/// one. The pick deletes the other, and this with it.
-enum BoardStyle {
-    case shelf, spine
-    @MainActor static var current: BoardStyle = .shelf
+/// Odds and ends: cards whose thumbnails fade so the part reads as set aside.
+private struct SetAsideKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues {
+    var setAside: Bool {
+        get { self[SetAsideKey.self] }
+        set { self[SetAsideKey.self] = newValue }
+    }
 }
 
 /// A task of two briefs or more: its name, then its briefs, held together
@@ -1089,38 +1097,25 @@ private struct TaskShelf: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        let shelf = VStack(alignment: .leading, spacing: 10) {
+        // A TRAY, NOT A CARD: sunk a step below the paper, so the white cards
+        // stand up out of it — and never a card on a card. Paper itself, with
+        // only a hairline, was a box you had to look for. (The owner picked
+        // this over a thin accent "spine" on 2026-09-25.)
+        VStack(alignment: .leading, spacing: 10) {
             TaskHeader(group: group, store: store)
             CardGrid(items: group.items, store: store)
         }
-        switch BoardStyle.current {
-        case .shelf:
-            // A TRAY, NOT A CARD: sunk a step below the paper, so the white
-            // cards stand up out of it — and never a card on a card. Paper
-            // itself, with only a hairline, was a box you had to look for.
-            shelf
-                .padding(12)
-                .background(
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: DeikoStyle.panelRadius)
+                .fill(scheme == .dark
+                      ? Color.black.opacity(0.2)
+                      : Color(red: 30 / 255, green: 36 / 255, blue: 90 / 255).opacity(0.065))
+                .overlay(
                     RoundedRectangle(cornerRadius: DeikoStyle.panelRadius)
-                        .fill(scheme == .dark
-                              ? Color.black.opacity(0.2)
-                              : Color(red: 30 / 255, green: 36 / 255, blue: 90 / 255).opacity(0.065))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: DeikoStyle.panelRadius)
-                                .strokeBorder(DeikoStyle.hairline, lineWidth: 1)
-                        )
+                        .strokeBorder(DeikoStyle.hairline, lineWidth: 1)
                 )
-        case .spine:
-            // A background, not an HStack sibling: a bare shape in a stack
-            // inside a scroll view is offered no height and draws 10pt tall.
-            shelf
-                .padding(.leading, 15)
-                .background(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 1.5)
-                        .fill(DeikoStyle.mark.opacity(0.55))
-                        .frame(width: 3)
-                }
-        }
+        )
     }
 }
 
