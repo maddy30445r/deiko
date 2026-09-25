@@ -27,7 +27,7 @@ import { fileURLToPath } from "node:url";
 // because the whole point of normalising here is to match what the aligner
 // will match on.
 import { normalizeWord } from "../packages/alignment/dist/src/deictic.js";
-import { loadEvents } from "./lib/session-io.mjs";
+import { awaitPrecomputed, loadEvents } from "./lib/session-io.mjs";
 import { refusalReason, REFUSAL_IS_FINAL } from "./lib/cloud.mjs";
 
 
@@ -690,21 +690,25 @@ async function appleTimings(wavPath, { locale = "en-IN", timeoutMs, contextFile 
 
   const out = `${wavPath}.timing.json`;
 
-  // ALREADY DONE. When the app itself drives this pipeline it recognises the
-  // holds in-process first — it is the process that holds the Speech grant, so
+  // THE APP IS ON IT. When the app itself drives this pipeline it recognises
+  // the holds in-process — it is the process that holds the Speech grant, so
   // the LaunchServices dance below buys nothing there and costs a whole app
-  // launch per hold. Read the result and skip straight past it.
+  // launch per hold. It does that WHILE this uploads: waiting for it first put
+  // the whole on-device pass in front of the upload, seconds at p90. So wait
+  // for the file here, beside the upload; a hold the app finished without
+  // falls through to launching, as before.
   //
   // Note the ORDER: this has to come before the `rmSync` that follows, which
   // exists to clear a stale file from a previous run and would cheerfully
   // delete a freshly precomputed one.
-  if (process.env.DEIKO_TIMINGS_READY === "1" && existsSync(out)) {
-    return await timed("apple:precomputed", async () => {
+  if (process.env.DEIKO_TIMINGS_PENDING === "1") {
+    const ready = await timed("apple:precomputed", () => awaitPrecomputed(out, { deadline: Date.now() + timeoutMs }));
+    if (ready) {
       const result = JSON.parse(readFileSync(out, "utf8"));
       rmSync(out);
       if (result.error) throw new Error(`speech timing: ${result.error}`);
       return result;
-    });
+    }
   }
 
   if (existsSync(out)) rmSync(out);

@@ -20,7 +20,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { TIMINGS_DONE, awaitPrecomputed } from "../lib/session-io.mjs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -358,4 +360,31 @@ test("a release refuses to inherit a URL from somebody's .env", () => {
       `${name} release guard no longer checks origin`,
     );
   }
+});
+
+// ── On-device timings, recognised while the upload runs ─────────────────────
+
+test("the app's done marker is the one the script waits on, and the script is told to wait", () => {
+  const pipeline = read("apps/capture/Sources/DeikoCapture/BriefPipeline.swift");
+  assert.match(pipeline, new RegExp(`doneMarker = "${TIMINGS_DONE.replace(".", "\\.")}"`));
+  assert.match(pipeline, /"DEIKO_TIMINGS_PENDING": "1"/);
+  assert.match(read("scripts/transcribe.mjs"), /process\.env\.DEIKO_TIMINGS_PENDING === "1"/);
+});
+
+test("a pending timing file is waited for, and given up on once the app says it is done", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "deiko-timings-"));
+  const out = join(dir, "hold-1.wav.timing.json");
+  const far = () => Date.now() + 5_000;
+
+  setTimeout(() => writeFileSync(out, "{}"), 300);
+  assert.equal(await awaitPrecomputed(out, { deadline: far() }), out, "lands while we wait");
+
+  rmSync(out);
+  writeFileSync(join(dir, TIMINGS_DONE), "");
+  const t0 = Date.now();
+  assert.equal(await awaitPrecomputed(out, { deadline: far() }), null, "the app finished without it");
+  assert.ok(Date.now() - t0 < 1_000, "at once, not at the deadline");
+
+  rmSync(join(dir, TIMINGS_DONE));
+  assert.equal(await awaitPrecomputed(out, { deadline: Date.now() + 250 }), null, "and never past the deadline");
 });

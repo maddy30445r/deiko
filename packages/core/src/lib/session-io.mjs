@@ -8,7 +8,8 @@
  */
 
 import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 
 /**
  * Parse `events.jsonl` into an array of events.
@@ -39,4 +40,23 @@ export function loadFile(sessionDir, file) {
   const path = join(sessionDir, file);
   if (!existsSync(path)) throw new Error(`missing ${file} in ${sessionDir}`);
   return readFileSync(path, "utf8");
+}
+
+/** Written by the app beside a session's WAVs once its on-device recognition
+ *  has finished, whether or not every hold got a timing file. */
+export const TIMINGS_DONE = "timings.done";
+
+/**
+ * A hold's timing file, which the app is recognising WHILE this script uploads.
+ * Resolves with the path once it is there; null once the app has finished
+ * without it (or the deadline passes), so the caller takes its own path.
+ */
+export async function awaitPrecomputed(out, { deadline }) {
+  const done = join(dirname(out), TIMINGS_DONE);
+  while (Date.now() < deadline) {
+    if (existsSync(out)) return out;
+    if (existsSync(done)) return existsSync(out) ? out : null;
+    await sleep(100);
+  }
+  return null;
 }

@@ -243,8 +243,14 @@ enum BriefPipeline {
                 + " · total \(seconds(started.duration(to: clock.now)))")
         }
 
-        let precomputed = await precomputeTimings(sessionDir: sessionDir)
-        mark("precompute")
+        // ON-DEVICE RECOGNITION AND THE UPLOAD, TOGETHER. The script waits
+        // for each hold's timing file beside its upload (`DEIKO_TIMINGS_PENDING`)
+        // instead of the upload waiting for all of them first.
+        let recordings = hasRecordings(sessionDir: sessionDir)
+        // A marker left by a run that died would tell the script "finished"
+        // before this run has started.
+        try? FileManager.default.removeItem(atPath: "\(sessionDir)/audio/\(doneMarker)")
+        async let precomputed: Void = precomputeTimings(sessionDir: sessionDir)
         // EVERY timing file is transient, and one that outlives the run is a
         // verbatim transcript of the developer's narration sitting in a
         // directory they may hand to somebody. `transcribe.mjs` deletes each
@@ -255,12 +261,11 @@ enum BriefPipeline {
         let transcribeOutput = try await run(
             .transcribe,
             sessionDir: sessionDir,
-            // Only claimed when a file was actually written. Asserting it
-            // unconditionally would make the script trust a file that is not
-            // there for holds we failed to recognise, and the launch fallback
-            // is exactly what should happen then.
-            extraEnvironment: precomputed ? ["DEIKO_TIMINGS_READY": "1"] : [:]
+            // Only when there is audio to recognise: with none, nothing would
+            // ever be written, and the script would wait for it.
+            extraEnvironment: recordings ? ["DEIKO_TIMINGS_PENDING": "1"] : [:]
         )
+        await precomputed
         mark("transcribe")
 
         // THE SPEND JUST HAPPENED — ask what is left of it.
@@ -349,40 +354,32 @@ enum BriefPipeline {
         guard let files = try? FileManager.default.contentsOfDirectory(
             at: audio, includingPropertiesForKeys: nil
         ) else { return }
-        for file in files where file.lastPathComponent.hasSuffix(".timing.json") {
+        for file in files where file.lastPathComponent.hasSuffix(".timing.json") || file.lastPathComponent == doneMarker {
             try? FileManager.default.removeItem(at: file)
         }
     }
 
-    /// Returns whether at least one timing file is NOW ON DISK — not whether
-    /// this function put it there.
+    /// Every hold's on-device timing file, recognised here while the script
+    /// uploads, and then `timings.done` — the script waits for each file until
+    /// that marker says no more are coming (`awaitPrecomputed`).
     ///
-    /// That distinction is the whole contract. The caller uses the answer to set
-    /// `DEIKO_TIMINGS_READY`, and the script reads a precomputed file only when
-    /// that is set; without it, it *deletes* any file it finds and launches a
-    /// second copy of the app to redo the work. So reporting "I wrote nothing"
-    /// for a session whose holds were all recognised live would throw away every
-    /// one of those results and take the slowest path available — the exact
-    /// opposite of what recognising during capture is for.
-    ///
-    /// Safe when only some holds have files: the script checks per hold and
-    /// falls back to launching for the ones that do not.
-    private static func precomputeTimings(sessionDir: String) async -> Bool {
+    /// A hold recognised live during the session already has its file and is
+    /// left alone: the script reads whatever is on disk, never only what this
+    /// wrote. The script DELETES a file it was not told to expect and relaunches
+    /// the app to redo the work, which is why it is told (`DEIKO_TIMINGS_PENDING`).
+    private static func precomputeTimings(sessionDir: String) async {
         let audio = URL(fileURLWithPath: sessionDir).appendingPathComponent("audio")
-        guard let wavs = try? FileManager.default.contentsOfDirectory(
-            at: audio, includingPropertiesForKeys: nil
-        ).filter({ $0.pathExtension == "wav" }), !wavs.isEmpty else { return false }
+        let wavs = recordings(sessionDir: sessionDir)
+        // Said even when nothing was recognised, so the script never waits
+        // past the end of this.
+        defer { FileManager.default.createFile(atPath: audio.appendingPathComponent(doneMarker).path, contents: nil) }
 
-        return await withTaskGroup(of: Bool.self) { group in
-            var alreadyPresent = false
+        await withTaskGroup(of: Bool.self) { group in
             for wav in wavs {
                 let out = URL(fileURLWithPath: wav.path + ".timing.json")
                 // Recognised already: live, during the session, or by an earlier
                 // run of this pipeline (the extend flow re-runs the whole thing).
-                if FileManager.default.fileExists(atPath: out.path) {
-                    alreadyPresent = true
-                    continue
-                }
+                if FileManager.default.fileExists(atPath: out.path) { continue }
                 group.addTask {
                     // The same locale `transcribe.mjs` reads from
                     // DEIKO_SPEECH_LOCALE, so the words cannot differ between
@@ -412,11 +409,21 @@ enum BriefPipeline {
                     }
                 }
             }
-            var any = alreadyPresent
-            for await wrote in group where wrote { any = true }
-            return any
+            for await _ in group {}
         }
     }
+
+    /// Written beside the WAVs when `precomputeTimings` is finished. The same
+    /// name as `TIMINGS_DONE` in `scripts/lib/session-io.mjs`.
+    private static let doneMarker = "timings.done"
+
+    private static func recordings(sessionDir: String) -> [URL] {
+        let audio = URL(fileURLWithPath: sessionDir).appendingPathComponent("audio")
+        return ((try? FileManager.default.contentsOfDirectory(at: audio, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.pathExtension == "wav" }
+    }
+
+    private static func hasRecordings(sessionDir: String) -> Bool { !recordings(sessionDir: sessionDir).isEmpty }
 
     /// Which holds a session has already transcribed, and what each one said.
     ///
