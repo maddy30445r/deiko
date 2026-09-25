@@ -46,25 +46,6 @@ func filedByDeiko() {
     #expect(!BoardTimeline.filedByDeiko(decidedBy: "local", taskBy: nil, task: "t-1", own: "t-2", odds: true), "odds and ends")
 }
 
-@Test("a drop joins the target's work, or starts it on the target")
-func drop() {
-    let counts = ["t-a": 3, "t-b": 1]
-    let count = { (id: String) in counts[id] ?? 0 }
-    // Onto work of three: joins it, target untouched.
-    let join = BoardTimeline.drop(dragged: ("x", "t-x"), target: ("a2", "t-a", "t-a2", false), count: count)
-    #expect(join?.task == "t-a" && join?.placeTarget == false)
-    // Already there: nothing to do.
-    #expect(BoardTimeline.drop(dragged: ("a1", "t-a"), target: ("a2", "t-a", "t-a2", false), count: count) == nil)
-    // Onto itself: nothing.
-    #expect(BoardTimeline.drop(dragged: ("b", "t-b"), target: ("b", "t-b", "t-b", false), count: count) == nil)
-    // Onto a lone brief: its task becomes the work.
-    let lone = BoardTimeline.drop(dragged: ("x", "t-x"), target: ("b", "t-b", "t-b", false), count: count)
-    #expect(lone?.task == "t-b" && lone?.placeTarget == false)
-    // Onto odds and ends: the target's own id, and the target placed too.
-    let odds = BoardTimeline.drop(dragged: ("x", "t-x"), target: ("o", "t-o", "t-o", true), count: count)
-    #expect(odds?.task == "t-o" && odds?.placeTarget == true)
-}
-
 @Test("an outcome, by its headings: agent named, fences skipped, other sections dropped")
 func outcomeSections() {
     let o = BoardTimeline.outcome("""

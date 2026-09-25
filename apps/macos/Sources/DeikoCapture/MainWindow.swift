@@ -820,19 +820,6 @@ private struct BoardPane: View {
     @State private var filter: Filter = .all
     /// One piece of work, oldest first — what a card's tag opens.
     @State private var work: String? = UIShotPose.work
-    /// Where a carried brief lands if it is let go now: on a card, or on the
-    /// timeline's empty space. The lede says which.
-    @State private var overCard: String?
-    @State private var overSpace = false
-    /// HOVER FROM GEOMETRY, NOT FROM TRACKING AREAS. `.onHover` on a card
-    /// is an AppKit tracking area placed where the card was laid out, and it
-    /// stays there while the card moves: thumbnails load and rows grow, a
-    /// fold opens, a search filters. After that, hovering one card lit the
-    /// card that used to be at that spot. So every card and tag reports its
-    /// real frame, the scroll view (whose own frame never moves) follows the
-    /// pointer, and "hovered" is whichever frames contain the point.
-    @State private var zoneFrames: [String: CGRect] = [:]
-    @State private var hoveredZones: Set<String> = []
     /// Days whose set-aside briefs are shown, by heading.
     @State private var unfolded: Set<String> = UIShotPose.unfolded
     @FocusState private var searching: Bool
@@ -955,10 +942,7 @@ private struct BoardPane: View {
     }
 
     private var lede: String {
-        if overCard != nil { return "Let go and they're one piece of work." }
-        if overSpace { return "Let go and it stands on its own." }
-        if work != nil { return "Drag one out onto empty space and it stands on its own." }
-        return "Newest first. Drag one brief onto another to group them."
+        work == nil ? "Newest first, under the day you said them." : "How it started, then what came of it."
     }
 
     /// CHROME ABOVE, CONTENT BELOW, AND NEVER IN THE SAME SCROLL VIEW.
@@ -1013,21 +997,6 @@ private struct BoardPane: View {
                 .padding(.bottom, 28)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            // EMPTY SPACE IS A PLACE TO DROP. A card's own destination wins
-            // over this one, so only a drop between or below cards lands here.
-            .dropDestination(for: String.self) { ids, _ in
-                standAlone(ids)
-            } isTargeted: { overSpace = $0 }
-            .onPreferenceChange(HoverZonesKey.self) { zoneFrames = $0 }
-            .onContinuousHover(coordinateSpace: .global) { phase in
-                let over: Set<String>
-                switch phase {
-                case .active(let point): over = Set(zoneFrames.filter { $0.value.contains(point) }.keys)
-                case .ended: over = []
-                }
-                if over != hoveredZones { hoveredZones = over }
-            }
-            .environment(\.hoveredZones, hoveredZones)
         }
     }
 
@@ -1040,8 +1009,7 @@ private struct BoardPane: View {
         let sections = work == nil
             ? BoardTimeline.sections(shown, date: \.date, now: Date())
             : [(title: "", items: shown)]
-        // Not lazy: the board is at most a few hundred cards, and a lazy stack
-        // gave hover and drop nothing to measure until a row had scrolled in.
+        // Not lazy — see `CardGrid`.
         return VStack(alignment: .leading, spacing: 26) {
             // Above the cards, for the reason the day heading is: it must
             // win the click where the two meet.
@@ -1065,10 +1033,7 @@ private struct BoardPane: View {
                             }
                         }
                         .accessibilityAddTraits(.isHeader)
-                        // ABOVE THE GRID, ALWAYS. A hovered card grows 2% and
-                        // lifts a point, and the grid comes later in the stack
-                        // so it was drawn — and hit-tested — on top: the card
-                        // below took the "set aside" chip's clicks.
+                        // Above the grid: where the two meet, the chip wins the click.
                         .zIndex(1)
                     }
                     if unfolded.contains(section.title) { grid(fold.folded).padding(.bottom, 8) }
@@ -1078,21 +1043,13 @@ private struct BoardPane: View {
         }
     }
 
-    // `.top`, because the default is `.center`: cards of unequal height were
-    // centred in their row, which staggered the top edge and read as a
-    // rendering fault.
     private func grid(_ items: [SessionsStore.Item]) -> some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), spacing: 14, alignment: .top)], spacing: 14) {
+        CardGrid {
             ForEach(items) { item in
-                BoardCard(
-                    item: item, store: sessions, showsTag: work == nil,
-                    openWork: { task in
-                        query = ""
-                        work = task
-                    },
-                    dropped: { join($0, onto: item) },
-                    targeted: { overCard = $0 ? item.id : (overCard == item.id ? nil : overCard) }
-                )
+                BoardCard(item: item, store: sessions, showsTag: work == nil) { task in
+                    query = ""
+                    work = task
+                }
             }
         }
     }
@@ -1114,9 +1071,7 @@ private struct BoardPane: View {
                     Text("\(count) mic checks & scraps").font(.system(size: 11, weight: .medium))
                 }
             }
-            .buttonStyle(ChipButtonStyle(on: false, zone: "fold:\(key)"))
-            // The whole capsule takes the click, not just its letters.
-            .contentShape(Capsule())
+            .buttonStyle(ChipButtonStyle(on: false))
             .deikoFocusRing(Capsule())
             .help(open
                   ? "Tuck them away again"
@@ -1125,53 +1080,6 @@ private struct BoardPane: View {
             .accessibilityValue(open ? "Shown" : "Folded")
             Rectangle().fill(DeikoStyle.hairline).frame(height: 1)
         }
-    }
-
-    /// A brief dropped on another: the same work from now on, by hand, so the
-    /// classifier never files it anywhere else. A name is asked for only when
-    /// the work is new and has none, prefilled from the brief it was dropped on.
-    private func join(_ ids: [String], onto target: SessionsStore.Item) -> Bool {
-        guard let id = ids.first,
-              let dragged = sessions.items.first(where: { $0.id == id }),
-              !dragged.unfinished, !dragged.unreadable, !target.unfinished, !target.unreadable,
-              let plan = BoardTimeline.drop(
-                  dragged: (dragged.id, dragged.setAside ? "" : dragged.task),
-                  target: (target.id, target.task, Tasks.own(target.id), target.setAside),
-                  count: { sessions.workCounts[$0] ?? 0 }
-              )
-        else { return false }
-        let named = sessions.taskTitles[plan.task] != nil
-        // After the drop returns: a modal inside a drop handler holds the
-        // drag session open under it.
-        DispatchQueue.main.async {
-            if !named {
-                guard let name = Collections.askText(
-                    title: "Name this piece of work",
-                    informative: "These two briefs go together now. The next one that belongs with them joins them.",
-                    value: target.title,
-                    placeholder: "What the work is",
-                    confirm: "Group them"
-                ), !name.isEmpty else { return }
-                Tasks.name(plan.task, name)
-            }
-            if plan.placeTarget { sessions.move(target, toTask: plan.task) }
-            sessions.move(dragged, toTask: plan.task)
-        }
-        return true
-    }
-
-    /// A brief dropped on empty space: its own work again. Refused when it
-    /// already is, or when other briefs have since joined the task it
-    /// started — "its own" would join them (see `ownTaskTakenHelp`).
-    private func standAlone(_ ids: [String]) -> Bool {
-        guard let id = ids.first,
-              let item = sessions.items.first(where: { $0.id == id }),
-              !item.unfinished, !item.unreadable
-        else { return false }
-        let own = Tasks.own(item.id)
-        guard item.odds || item.task != own, !sessions.hasOthers(inTask: own, besides: item.id) else { return false }
-        sessions.move(item, toTask: own)
-        return true
     }
 
     private var searchField: some View {
@@ -1207,13 +1115,9 @@ private struct BoardPane: View {
 /// The review card's "Carries on from which?" chips borrow it, for the same reason.
 struct ChipButtonStyle: ButtonStyle {
     let on: Bool
-    /// Named for a chip inside the board's scroll view: its hover then comes
-    /// from the board's geometry (see `BoardPane.zoneFrames`), never from a
-    /// tracking area that the moving layout has left behind.
-    var zone: String? = nil
 
     func makeBody(configuration: Configuration) -> some View {
-        Chip(configuration: configuration, on: on, zone: zone)
+        Chip(configuration: configuration, on: on)
     }
 
     /// Named `Chip`, not `Body`: `Body` is the protocol's own associated type
@@ -1222,12 +1126,9 @@ struct ChipButtonStyle: ButtonStyle {
     private struct Chip: View {
         let configuration: ButtonStyleConfiguration
         let on: Bool
-        let zone: String?
         /// Hover lives with the drawing rather than outside the button, so
         /// nothing between the two can get out of step.
-        @State private var tracked = false
-        @Environment(\.hoveredZones) private var hoveredZones
-        private var hovering: Bool { zone.map { hoveredZones.contains($0) } ?? tracked }
+        @State private var hovering = false
 
         var body: some View {
             configuration.label
@@ -1248,41 +1149,64 @@ struct ChipButtonStyle: ButtonStyle {
                 .contentShape(Capsule())
                 .opacity(configuration.isPressed ? 0.7 : 1)
                 .animation(.easeOut(duration: 0.12), value: hovering)
-                .hoverZone(zone)
-                .onHover { if zone == nil { tracked = $0 } }
+                .onHover { hovering = $0 }
         }
     }
 }
 
-// ── Hover from geometry ─────────────────────────────────────────────────────
+/// Columns of at least 210pt, 14pt apart, each row as tall as its tallest
+/// card, cards top-aligned: `LazyVGrid(.adaptive(minimum: 210))`'s look,
+/// without its laziness.
+///
+/// WHY NOT LAZY. A lazy grid puts a card at an estimated place and moves it
+/// once its row's real height is known, and on macOS the tracking areas the
+/// card's `.onHover` and buttons registered stay at the estimate: hovering
+/// or clicking the fourth brief reached September's first card, measured at
+/// that spot earlier. This places every card once, at its final frame. The
+/// board is a few hundred cards at most; laying them all out is cheap.
+struct CardGrid: SwiftUI.Layout {
+    let minColumn: CGFloat = 210
+    let spacing: CGFloat = 14
 
-/// Every hover zone's frame in the window, by id, gathered up the view tree.
-private struct HoverZonesKey: PreferenceKey {
-    static let defaultValue: [String: CGRect] = [:]
-    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
-        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    private func columns(_ width: CGFloat) -> (count: Int, width: CGFloat) {
+        let count = max(1, Int((width + spacing) / (minColumn + spacing)))
+        return (count, (width - spacing * CGFloat(count - 1)) / CGFloat(count))
     }
-}
 
-private struct HoveredZonesKey: EnvironmentKey { static let defaultValue: Set<String> = [] }
-extension EnvironmentValues {
-    /// The ids of every hover zone under the pointer right now.
-    var hoveredZones: Set<String> {
-        get { self[HoveredZonesKey.self] }
-        set { self[HoveredZonesKey.self] = newValue }
+    /// Each row's cards and its height: the tallest card's, at the column width.
+    private func rows(_ subviews: LayoutSubviews, _ count: Int, _ column: CGFloat) -> [(range: Range<Int>, height: CGFloat)] {
+        let proposal = ProposedViewSize(width: column, height: nil)
+        var rows: [(range: Range<Int>, height: CGFloat)] = []
+        for start in stride(from: 0, to: subviews.count, by: count) {
+            let range = start..<min(start + count, subviews.count)
+            var height: CGFloat = 0
+            for index in range { height = max(height, subviews[index].sizeThatFits(proposal).height) }
+            rows.append((range, height))
+        }
+        return rows
     }
-}
 
-extension View {
-    /// Reports this view's real frame under `id`, so the board can tell what
-    /// the pointer is over from where things ARE. Nil reports nothing.
-    func hoverZone(_ id: String?) -> some View {
-        background {
-            if let id {
-                GeometryReader { g in
-                    Color.clear.preference(key: HoverZonesKey.self, value: [id: g.frame(in: .global)])
-                }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: LayoutSubviews, cache: inout ()) -> CGSize {
+        // A scroll view also asks with `.infinity`; three columns then.
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? (minColumn * 3 + spacing * 2)
+        let (count, column) = columns(width)
+        let all = rows(subviews, count, column)
+        var height: CGFloat = 0
+        for row in all { height += row.height }
+        height += spacing * CGFloat(max(0, all.count - 1))
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: LayoutSubviews, cache: inout ()) {
+        let (count, column) = columns(bounds.width)
+        let size = ProposedViewSize(width: column, height: nil)
+        var y = bounds.minY
+        for row in rows(subviews, count, column) {
+            for (i, index) in row.range.enumerated() {
+                let x = bounds.minX + CGFloat(i) * (column + spacing)
+                subviews[index].place(at: CGPoint(x: x, y: y), anchor: UnitPoint.topLeading, proposal: size)
             }
+            y += row.height + spacing
         }
     }
 }
@@ -1293,16 +1217,8 @@ private struct BoardCard: View {
     /// Off inside one piece of work, where every card would wear the same one.
     let showsTag: Bool
     let openWork: (String) -> Void
-    let dropped: ([String]) -> Bool
-    let targeted: (Bool) -> Void
-    @State private var dropping = false
+    @State private var hovering = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.hoveredZones) private var hoveredZones
-
-    /// The pointer is over this card — by its real frame, see `BoardPane`.
-    private var hovering: Bool { hoveredZones.contains("card:\(item.id)") }
-    /// A brief is being held over this card.
-    private var lit: Bool { dropping || UIShotPose.dropTarget == item.id }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -1389,49 +1305,35 @@ private struct BoardCard: View {
         .padding(11)
         .background(
             RoundedRectangle(cornerRadius: DeikoStyle.insetRadius)
-                .fill(lit ? DeikoStyle.accentSoft : DeikoStyle.card)
+                .fill(DeikoStyle.card)
                 .overlay(
                     RoundedRectangle(cornerRadius: DeikoStyle.insetRadius)
-                        .strokeBorder(lit || hovering ? DeikoStyle.accent : DeikoStyle.hairline, lineWidth: lit ? 1.5 : 1)
+                        .strokeBorder(hovering ? DeikoStyle.accent : DeikoStyle.hairline, lineWidth: 1)
                 )
-                .shadow(color: DeikoStyle.shadow, radius: hovering || lit ? 16 : 10, x: 0, y: hovering || lit ? 9 : 5)
+                .shadow(color: DeikoStyle.shadow, radius: hovering ? 16 : 10, x: 0, y: hovering ? 9 : 5)
         )
-        // NO GROWING, NO LIFTING. A card that scaled up on hover or drop
-        // reached over the controls beside it — a day heading's chip, a
-        // neighbour's tag — and took their clicks. A card says "hovered" and
-        // "drop here" with its border and shadow alone, inside its own frame.
+        // NO GROWING, NO LIFTING. A card that scaled up on hover reached over
+        // the controls beside it — a day heading's chip, a neighbour's tag —
+        // and took their clicks. A card says "hovered" with its border and
+        // shadow alone, inside its own frame.
         .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: hovering)
-        .animation(reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.8), value: lit)
-        .hoverZone("card:\(item.id)")
+        .onHover { hovering = $0 }
         .onTapGesture(count: 2) { NSWorkspace.shared.open(URL(fileURLWithPath: item.dir)) }
         // Kept beside the button: somebody who already reaches for a
         // right-click should not have to learn a new way to do it.
         .contextMenu { SessionMenu(item: item, store: store) }
-        .help("Double-click to open this session's folder · drag onto another brief to group them")
+        .help("Double-click to open this session's folder")
         .onAppear { store.sawFiling(item) }
-        .draggable(item.id) { preview }
-        .dropDestination(for: String.self) { ids, _ in
-            dropped(ids)
-        } isTargeted: { over in
-            dropping = over && !item.unfinished && !item.unreadable
-            targeted(dropping)
-        }
     }
 
-    /// Where this brief belongs, in one line at the foot of the card. While a
-    /// brief is held over it, what letting go will do instead.
+    /// Where this brief belongs, in one line at the foot of the card.
     @ViewBuilder private var footer: some View {
         let count = store.workCounts[item.task] ?? 0
-        if lit {
-            Label("Same work as this", systemImage: "link")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(DeikoStyle.mark)
-                .padding(.vertical, 3)
-        } else if store.announces(item) {
+        if store.announces(item) {
             // FILING IS VISIBLE. Deiko put this with earlier work on its own;
             // said once, beside the way to take it back.
             HStack(spacing: 8) {
-                WorkTag(text: "Added to \(store.workName(ofTask: item.task))", zone: "tag:\(item.id)") { openWork(item.task) }
+                WorkTag(text: "Added to \(store.workName(ofTask: item.task))") { openWork(item.task) }
                     .help("Deiko put this with \(count - 1) earlier brief\(count == 2 ? "" : "s") in “\(store.title(ofTask: item.task))”. Click to see everything about it.")
                 let own = Tasks.own(item.id)
                 let taken = store.hasOthers(inTask: own, besides: item.id)
@@ -1443,8 +1345,8 @@ private struct BoardCard: View {
             }
         } else if let target = suggestion {
             // ONE CLICK TO ANSWER. "Looks like Sitemap?" was a question with
-            // no way to say yes but a drag. Yes files it by hand, exactly as
-            // a drag would; no makes it its own work, as Undo does.
+            // no way to say yes. Yes files it by hand; no makes it its own
+            // work, as Undo does.
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 8) { suggestionButtons(target) }
                 VStack(alignment: .leading, spacing: 4) { suggestionButtons(target) }
@@ -1457,10 +1359,10 @@ private struct BoardCard: View {
                 .padding(.vertical, 3)
                 .overlay(Capsule().strokeBorder(DeikoStyle.hairline, lineWidth: 1))
                 .help(item.odds
-                      ? "Too short or unclear to be a brief — a mic check, a thank-you. Drag it onto a brief to put it with that work."
+                      ? "Too short or unclear to be a brief — a mic check, a thank-you. Its ⋯ menu can still put it with a piece of work."
                       : "This recording never became a brief.")
         } else if showsTag, count >= 2 {
-            WorkTag(text: store.workName(ofTask: item.task), count: count, zone: "tag:\(item.id)") { openWork(item.task) }
+            WorkTag(text: store.workName(ofTask: item.task), count: count) { openWork(item.task) }
                 .help("See everything about \(store.workName(ofTask: item.task)): its briefs, where it stands, what was decided")
         }
     }
@@ -1474,9 +1376,9 @@ private struct BoardCard: View {
                 .labelStyle(TightLabel())
                 .lineLimit(1)
         }
-        .buttonStyle(ChipButtonStyle(on: false, zone: "put:\(item.id)"))
+        .buttonStyle(ChipButtonStyle(on: false))
         .deikoFocusRing(Capsule())
-        .help("Deiko thinks this carries on “\(store.title(ofTask: target))”. Click to put it there, or drag it onto any brief.")
+        .help("Deiko thinks this carries on “\(store.title(ofTask: target))”. Click to put it there.")
         let own = Tasks.own(item.id)
         let taken = store.hasOthers(inTask: own, besides: item.id)
         Button("Not this one") { store.move(item, toTask: own) }
@@ -1484,15 +1386,6 @@ private struct BoardCard: View {
             .disabled(taken)
             .help(taken ? SessionsStore.ownTaskTakenHelp : "Keep it as its own work. Deiko won't ask again.")
             .fixedSize()
-    }
-
-    private var preview: some View {
-        Text(item.title)
-            .font(.system(size: 12.5))
-            .lineLimit(2)
-            .padding(11)
-            .frame(width: 220, alignment: .leading)
-            .background(DeikoStyle.card, in: RoundedRectangle(cornerRadius: DeikoStyle.insetRadius))
     }
 
     /// A task id, while that task still has briefs on the board.
@@ -1538,8 +1431,6 @@ private struct BoardCard: View {
 private struct WorkTag: View {
     let text: String
     var count: Int?
-    /// The board's hover zone for this tag (see `ChipButtonStyle.zone`).
-    var zone: String? = nil
     let open: () -> Void
 
     var body: some View {
@@ -1551,7 +1442,7 @@ private struct WorkTag: View {
             }
             .font(.system(size: 11, weight: .medium))
         }
-        .buttonStyle(ChipButtonStyle(on: true, zone: zone))
+        .buttonStyle(ChipButtonStyle(on: true))
         .deikoFocusRing(Capsule())
     }
 }
