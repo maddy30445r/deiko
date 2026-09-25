@@ -2042,7 +2042,7 @@ private struct BriefView: View {
                     .help("See everything about \(store.workName(ofTask: item.task))")
             } else {
                 quietChip("On its own")
-                    .help("No other brief is part of this work yet")
+                    .help("This brief isn't part of any piece of work yet — Deiko didn't find earlier briefs it carries on. When the next brief about the same thing arrives, they're grouped into one task, and each brief then carries the other's story. Group it yourself with Move to task, or drag it onto another brief.")
                 if let target = live(item.maybe) {
                     Button {
                         store.move(item, toTask: target)
@@ -2071,6 +2071,7 @@ private struct BriefView: View {
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
                     .background(DeikoStyle.accentSoft, in: Capsule())
+                    .help(detail?.context?.tierHelp ?? "")
             }
         }
     }

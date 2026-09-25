@@ -1247,7 +1247,7 @@ struct ReviewView: View {
                     Text("· \(tier)")
                         .font(.system(size: 11))
                         .foregroundStyle(DeikoStyle.ink2)
-                        .help("How much work this looks like. Your agent still decides for itself.")
+                        .help(context.tierHelp ?? "How much work this looks like. Your agent still decides for itself.")
                 }
             }
             .padding(.top, 1)

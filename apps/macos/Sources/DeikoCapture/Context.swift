@@ -171,6 +171,20 @@ struct SessionContext: Codable, Equatable {
         default: return nil
         }
     }
+
+    /// What the size label means, on hover. Deiko's guess at how big the
+    /// ask is — it only ever becomes a line in the brief when "Mention when a
+    /// brief looks quick" is on, and the agent still decides for itself.
+    var tierHelp: String? {
+        let tail = " Deiko's guess from what you said; your agent still decides for itself."
+        switch tier {
+        case "quick": return "Quick one: a small, clear change, like a label, a colour or a one-line fix. A fast model will likely do." + tail
+        case "medium": return "A short one: a contained change to a feature or two, a few minutes of work." + tail
+        case "complex": return "Needs digging: the agent will have to read around the code and work out the cause before changing anything." + tail
+        case "reasoning": return "Needs a thinker: an open question or a design decision, worth the agent's most careful model." + tail
+        default: return nil
+        }
+    }
 }
 
 /// EVERY KEY MAY BE MISSING. Odds and ends are written as `{ pile, decidedBy }`
