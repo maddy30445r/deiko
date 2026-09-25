@@ -2,6 +2,7 @@ import AppKit
 import DeikoGesture
 import ServiceManagement
 import SwiftUI
+import DeikoHandoff
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SETTINGS — a section of the Deiko window, not a window of its own
@@ -326,8 +327,8 @@ struct SettingsView: View {
     let sessionRoot: String
     /// Momentary, so the button can say it worked.
     @State private var copied = false
-    /// Whether Claude Code or Cursor already has the memory helper registered.
-    @State private var helperConnected = false
+    /// Which agents are on this Mac, and which already have the memory helper.
+    @State private var helper = MemoryHelper.Status()
     /// What the button's last press said, or nil for the default caption.
     @State private var helperMessage: String?
 
@@ -477,37 +478,64 @@ struct SettingsView: View {
 
                 Divider()
 
-                Button(helperConnected ? "Remove Deiko memory from Claude Code / Cursor" : "Give Claude Code / Cursor your Deiko memory") {
-                    let removing = helperConnected
-                    Task.detached(priority: .userInitiated) {
-                        let message: String
-                        do {
+                HStack(spacing: 8) {
+                    Button(helper.allSet ? "Remove Deiko memory from your agents" : "Give your agent your Deiko memory") {
+                        let removing = helper.allSet
+                        Task.detached(priority: .userInitiated) {
+                            let message: String
                             if removing {
-                                try MemoryHelper.disconnect()
-                                message = "Removed. Restart Claude Code or Cursor to drop it."
+                                message = Self.sentence(MemoryHelper.disconnect(), did: "Removed from")
+                                    + " Restart your agents to drop it."
                             } else {
-                                let names = try MemoryHelper.connect()
-                                message = names.isEmpty
-                                    ? "Neither Claude Code nor Cursor is set up on this Mac yet."
-                                    : "Connected to \(names.joined(separator: " and ")). Restart \(names.count == 1 ? "it" : "them") to pick it up."
+                                do {
+                                    let outcome = try MemoryHelper.connect()
+                                    message = Self.sentence(outcome, did: "Set up in")
+                                        + (outcome.done.isEmpty ? "" : " Restart \(outcome.done.count == 1 ? "it" : "them") to pick it up.")
+                                } catch {
+                                    message = error.localizedDescription
+                                }
                             }
-                        } catch {
-                            message = error.localizedDescription
+                            let status = MemoryHelper.status()
+                            await MainActor.run { helperMessage = message; helper = status }
                         }
-                        let connected = MemoryHelper.isConnected()
-                        await MainActor.run { helperMessage = message; helperConnected = connected }
                     }
+                    .disabled(helper.found.isEmpty)
+                    Button("Copy setup") {
+                        helperMessage = MemoryHelper.copySetup()
+                            ? "Copied the command and a JSON entry. Paste either into your agent's MCP settings."
+                            : MemoryHelper.Failure.noRuntime.localizedDescription
+                    }
+                    .help("For any agent that takes MCP servers: copies the helper's command and a ready JSON entry.")
                 }
-                Text(helperMessage ?? "A small helper that runs only on this Mac. Your agent can search past briefs and open a task's history. It hands back only what your briefs already share: prompts, outcome notes, task notes and the screenshots you kept — never ones you removed.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(DeikoStyle.ink2)
-                    .fixedSize(horizontal: false, vertical: true)
+                captionLine(helperMessage ?? Self.found(helper))
+                captionLine("A small helper that runs only on this Mac. Your agent can search past briefs and open a task's history. It hands back only what your briefs already share: prompts, outcome notes, task notes and the screenshots you kept — never ones you removed. Using another agent? Copy setup gives you what to paste into its MCP settings.")
             }
             .padding(14)
         }
         .task {
-            helperConnected = await Task.detached { MemoryHelper.isConnected() }.value
+            helper = await Task.detached { MemoryHelper.status() }.value
         }
+    }
+
+    /// The caption under the memory buttons before anything is pressed.
+    private static func found(_ status: MemoryHelper.Status) -> String {
+        let joined = { (names: [String]) in names.joined(separator: ", ") }
+        let rest = status.found.filter { !status.connected.contains($0) }
+        if status.found.isEmpty {
+            return "No agent found on this Mac to set up. Copy setup works with any agent that takes MCP servers."
+        }
+        if status.connected.isEmpty { return "Found on this Mac: \(joined(status.found))." }
+        if rest.isEmpty { return "Set up in: \(joined(status.connected))." }
+        return "Set up in: \(joined(status.connected)). Not yet: \(joined(rest))."
+    }
+
+    /// What a press did, agent by agent — one that failed says why, and does
+    /// not hide the ones that worked.
+    nonisolated private static func sentence(_ outcome: AgentSetup.Outcome, did verb: String) -> String {
+        var parts: [String] = []
+        if !outcome.done.isEmpty { parts.append("\(verb): \(outcome.done.joined(separator: ", ")).") }
+        for failure in outcome.failed { parts.append("\(failure.agent): \(failure.reason)") }
+        return parts.isEmpty ? "Nothing to change." : parts.joined(separator: " ")
     }
 
     private func captionLine(_ text: String) -> some View {

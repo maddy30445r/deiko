@@ -77,11 +77,11 @@ public enum AgentSetup {
 
         add("Cursor", if: exists(at(".cursor")), at(".cursor/mcp.json"),
             .json(container: "mcpServers", typed: true, env: true))
-        // Antigravity's folder may not exist until its first MCP server, so
-        // the app itself also counts.
-        let antigravity = at(".gemini/config")
-        add("Antigravity", if: exists(antigravity) || exists(applications.appendingPathComponent("Antigravity.app")),
-            antigravity.appendingPathComponent("mcp_config.json"),
+        // By the app, not the folder: `~/.gemini/config` is exactly what an
+        // old Fovea build created on Macs that never had Antigravity at all.
+        add("Antigravity", if: exists(applications.appendingPathComponent("Antigravity.app"))
+                || exists(at("Applications/Antigravity.app")),
+            at(".gemini/config/mcp_config.json"),
             .json(container: "mcpServers", typed: false, env: false))
         add("Gemini CLI", if: exists(at(".gemini/settings.json")), at(".gemini/settings.json"),
             .json(container: "mcpServers", typed: false, env: false))

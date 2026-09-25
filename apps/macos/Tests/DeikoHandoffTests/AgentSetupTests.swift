@@ -46,7 +46,10 @@ private func everyAgent() throws -> Home {
 
 @Test("nothing installed, nothing found")
 func detectsNothing() throws {
-    #expect(try Home().targets().isEmpty)
+    let home = try Home()
+    // What an old Fovea build left behind is not Antigravity.
+    try home.write(".gemini/config/mcp_config.json", #"{"mcpServers":{}}"#)
+    #expect(home.targets().isEmpty)
 }
 
 @Test("each agent is found by its own folder, file or app")
