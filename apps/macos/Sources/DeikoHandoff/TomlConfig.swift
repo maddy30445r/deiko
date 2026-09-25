@@ -1,6 +1,6 @@
 import Foundation
 
-/// Removing Deiko's entry from Codex CLI's TOML MCP config, as pure logic.
+/// Adding and removing Deiko's entry in Codex's TOML MCP config, as pure logic.
 ///
 /// Codex CLI is the odd one out: every other client here keeps its MCP servers
 /// in JSON, and Codex keeps them in `~/.codex/config.toml` under
@@ -18,6 +18,78 @@ import Foundation
 /// fixtures without a real config on disk — the same arrangement as
 /// `ClientConfig`.
 public enum TomlConfig {
+
+    /// Add or update `[mcp_servers.<serverKey>]`. Every line outside our
+    /// table survives byte-for-byte, comments included.
+    ///
+    /// Returns nil for a file whose shape an appended table would break:
+    /// `mcp_servers = { … }` (an inline table cannot be extended by a header
+    /// later on) or our key already written in quotes (`[mcp_servers."x"]`,
+    /// which we would not find and would then define twice). Both are rare,
+    /// and both would stop Codex starting, so the caller leaves the file alone.
+    public static func merge(
+        into existing: String?,
+        serverKey: String,
+        command: String,
+        arguments: [String]
+    ) -> String? {
+        let table = render(serverKey: serverKey, command: command, arguments: arguments)
+        guard let existing, !existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return table }
+
+        for raw in existing.components(separatedBy: "\n") {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("mcp_servers"),
+               line.dropFirst("mcp_servers".count).trimmingCharacters(in: .whitespaces).hasPrefix("=") { return nil }
+            if line.contains("mcp_servers.\"\(serverKey)\"") || line.contains("mcp_servers.'\(serverKey)'") { return nil }
+        }
+
+        guard let range = tableRange(in: existing, serverKey: serverKey) else {
+            // Exactly one blank line before it — enough to separate our table
+            // from whatever precedes it, not enough to grow on every run.
+            var trimmed = existing
+            while trimmed.hasSuffix("\n") { trimmed.removeLast() }
+            return trimmed + "\n\n" + table
+        }
+        var lines = existing.components(separatedBy: "\n")
+        lines.replaceSubrange(range, with: table.components(separatedBy: "\n").dropLast())
+        return lines.joined(separator: "\n")
+    }
+
+    /// Whether the file already registers exactly this command and these
+    /// arguments — by value, like `ClientConfig.isRegistered`, because an
+    /// entry naming a runtime that moved is worse than none.
+    public static func isRegistered(
+        in existing: String?,
+        serverKey: String,
+        command: String,
+        arguments: [String]
+    ) -> Bool {
+        guard let existing, let found = lines(of: serverKey, in: existing) else { return false }
+        func meaningful(_ lines: [String]) -> [String] {
+            lines.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        }
+        let wanted = render(serverKey: serverKey, command: command, arguments: arguments)
+        return meaningful(found) == meaningful(wanted.components(separatedBy: "\n"))
+    }
+
+    /// The table, with a trailing newline.
+    static func render(serverKey: String, command: String, arguments: [String]) -> String {
+        """
+        [mcp_servers.\(serverKey)]
+        command = \(quote(command))
+        args = [\(arguments.map(quote).joined(separator: ", "))]
+
+        """
+    }
+
+    /// TOML basic strings escape the same two characters JSON does; a macOS
+    /// path can legally contain either.
+    static func quote(_ value: String) -> String {
+        let escaped = value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        return "\"\(escaped)\""
+    }
 
     /// Strip `[mcp_servers.<serverKey>]` out again. Returns nil when it was not
     /// there, so the caller can skip a pointless write.

@@ -38,9 +38,9 @@ public enum ClientConfig {
     public static func merge(
         into existing: [String: Any]?,
         serverKey: String,
-        entry: [String: Any]
+        entry: [String: Any],
+        containerKey: String = "mcpServers"
     ) throws -> [String: Any] {
-        let containerKey = "mcpServers"
         var document = existing ?? [:]
 
         // A missing container is normal — a config with no MCP servers yet.
@@ -92,13 +92,14 @@ public enum ClientConfig {
     /// presence: an entry pointing at a runtime or a server path that no
     /// longer exists — an app moved, a Node upgraded — is worse than no entry
     /// at all, because the client keeps trying to spawn it and the failure
-    /// surfaces inside Claude Code rather than here.
+    /// surfaces inside the agent rather than here.
     public static func isRegistered(
         in existing: [String: Any]?,
         serverKey: String,
-        matching entry: [String: Any]
+        matching entry: [String: Any],
+        containerKey: String = "mcpServers"
     ) -> Bool {
-        guard let servers = existing?["mcpServers"] as? [String: Any],
+        guard let servers = existing?[containerKey] as? [String: Any],
               let found = servers[serverKey] as? [String: Any]
         else { return false }
         return NSDictionary(dictionary: found).isEqual(to: entry)
