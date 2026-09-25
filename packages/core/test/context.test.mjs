@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 
 import {
   ASK, CLASSIFIER, COULD_NOT_TELL, FLOORS, GATE, JOIN, RELATIONS, TIERS, briefDate, decide, level,
-  projectFromKeys, readBriefLine, relativeAge, slug, unplaceable, wantsQuickHint, yes,
+  projectFromKeys, readBriefLine, relativeAge, saysNothing, slug, unplaceable, wantsQuickHint, yes,
 } from "../lib/context.mjs";
 import { EMPTY_KEYS } from "../lib/labels.mjs";
 import { stampTime } from "../lib/tasks.mjs";
@@ -348,4 +348,9 @@ test("a sibling whose summary could not tell falls back to what was said", () =>
   const b = readBriefLine(dir);
   assert.equal(b.line, "Hello, hello, this is my testing second time.");
   assert.equal(b.task, null, "a malformed task id is no task");
+});
+
+test("filler says nothing; a short real follow-up does", () => {
+  for (const n of [".", "I", "Thank you.", "hello hello", "testing, testing", "", "Haan theek hai"]) assert.equal(saysNothing(n), true, n);
+  for (const n of ["make it blue", "fix this", "same here", "kal wala bug"]) assert.equal(saysNothing(n), false, n);
 });

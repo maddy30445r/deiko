@@ -421,6 +421,18 @@ test("a short follow-up on its task's window joins it here, and nothing is sent"
   assert.equal(json(join(dir, "context.json")).task, task);
 });
 
+test("filler on a task's own window still goes to odds and ends", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
+  const task = "t-20260918-090000";
+  filed(root, "20260918-090000", { narration: "the price still shows 99 after I save", ...catalogue });
+  filed(root, "20260918-091000", { narration: "same price bug on the listing page", ...catalogue, context: { task } });
+  for (const [stamp, narration] of [["20260918-100000", "Thank you."], ["20260918-100100", "I"], ["20260918-100200", "."]]) {
+    const dir = filed(root, stamp, { narration, ...catalogue });
+    await classify(dir);
+    assert.deepEqual(json(join(dir, "context.json")), { pile: "odds", decidedBy: "local", classifier: "v3.0" }, narration);
+  }
+});
+
 test("a short brief with no clear match on its window goes to odds and ends", async () => {
   const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
   const stub = await relay();

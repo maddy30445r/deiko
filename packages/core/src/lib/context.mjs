@@ -95,6 +95,19 @@ export const COULD_NOT_TELL = /\btoo (short|garbled) to (tell|determine|understa
  *  could not tell what was asked — or null when it can be placed. One rule
  *  for the brief being classified and for the board it is scored against,
  *  so a mic test is neither filed nor a task to file into. */
+/// Words that say nothing on their own — "Thank you.", "I", ".", a mic check.
+/// ponytail: a short list, English and Hinglish; grow it from real boards.
+const FILLER = new Set(["i", "a", "the", "and", "so", "um", "uh", "hmm", "ok", "okay", "yes", "yeah", "no",
+  "hi", "hey", "hello", "thanks", "thank", "you", "test", "testing", "mic", "check", "haan", "acha", "accha", "theek", "hai"]);
+
+/** True when a narration has no word that asks for anything — the owner's
+ *  call (2026-09-25): such a brief goes to odds and ends even on a task's
+ *  screen, while a real short follow-up ("make it blue") still joins. */
+export function saysNothing(narration) {
+  const words = String(narration ?? "").toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+  return words.every((w) => FILLER.has(w));
+}
+
 export function unplaceable(b) {
   if ((b.narration ?? "").trim().length < MIN_NARRATION) return "narration too short to place";
   if (COULD_NOT_TELL.test(b.summaryLine ?? "")) return "the summary could not tell what was asked";

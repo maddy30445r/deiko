@@ -7,7 +7,7 @@
 import { readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
-import { CLASSIFIER, COULD_NOT_TELL, decide, readBriefLine, unplaceable } from "./context.mjs";
+import { CLASSIFIER, COULD_NOT_TELL, decide, readBriefLine, saysNothing, unplaceable } from "./context.mjs";
 import {
   bm25, firm, groupTasks, readBoard, shortlist as rankTasks, stampTime, taskLabels, taskState, taskText, timeWindow,
   titleFor, tokens,
@@ -181,7 +181,7 @@ export function prepare({ id, me, summary, windowTitles, board, taskTitles, coll
 export function decideLocally({ me, local, groups, collections }) {
   const [top, next] = local;
   const mine = new Set(me.windows);
-  const joins = !COULD_NOT_TELL.test(me.summaryLine ?? "") && top
+  const joins = !COULD_NOT_TELL.test(me.summaryLine ?? "") && !saysNothing(me.narration) && top
     && top.score >= SHORT_JOIN.min && top.score >= SHORT_JOIN.ratio * (next?.score ?? 0)
     && groups.get(top.id).some((b) => b.windows.some((w) => mine.has(w)));
   const inherited = joins && groups.get(top.id).find((b) => b.collection)?.collection;
