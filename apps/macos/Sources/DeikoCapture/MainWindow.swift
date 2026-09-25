@@ -1365,11 +1365,17 @@ private struct BoardCard: View {
         .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: hovering)
         .animation(reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.8), value: lit)
         .onHover { hovering = $0 }
-        .onTapGesture(count: 2) { NSWorkspace.shared.open(URL(fileURLWithPath: item.dir)) }
+        // THE BRIEF, as a Mac opens a document on double-click — not Finder,
+        // which is one item away in the menu. A brief that never rendered has
+        // only its folder to show.
+        .onTapGesture(count: 2) {
+            let brief = URL(fileURLWithPath: item.dir).appendingPathComponent("prompt.txt")
+            NSWorkspace.shared.open(FileManager.default.fileExists(atPath: brief.path) ? brief : URL(fileURLWithPath: item.dir))
+        }
         // Kept beside the button: somebody who already reaches for a
         // right-click should not have to learn a new way to do it.
         .contextMenu { SessionMenu(item: item, store: store) }
-        .help("Double-click to open this session's folder · drag onto another brief to group them")
+        .help("Double-click to open the brief · drag onto another brief to group them")
         .onAppear { store.sawFiling(item) }
         .draggable(item.id) { preview }
         .dropDestination(for: String.self) { ids, _ in
