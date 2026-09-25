@@ -73,7 +73,7 @@ for (const s of stamps) {
   const ctx = existsSync(join(d, "context.json")) ? JSON.parse(readFileSync(join(d, "context.json"), "utf8")) : null;
   if (!prompt.trim()) { console.log(`✗ ${s} has no prompt`); bad = 1; }
   if (!ctx) { console.log(`✗ ${s} was not filed`); bad = 1; continue; }
-  const conf = ctx.confidence?.task ?? ctx.jev?.join ?? "";
+  const conf = ctx.confidence?.task ?? "";
   rows.push([s, ctx.task ?? "-", ctx.collection ?? "-", ctx.decidedBy ?? "-", String(conf)]);
 }
 const tasks = existsSync(join(board, "tasks.json")) ? JSON.parse(readFileSync(join(board, "tasks.json"), "utf8")) : [];

@@ -17,7 +17,7 @@
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 
-import { KINDS, normaliseLabel } from "./labels.mjs";
+import { KINDS, normaliseLabel, notAProject } from "./labels.mjs";
 import { TASK_ID, parseOutcome } from "./tasks.mjs";
 
 /// Where a probability becomes a decision.
@@ -140,12 +140,11 @@ export function level(answer) {
   return typeof answer.score === "number" ? Math.round(answer.score) : null;
 }
 
-const NOT_A_PROJECT_APP = /^(google chrome|chrome|safari|arc|firefox|microsoft edge|brave browser|chromium|opera|vivaldi|zen|code|visual studio code|cursor|windsurf|zed|xcode|terminal|iterm2?|warp|ghostty|finder|dock|deiko|deiko capture|screenshot|usernotificationcenter|system settings)$/i;
-
+/** The first code project, site, document or app that can name a project —
+ *  never a tool ("GitHub", "Slack") or a holding folder ("Downloads"). */
 export function projectFromKeys({ keys = {}, apps = [] } = {}) {
-  const first = (list) => (Array.isArray(list) ? list.find((s) => typeof s === "string" && s.trim()) : undefined);
-  return first(keys.repo) ?? first(keys.sites) ?? first(keys.docs)
-    ?? apps.find((a) => typeof a === "string" && a.trim() && !NOT_A_PROJECT_APP.test(a.trim())) ?? null;
+  const first = (list, app) => (Array.isArray(list) ? list.find((s) => typeof s === "string" && !notAProject(s, { app })) : undefined);
+  return first(keys.repo) ?? first(keys.sites) ?? first(keys.docs) ?? first(apps, true) ?? null;
 }
 
 const lowered = (list) => new Set((list ?? []).map((s) => String(s).toLowerCase()));
@@ -155,6 +154,14 @@ const meets = (a, b) => {
 };
 /// Both sides named one, and none is shared.
 const differ = (a, b) => (a?.length ?? 0) > 0 && (b?.length ?? 0) > 0 && !meets(a, b);
+const trackers = (list) => new Set((list ?? []).map((t) => /^([A-Z][A-Z0-9]*)-\d+$/i.exec(t)?.[1]?.toUpperCase()).filter(Boolean));
+/// ANOTHER TICKET IN THE SAME TRACKER: both name an ENG-n, none the same one.
+/// Never "#n" — an issue and the pull request that fixes it always differ —
+/// and never across trackers, which say nothing about each other.
+const otherTicket = (a, b) => {
+  const theirs = trackers(b);
+  return [...trackers(a)].some((p) => theirs.has(p)) && !meets(a, b);
+};
 
 /**
  * Jev's percentages → where the brief goes. The only place they become a
@@ -166,7 +173,8 @@ const differ = (a, b) => (a?.length ?? 0) > 0 && (b?.length ?? 0) > 0 && !meets(
  *     (round one ≥ JOIN.recent when the task's newest brief is under 30 min
  *      old AND a page or file label matches — never for old work)
  *     … but a different page                      → ask instead
- *   a different ticket                            → that task is never joined or offered
+ *   another ticket of the same tracker (ENG-142
+ *     against ENG-150; never "#n")                 → that task is never joined or offered
  *   anything ≥ ASK not joined, not "different",
  *     not "related"                               → ask "Which one?" (up to 3)
  *   the second look says related-but-separate     → new task, `related` link
@@ -179,7 +187,10 @@ export function decide({
   shortlist = [], taskKeys = {}, newest = {}, now = 0,
   taskCollections = {}, sessionId = null, title = null,
 } = {}) {
-  const gate = answers.is_work_brief ? yes(answers.is_work_brief) : 1;
+  // AN UNREADABLE GATE IS A MISSING ONE, as the relay reads it (`finalists`):
+  // `Number(null)` is 0, so coercing first would send a real brief to odds.
+  const g = answers.is_work_brief?.noul;
+  const gate = Number.isFinite(g) ? Math.min(1, Math.max(0, g)) : 1;
   const same = Object.fromEntries(shortlist.map((id) => [id, yes(answers[`same_${id}`])]));
   const looks = Object.fromEntries(Object.entries(second ?? {})
     .filter(([id]) => shortlist.includes(id))
@@ -207,7 +218,7 @@ export function decide({
     return out;
   }
 
-  const open = shortlist.filter((id) => !differ(keys.tickets, taskKeys[id]?.tickets));
+  const open = shortlist.filter((id) => !otherTicket(keys.tickets, taskKeys[id]?.tickets));
   const p = (id) => same[id] ?? 0;
   const ranked = open.filter((id) => looks[id]).sort((a, b) => p(b) - p(a));
   const best = ranked[0];
@@ -321,6 +332,10 @@ export function readBriefLine(sessionDir) {
     // How it was filed — `firm` in tasks.mjs reads these to decide whether
     // this brief may describe its task.
     decidedBy: typeof context.decidedBy === "string" ? context.decidedBy : null,
+    // `"you"` when the TASK was placed by hand, `collectionBy` when the
+    // project was (the app writes both).
+    taskBy: typeof context.taskBy === "string" ? context.taskBy : null,
+    collectionBy: typeof context.collectionBy === "string" ? context.collectionBy : null,
     classifier: typeof context.classifier === "string" ? context.classifier : null,
     confidence: context.confidence && typeof context.confidence === "object" ? context.confidence : {},
     // In odds and ends: too little said, or nothing Groq could make sense

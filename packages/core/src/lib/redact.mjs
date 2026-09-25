@@ -140,6 +140,22 @@ export function redactBlock(lines) {
   return stripped.map((l) => redactTokens(l, suspect));
 }
 
+/// A line that is just a file path, bulleted or not.
+const PATH_LINE = /^\s*(?:[-*]\s+)?[-\w@./]+\.\w+$/;
+
+/**
+ * Lines an agent wrote (an outcome's sections), redacted as ONE block like
+ * `redactBlock`, so a secret on the line after its label ("API key for
+ * staging:") is still caught — while a line that is only a file path stays
+ * one an agent can open: once the block is suspect, `looksOpaque` reads
+ * `src/…/Foo.tsx` as credential-shaped. A path line still loses a credential
+ * that carries its own signature (a JWT, a key id).
+ */
+export function redactNote(lines) {
+  const scrubbed = redactBlock(lines);
+  return lines.map((l, i) => (PATH_LINE.test(l) && stripStandalone(l) === l ? l : scrubbed[i]));
+}
+
 /**
  * Was a credential VISIBLE in this referent's capture?
  *

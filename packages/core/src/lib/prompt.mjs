@@ -360,7 +360,8 @@ export function buildPrompt({
         ...now.slice(0, Math.max(0, MEMORY_LINES - 2 - recentLines.length)),
         ...recentLines,
         `The full history is in ${task.notePath} — read what you need.`
-          + (task.id ? ` Deiko task id: ${task.id} (the deiko-memory tools can open it).` : ""),
+          // "If": whether the helper is connected is the destination's to know.
+          + (task.id ? ` Deiko task id: ${task.id} (if the deiko-memory tools are connected, they can open it).` : ""),
       );
     }
   } else if (maybe?.length) {

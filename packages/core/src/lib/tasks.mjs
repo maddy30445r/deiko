@@ -13,7 +13,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { redact } from "./redact.mjs";
+import { redact, redactNote } from "./redact.mjs";
 import { COULD_NOT_TELL, STAMP, briefDate, readBriefLine } from "./context.mjs";
 
 export const TASK_ID = /^t-\d{8}-\d{6}$/;
@@ -140,9 +140,10 @@ export function taskState(briefs, title = null) {
     const open = last?.outcome.open ?? [];
     now = [...asked, ...open.map((o, i) => (i ? o : `Still open from ${briefDate(last.id)}: ${o}`))];
   }
+  // As blocks, not line by line: see `redactNote`.
   return {
-    now: now.slice(0, CAP.now).map(redact),
-    lastDid: (last?.outcome.did ?? []).slice(0, CAP.now).map(redact),
+    now: redactNote(now.slice(0, CAP.now)),
+    lastDid: redactNote((last?.outcome.did ?? []).slice(0, CAP.now)),
   };
 }
 
@@ -222,19 +223,24 @@ const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "frida
 
 /**
  * The window a brief's time words name, from its own stamp: "today"/"aaj",
- * "this morning", "yesterday"/"kal", "parso", "last week"/"pichle hafte", and
+ * "this morning", "yesterday"/"kal", "last night" (the evening before),
+ * "parso"/"day before yesterday", "this week" (from Monday), "last
+ * week"/"pichle hafte", and
  * weekday names (the most recent one before today). Several words → their
  * union. "kal" also means tomorrow; said about past work it means yesterday.
  */
 export function timeWindow(text, stamp) {
-  const said = String(text ?? "").toLowerCase();
+  // "day before yesterday" is parso, and must not also read as yesterday.
+  const said = String(text ?? "").toLowerCase().replace(/\bday before yesterday\b/g, "parso");
   const at = new Date(stamp);
-  const day = (offset) => new Date(at.getFullYear(), at.getMonth(), at.getDate() + offset).getTime();
+  const day = (offset, hour = 0) => new Date(at.getFullYear(), at.getMonth(), at.getDate() + offset, hour).getTime();
   const spans = [];
   if (/\b(today|aaj)\b/.test(said)) spans.push([day(0), stamp]);
-  if (/\bthis morning\b/.test(said)) spans.push([day(0), new Date(at.getFullYear(), at.getMonth(), at.getDate(), 12).getTime()]);
+  if (/\bthis morning\b/.test(said)) spans.push([day(0), day(0, 12)]);
   if (/\b(yesterday|kal)\b/.test(said)) spans.push([day(-1), day(0)]);
+  if (/\blast night\b/.test(said)) spans.push([day(-1, 18), day(0, 6)]);
   if (/\bparso\b/.test(said)) spans.push([day(-2), day(-1)]);
+  if (/\bthis week\b/.test(said)) spans.push([day(-((at.getDay() + 6) % 7)), stamp]);
   if (/\b(last week|pichle hafte|pichhle hafte|pichle week)\b/.test(said)) spans.push([day(-7), day(0)]);
   WEEKDAYS.forEach((name, weekday) => {
     if (!new RegExp(`\\b${name}\\b`).test(said)) return;
@@ -245,13 +251,17 @@ export function timeWindow(text, stamp) {
   return { from: Math.min(...spans.map((s) => s[0])), to: Math.max(...spans.map((s) => s[1])) };
 }
 
-/** Whether a brief may describe its task: its founder, a hand placement, or
- *  any v3 join. JOIN's own thresholds in context.mjs already gate what
- *  counts as one, so this asks only whether a join happened, not how sure
- *  it was. A legacy join (no `classifier`) or a local one is a guess, never
- *  a face — see `decide` and `decideLocally`. */
+/** Whether a brief may describe its task: its founder, a hand placement of
+ *  its TASK, or any v3 join. JOIN's own thresholds in context.mjs already
+ *  gate what counts as one, so this asks only whether a join happened, not
+ *  how sure it was. A legacy join (no `classifier`) or a local one is a
+ *  guess, never a face — see `decide` and `decideLocally`. So is a join whose
+ *  PROJECT alone was corrected by hand: that fixes a chip, not the task. */
 export function firm(b, taskId) {
-  if (taskIdFor(b.id) === taskId || b.decidedBy === "you") return true;
+  if (taskIdFor(b.id) === taskId || b.taskBy === "you") return true;
+  // Before `taskBy`: `decidedBy: "you"` was a task placement unless the
+  // project was what the hand placed.
+  if (b.decidedBy === "you" && b.collectionBy !== "you") return true;
   return String(b.classifier ?? "").startsWith("v3") && typeof b.confidence?.task === "number";
 }
 
@@ -272,7 +282,6 @@ export function taskLabels(briefs) {
  */
 export function shortlist({ query, queryKeys = {}, window = null, queryVec = null, tasks, limit = SHORTLIST }) {
   if (!tasks.length) return [];
-  const words = bm25(tokens(query), tasks.map((t) => tokens(t.text)));
   const grams = bm25(terms(query), tasks.map((t) => terms(t.text)));
   const meaning = tasks.map((t) => (queryVec && t.vecs?.length ? Math.max(...t.vecs.map((v) => cosine(queryVec, v))) : null));
   const fused = rrf([
@@ -287,7 +296,7 @@ export function shortlist({ query, queryKeys = {}, window = null, queryVec = nul
     .flatMap((k) => (queryKeys[k] ?? []).map((v) => [k, String(v).toLowerCase()]))
     .filter(([k, v]) => (count.get(`${k}\n${v}`) ?? 0) <= COMMON_LABEL);
   const rows = tasks.map((t, i) => ({
-    id: t.id, score: fused[i], words: words[i], meaning: meaning[i], lastActive: t.lastActive ?? 0,
+    id: t.id, score: fused[i], meaning: meaning[i], lastActive: t.lastActive ?? 0,
     label: mine.some(([k, v]) => t.labels?.[k]?.has(v)),
     inWindow: Boolean(window && (t.times ?? []).some((ms) => ms >= window.from && ms < window.to)),
   }));
@@ -299,7 +308,7 @@ export function shortlist({ query, queryKeys = {}, window = null, queryVec = nul
     ...labelled.map((r) => ({ ...r, seat: "label" })),
     ...timed.map((r) => ({ ...r, seat: "time" })),
     ...rows.filter((r) => !taken.has(r.id)).sort(byScore).map((r) => ({ ...r, seat: "score" })),
-  ].slice(0, limit).map(({ id, score, words: w, meaning: m, seat }) => ({ id, score, words: w, meaning: m, seat }));
+  ].slice(0, limit).map(({ id, score, meaning: m, seat }) => ({ id, score, meaning: m, seat }));
 }
 
 /** The compiled note. `briefs` newest first. Every line from another
@@ -316,8 +325,9 @@ export function renderTaskNote({ id, title, collection = null, briefs }) {
   ];
   const now = taskState(briefs, title).now;
   if (now.length) out.push("", "## Now", ...now);
+  // Each brief's decisions as one block, like its Now: see `redactNote`.
   const decided = briefs
-    .flatMap((b) => (b.outcome?.decided ?? []).map((d) => `- ${briefDate(b.id)}: ${redact(d)}`))
+    .flatMap((b) => redactNote(b.outcome?.decided ?? []).map((d) => `- ${briefDate(b.id)}: ${d}`))
     .slice(0, CAP.decided);
   if (decided.length) out.push("", "## Decided", ...decided);
   out.push("", "## Briefs");

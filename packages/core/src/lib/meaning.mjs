@@ -15,10 +15,10 @@
  * Keep a resident process if that is ever felt.
  */
 import { createHash } from "node:crypto";
-import { once } from "node:events";
 import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { pipeline } from "node:stream/promises";
 
 const HF = "https://huggingface.co";
 export const MODELS = {
@@ -190,17 +190,19 @@ export async function download({
     if (!res.ok || !res.body) throw new Error(`${f.path}: HTTP ${res.status}`);
     const part = `${dest}.part`;
     const hash = createHash("sha256");
-    const out = createWriteStream(part);
+    // A PIPELINE, so a write that fails (a full disk) rejects here and is
+    // reported, never an unhandled 'error' event that kills the process with
+    // a ~200 MB `.part` left behind.
     try {
-      for await (const chunk of res.body) {
-        hash.update(chunk);
-        if (!out.write(chunk)) await once(out, "drain");
-        done += chunk.length;
-        onProgress(done, total);
-      }
-      await new Promise((resolve, reject) => out.end((err) => (err ? reject(err) : resolve())));
+      await pipeline(async function* () {
+        for await (const chunk of res.body) {
+          hash.update(chunk);
+          done += chunk.length;
+          onProgress(done, total);
+          yield chunk;
+        }
+      }, createWriteStream(part));
     } catch (err) {
-      out.destroy();
       rmSync(part, { force: true });
       throw err;
     }

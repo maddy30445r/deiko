@@ -31,7 +31,7 @@ import { briefKeys, repoHints } from "./lib/labels.mjs";
 import { buildPrompt, quoteSurvives } from "./lib/prompt.mjs";
 import { degradedReason as cloudDegradedReason } from "./lib/cloud.mjs";
 import { briefDate, readBriefLine, relativeAge, wantsQuickHint } from "./lib/context.mjs";
-import { briefText, loadModel, vectorIsCurrent, writeVector } from "./lib/meaning.mjs";
+import { briefText, currentModel, isReady, loadModel, vectorIsCurrent, writeVector } from "./lib/meaning.mjs";
 import { firm, groupTasks, readBoard, readTasks, stampTime, taskIdFor, taskState, titleFor, tokens, writeTaskNotes } from "./lib/tasks.mjs";
 
 // ── Rendering ───────────────────────────────────────────────────────────────
@@ -279,10 +279,11 @@ const mates = context?.pile === "odds" ? [] : groups.get(myTask) ?? [];
 // Every mate is older, so the oldest of them is the oldest brief of the task
 // counting this one — the brief `writeTaskNotes` titles an untitled task by.
 const myTitle = mates.length ? taskTitles.get(myTask) ?? titleFor(mates.at(-1)) : null;
-// RECENT BRIEFS, for the prompt: firm ones only (`firm` in tasks.mjs) — the
-// founder, a hand placement, or a sure v3 join — so a join Jev only guessed
-// at never shows up dressed as this task's own history. Newest three,
-// oldest first, dated.
+// RECENT BRIEFS, WHERE IT STANDS AND LAST TIME, for the prompt: firm ones
+// only (`firm` in tasks.mjs) — the founder, a hand placement, or a sure v3
+// join — so a join Jev only guessed at never shows up dressed as this task's
+// own history. Newest three, oldest first, dated. A task with no firm brief
+// at all falls back to every mate, as its face does in `prepare`.
 const firmMates = mates.filter((b) => firm(b, myTask));
 const task = mates.length
   ? (({ now, ...state }) => ({
@@ -295,14 +296,14 @@ const task = mates.length
     now: now.filter((l) => !l.startsWith("Last asked: ")),
     recent: firmMates.slice(0, 3).reverse().map((b) => ({ date: briefDate(b.id), line: b.line })),
     notePath: join(root, "tasks", `${myTask}.md`),
-  }))(taskState(mates, myTitle))
+  }))(taskState(firmMates.length ? firmMates : mates, myTitle))
   : null;
 // ON ITS OWN, BUT MAYBE NOT: the tasks `classify.mjs` could not choose
 // between. Only ids the board still has briefs for — which is also what makes
 // a hand-edited id safe to put in a path.
 // Not gated on `decidedBy`: placing the COLLECTION by hand leaves the task a
 // guess, and the question stands. The app drops `candidates` when the TASK is
-// placed by hand, which is the one placement that answers it.
+// placed by hand (`taskBy: "you"`), which is the one placement that answers it.
 const maybe = !task && Array.isArray(context?.candidates) && context.candidates.length
   ? context.candidates.filter((id) => groups.has(id)).map((id) => {
     const bs = groups.get(id);
@@ -488,14 +489,16 @@ try {
 // THIS BRIEF'S MEANING, ON THIS MAC ONLY, for matching the briefs after it.
 // From what was said and the window titles — never the screen's words. No
 // model, or any failure, and there is simply no vector: words carry on alone.
+// CHECKED BEFORE THE MODEL LOADS (~0.6 s): a re-render whose text did not
+// change, and one after `classify.mjs` already wrote it, load nothing.
+// ponytail: the first render of a brief still pays the load once.
 try {
-  const model = await loadModel();
-  if (model) {
-    const text = briefText(readBriefLine(dir));
-    if (text.trim() && !vectorIsCurrent(dir, model.key, text)) {
-      const vec = await model.embed(text, "doc");
-      if (vec) writeVector(dir, model.key, vec, text);
-    }
+  const key = currentModel();
+  const text = briefText(readBriefLine(dir));
+  if (isReady(key) && text.trim() && !vectorIsCurrent(dir, key, text)) {
+    const model = await loadModel(key);
+    const vec = model ? await model.embed(text, "doc") : null;
+    if (vec) writeVector(dir, key, vec, text);
   }
 } catch (err) {
   console.error(`  ⚠ meaning vector not written — ${String(err?.message ?? err).slice(0, 80)}`);

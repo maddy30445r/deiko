@@ -7,13 +7,16 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import {
-  closeSync, constants, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync, writeSync,
+  closeSync, constants, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync, writeSync,
 } from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+
+import { readBriefLine } from "../lib/context.mjs";
+import { DEFAULT_MODEL, briefText, isReady, vectorIsCurrent } from "../lib/meaning.mjs";
 
 const run = promisify(execFile);
 const scripts = fileURLToPath(new URL("..", import.meta.url));
@@ -54,7 +57,7 @@ test("a re-rendered brief carries on only from briefs older than itself", async 
   await render(a);
   await render(b);
   assert.doesNotMatch(prompt(a), /carries on/, "the first brief has nothing earlier");
-  assert.match(prompt(b), /This carries on from "Fix the price display after saving" \(1 brief so far\)\.\nRecent briefs:\n- Sep 18: Fix the price display after saving\.\nThe full history is in [^\n]*— read what you need\. Deiko task id: t-20260918-100000 \(the deiko-memory tools can open it\)\.\n/,
+  assert.match(prompt(b), /This carries on from "Fix the price display after saving" \(1 brief so far\)\.\nRecent briefs:\n- Sep 18: Fix the price display after saving\.\nThe full history is in [^\n]*— read what you need\. Deiko task id: t-20260918-100000 \(if the deiko-memory tools are connected, they can open it\)\.\n/,
     "titled from the oldest brief, counting only earlier ones, with no line repeating the title");
   assert.doesNotMatch(prompt(b), /cart total/, "a later brief never reaches an earlier one's prompt");
   assert.match(prompt(c), /\(2 briefs so far\)\.\nRecent briefs:\n- Sep 18: Fix the price display after saving\.\nThe full history is in /);
@@ -62,6 +65,25 @@ test("a re-rendered brief carries on only from briefs older than itself", async 
   // or a person — so it is not firm, and never dresses up as c's history.
   assert.doesNotMatch(prompt(c), /old price too/, "a guessed join never appears as history");
   assert.equal(prompt(c, "prompt-attached.txt").includes("t-20260918-100000"), false, "a browser never gets the id");
+});
+
+test("where a task stands comes from its firm briefs, not a guessed join's outcome", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-render-"));
+  const task = "t-20260918-100000";
+  session(root, "20260918-100000", {
+    said: "the price still shows 99 after I save", summary: "Fix the price display after saving.",
+    outcome: "## Did\nSynced the price.\n## Open\nThe listing page still caches the old price.\n",
+  });
+  // An old 0.5.0 guess, worked on by an agent about something else.
+  session(root, "20260918-110000", {
+    said: "why does the signup chart drop in week 32", summary: "Explain the week-32 drop.",
+    context: { task, decidedBy: "jev", confidence: { task: 0.9 } },
+    outcome: "## Open\nBackfill week 32 from the warehouse.\n",
+  });
+  const c = session(root, "20260918-120000", { said: "the price bug is back on the listing", summary: "The price bug is back.", context: { task } });
+  await render(c);
+  assert.match(prompt(c), /Where it stands:\nThe listing page still caches the old price\./);
+  assert.doesNotMatch(prompt(c), /week 32/);
 });
 
 test("a brief linked to related work names it as a hint, not as its history", async () => {
@@ -184,6 +206,26 @@ test("a task's face is its firm briefs: a guessed join adds nothing to it", asyn
   assert.equal("lastActive" in sent[task], false);
 });
 
+test("a join whose project alone was corrected by hand is not its task's face", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
+  const task = "t-20260918-090000";
+  filed(root, "20260918-090000", { narration: "the price still shows 99 after I save", windows: ["Price.tsx — acme-portal"] });
+  // A legacy guess whose project chip was fixed, and a task placed by hand after a project was.
+  filed(root, "20260918-091000", {
+    narration: "why does the signup chart drop in week 32", windows: ["Chart.tsx — analytics"],
+    context: { task, collection: "build", decidedBy: "you", collectionBy: "you" },
+  });
+  filed(root, "20260918-092000", {
+    narration: "the listing page price is stale too", windows: ["Listing.tsx — acme-portal"],
+    context: { task, decidedBy: "you", collectionBy: "you", taskBy: "you" },
+  });
+  const dir = filed(root, "20260918-100000", { narration: "the price bug is back on the listing" });
+  const stub = await relay();
+  await classify(dir, stub.url);
+  stub.close();
+  assert.deepEqual(stub.bodies[0].tasks[0].windows.sort(), ["Listing.tsx — acme-portal", "Price.tsx — acme-portal"]);
+});
+
 test("a task is described by where it stands, never by its newest ask", async () => {
   const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
   const task = "t-20260918-090000";
@@ -291,7 +333,7 @@ test("the request carries labels, never screen words or components", async () =>
   });
   const dir = filed(root, "20260918-100000", {
     narration: "the week 32 signup chart drops", screenTerms: ["secretword"],
-    keys: { pages: ["Signups"], sites: ["build"], components: ["Weekly signups"] },
+    keys: { pages: ["Signups"], sites: ["build"], components: ["Weekly signups"], errors: ["TypeError: can't read … of undefined"] },
   });
   const stub = await relay();
   await classify(dir, stub.url);
@@ -300,6 +342,7 @@ test("the request carries labels, never screen words or components", async () =>
   assert.equal(body.version, 3, "routes the relay to the v3 path");
   assert.deepEqual(body.keys.pages, ["Signups"]);
   assert.equal("components" in body.keys, false);
+  assert.equal("errors" in body.keys, false, "an error line is screen text");
   assert.deepEqual(body.tasks[0].keys.pages, ["Pricing"]);
   assert.deepEqual(body.tasks[0].recent, ["the price still shows 99 after I save"], "what its firm briefs asked");
   assert.deepEqual(body.collections[0].labels, ["build", "Pricing"]);
@@ -319,7 +362,23 @@ test("DEIKO_CLASSIFY_DEBUG=1 prints the request and the answer; nothing by defau
   assert.match(loud.stderr, /· debug answer \{"model":"stub"/);
 });
 
-const ODDS = { pile: "odds", decidedBy: "local" };
+test("classify writes the brief's own meaning, so the re-render after it embeds nothing",
+  { skip: !isReady(DEFAULT_MODEL) && "model not downloaded on this Mac" }, async () => {
+    const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
+    const dir = session(root, "20260918-100000", { said: "the price still shows 99 after I save it", windows: ["Price.tsx — acme-portal"] });
+    const on = { ...process.env, DEIKO_MEANING_MODEL: DEFAULT_MODEL };
+    await run(process.execPath, [join(scripts, "render-brief.mjs"), dir], { env: on });
+    writeFileSync(join(dir, "review-summary.txt"), "Fix the price display after saving.\n");
+    const stub = await relay();
+    await classify(dir, stub.url, { DEIKO_MEANING_MODEL: DEFAULT_MODEL });
+    stub.close();
+    assert.equal(vectorIsCurrent(dir, DEFAULT_MODEL, briefText(readBriefLine(dir))), true, "the summary's text, written by classify");
+    const before = statSync(join(dir, "meaning.f32")).mtimeMs;
+    await run(process.execPath, [join(scripts, "render-brief.mjs"), dir], { env: on });
+    assert.equal(statSync(join(dir, "meaning.f32")).mtimeMs, before);
+  });
+
+const ODDS = { pile: "odds", decidedBy: "local", classifier: "v3.0" };
 
 test("a brief the summary could not tell goes to odds and ends, sending nothing, relay or none", async () => {
   const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
@@ -352,7 +411,7 @@ test("a short follow-up on its task's window joins it here, and nothing is sent"
   // No relay at all, and the same with one: a short brief is never sent.
   await classify(dir);
   assert.deepEqual(json(join(dir, "context.json")), {
-    collection: "shop", task, tier: null, confidence: { task: null }, decidedBy: "local", model: null,
+    collection: "shop", task, tier: null, confidence: { task: null }, decidedBy: "local", model: null, classifier: "v3.0",
   });
   const stub = await relay(join1("t-20260918-092000"));
   await classify(dir, stub.url);

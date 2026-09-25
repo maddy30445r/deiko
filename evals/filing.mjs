@@ -32,7 +32,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { STAMP, readBriefLine, unplaceable } from "./lib/context.mjs";
-import { decideLocally, place, prepare, requestClassify, sessionInputs } from "./lib/filing.mjs";
+import { decideLocally, place, prepare, rankLocally, requestClassify, sessionInputs } from "./lib/filing.mjs";
 import { draftLabels, expectations, formatReport, outcomeOf, rankOf, readLabels } from "./lib/eval.mjs";
 import { briefText, currentModel, loadModel } from "./lib/meaning.mjs";
 import { titleFor } from "./lib/tasks.mjs";
@@ -120,7 +120,7 @@ for (const [stamp, e] of exp) {
     const use = blended ?? prep;
     try {
       const decision = why
-        ? decideLocally({ me, why, local: prep.local, groups: prep.groups, collections })
+        ? decideLocally({ me, ...rankLocally({ me, summary, windowTitles, board, taskTitles }), collections })
         : place({ answer: await ask(use.body, paceMs), id: stamp, me, summary, groups: use.groups, shortlist: use.shortlist, collections });
       if (decision.newCollection && !collections.some((c) => c.id === decision.newCollection.id)) {
         collections.push({ ...decision.newCollection, hint: "" });
@@ -142,9 +142,10 @@ for (const [stamp, e] of exp) {
     const vec = await model.embed(briefText(me), "doc");
     if (vec) docs.set(stamp, vec);
   }
-  // THE KEY, NOT THE GUESS, goes on the in-memory board. A placement the key makes is a hand placement — which is also what lets
-  // it describe its task (`firm` in tasks.mjs), as a corrected brief would.
-  done.push({ ...me, task: e.task, odds: e.want === "odds", decidedBy: "you" });
+  // THE KEY, NOT THE GUESS, goes on the in-memory board. A placement the key
+  // makes is a hand placement of the TASK — which is also what lets it
+  // describe its task (`firm` in tasks.mjs), as a corrected brief would.
+  done.push({ ...me, task: e.task, odds: e.want === "odds", decidedBy: "you", taskBy: "you" });
   if (e.want === "new") taskTitles.set(e.task, titleFor(me));
 }
 const report = formatReport({ rows, shortlistOnly, errored, all: flag("--all") });

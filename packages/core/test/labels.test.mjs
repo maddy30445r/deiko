@@ -26,8 +26,20 @@ test("an address keeps host and path, ids become a wildcard, the query never sur
   assert.equal(normaliseLabel("https://example.com:8443/a/3f2a9c1e-1d2b-4c3d-9e8f-0123456789ab/", "url"), "example.com/a/*");
   assert.equal(normaliseLabel("https://x.dev/c/9f86d081884c7d659a2feaa0c55ad015", "url"), "x.dev/c/*");
   assert.equal(normaliseLabel("http://127.0.0.1:8801/", "url"), "127.0.0.1:8801");
-  assert.equal(normaliseLabel("https://x.dev/reset/AbCdEf1234567890GhIjKlMnOpQr", "url"), "x.dev/reset/<REDACTED>",
+  assert.equal(normaliseLabel("https://x.dev/reset/AbCdEf1234567890GhIjKlMnOpQr", "url"), "x.dev/reset/*",
     "a token in the path is still caught");
+});
+
+test("a token-shaped path segment becomes a wildcard; a slug of words and dates stays", () => {
+  for (const [url, want] of [
+    ["localhost:8000/reset/MQ/c3x7ml-1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d/", "localhost:8000/reset/MQ/*"],
+    ["localhost:3000/invite/Xk9f2LmQpR7sT1uV", "localhost:3000/invite/*"],
+    ["app.acme.com/share/9fKq2LmZ8xYt", "app.acme.com/share/*"],
+    ["https://hooks.slack.com/services/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", "hooks.slack.com/services/T024BE7LD/B024BE7LH/*"],
+    ["https://docs.google.com/document/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit", "docs.google.com/document/d/*/edit"],
+    ["blog.dev/posts/2026-09-25-memory-v3", "blog.dev/posts/2026-09-25-memory-v3"],
+    ["localhost:3000/signups/weekly", "localhost:3000/signups/weekly"],
+  ]) assert.equal(normaliseLabel(url, "url"), want, url);
 });
 
 test("titles that name no real page are not labels", () => {
@@ -98,7 +110,7 @@ test("a long mixed-case name redact() opaques never becomes a shared '<REDACTED>
   // same as an id segment already is.
   assert.deepEqual(
     briefKeys({ referents: [{ app: {}, page: { url: "https://x.dev/reset/AbCdEf1234567890GhIjKlMnOpQr" } }] }).urls,
-    ["x.dev/reset/<REDACTED>"],
+    ["x.dev/reset/*"],
   );
 });
 
@@ -142,6 +154,29 @@ test("a plain word pair is not mistaken for an address, and a VS Code dirty mark
   assert.deepEqual(keys.urls, [], "neither 'N/A' nor 'TCP/IP' has a dotted host or a port");
   assert.deepEqual(keys.pages, ["N/A", "TCP/IP basics"]);
   assert.deepEqual(keys.files, ["App.tsx"]);
+});
+
+test("an error label is a line that starts with one, never a chat or mail message", () => {
+  const errors = (app, line) => briefKeys({ referents: [{ app: { name: app }, window: "x", text: { ax: [], ocr: [line] } }] }).errors;
+  assert.deepEqual(errors("Slack", "TypeError: can't read 'price' of undefined"), [], "a chat app's line is somebody's message");
+  assert.deepEqual(errors("Mail", "Error in your invoice #4471 for Globex Corp"), []);
+  assert.deepEqual(errors("Google Chrome", "hey getting a TypeError when Rahul Verma logs in, his email is rahul.verma@globex.com"), [],
+    "mentioning an error is not one");
+  assert.deepEqual(errors("Google Chrome", "  Uncaught (in promise) Error: boom"), ["Uncaught (in promise) Error: boom"]);
+  assert.deepEqual(errors("Terminal", "panic: runtime error: index out of range"), ["panic: runtime error: index out of range"]);
+});
+
+test("standards shaped like tickets are not tickets", () => {
+  const keys = briefKeys({ narration: "use AES-256 and RSA-2048, floats are IEEE-754, see CVE-2024 and ENG-7" });
+  assert.deepEqual(keys.tickets, ["ENG-7"]);
+});
+
+test("a terminal names the folder it is in, spaces and all, but never a holding folder", () => {
+  const repo = (window) => briefKeys({ referents: [{ app: { name: "Ghostty" }, window, text: { ax: [], ocr: [] } }] }).repo;
+  assert.deepEqual(repo("~/Desktop/personal /Deiko"), ["Deiko"]);
+  assert.deepEqual(repo("dev@mac: ~/work/acme-api — -zsh — 80×24"), ["acme-api"]);
+  assert.deepEqual(repo("~/code/app (main)"), ["app"]);
+  for (const w of ["alex@mac: ~/Downloads", "~/Desktop", "~", "~/Desktop/personal "]) assert.deepEqual(repo(w), [], w);
 });
 
 test("nothing captured is no labels, not an error", () => {

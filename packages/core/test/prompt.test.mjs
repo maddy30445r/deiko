@@ -721,7 +721,7 @@ test("a joined task lists its recent briefs and, for a coding agent, its id", ()
       + "The listing page still caches the old price.\n"
       + "Recent briefs:\n- Sep 18: Fix the price display.\n- Sep 19: The listing page shows the old price.\n"
       + "The full history is in /Users/dev/Documents/Deiko/tasks/t-20260918-155836.md — read what you need."
-      + " Deiko task id: t-20260918-155836 (the deiko-memory tools can open it).\n",
+      + " Deiko task id: t-20260918-155836 (if the deiko-memory tools are connected, they can open it).\n",
   );
   assert.ok(withTask.evidence.includes("The listing page shows the old price"), "earlier words are guarded like the rest");
 });

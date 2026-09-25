@@ -81,8 +81,13 @@ test("not a real request goes to odds and ends, whatever else was answered", () 
   assert.equal(out.jev.gate, 0.3);
 });
 
-test("a missing gate reads as a real request", () => {
+test("a missing gate reads as a real request, and so does a garbled one", () => {
   assert.equal(decide({ ...base, answers: {} }).pile, null);
+  for (const noul of [null, "0.1", undefined]) {
+    const out = decide({ ...base, answers: { is_work_brief: { noul } } });
+    assert.equal(out.pile, null, String(noul));
+    assert.equal(out.jev.gate, 1);
+  }
 });
 
 test("a join needs the second look to say 'same', round one ≥ 0.6 and 0.2 ahead", () => {
@@ -145,13 +150,24 @@ test("a join on a different page asks instead", () => {
   assert.deepEqual(out.candidates, [A]);
 });
 
-test("a different ticket never joins and is never offered", () => {
+test("another ticket of the same tracker never joins and is never offered", () => {
   const out = decide({
     ...base, answers: r1({ [A]: 0.95 }), second: r2(A, 0.97),
     keys: keys({ tickets: ["ENG-2"] }), taskKeys: { [A]: tk({ tickets: ["ENG-1"] }) },
   });
   assert.equal(out.why, "new");
   assert.equal(out.candidates, undefined);
+});
+
+test("a ticket number only blocks against the same tracker, and '#n' never does", () => {
+  const join = (mine, theirs) => decide({
+    ...base, answers: r1({ [A]: 0.8 }), second: r2(A, 0.7),
+    keys: keys({ tickets: mine }), taskKeys: { [A]: tk({ tickets: theirs }) },
+  }).why;
+  assert.equal(join(["#412"], ["#398"]), "join", "an issue and the pull request that fixes it");
+  assert.equal(join(["ENG-2"], ["OPS-1"]), "join", "two trackers say nothing about each other");
+  assert.equal(join(["ENG-2", "ENG-1"], ["ENG-1"]), "join", "one in common");
+  assert.equal(join(["ENG-2"], []), "join");
 });
 
 test("related but separate starts its own task with a link, not a merge", () => {
@@ -181,8 +197,19 @@ test("the strongest label names the project: code project, website, document, ap
   assert.equal(projectFromKeys({ keys: keys({ repo: ["acme-portal"], sites: ["build"] }) }), "acme-portal");
   assert.equal(projectFromKeys({ keys: keys({ sites: ["build"], docs: ["Card Library"] }) }), "build");
   assert.equal(projectFromKeys({ keys: keys({ docs: ["Card Library"] }), apps: ["Figma"] }), "Card Library");
-  assert.equal(projectFromKeys({ keys: keys(), apps: ["Google Chrome", "Figma"] }), "Figma");
+  assert.equal(projectFromKeys({ keys: keys(), apps: ["Google Chrome", "Keynote"] }), "Keynote");
   assert.equal(projectFromKeys({ keys: keys(), apps: ["Google Chrome", "Code", "Finder"] }), null);
+  assert.equal(projectFromKeys({ keys: keys({ repo: ["Deiko"] }), apps: ["Deiko"] }), "Deiko", "a repo can share the app's name");
+});
+
+test("a tool or a holding folder never names a project", () => {
+  // What was on screen → what it named before.
+  for (const [k, v] of [["sites", "GitHub"], ["sites", "Jira"], ["sites", "Google Search"], ["sites", "Google Docs"],
+    ["sites", "Figma"], ["sites", "Gmail"], ["repo", "Downloads"], ["repo", "personal"], ["docs", "Notion"]]) {
+    assert.equal(projectFromKeys({ keys: keys({ [k]: [v] }) }), null, v);
+  }
+  for (const app of ["Slack", "Mail", "Linear", "Messages"]) assert.equal(projectFromKeys({ keys: keys(), apps: [app] }), null, app);
+  assert.equal(projectFromKeys({ keys: keys({ sites: ["GitHub", "build"] }) }), "build", "the next one names it");
 });
 
 test("every probability is logged, with the shortlist in the order it was sent", () => {
@@ -253,7 +280,7 @@ test("a sibling is read with its summary line, task, windows, terms and outcome"
     summaryLine: "Fix the drag on the board.",
     line: "Fix the drag on the board.",
     collection: "deiko", task: "t-20260915-100000", odds: false,
-    decidedBy: null, classifier: null, confidence: {},
+    decidedBy: null, taskBy: null, collectionBy: null, classifier: null, confidence: {},
     apps: ["Deiko"], windows: ["Orb.swift — Deiko"], screenTerms: ["drag"], repoHints: ["Deiko"],
     keys: { ...EMPTY_KEYS, repo: ["Deiko"] },
     outcome: { did: ["Moved the threshold."], decided: [], open: ["Test on a trackpad."], files: [] },

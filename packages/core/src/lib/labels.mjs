@@ -6,11 +6,14 @@
  * and a label is exact the way an email's reply thread is.
  *
  * Every value is cleaned so two visits to the same page match, and passed
- * through `redact`. `pages/sites/urls/files/repo/docs/errors/tickets` may
- * travel to the classifier — the same class as the window titles they come
- * from. `components` (headings and element ids read off the screen) stays on
- * this Mac.
+ * through `redact`. `pages/sites/urls/files/repo/docs/tickets` may travel to
+ * the classifier — the same class as the window titles they come from.
+ * `components` (headings and element ids) and `errors` (a line read off the
+ * screen) stay on this Mac: both are screen text.
  */
+import { homedir } from "node:os";
+import { basename } from "node:path";
+
 import { redact, redactBlock } from "./redact.mjs";
 
 export const KINDS = ["pages", "sites", "urls", "files", "repo", "docs", "components", "errors", "tickets"];
@@ -29,6 +32,13 @@ const GENERIC = new Set(["new tab", "dashboard", "home", "untitled", "loading", 
 const SEPARATOR = / (?:—|–|-|\||·) /;
 const COUNT = /^\(\d+\)\s*|\s*\(\d+\)$/g;
 const ID_SEGMENT = /^(\d+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{16,})$/i;
+/// A token in a path — an invite, share or reset token, a webhook secret, a
+/// document key: 12+ characters mixing cases and digits, or a 10+ run of
+/// letters and digits that has both. ponytail: a shape test, so a slug like
+/// "iphone15promax" goes to `*` too; a slug of words and dates stays.
+const isToken = (seg) =>
+  (seg.length >= 12 && /^[\w-]+$/.test(seg) && /\d/.test(seg) && /[a-z]/.test(seg) && /[A-Z]/.test(seg))
+  || seg.split(/[-_.~]/).some((p) => p.length >= 10 && /^[a-z0-9]+$/i.test(p) && /\d/.test(p) && /[a-z]/i.test(p));
 // A real address: localhost/127.0.0.1, a dotted host, or anything with a
 // port — never a bare "word/word" like "N/A" or "TCP/IP", which the old
 // `[\w.-]+/\S*` shape matched by accident (no dot, no port, still "looked
@@ -36,8 +46,10 @@ const ID_SEGMENT = /^(\d+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 const LOOKS_LIKE_URL = /^(https?:\/\/)?((localhost|127\.0\.0\.1)(:\d+)?|[\w-]+(\.[\w-]+)+(:\d+)?|[\w-]+:\d+)\/\S*/i;
 const TICKET = /\b([A-Z][A-Z0-9]{1,9}-\d{1,6})\b|(?<![\w&])#(\d{1,6})\b/g;
 /// Standards and encodings shaped like tickets. ponytail: a list.
-const NOT_A_TICKET = /^(UTF|ISO|SHA|MD|RFC|TLS|SSL|GPT|ES|IPV|HTTP|COVID|WCAG|PEP)-/;
-const ERROR_LINE = /\b[A-Z][A-Za-z]*(Error|Exception)\b|\bUncaught\b|\bTraceback\b|\bpanic:|^(error|Error|ERROR)\b/;
+const NOT_A_TICKET = /^(UTF|ISO|SHA|MD|RFC|TLS|SSL|GPT|ES|IPV|HTTP|COVID|WCAG|PEP|AES|RSA|DES|HMAC|IEEE|ECMA|CVE|MPEG|USB|DDR|WPA)-/;
+/// A line that STARTS with an error's signature — never one that merely
+/// mentions one ("hey getting a TypeError when …" is a message, not an error).
+const ERROR_LINE = /^(Uncaught\b|Traceback\b|panic:|[A-Z]\w*(Error|Exception)\b|(error|Error|ERROR)\b)/;
 const BROWSER_TAIL = /\s[-–—]\s(Google Chrome|Mozilla Firefox|Firefox|Microsoft Edge|Brave|Chromium|Opera|Vivaldi)\b.*$/;
 /// Chrome appends one of these as an extra trailing segment while a tab is
 /// actively capturing camera/mic/audio — not part of the page's own title,
@@ -68,7 +80,7 @@ function cleanUrl(text) {
   // The port only where it tells two projects apart: localhost:3000 and :5173.
   const host = port && (name === "localhost" || name === "127.0.0.1") ? `${name}:${port}` : name;
   const segments = (slash === -1 ? "" : s.slice(slash)).split("/").filter(Boolean)
-    .map((seg) => (ID_SEGMENT.test(seg) ? "*" : seg));
+    .map((seg) => (ID_SEGMENT.test(seg) || isToken(seg) ? "*" : seg));
   return segments.length ? `${host}/${segments.join("/")}` : host;
 }
 
@@ -115,6 +127,20 @@ export function normaliseLabel(text, kind, { site = null } = {}) {
   // label is lost; per segment, a token in the path is still caught.
   return kind === "url" ? out.split("/").map(redact).join("/") : redact(out);
 }
+
+/// Never a project's name: the tools and sites work happens IN, and the
+/// folders a terminal sits in between projects. ponytail: a list; grow it when
+/// a real board names a project after another one.
+const TOOL = /^(github|gitlab|bitbucket|jira|linear|notion|figma|slack|discord|mail|gmail|outlook|messages|calendar|notes|youtube|stack overflow|chatgpt|claude|bing|duckduckgo|google (search|docs|sheets|slides|drive|meet|calendar))$/i;
+const HOLDING_FOLDER = /^(~|desktop|documents|downloads|developer|projects|code|src|repos|personal)$/i;
+const holding = (name) => HOLDING_FOLDER.test(name) || name.toLowerCase() === basename(homedir()).toLowerCase();
+/** An app's name also never names a project when it is a browser, an
+ *  editor, a terminal or a system app — but a repo called "Deiko" can. */
+export const notAProject = (name, { app = false } = {}) => {
+  const s = String(name ?? "").trim();
+  return !s || TOOL.test(s) || holding(s)
+    || (app && (BROWSER.test(s) || EDITOR.test(s) || TERMINAL.test(s) || NOT_A_DOC.test(s)));
+};
 
 /** App/browser names that are never a repo, so they can be discarded. */
 /// Whole words, so `search-api` and `research` are not "Arc".
@@ -181,8 +207,10 @@ export function briefKeys({ referents = [], narration = "" } = {}) {
       const parts = window.split("—").map((p) => p.trim()).filter(Boolean);
       if (parts.length > 1) add("files", parts[0]);
     } else if (TERMINAL.test(app)) {
-      const path = window.match(/(?:~|\/)[^\s—–:]*[^\s—–:/]/)?.[0];
-      if (path) add("repo", path.split("/").pop());
+      // The path runs to a " — " or " (" or the end — folders can have
+      // spaces ("~/Desktop/personal /Deiko" is Deiko, not "personal").
+      const name = window.match(/(?:~|\/)[^—–:(]*/)?.[0].trim().replace(/\/+$/, "").split("/").pop();
+      if (name && !holding(name)) add("repo", name);
     } else if (window && !NOT_A_DOC.test(app)) {
       add("docs", splitTitle(window)[0]);
     }
@@ -190,7 +218,9 @@ export function briefKeys({ referents = [], narration = "" } = {}) {
     if (r.page?.document) add("files", r.page.document);
     for (const h of r.page?.headings ?? []) add("components", h);
     for (const d of r.page?.domIds ?? []) add("components", d);
-    const err = redactBlock([...(r.text?.ax ?? []), ...(r.text?.ocr ?? [])]).find((l) => ERROR_LINE.test(l));
+    // Never from a chat or mail app: there a line is somebody's message.
+    const err = !NOT_A_DOC.test(app)
+      && redactBlock([...(r.text?.ax ?? []), ...(r.text?.ocr ?? [])]).find((l) => ERROR_LINE.test(l.trim()));
     if (err) add("errors", err);
   }
   // Editor and browser titles only: a terminal's "— -zsh — 80×24" is not a repo.

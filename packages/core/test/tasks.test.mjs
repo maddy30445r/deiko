@@ -175,6 +175,9 @@ test("time words name a window, English and Hinglish, from the brief's own stamp
   assert.deepEqual(timeWindow("the thing on Monday", stamp), { from: day(21), to: day(22) });
   assert.deepEqual(timeWindow("friday's bug", stamp), { from: day(18), to: day(19) }, "today is Friday: last Friday");
   assert.deepEqual(timeWindow("yesterday, or maybe Monday", stamp), { from: day(21), to: day(25) });
+  assert.deepEqual(timeWindow("the day before yesterday", stamp), { from: day(23), to: day(24) }, "parso, not yesterday too");
+  assert.deepEqual(timeWindow("what I broke last night", stamp), { from: day(24, 18), to: day(25, 6) });
+  assert.deepEqual(timeWindow("earlier this week", stamp), { from: day(21), to: stamp }, "from Monday");
   assert.equal(timeWindow("fix the signup chart", stamp), null);
   assert.equal(timeWindow("the kalman filter", stamp), null, "whole words only");
 });
@@ -190,6 +193,12 @@ test("a task is described by its founder, hand placements and sure v3 joins only
     "a v3 filing that only asked or started fresh, not a join");
   assert.equal(firm({ id: "20260918-140000", task: T, decidedBy: "jev", confidence: { task: 0.95 } }, T), false, "an old 0.5.0 join has no classifier");
   assert.equal(firm({ id: "20260918-150000", task: T, decidedBy: "local", confidence: { task: null } }, T), false);
+  assert.equal(firm({ id: "20260918-160000", task: T, decidedBy: "you", taskBy: "you", collectionBy: "you" }, T), true,
+    "the task placed by hand, whatever else was");
+  assert.equal(firm({ id: "20260918-170000", task: T, decidedBy: "you", collectionBy: "you", confidence: { gate: 1 } }, T), false,
+    "only its project was corrected by hand: the task is still a guess");
+  assert.equal(firm({ id: "20260918-180000", task: T, decidedBy: "you", collectionBy: "jev" }, T), true,
+    "a task placement from before taskBy");
 });
 
 const noLabels = () => Object.fromEntries(SEAT_KINDS.map((k) => [k, new Set()]));
@@ -286,6 +295,18 @@ test("app names and collections are redacted when they contain secrets", () => {
   const note = renderTaskNote({ id: "t-x", title: "Title", collection: "AKIAIOSFODNN7EXAMPLE", briefs: withSecret });
   assert.equal(note.includes("AKIAIOSFODNN7EXAMPLE"), false);
   assert.match(note, /REDACTED-AWS-KEY-ID/);
+});
+
+test("a note's Now and Decided are redacted as blocks: a secret on the line after its label goes", () => {
+  const outcome = parseOutcome([
+    "## Decided", "Staging API key is below.", "UzvkZx7oHzB3KjQ9",
+    "## Open", "The token for the webhook:", "Xk9f2LmQpR7sT1uVwq", "src/components/PriceDisplay.tsx",
+  ].join("\n"));
+  const note = renderTaskNote({ id: "t-x", title: "Keys", briefs: [brief("20260918-155836", "A brief", { outcome })] });
+  assert.equal(note.includes("UzvkZx7oHzB3KjQ9"), false, "decided");
+  assert.equal(note.includes("Xk9f2LmQpR7sT1uVwq"), false, "now");
+  assert.match(note, /\nsrc\/components\/PriceDisplay\.tsx\n/, "a path line stays readable");
+  assert.match(note, /- Sep 18: Staging API key is below\.\n- Sep 18: <REDACTED>\n/);
 });
 
 test("odds and ends are not on the board tasks are read from, so never in a task or its note", () => {

@@ -1,10 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync } from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 import {
   DEFAULT_MODEL, MODELS, briefText, currentModel, download, finish, isReady, loadModel,
@@ -101,6 +104,33 @@ test("a download is checked against its SHA-256 and marked complete only when ev
     await site.close();
     if (was === undefined) delete process.env.DEIKO_MODEL_DIR; else process.env.DEIKO_MODEL_DIR = was;
   }
+});
+
+test("a write that fails is reported, and leaves no partial file", async () => {
+  const was = process.env.DEIKO_MODEL_DIR;
+  process.env.DEIKO_MODEL_DIR = mkdtempSync(join(tmpdir(), "deiko-models-"));
+  const a = Buffer.from("model bytes");
+  const spec = { files: [{ path: "ro/a.onnx", bytes: a.length, sha256: createHash("sha256").update(a).digest("hex") }] };
+  const site = await serve({ "/full/ro/a.onnx": a });
+  // A folder the write cannot open stands in for a full disk: the same
+  // write-stream 'error', which used to kill the process unhandled.
+  const ro = join(process.env.DEIKO_MODEL_DIR, "full", "ro");
+  mkdirSync(ro, { recursive: true });
+  chmodSync(ro, 0o555);
+  try {
+    await assert.rejects(download({ key: "full", spec, baseUrl: site.url }), /EACCES/);
+    assert.deepEqual(readdirSync(ro), []);
+  } finally {
+    chmodSync(ro, 0o755);
+    await site.close();
+    if (was === undefined) delete process.env.DEIKO_MODEL_DIR; else process.env.DEIKO_MODEL_DIR = was;
+  }
+});
+
+test("a backfill before the first recording has nothing to do", { skip: !isReady(DEFAULT_MODEL) && "model not downloaded on this Mac" }, async () => {
+  const script = fileURLToPath(new URL("../meaning.mjs", import.meta.url));
+  const { stdout } = await promisify(execFile)(process.execPath, [script, "backfill", join(tmpdir(), "deiko-no-board-yet")]);
+  assert.equal(stdout.trim(), "backfilled 0");
 });
 
 test("the real model puts a graph near a chart", { skip: !isReady(DEFAULT_MODEL) && "model not downloaded on this Mac" }, async () => {

@@ -16,7 +16,7 @@
  * BACKFILL WRITES INTO THE BOARD (<session>/meaning.f32). Only the app, once
  * after a download, and the controller (`make meaning-backfill`) run it.
  */
-import { readdirSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -58,7 +58,8 @@ if (command === "status") {
     process.exit(1);
   }
   let n = 0;
-  for (const name of readdirSync(root).filter((x) => STAMP.test(x)).sort()) {
+  // No board yet (the model came before the first recording) is nothing to do.
+  for (const name of (existsSync(root) ? readdirSync(root) : []).filter((x) => STAMP.test(x)).sort()) {
     const dir = join(root, name);
     const me = readBriefLine(dir);
     if (me.narration == null) continue;
