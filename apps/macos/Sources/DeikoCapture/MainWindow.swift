@@ -829,6 +829,10 @@ private struct BoardPane: View {
         get { nav.work }
         nonmutating set { nav.work = newValue }
     }
+    /// Where a carried brief lands if it is let go now: on a card, or on the
+    /// timeline's empty space. The lede says which.
+    @State private var overCard: String?
+    @State private var overSpace = false
     /// Days whose set-aside briefs are shown, by heading.
     @State private var unfolded: Set<String> = UIShotPose.unfolded
     @FocusState private var searching: Bool
@@ -951,7 +955,10 @@ private struct BoardPane: View {
     }
 
     private var lede: String {
-        work == nil ? "Newest first, under the day you said them." : "How it started, then what came of it."
+        if overCard != nil { return "Let go and they're one piece of work." }
+        if overSpace { return "Let go and it stands on its own." }
+        if work != nil { return "Drag one out onto empty space and it stands on its own." }
+        return "Newest first. Drag one brief onto another to group them."
     }
 
     /// CHROME ABOVE, CONTENT BELOW, AND NEVER IN THE SAME SCROLL VIEW.
@@ -1006,6 +1013,11 @@ private struct BoardPane: View {
                 .padding(.bottom, 28)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            // EMPTY SPACE IS A PLACE TO DROP. A card's own destination wins
+            // over this one, so only a drop between or below cards lands here.
+            .dropDestination(for: String.self) { ids, _ in
+                standAlone(ids)
+            } isTargeted: { overSpace = $0 }
         }
     }
 
@@ -1054,10 +1066,15 @@ private struct BoardPane: View {
     private func grid(_ items: [SessionsStore.Item]) -> some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), spacing: 14, alignment: .top)], spacing: 14) {
             ForEach(items) { item in
-                BoardCard(item: item, store: sessions, showsTag: work == nil) { task in
-                    query = ""
-                    work = task
-                }
+                BoardCard(
+                    item: item, store: sessions, showsTag: work == nil,
+                    openWork: { task in
+                        query = ""
+                        work = task
+                    },
+                    dropped: { join($0, onto: item) },
+                    targeted: { overCard = $0 ? item.id : (overCard == item.id ? nil : overCard) }
+                )
             }
         }
     }
@@ -1088,6 +1105,53 @@ private struct BoardPane: View {
             .accessibilityValue(open ? "Shown" : "Folded")
             Rectangle().fill(DeikoStyle.hairline).frame(height: 1)
         }
+    }
+
+    /// A brief dropped on another: the same work from now on, by hand, so the
+    /// classifier never files it anywhere else. A name is asked for only when
+    /// the work is new and has none, prefilled from the brief it was dropped on.
+    private func join(_ ids: [String], onto target: SessionsStore.Item) -> Bool {
+        guard let id = ids.first,
+              let dragged = sessions.items.first(where: { $0.id == id }),
+              !dragged.unfinished, !dragged.unreadable, !target.unfinished, !target.unreadable,
+              let plan = BoardTimeline.drop(
+                  dragged: (dragged.id, dragged.setAside ? "" : dragged.task),
+                  target: (target.id, target.task, Tasks.own(target.id), target.setAside),
+                  count: { sessions.workCounts[$0] ?? 0 }
+              )
+        else { return false }
+        let named = sessions.taskTitles[plan.task] != nil
+        // After the drop returns: a modal inside a drop handler holds the
+        // drag session open under it.
+        DispatchQueue.main.async {
+            if !named {
+                guard let name = Collections.askText(
+                    title: "Name this piece of work",
+                    informative: "These two briefs go together now. The next one that belongs with them joins them.",
+                    value: target.title,
+                    placeholder: "What the work is",
+                    confirm: "Group them"
+                ), !name.isEmpty else { return }
+                Tasks.name(plan.task, name)
+            }
+            if plan.placeTarget { sessions.move(target, toTask: plan.task) }
+            sessions.move(dragged, toTask: plan.task)
+        }
+        return true
+    }
+
+    /// A brief dropped on empty space: its own work again. Refused when it
+    /// already is, or when other briefs have since joined the task it
+    /// started — "its own" would join them (see `ownTaskTakenHelp`).
+    private func standAlone(_ ids: [String]) -> Bool {
+        guard let id = ids.first,
+              let item = sessions.items.first(where: { $0.id == id }),
+              !item.unfinished, !item.unreadable
+        else { return false }
+        let own = Tasks.own(item.id)
+        guard item.odds || item.task != own, !sessions.hasOthers(inTask: own, besides: item.id) else { return false }
+        sessions.move(item, toTask: own)
+        return true
     }
 
     private var searchField: some View {
@@ -1168,8 +1232,14 @@ private struct BoardCard: View {
     /// Off inside one piece of work, where every card would wear the same one.
     let showsTag: Bool
     let openWork: (String) -> Void
+    let dropped: ([String]) -> Bool
+    let targeted: (Bool) -> Void
     @State private var hovering = false
+    @State private var dropping = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// A brief is being held over this card.
+    private var lit: Bool { dropping || UIShotPose.dropTarget == item.id }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -1256,31 +1326,45 @@ private struct BoardCard: View {
         .padding(11)
         .background(
             RoundedRectangle(cornerRadius: DeikoStyle.insetRadius)
-                .fill(DeikoStyle.card)
+                .fill(lit ? DeikoStyle.accentSoft : DeikoStyle.card)
                 .overlay(
                     RoundedRectangle(cornerRadius: DeikoStyle.insetRadius)
-                        .strokeBorder(hovering ? DeikoStyle.accent : DeikoStyle.hairline, lineWidth: 1)
+                        .strokeBorder(lit || hovering ? DeikoStyle.accent : DeikoStyle.hairline, lineWidth: lit ? 1.5 : 1)
                 )
-                .shadow(color: DeikoStyle.shadow, radius: hovering ? 16 : 10, x: 0, y: hovering ? 9 : 5)
+                .shadow(color: DeikoStyle.shadow, radius: hovering || lit ? 16 : 10, x: 0, y: hovering || lit ? 9 : 5)
         )
-        // NO GROWING, NO LIFTING. A card that scaled up on hover reached over
-        // the controls beside it — a day heading's chip, a neighbour's tag —
-        // and took their clicks. A card says "hovered" with its border and
-        // shadow alone, inside its own frame.
+        // NO GROWING, NO LIFTING. A card that scaled up on hover or drop
+        // reached over the controls beside it — a day heading's chip, a
+        // neighbour's tag — and took their clicks. A card says "hovered" and
+        // "drop here" with its border and shadow alone, inside its own frame.
         .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: hovering)
+        .animation(reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.8), value: lit)
         .onHover { hovering = $0 }
         .onTapGesture(count: 2) { NSWorkspace.shared.open(URL(fileURLWithPath: item.dir)) }
         // Kept beside the button: somebody who already reaches for a
         // right-click should not have to learn a new way to do it.
         .contextMenu { SessionMenu(item: item, store: store) }
-        .help("Double-click to open this session's folder")
+        .help("Double-click to open this session's folder · drag onto another brief to group them")
         .onAppear { store.sawFiling(item) }
+        .draggable(item.id) { preview }
+        .dropDestination(for: String.self) { ids, _ in
+            dropped(ids)
+        } isTargeted: { over in
+            dropping = over && !item.unfinished && !item.unreadable
+            targeted(dropping)
+        }
     }
 
-    /// Where this brief belongs, in one line at the foot of the card.
+    /// Where this brief belongs, in one line at the foot of the card. While a
+    /// brief is held over it, what letting go will do instead.
     @ViewBuilder private var footer: some View {
         let count = store.workCounts[item.task] ?? 0
-        if store.announces(item) {
+        if lit {
+            Label("Same work as this", systemImage: "link")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(DeikoStyle.mark)
+                .padding(.vertical, 3)
+        } else if store.announces(item) {
             // FILING IS VISIBLE. Deiko put this with earlier work on its own;
             // said once, beside the way to take it back.
             HStack(spacing: 8) {
@@ -1296,8 +1380,8 @@ private struct BoardCard: View {
             }
         } else if let target = suggestion {
             // ONE CLICK TO ANSWER. "Looks like Sitemap?" was a question with
-            // no way to say yes. Yes files it by hand; no makes it its own
-            // work, as Undo does.
+            // no way to say yes but a drag. Yes files it by hand, exactly as
+            // a drag would; no makes it its own work, as Undo does.
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 8) { suggestionButtons(target) }
                 VStack(alignment: .leading, spacing: 4) { suggestionButtons(target) }
@@ -1310,7 +1394,7 @@ private struct BoardCard: View {
                 .padding(.vertical, 3)
                 .overlay(Capsule().strokeBorder(DeikoStyle.hairline, lineWidth: 1))
                 .help(item.odds
-                      ? "Too short or unclear to be a brief — a mic check, a thank-you. Its ⋯ menu can still put it with a piece of work."
+                      ? "Too short or unclear to be a brief — a mic check, a thank-you. Drag it onto a brief to put it with that work."
                       : "This recording never became a brief.")
         } else if showsTag, count >= 2 {
             WorkTag(text: store.workName(ofTask: item.task), count: count) { openWork(item.task) }
@@ -1329,7 +1413,7 @@ private struct BoardCard: View {
         }
         .buttonStyle(ChipButtonStyle(on: false))
         .deikoFocusRing(Capsule())
-        .help("Deiko thinks this carries on “\(store.title(ofTask: target))”. Click to put it there.")
+        .help("Deiko thinks this carries on “\(store.title(ofTask: target))”. Click to put it there, or drag it onto any brief.")
         let own = Tasks.own(item.id)
         let taken = store.hasOthers(inTask: own, besides: item.id)
         Button("Not this one") { store.move(item, toTask: own) }
@@ -1337,6 +1421,15 @@ private struct BoardCard: View {
             .disabled(taken)
             .help(taken ? SessionsStore.ownTaskTakenHelp : "Keep it as its own work. Deiko won't ask again.")
             .fixedSize()
+    }
+
+    private var preview: some View {
+        Text(item.title)
+            .font(.system(size: 12.5))
+            .lineLimit(2)
+            .padding(11)
+            .frame(width: 220, alignment: .leading)
+            .background(DeikoStyle.card, in: RoundedRectangle(cornerRadius: DeikoStyle.insetRadius))
     }
 
     /// A task id, while that task still has briefs on the board.

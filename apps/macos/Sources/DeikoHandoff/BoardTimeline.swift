@@ -62,6 +62,22 @@ public enum BoardTimeline {
         return decidedBy == "jev" || decidedBy == "local"
     }
 
+    /// Where a brief dropped on `target` goes. Into the target's task when
+    /// that is already work of two or more; otherwise the target starts one
+    /// under its own id — placed there too when it was set aside, so both
+    /// leave odds and ends together. `nil` when there is nothing to do.
+    public static func drop(
+        dragged: (id: String, task: String),
+        target: (id: String, task: String, own: String, setAside: Bool),
+        count: (String) -> Int
+    ) -> (task: String, placeTarget: Bool)? {
+        guard dragged.id != target.id else { return nil }
+        if !target.setAside, count(target.task) >= 2 {
+            return dragged.task == target.task ? nil : (target.task, false)
+        }
+        return target.setAside ? (target.own, true) : (target.task, false)
+    }
+
     // ── Work names ──────────────────────────────────────────────────────────
 
     /// What a task's tag calls it. Task titles are summaries ("They want an

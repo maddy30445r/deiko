@@ -74,8 +74,15 @@ enum UIShot {
                 to: "\(out)-board-fold-\(name).png"
             )
             UIShotPose.unfolded = []
-            // The board opened on the biggest piece of work — not reachable
-            // by a still first paint.
+            // A brief held over the second card, and the board opened on the
+            // biggest piece of work — neither reachable by a still first paint.
+            UIShotPose.dropTarget = store.items.dropFirst().first?.id
+            shoot(
+                MainWindowView(openSessionDir: nil, sessionRoot: root),
+                size: NSSize(width: 980, height: 660), look: look,
+                to: "\(out)-board-drop-\(name).png"
+            )
+            UIShotPose.dropTarget = nil
             MainNav.shared.work = store.workCounts.max { $0.value < $1.value }?.key
             shoot(
                 MainWindowView(openSessionDir: nil, sessionRoot: root),
@@ -147,7 +154,7 @@ enum UIShot {
             }
         }
 
-        Emit.log("wrote \(out)-{welcome,orb,orbready,orbnotice,orbsent,review,review-odds,review-related,dashboard,board,board-full,board-fold,board-work,personas,settings,settings-full}-{light,dark}.png")
+        Emit.log("wrote \(out)-{welcome,orb,orbready,orbnotice,orbsent,review,review-odds,review-related,dashboard,board,board-full,board-fold,board-drop,board-work,personas,settings,settings-full}-{light,dark}.png")
     }
 
     /// The collapsed card, mid-session: the state the orb spends most of its
@@ -310,9 +317,11 @@ enum UIShot {
 }
 
 /// States `ui-shot` poses that no click can reach in a still picture: the
-/// board opened on one piece of work, and the set-aside folds opened.
+/// board opened on one piece of work, a card with a brief held over it, and
+/// the set-aside folds opened.
 @MainActor
 enum UIShotPose {
+    static var dropTarget: String?
     /// Days whose set-aside briefs are shown, by heading.
     static var unfolded: Set<String> = []
     /// The work panel with every note shown, and with its full history open.
