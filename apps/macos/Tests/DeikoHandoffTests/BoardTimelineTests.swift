@@ -168,11 +168,11 @@ func workNamesShared() {
     #expect(names == ["a": "Price display bug", "b": "Fix the sort order", "c": "Pricing"])
 }
 
-@Test("set-aside briefs two or more in a row fold; a lone one stays a card")
+@Test("every set-aside brief folds, a lone one among real briefs included")
 func fold() {
     // Lowercase is set aside.
     let out = BoardTimeline.fold(Array("abCdDefgH"), setAside: \.isLowercase)
-    #expect(String(out.cards) == "CdDH")
-    #expect(String(out.folded) == "abefg")
-    #expect(BoardTimeline.fold(Array("Ca"), setAside: \.isLowercase).folded.isEmpty)
+    #expect(String(out.cards) == "CDH")
+    #expect(String(out.folded) == "abdefg")
+    #expect(String(BoardTimeline.fold(Array("Ca"), setAside: \.isLowercase).folded) == "a")
 }

@@ -39,13 +39,11 @@ public enum BoardTimeline {
     /// or more in a row fold into the day's one quiet "N set aside" line, so
     /// mic checks and unfinished recordings never stack above the work or
     /// break its grid. A lone one stays a card where it fell.
+    /// EVERY set-aside brief folds, a lone one included: one "Scrap" card
+    /// left among the real briefs read as a brief that had escaped the chip.
     public static func fold<T>(_ items: [T], setAside: (T) -> Bool) -> (cards: [T], folded: [T]) {
-        var cards: [T] = [], folded: [T] = [], run: [T] = []
-        func close() { if run.count >= 2 { folded += run } else { cards += run }; run = [] }
-        for item in items {
-            if setAside(item) { run.append(item) } else { close(); cards.append(item) }
-        }
-        close()
+        var cards: [T] = [], folded: [T] = []
+        for item in items { if setAside(item) { folded.append(item) } else { cards.append(item) } }
         return (cards, folded)
     }
 

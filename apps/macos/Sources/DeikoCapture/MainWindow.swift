@@ -1021,9 +1021,16 @@ private struct BoardPane: View {
         let sections = work == nil
             ? BoardTimeline.sections(shown, date: \.date, now: Date())
             : [(title: "", items: shown)]
-        return LazyVStack(alignment: .leading, spacing: 26) {
-            // Above the cards, for the reason the day heading is: a hovered
-            // card grows and lifts, and would take this panel's clicks.
+        // NOT LAZY, AND REBUILT ON EVERY LAYOUT CHANGE. A lazy stack keeps
+        // the cards it has built, and a built card's mouse-tracking area is
+        // where the card WAS: after a fold opened or closed, a filter or a
+        // search moved everything, hovering one card lit the one that used to
+        // be there. The board is at most a few hundred cards, so building
+        // them all is cheap, and the identity below makes SwiftUI start the
+        // whole timeline afresh — new tracking areas — whenever it shifts.
+        return VStack(alignment: .leading, spacing: 26) {
+            // Above the cards, for the reason the day heading is: it must
+            // win the click where the two meet.
             if let work { WorkNotes(task: work, store: sessions).zIndex(1) }
             ForEach(sections, id: \.title) { section in
                 let fold = BoardTimeline.fold(section.items, setAside: \.setAside)
@@ -1055,6 +1062,13 @@ private struct BoardPane: View {
                 }
             }
         }
+        .id(layoutKey)
+    }
+
+    /// Everything that moves cards around: folds, the project filter, the
+    /// search, the open work, and the set of briefs itself.
+    private var layoutKey: String {
+        "\(unfolded.sorted().joined(separator: "|"))·\(filter)·\(query)·\(work ?? "")·\(shown.count)"
     }
 
     // `.top`, because the default is `.center`: cards of unequal height were
@@ -1332,8 +1346,10 @@ private struct BoardCard: View {
                 )
                 .shadow(color: DeikoStyle.shadow, radius: hovering || lit ? 16 : 10, x: 0, y: hovering || lit ? 9 : 5)
         )
-        .scaleEffect(lit && !reduceMotion ? 1.02 : 1)
-        .offset(y: hovering && !reduceMotion ? -1 : 0)
+        // NO GROWING, NO LIFTING. A card that scaled up on hover or drop
+        // reached over the controls beside it — a day heading's chip, a
+        // neighbour's tag — and took their clicks. A card says "hovered" and
+        // "drop here" with its border and shadow alone, inside its own frame.
         .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: hovering)
         .animation(reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.8), value: lit)
         .onHover { hovering = $0 }
