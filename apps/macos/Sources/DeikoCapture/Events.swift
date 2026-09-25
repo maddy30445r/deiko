@@ -692,6 +692,9 @@ enum Emit {
             alert.messageText = "Deiko can't start a session"
             alert.informativeText = hint
             alert.addButton(withTitle: "OK")
+            // In front: this fires while somebody is in another app, and an
+            // accessory app's alert otherwise opens behind it, unseen.
+            NSApp.activate(ignoringOtherApps: true)
             alert.runModal()
         }
     }

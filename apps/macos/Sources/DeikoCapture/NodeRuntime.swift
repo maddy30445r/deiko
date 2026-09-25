@@ -93,11 +93,15 @@ enum Layout {
     static func resolve() -> Layout? {
         let fm = FileManager.default
 
-        // `<repo>/build/Deiko.app` → up two → `<repo>`.
-        let beside = Bundle.main.bundleURL
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        if fm.fileExists(atPath: beside.appendingPathComponent("Makefile").path) {
+        // `<repo>/build/Deiko.app` → up two → `<repo>`. THIS checkout's shape,
+        // not merely a Makefile: a shipped app in `~/Applications` with a
+        // `~/Makefile` two folders up used to take itself for a developer's,
+        // run that `make` and source the `.env` beside it.
+        let build = Bundle.main.bundleURL.deletingLastPathComponent()
+        let beside = build.deletingLastPathComponent()
+        if build.lastPathComponent == "build",
+           fm.fileExists(atPath: beside.appendingPathComponent("Makefile").path),
+           fm.fileExists(atPath: beside.appendingPathComponent("apps/capture/Package.swift").path) {
             return .development(repo: beside)
         }
 

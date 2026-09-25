@@ -338,6 +338,7 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     + "If you can, copy the diagnostics and send them over; they say what failed."
                 alert.addButton(withTitle: "Copy diagnostics")
                 alert.addButton(withTitle: "Ignore")
+                NSApp.activate(ignoringOtherApps: true)
                 if alert.runModal() == .alertFirstButtonReturn {
                     Diagnostics.copyToPasteboard()
                 }
@@ -890,6 +891,14 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Quit used to stop the recorder, so the others cut a live session off
     /// mid-crop: its WAV never finished, and it came back as an unfinished
     /// recording. The stop is the one the button does, crops in flight and all.
+    /// Opening Deiko while it runs — double-clicking it in Finder or
+    /// Launchpad, clicking its Dock tile — opens its window. It did nothing,
+    /// and with the menu-bar icon hidden behind a notch that left no way in.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        if !hasVisibleWindows { main.present(.dashboard) }
+        return true
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard recorder.sessionDir != nil else { return .terminateNow }
         Task { @MainActor in
