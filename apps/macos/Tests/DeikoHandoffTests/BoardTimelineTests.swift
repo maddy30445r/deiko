@@ -85,3 +85,45 @@ func noteSections() {
     #expect(s.now == ["Still open from Sep 18: the toast and the card disagree"])
     #expect(s.decided == ["Sep 18: re-fetch after save, no optimistic update"])
 }
+
+private func name(_ title: String?, named: Bool = false, pages: [String] = [], files: [String] = []) -> String {
+    BoardTimeline.workNames([.init(id: "t", title: title, named: named, pages: pages, files: files)])["t"]!
+}
+
+@Test("a work name: yours, else the page or file, else the title's head")
+func workNames() {
+    // A name you gave wins, even over a page.
+    #expect(name("Checkout copy", named: true, pages: ["Pricing"]) == "Checkout copy")
+    #expect(name("The whole onboarding flow for new teams", named: true) == "The whole onboarding…")
+    // The page said most, then the file.
+    #expect(name("They want an explanation", pages: ["Signups", "Pricing", "Pricing"]) == "Pricing")
+    #expect(name("Pricing | Acme Inc", pages: ["Pricing | Acme Inc"]) == "Pricing")
+    #expect(name("They want an explanation of the content and what a sitemap XML is",
+                 files: ["public/sitemap.xml"]) == "Sitemap")
+    // The title's head, filler off.
+    #expect(name("They want an explanation of the content and what a sitemap XML is") == "Content")
+    #expect(name("Price display doesn’t update after editing – toast shows new value but UI stays…") == "Price display bug")
+    #expect(name("Fix default tab to annual instead of monthly") == "Fix default tab")
+    #expect(name("Match the card radius to the left one") == "Match the card radius")
+    #expect(name("They’re confused why the week‑32 signup chart shows a drop while another chart…") == "Week‑32 signup chart")
+    #expect(name("Okay, so we have some issues here that we need to solve.") == "Issues")
+    // Nothing but filler: its first sentence as said.
+    #expect(name("Explain this. What is this? What is this?") == "Explain this")
+    #expect(name(nil) == "A task")
+    // Never over the limit, never cut mid-word.
+    for title in ["Supercalifragilistic expialidocious button spacing", "Please make the navigation drawer animation smoother"] {
+        let n = name(title)
+        #expect(n.count <= BoardTimeline.nameLimit, "\(n)")
+        #expect(title.lowercased().contains(n.lowercased().replacingOccurrences(of: "…", with: "")), "\(n)")
+    }
+}
+
+@Test("two tasks on one page are told apart by their titles")
+func workNamesShared() {
+    let names = BoardTimeline.workNames([
+        .init(id: "a", title: "Price display doesn’t update after editing", named: false, pages: ["Catalogue"], files: []),
+        .init(id: "b", title: "Fix the sort order of shoes", named: false, pages: ["Catalogue"], files: []),
+        .init(id: "c", title: "Fix default tab to annual", named: false, pages: ["Pricing"], files: []),
+    ])
+    #expect(names == ["a": "Price display bug", "b": "Fix the sort order", "c": "Pricing"])
+}
