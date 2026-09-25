@@ -909,9 +909,9 @@ private struct BoardPane: View {
                 .deikoFocusRing(Capsule())
                 .keyboardShortcut(.cancelAction)
                 .help("Back to every brief, newest first (Esc)")
-                Text("One piece of work, oldest first")
-                    .font(.system(size: 11))
-                    .foregroundStyle(DeikoStyle.ink2)
+                (Text("Everything about \(sessions.workName(ofTask: work))").font(.system(size: 12, weight: .semibold))
+                    + Text("  ·  oldest first").font(.system(size: 11)).foregroundColor(DeikoStyle.ink2))
+                    .lineLimit(1)
                 Spacer()
                 Menu {
                     TaskMenu(task: work, store: sessions)
@@ -1191,6 +1191,7 @@ struct ChipButtonStyle: ButtonStyle {
                 .background {
                     if on {
                         Capsule().fill(DeikoStyle.accentSoft)
+                            .overlay(Capsule().strokeBorder(DeikoStyle.accent.opacity(hovering ? 0.6 : 0), lineWidth: 1))
                     } else {
                         Capsule()
                             .fill(hovering ? DeikoStyle.accentSoft.opacity(0.5) : .clear)
@@ -1369,7 +1370,7 @@ private struct BoardCard: View {
             // said once, beside the way to take it back.
             HStack(spacing: 8) {
                 WorkTag(text: "Added to \(store.workName(ofTask: item.task))") { openWork(item.task) }
-                    .help("Deiko put this with \(count - 1) earlier brief\(count == 2 ? "" : "s") in “\(store.title(ofTask: item.task))”. Click to see them together.")
+                    .help("Deiko put this with \(count - 1) earlier brief\(count == 2 ? "" : "s") in “\(store.title(ofTask: item.task))”. Click to see everything about it.")
                 let own = Tasks.own(item.id)
                 let taken = store.hasOthers(inTask: own, besides: item.id)
                 Button("Undo") { store.move(item, toTask: own) }
@@ -1398,7 +1399,7 @@ private struct BoardCard: View {
                       : "This recording never became a brief.")
         } else if showsTag, count >= 2 {
             WorkTag(text: store.workName(ofTask: item.task), count: count) { openWork(item.task) }
-                .help("“\(store.title(ofTask: item.task))”. Click to see this work on its own, oldest first.")
+                .help("See everything about \(store.workName(ofTask: item.task)): its briefs, where it stands, what was decided")
         }
     }
 
@@ -1470,7 +1471,8 @@ private struct BoardCard: View {
 
 /// A card's work tag: the wash chip (DESIGN.md §Chips), name first and the
 /// count quiet, the name giving way before the count does. Clicking it opens
-/// that work on its own.
+/// that work on its own — which the chevron says at rest and the accent edge
+/// says under the pointer, because a wash chip alone reads as a label.
 private struct WorkTag: View {
     let text: String
     var count: Int?
@@ -1481,6 +1483,7 @@ private struct WorkTag: View {
             HStack(spacing: 4) {
                 Text(text).lineLimit(1).truncationMode(.tail)
                 if let count { Text("· \(count)").opacity(0.7).fixedSize() }
+                Image(systemName: "chevron.right").font(.system(size: 7.5, weight: .bold)).opacity(0.8)
             }
             .font(.system(size: 11, weight: .medium))
         }
