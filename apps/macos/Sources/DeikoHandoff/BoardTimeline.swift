@@ -222,18 +222,152 @@ public enum BoardTimeline {
         text.prefix(1).uppercased() + text.dropFirst()
     }
 
-    /// The `## Now` and `## Decided` blocks of a compiled task note
-    /// (`tasks/<id>.md`, written by `render-brief.mjs`), list markers off.
-    public static func noteSections(_ markdown: String) -> (now: [String], decided: [String]) {
-        var now: [String] = [], decided: [String] = []
-        var into: String?
-        for raw in markdown.split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = raw.trimmingCharacters(in: .whitespaces)
-            if line.hasPrefix("## ") { into = String(line.dropFirst(3)); continue }
-            guard !line.isEmpty else { continue }
-            let text = line.hasPrefix("- ") ? String(line.dropFirst(2)) : line
-            if into == "Now" { now.append(text) } else if into == "Decided" { decided.append(text) }
+    // ── A work's notes ──────────────────────────────────────────────────────
+
+    /// An agent's `outcome.md`, by the four headings the brief asks for —
+    /// the Swift twin of `parseOutcome` in `scripts/lib/tasks.mjs`. Text
+    /// before any heading is what it did; a `##` heading that is none of
+    /// the four drops what follows; code fences are skipped whole. One line
+    /// more than the script reads: "Agent: Codex" (or "Written by: …") names
+    /// who wrote it, and is not a note.
+    public struct Outcome: Equatable, Sendable {
+        public var did: [String] = [], decided: [String] = [], open: [String] = [], files: [String] = []
+        public var agent: String?
+        public init() {}
+    }
+
+    private static var heads: [(WritableKeyPath<Outcome, [String]>, String)] { [
+        (\.decided, #"^(decisions?|decided)\b"#),
+        (\.open, #"^(open|next( steps)?|todo|to do|remaining)\b"#),
+        (\.did, #"^(did|done|changes?|what i did)\b"#),
+        (\.files, #"^files?( touched| changed)?\b"#),
+    ] }
+
+    private static func head(_ name: String) -> WritableKeyPath<Outcome, [String]>? {
+        let clean = name.filter { !"*_`".contains($0) }.trimmingCharacters(in: .whitespaces)
+        return heads.first { clean.range(of: $0.1, options: [.regularExpression, .caseInsensitive]) != nil }?.0
+    }
+
+    public static func outcome(_ markdown: String) -> Outcome {
+        var out = Outcome()
+        var into: WritableKeyPath<Outcome, [String]>? = \.did
+        var fence: String?
+        for raw in markdown.components(separatedBy: "\n") {
+            let trimmed = raw.trimmingCharacters(in: .whitespaces)
+            let marker = trimmed.range(of: #"^(`{3,}|~{3,})"#, options: .regularExpression).map { String(trimmed[$0]) }
+            if let open = fence {
+                if let marker, marker.first == open.first, marker.count >= open.count { fence = nil }
+                continue
+            }
+            if let marker { fence = marker; continue }
+            if let r = raw.range(of: #"^#{1,6}\s+"#, options: .regularExpression) {
+                let level = raw[r].filter { $0 == "#" }.count
+                let named = head(String(raw[r.upperBound...]))
+                if named != nil || level > 1 { into = named }
+                continue
+            }
+            let label = trimmed.filter { !"*_".contains($0) }
+            if label.range(of: #"^[a-z][a-z ]*:?$"#, options: [.regularExpression, .caseInsensitive]) != nil,
+               label.hasSuffix(":") || trimmed.hasPrefix("**") || trimmed.hasPrefix("__"),
+               let named = head(label) {
+                into = named
+                continue
+            }
+            if out.agent == nil,
+               let r = label.range(of: #"^(agent|written by)\s*:\s*"#, options: [.regularExpression, .caseInsensitive]) {
+                let name = label[r.upperBound...].trimmingCharacters(in: .whitespaces)
+                if !name.isEmpty, name.count <= 40 { out.agent = name; continue }
+            }
+            let line = raw.replacingOccurrences(of: #"^\s*[-*]\s*"#, with: "", options: .regularExpression)
+                .trimmingCharacters(in: .whitespaces)
+            if !line.isEmpty, let into { out[keyPath: into].append(line) }
         }
-        return (now, decided)
+        return out
+    }
+
+    /// What a card says came of a brief: the first thing the agent did, else
+    /// decided, else left open.
+    public static func outcomeLine(_ markdown: String) -> String? {
+        let o = outcome(markdown)
+        return o.did.first ?? o.decided.first ?? o.open.first
+    }
+
+    /// The summary said "too short to tell" — not something anybody asked.
+    private static let couldNotTell = #"\btoo (short|garbled) to (tell|determine|understand)\b"#
+    /// The longest "You last asked" runs before it is cut, between words.
+    static let askedLimit = 140
+
+    /// What a brief asked, in one clean line: the summary's first line, else
+    /// the narration's first sentence — nil when neither says anything.
+    /// Never cut mid-word.
+    public static func asked(summary: String?, narration: String?) -> String? {
+        let firstLine = summary?.components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty }
+        var text: String
+        if let firstLine, firstLine.range(of: couldNotTell, options: [.regularExpression, .caseInsensitive]) == nil {
+            text = firstLine
+        } else {
+            let said = (narration ?? "").split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            guard said.count > 12 else { return nil }
+            // The first sentence, when it says enough on its own.
+            if let end = said.firstIndex(where: { ".?!".contains($0) }),
+               said.distance(from: said.startIndex, to: end) > 12 {
+                text = String(said[...end])
+            } else {
+                text = said
+            }
+        }
+        guard text.count > askedLimit else { return text }
+        var words = text.split(separator: " ").map(String.init)
+        while words.count > 1, words.joined(separator: " ").count > askedLimit - 1 { words.removeLast() }
+        let kept = words.joined(separator: " ").trimmingCharacters(in: CharacterSet(charactersIn: ",;:–—-"))
+        return kept + "…"
+    }
+
+    /// One brief of a work, as its notes panel reads it.
+    public struct WorkBrief: Sendable {
+        public let date: Date
+        public let asked: String?
+        public let outcome: Outcome?
+        public init(date: Date, asked: String?, outcome: Outcome?) {
+            self.date = date; self.asked = asked; self.outcome = outcome
+        }
+    }
+
+    /// A line of the panel, with when it was said and who said it.
+    public struct NoteLine: Equatable, Sendable {
+        public let text: String
+        public let date: Date
+        public let agent: String?
+    }
+
+    public struct WorkState: Equatable, Sendable {
+        public var lastAsked: NoteLine?
+        /// What the newest write-back left open.
+        public var open: [NoteLine] = []
+        /// Every write-back's decisions, newest first.
+        public var decided: [NoteLine] = []
+        /// When an agent last wrote back; nil when none has.
+        public var wroteBack: Date?
+    }
+
+    /// Where a piece of work stands. Only the NEWEST write-back says what is
+    /// open — an older one describes work a later ask moved past — while
+    /// decisions hold until somebody says otherwise, so all of them count.
+    public static func workState(_ briefs: [WorkBrief]) -> WorkState {
+        let newest = briefs.sorted { $0.date > $1.date }
+        var state = WorkState()
+        if let b = newest.first(where: { $0.asked != nil }), let asked = b.asked {
+            state.lastAsked = NoteLine(text: asked, date: b.date, agent: nil)
+        }
+        let wrote = newest.filter { $0.outcome != nil }
+        if let last = wrote.first, let o = last.outcome {
+            state.wroteBack = last.date
+            state.open = o.open.map { NoteLine(text: $0, date: last.date, agent: o.agent) }
+        }
+        state.decided = wrote.flatMap { b in
+            (b.outcome?.decided ?? []).map { NoteLine(text: $0, date: b.date, agent: b.outcome?.agent) }
+        }
+        return state
     }
 }

@@ -622,13 +622,7 @@ final class SessionsStore: ObservableObject {
                 let outcome = (try? String(
                     contentsOf: URL(fileURLWithPath: dir).appendingPathComponent("outcome.md"),
                     encoding: .utf8
-                ))?
-                    .split(separator: "\n")
-                    .map { $0.trimmingCharacters(in: .whitespaces) }
-                    .filter { !$0.hasPrefix("#") }
-                    .map { $0.replacingOccurrences(
-                        of: "^[-*]\\s*", with: "", options: .regularExpression) }
-                    .first { !$0.isEmpty }
+                )).flatMap(BoardTimeline.outcomeLine)
                 let own = Tasks.own(name)
                 let isOwnTask = stored?.task == nil || stored?.task == own
                 let odds = stored?.isOdds == true
@@ -1010,7 +1004,9 @@ private struct BoardPane: View {
             ? BoardTimeline.sections(shown, date: \.date, now: Date())
             : [(title: "", items: shown)]
         return LazyVStack(alignment: .leading, spacing: 26) {
-            if let work { WorkNotes(task: work, store: sessions) }
+            // Above the cards, for the reason the day heading is: a hovered
+            // card grows and lifts, and would take this panel's clicks.
+            if let work { WorkNotes(task: work, store: sessions).zIndex(1) }
             ForEach(sections, id: \.title) { section in
                 let fold = BoardTimeline.fold(section.items, setAside: \.setAside)
                 VStack(alignment: .leading, spacing: 14) {
@@ -1462,17 +1458,21 @@ private struct WorkTag: View {
 /// `ButtonStyle` for the reason `ChipButtonStyle` gives — a `.plain` button
 /// in a scrolling pane took no clicks.
 private struct TextButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View { Word(configuration: configuration) }
+    /// Ink 2 instead of the mark: the verb beside a stronger one.
+    var quiet = false
+
+    func makeBody(configuration: Configuration) -> some View { Word(configuration: configuration, quiet: quiet) }
 
     private struct Word: View {
         let configuration: ButtonStyleConfiguration
+        let quiet: Bool
         @Environment(\.isEnabled) private var enabled
         @State private var hovering = false
 
         var body: some View {
             configuration.label
                 .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(enabled ? DeikoStyle.mark : DeikoStyle.ink2)
+                .foregroundStyle(enabled && !quiet ? DeikoStyle.mark : DeikoStyle.ink2)
                 .underline(hovering && enabled)
                 .padding(.vertical, 3)
                 .contentShape(Rectangle())
@@ -1482,19 +1482,34 @@ private struct TextButtonStyle: ButtonStyle {
     }
 }
 
-/// The head of one piece of work: its name, its span, and its note — where
-/// it stands and what was decided, from `tasks/<id>.md`, the same note the
-/// next brief carries to the agent. On the wall, because it is a header; no
-/// controls in it, because nothing clickable sits above cards in their scroll
-/// view (see `BoardPane.body`).
+/// The head of one piece of work: its name, its span, what you last asked,
+/// and what agents wrote back about it — where it stands and what was
+/// decided, read from each brief's `outcome.md`. Everything else the next
+/// brief carries (every brief, every note in full) waits behind "Full
+/// history". On the wall, because it is a header; above the cards in the
+/// stack (`zIndex`), so a hovered card never takes its buttons' clicks.
 private struct WorkNotes: View {
     let task: String
     let store: SessionsStore
-    @State private var note: (now: [String], decided: [String]) = ([], [])
+    @State private var briefs: [Brief] = []
+    @State private var expanded = UIShotPose.notesExpanded
+    @State private var history = UIShotPose.historyOpen
+
+    /// One brief as read off disk for this panel.
+    struct Brief: Identifiable {
+        let id: String
+        let date: Date
+        let asked: String?
+        let outcome: BoardTimeline.Outcome?
+    }
+
+    /// Lines per block while folded. Whole lines, never a line cut short.
+    private static let folded = 3
 
     var body: some View {
-        let briefs = store.items.filter { $0.task == task && !$0.setAside }
-        VStack(alignment: .leading, spacing: 14) {
+        let items = store.items.filter { $0.task == task && !$0.setAside }
+        let state = BoardTimeline.workState(briefs.map { .init(date: $0.date, asked: $0.asked, outcome: $0.outcome) })
+        VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
                 let name = store.workName(ofTask: task), title = store.title(ofTask: task)
                 Text(name)
@@ -1505,55 +1520,186 @@ private struct WorkNotes: View {
                     Text(title)
                         .font(.system(size: 12.5))
                         .foregroundStyle(DeikoStyle.ink2)
-                        .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Text(span(briefs))
+                Text(span(items))
                     .font(.system(size: 11.5))
                     .foregroundStyle(DeikoStyle.ink2)
             }
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .top, spacing: 28) { blocks }
-                VStack(alignment: .leading, spacing: 14) { blocks }
+            if let asked = state.lastAsked {
+                VStack(alignment: .leading, spacing: 4) {
+                    heading("You last asked", meta: Self.day.string(from: asked.date))
+                    Text(asked.text)
+                        .font(.system(size: 12.5))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+            }
+            if let wrote = state.wroteBack {
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top, spacing: 28) { blocks(state, wrote: wrote) }
+                    VStack(alignment: .leading, spacing: 16) { blocks(state, wrote: wrote) }
+                }
+                let hidden = max(0, state.open.count - Self.folded) + max(0, state.decided.count - Self.folded)
+                if hidden > 0 || expanded {
+                    toggle(expanded ? "Show less" : "Show all \(state.open.count + state.decided.count) notes",
+                           open: expanded) { expanded.toggle() }
+                }
+            } else {
+                Text("No notes yet. When an agent finishes work here, what's left and what got decided shows up here.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(DeikoStyle.ink2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            VStack(alignment: .leading, spacing: 12) {
+                toggle("Full history", open: history) { history.toggle() }
+                    .help("Every brief in this work, and everything agents wrote back, in full")
+                if history { fullHistory }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(18)
         .background(DeikoStyle.wall, in: RoundedRectangle(cornerRadius: DeikoStyle.insetRadius))
-        .task(id: task) {
-            let text = (try? String(contentsOf: Tasks.notePath(for: task), encoding: .utf8)) ?? ""
-            note = BoardTimeline.noteSections(text)
+        .task(id: items.map(\.id).joined(separator: ",")) {
+            let sources = items.map { (id: $0.id, dir: $0.dir, date: $0.date, said: $0.line) }
+            briefs = await Task.detached(priority: .userInitiated) {
+                sources.map { b in
+                    let url = URL(fileURLWithPath: b.dir)
+                    let summary = try? String(contentsOf: url.appendingPathComponent("review-summary.txt"), encoding: .utf8)
+                    let outcome = (try? String(contentsOf: url.appendingPathComponent("outcome.md"), encoding: .utf8))
+                        .map(BoardTimeline.outcome)
+                        .flatMap { o in o.did.isEmpty && o.decided.isEmpty && o.open.isEmpty && o.files.isEmpty ? nil : o }
+                    return Brief(id: b.id, date: b.date,
+                                 asked: BoardTimeline.asked(summary: summary, narration: b.said), outcome: outcome)
+                }
+            }.value
         }
     }
 
-    @ViewBuilder private var blocks: some View {
-        block("Where it stands", note.now.isEmpty
-              ? ["Nothing written back yet. This fills in as your agent reports what it did."]
-              : note.now)
-        if !note.decided.isEmpty { block("Decided", note.decided) }
-    }
-
-    private func block(_ title: String, _ lines: [String]) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(title).font(.system(size: 12, weight: .semibold))
-            ForEach(Array(lines.prefix(6).enumerated()), id: \.offset) { _, line in
-                Self.line(line)
-                    .font(.system(size: 12))
-                    .foregroundStyle(DeikoStyle.ink2)
-                    .lineLimit(4)
-                    .fixedSize(horizontal: false, vertical: true)
+    @ViewBuilder private func blocks(_ state: BoardTimeline.WorkState, wrote: Date) -> some View {
+        let limit = expanded ? Int.max : Self.folded
+        VStack(alignment: .leading, spacing: 6) {
+            heading("Where it stands", meta: meta(wrote, agent(on: wrote)))
+            if state.open.isEmpty {
+                note("Nothing left open.")
+            } else {
+                ForEach(Array(state.open.prefix(limit).enumerated()), id: \.offset) { note($0.element.text) }
             }
         }
         .frame(maxWidth: 420, alignment: .leading)
+        if !state.decided.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                heading("Decided", meta: nil)
+                ForEach(Array(state.decided.prefix(limit).enumerated()), id: \.offset) { _, line in
+                    VStack(alignment: .leading, spacing: 1) {
+                        note(line.text)
+                        Text(meta(line.date, line.agent))
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(DeikoStyle.ink2)
+                    }
+                }
+            }
+            .frame(maxWidth: 420, alignment: .leading)
+        }
     }
 
-    /// "Last asked: …", "Still open from Sep 18: …", "Sep 18: …" — the short
-    /// lead-in before the colon carries the weight, the rest reads as prose.
-    private static func line(_ text: String) -> Text {
-        guard let colon = text.firstIndex(of: ":"), text.distance(from: text.startIndex, to: colon) <= 24 else {
-            return Text(text)
+    /// Every brief, oldest first like the cards below, each with what its
+    /// agent wrote back under the four headings; then the task's id and the
+    /// history file Deiko compiles from them.
+    private var fullHistory: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            ForEach(briefs.sorted { $0.date < $1.date }) { brief in
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text(BoardCard.stamp(brief.date))
+                        .font(.system(size: 11).monospacedDigit())
+                        .foregroundStyle(DeikoStyle.ink2)
+                        .frame(width: 118, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(brief.asked ?? "Nothing clear was said")
+                            .font(.system(size: 12))
+                            .foregroundStyle(brief.asked == nil ? DeikoStyle.ink2 : .primary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if let o = brief.outcome {
+                            section("Did", o.did)
+                            section("Decided", o.decided)
+                            section("Open", o.open)
+                            section("Files", o.files)
+                            if let agent = o.agent {
+                                Text("Written back by \(agent)")
+                                    .font(.system(size: 10.5))
+                                    .foregroundStyle(DeikoStyle.ink2)
+                            }
+                        } else {
+                            Text("No agent wrote back on this one.")
+                                .font(.system(size: 11))
+                                .foregroundStyle(DeikoStyle.ink2)
+                        }
+                    }
+                }
+            }
+            HStack(spacing: 10) {
+                Text(task)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(DeikoStyle.ink2)
+                    .textSelection(.enabled)
+                let file = Tasks.notePath(for: task)
+                if FileManager.default.fileExists(atPath: file.path) {
+                    Button("Open the history file") { NSWorkspace.shared.open(file) }
+                        .buttonStyle(TextButtonStyle())
+                        .help(file.path)
+                }
+            }
         }
-        return Text(text[...colon]).fontWeight(.medium) + Text(text[text.index(after: colon)...])
+        .textSelection(.enabled)
+    }
+
+    @ViewBuilder private func section(_ title: String, _ lines: [String]) -> some View {
+        if !lines.isEmpty {
+            (Text("\(title): ").font(.system(size: 11, weight: .semibold))
+                + Text(lines.joined(separator: " · ")).font(.system(size: 11.5)))
+                .foregroundStyle(DeikoStyle.ink2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func heading(_ title: String, meta: String?) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(title).font(.system(size: 12, weight: .semibold))
+            if let meta {
+                Text(meta).font(.system(size: 11)).foregroundStyle(DeikoStyle.ink2)
+            }
+        }
+    }
+
+    private func note(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12))
+            .foregroundStyle(DeikoStyle.ink2)
+            .fixedSize(horizontal: false, vertical: true)
+            .textSelection(.enabled)
+    }
+
+    private func toggle(_ label: String, open: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Text(label)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+                    .rotationEffect(.degrees(open ? 180 : 0))
+            }
+        }
+        .buttonStyle(TextButtonStyle())
+        .deikoFocusRingLoose()
+        .accessibilityValue(open ? "Open" : "Closed")
+    }
+
+    /// "19 Sep · Claude Code", or just the day when no agent signed it.
+    private func meta(_ date: Date, _ agent: String?) -> String {
+        [Self.day.string(from: date), agent].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    private func agent(on date: Date) -> String? {
+        briefs.first { $0.date == date }?.outcome?.agent
     }
 
     private static let day: DateFormatter = {
