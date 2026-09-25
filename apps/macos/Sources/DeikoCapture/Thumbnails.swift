@@ -24,45 +24,45 @@ import SwiftUI
 // half of the work anyway.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// NOT OBSERVABLE. It used to be, and every decode that landed told every
+/// thumbnail on the board to redraw; with a 240-image cap and more cards than
+/// that, redrawing re-requested evicted images, which landed, which redrew
+/// everything again. Each `CropThumbnail` now waits for its own image.
 @MainActor
-final class Thumbnails: ObservableObject {
+final class Thumbnails {
 
     static let shared = Thumbnails()
 
     /// Keyed by path AND size: the dashboard's 96pt tiles and the board's
-    /// 210pt cards are different images of the same file.
-    private var cache: [String: NSImage] = [:]
-    private var inFlight: Set<String> = []
-    /// Oldest first, so the cap evicts what was drawn longest ago.
-    private var order: [String] = []
+    /// 210pt cards are different images of the same file. `NSCache` evicts
+    /// the least recently used first, and gives memory back under pressure.
+    private let cache: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = 600
+        return cache
+    }()
+    /// One decode per image however many cards ask at once.
+    private var inFlight: [String: Task<NSImage?, Never>] = [:]
 
-    /// About a screenful of board at any reasonable window size. A real LRU
-    /// would track use rather than arrival; this is a cap, not a cache policy,
-    /// and the cost of a miss is one downsample.
-    // ponytail: FIFO cap, make it an LRU if profiling ever says it matters
-    private let limit = 240
+    static func key(_ path: String, maxPoints: CGFloat) -> String {
+        "\(path)#\(Int(maxPoints * (NSScreen.main?.backingScaleFactor ?? 2)))"
+    }
 
-    /// The thumbnail if we have it; otherwise nil, and a decode is started.
-    /// Callers re-render when it lands, because this is an ObservableObject.
-    func image(_ path: String, maxPoints: CGFloat) -> NSImage? {
+    /// Already decoded — the first frame of a card that has been drawn before.
+    func cached(_ key: String) -> NSImage? { cache.object(forKey: key as NSString) }
+
+    /// The thumbnail, decoded off the main thread if it is not cached.
+    func image(_ path: String, maxPoints: CGFloat) async -> NSImage? {
+        let key = Self.key(path, maxPoints: maxPoints)
+        if let hit = cached(key) { return hit }
+        if let running = inFlight[key] { return await running.value }
         let pixels = maxPoints * (NSScreen.main?.backingScaleFactor ?? 2)
-        let key = "\(path)#\(Int(pixels))"
-        if let hit = cache[key] { return hit }
-        guard !inFlight.contains(key) else { return nil }
-        inFlight.insert(key)
-        Task {
-            let image = await Self.decode(path: path, pixels: pixels)
-            inFlight.remove(key)
-            guard let image else { return }
-            cache[key] = image
-            order.append(key)
-            while order.count > limit, let oldest = order.first {
-                order.removeFirst()
-                cache.removeValue(forKey: oldest)
-            }
-            objectWillChange.send()
-        }
-        return nil
+        let task = Task { await Self.decode(path: path, pixels: pixels) }
+        inFlight[key] = task
+        let image = await task.value
+        inFlight[key] = nil
+        if let image { cache.setObject(image, forKey: key as NSString) }
+        return image
     }
 
     /// `nonisolated` so the decode runs off the main actor — the whole point.
@@ -93,10 +93,13 @@ struct CropThumbnail: View {
     let height: CGFloat
     var radius: CGFloat = 9
 
-    @ObservedObject private var thumbnails = Thumbnails.shared
+    @State private var loaded: NSImage?
+
+    private var maxPoints: CGFloat { max(width ?? height * 2, height) }
+    private var key: String { Thumbnails.key(path, maxPoints: maxPoints) }
 
     var body: some View {
-        let image = thumbnails.image(path, maxPoints: max(width ?? height * 2, height))
+        let image = loaded ?? Thumbnails.shared.cached(key)
         return Group {
             if let image {
                 Image(nsImage: image)
@@ -120,5 +123,6 @@ struct CropThumbnail: View {
                 .strokeBorder(DeikoStyle.hairline, lineWidth: 1)
         )
         .accessibilityHidden(true)
+        .task(id: key) { loaded = await Thumbnails.shared.image(path, maxPoints: maxPoints) }
     }
 }
