@@ -18,9 +18,11 @@
 //     forwarded; there is no upload directory to forget to clean;
 //   • log content — a line is a status, a duration and a token prefix, never a
 //     word of what was said;
-//   • see anything except narration — crops, OCR, window titles and
-//     accessibility text never leave the user's Mac, and no route here accepts
-//     them.
+//   • see raw screen content — crops, OCR, screen text and screenshots never
+//     leave the user's Mac. `/v1/classify` accepts window and page titles and
+//     the labels read from them (pages, sites, web addresses — host and path
+//     only, never the part after "?" — files, repo, docs, tickets) plus
+//     open-document names; every other route still takes narration alone.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
@@ -178,9 +180,9 @@ const summarySystem = (native) => [
 // A RELEASED APP MAY STILL SEND THE OLD BODY. `legacyClassifyRequest` keeps
 // today's single-request "which of these tasks is it" shape working for
 // 0.5.0 installs until they update — chosen by a body with no `version`, or
-// one below 3. `classifyRequest`/`secondLookRequest`/`finalists` are the v3
-// shape, and are exported so it is testable without a network;
-// `legacyClassifyRequest` stays private, called only from this route.
+// one below 3. `classifyRequest` is the v3 shape, and is exported so it is
+// testable without a network; `secondLookRequest`, `finalists` and
+// `legacyClassifyRequest` stay private, called only from this route.
 // WHO ANSWERS THE QUESTIONS, and why there are two of them.
 //
 // TypeSafe paused new signups two days after opening them, so a key from them
@@ -367,17 +369,24 @@ function legacyClassifyRequest(sent) {
 
 // ── v3: round 1 (every question at once) and round 2 (the finalists alone) ─
 
-/// Twenty tasks and twenty collections — collections' labels appear TWICE
-/// (once in `state`, once again as a Choice option), so an uncapped 60 could
-/// have pushed a full request past Jev's own limit (~150k characters). Both
-/// caps together still leave this comfortably under `MAX_CLASSIFY_BYTES`.
 export const MAX_CLASSIFY_BYTES = 192 * 1024;
+/// Twenty tasks and twenty collections — collections' labels appear TWICE
+/// (once in `state`, once again as a Choice option). MEASURED: plain-ASCII
+/// text at every cap here produces a 162,083-character round-one request (a
+/// 132 KB body, comfortably under `MAX_CLASSIFY_BYTES`) and a
+/// 25,296-character round-two request. At 3-4 characters per token that is
+/// roughly 40-54k tokens, under the design's ~64k-token limit (§ Relay) but
+/// not by a wide margin — token-dense input (punctuation, ids, Devanagari)
+/// that stays under the byte cap can still cross the token one. Honest
+/// boards measure far below these caps; a caller who hits the token limit
+/// pays for a 4xx and gets no refund, which only wastes their own call.
 const CLASSIFY_LIMITS = {
   narration: 2000, summary: 600, apps: 10, repoHints: 5, titles: 30, title: 200,
   collections: 20, name: 200, tasks: 20, now: 400, decided: 300, outcome: 300, label: 120,
 };
 /// Labels that may travel — `components` never does (see scripts/lib/labels.mjs).
-const BRIEF_KEYS = ["pages", "sites", "urls", "files", "repo", "docs", "errors", "tickets"];
+/// `errors` never does either: an error line is screen text, not a name.
+const BRIEF_KEYS = ["pages", "sites", "urls", "files", "repo", "docs", "tickets"];
 const TASK_KEYS = ["pages", "sites", "files", "tickets"];
 
 /// ponytail: starting values, tuned on the filing eval (scripts/eval-filing.mjs).
@@ -473,7 +482,7 @@ export function classifyRequest(sent) {
 }
 
 /** The careful second look: the brief and ONE task, nothing else to sway it. */
-export function secondLookRequest(request, id) {
+function secondLookRequest(request, id) {
   return {
     state: { brief: request.state.brief, task: { id, ...request.state.tasks[id] } },
     questions: {
@@ -489,7 +498,7 @@ const yes = (a) => {
 };
 
 /** Which tasks get a second look: at most two, each ≥ 0.35, none when the gate says no. */
-export function finalists(answers, ids) {
+function finalists(answers, ids) {
   // `Number.isFinite`, NOT `yes()`'s coercing version: a gate Jev answered
   // with an unreadable noul (`null`, a string, …) must read as MISSING, not
   // as a confident 0 — `Number(null)` is itself finite (0), so coercing
@@ -1393,7 +1402,6 @@ export async function handle({ method, path, query = "", token, contentType, bod
     // `V3_BUDGET_MS` — and is skipped outright once under a second remains,
     // rather than starting a request that cannot finish before the client
     // has already given up.
-    const budgetStart = Date.now();
     // Round 1 is held to the same budget: a Jev that answers after the client
     // has given up is a timeout (refunded), not a classify nobody receives.
     const first = await askJev(request, V3_BUDGET_MS);
@@ -1411,16 +1419,18 @@ export async function handle({ method, path, query = "", token, contentType, bod
     // get a request of their own. A second look that fails is simply absent:
     // the client then cannot join, and asks instead — never a failed brief.
     const second = {};
-    const remaining = V3_BUDGET_MS - (Date.now() - budgetStart);
+    const remaining = V3_BUDGET_MS - (Date.now() - now);
     if (remaining >= 1000) {
       await Promise.all(finalists(answers, Object.keys(request.state.tasks)).map(async (id) => {
         const look = secondLookRequest(request, id);
         let out = await askJev(look, remaining);
-        // ONE RETRY on an upstream 5xx while budget is left: the gateway
+        // ONE RETRY on a provider fault while budget is left: the gateway
         // drops the odd request (4 × 503 in one 33-brief eval run), and a
-        // lost second look turns a clear join into a "Which one?".
-        const left = V3_BUDGET_MS - (Date.now() - budgetStart);
-        if (out.status >= 500 && left >= 1000) out = await askJev(look, left);
+        // lost second look turns a clear join into a "Which one?". A
+        // deterministic caller-fault 4xx (`CALLERS_FAULT`, in `proxy`) is NOT
+        // retried — Jev will answer it the same way again.
+        const left = V3_BUDGET_MS - (Date.now() - now);
+        if (out.providerFault && left >= 1000) out = await askJev(look, left);
         if (out.status !== 200) return;
         try {
           const answered = JSON.parse(out.body);

@@ -151,9 +151,11 @@ than an oversight:
 - **No content in logs.** A line is a timestamp, method, path, status, duration
   and a 12-character fingerprint of the token — never the token, never a word
   of what was said.
-- **Nothing but narration ever arrives.** Crops, OCR, window titles and
-  accessibility text never leave the user's Mac, and no endpoint here accepts
-  them.
+- **No raw screen content, ever.** Crops, OCR, screen text and screenshots
+  never leave the user's Mac. `/v1/classify` accepts window and page titles
+  and the labels read from them — pages, sites, web addresses (host and path
+  only, never the part after "?"), files, repo, docs, tickets — plus
+  open-document names; every other endpoint still takes narration alone.
 
 ## What the token is, and is not
 

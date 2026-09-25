@@ -17,6 +17,8 @@ import { createServer } from "node:http";
 
 import { createHmac } from "node:crypto";
 
+import { GATE as CLIENT_GATE, ASK as CLIENT_ASK, RELATIONS as CLIENT_RELATIONS } from "../../../scripts/lib/context.mjs";
+
 import {
   CLASSIFIES_PER_CALLER_PER_DAY,
   FREE_TRIAL_SECONDS,
@@ -164,6 +166,9 @@ function stubFetch() {
 let handle;
 let logLine;
 let fullRows;
+let GATE;
+let SECOND_LOOK;
+let RELATION_RUBRIC;
 
 before(async () => {
   server = createServer((req, res) => {
@@ -196,7 +201,7 @@ before(async () => {
   process.env.GROQ_API_KEY = "test-groq";
   process.env.TYPESAFE_API_KEY = "test-typesafe";
 
-  ({ handle, logLine, fullRows } = await import("../relay.mjs"));
+  ({ handle, logLine, fullRows, GATE, SECOND_LOOK, RELATION_RUBRIC } = await import("../relay.mjs"));
 });
 
 after(() => server?.close());
@@ -736,6 +741,31 @@ test("a present but unreadable gate does not stop the second look", async () => 
     : { model: "jev-1.13.0", answers: { same_task: { noul: 0.9 }, relation: { score: 2 } } });
   const r = await classify("dev_badgate", { version: 3, narration: "the pricing bug again", tasks: tasksOf(3) });
   assert.deepEqual(Object.keys(JSON.parse(r.body).second), [A]);
+});
+
+// GATE, SECOND_LOOK.min and RELATION_RUBRIC are hand-tuned thresholds
+// MIRRORED in scripts/lib/context.mjs as GATE, ASK and RELATIONS (comments on
+// both sides say "change both"). Nothing enforced that beyond the comment, so
+// one side could be retuned on the eval and the other left behind with no
+// test failing. This gives the mirror a job.
+test("the relay's thresholds stay in step with scripts/lib/context.mjs's mirrors", () => {
+  assert.equal(GATE, CLIENT_GATE, "relay.mjs GATE and context.mjs GATE must be the same cutoff");
+  assert.ok(SECOND_LOOK.min <= CLIENT_ASK,
+    "a second look must not floor higher than the client's own ASK line, or the client asks about tasks the relay never looked at again");
+  assert.equal(RELATION_RUBRIC.length, CLIENT_RELATIONS.length, "same number of relation levels on both sides");
+  assert.equal(RELATION_RUBRIC[0].startsWith("different"), true, "same order: different first");
+  assert.equal(RELATION_RUBRIC.at(-1).startsWith("same"), true, "same order: same last");
+});
+
+test("an errors key in a brief's labels never reaches Jev", async () => {
+  await classify("dev_noerrors", {
+    version: 3,
+    narration: "the pricing bug again",
+    keys: { pages: ["Signups"], errors: ["TypeError: x is not a function"] },
+  });
+  const sent = JSON.parse(upstreamBodies.at(-1));
+  assert.equal("errors" in sent.state.brief.keys, false, "the errors label never leaves the Mac");
+  assert.equal(JSON.stringify(sent).includes("is not a function"), false);
 });
 
 test("a round two reply with no answers object leaves that task out of second", async () => {
