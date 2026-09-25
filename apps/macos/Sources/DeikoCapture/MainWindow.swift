@@ -479,7 +479,19 @@ final class SessionsStore: ObservableObject {
 
     /// Put a brief in another task. Re-rendered, because the prompt carries
     /// the task — unlike a collection move, which changes nothing it says.
+    /// The board window's, set by `BoardPane`: every move is one ⌘Z.
+    weak var undoManager: UndoManager?
+
     func move(_ item: Item, toTask id: String) {
+        // UNDO PUTS BACK EXACTLY WHAT WAS THERE — the file as it was, not a
+        // second move, which would stamp the brief as placed by hand.
+        let file = SessionContext.path(sessionDir: item.dir)
+        let before = try? Data(contentsOf: file)
+        let shown = items.first { $0.id == item.id }
+        undoManager?.registerUndo(withTarget: self) { store in
+            store.restore(item, file: file, before: before, shown: shown, redo: id)
+        }
+        undoManager?.setActionName("Move to \(workName(ofTask: id))")
         var context = SessionContext.read(sessionDir: item.dir) ?? SessionContext()
         context.placeTask(id)
         try? context.write(sessionDir: item.dir)
@@ -493,6 +505,16 @@ final class SessionsStore: ObservableObject {
             items[index].maybe = nil
             if items[index].related == id { items[index].related = nil }
         }
+        Task {
+            _ = try? await BriefPipeline.rerender(sessionDir: item.dir)
+            await load(root: root)
+        }
+    }
+
+    private func restore(_ item: Item, file: URL, before: Data?, shown: Item?, redo id: String) {
+        if let before { try? before.write(to: file, options: .atomic) } else { try? FileManager.default.removeItem(at: file) }
+        if let shown, let index = items.firstIndex(where: { $0.id == item.id }) { items[index] = shown }
+        undoManager?.registerUndo(withTarget: self) { $0.move(item, toTask: id) }
         Task {
             _ = try? await BriefPipeline.rerender(sessionDir: item.dir)
             await load(root: root)
@@ -585,8 +607,8 @@ final class SessionsStore: ObservableObject {
         return tally.sorted { $0.value > $1.value }.prefix(4).map { ($0.key, $0.value) }
     }
 
-    /// Forget one session, on disk and here. The confirmation lives with the
-    /// caller — this is the part that cannot be undone.
+    /// Forget one session: to the Trash, and off the board. The confirmation
+    /// lives with the caller.
     func delete(_ item: Item) {
         guard Sessions.delete(dir: item.dir) else { return }
         items.removeAll { $0.id == item.id }
@@ -821,6 +843,7 @@ private struct DashboardPane: View {
 
 private struct BoardPane: View {
     @ObservedObject var sessions: SessionsStore
+    @Environment(\.undoManager) private var undoManager
     @ObservedObject private var nav = MainNav.shared
     @State private var query = ""
     @State private var filter: Filter = .all
@@ -1013,6 +1036,8 @@ private struct BoardPane: View {
                 .padding(.bottom, 28)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .onAppear { sessions.undoManager = undoManager }
+            .onChange(of: undoManager) { _, manager in sessions.undoManager = manager }
             // EMPTY SPACE IS A PLACE TO DROP. A card's own destination wins
             // over this one, so only a drop between or below cards lands here.
             .dropDestination(for: String.self) { ids, _ in
@@ -1866,8 +1891,8 @@ struct SessionMenu: View {
         let alert = NSAlert()
         alert.alertStyle = .critical
         alert.messageText = "Delete this session?"
-        alert.informativeText = "\(item.title)\n\nRemoves the brief and its "
-            + "\(item.crops.count) screenshot\(item.crops.count == 1 ? "" : "s"). This cannot be undone."
+        alert.informativeText = "\(item.title)\n\nMoves the brief and its "
+            + "\(item.crops.count) screenshot\(item.crops.count == 1 ? "" : "s") to the Trash."
         alert.addButton(withTitle: "Delete")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }

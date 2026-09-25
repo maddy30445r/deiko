@@ -196,7 +196,14 @@ enum Sessions {
     static func delete(dir: String) -> Bool {
         let name = (dir as NSString).lastPathComponent
         guard stamp(name) != nil else { return false }
-        return (try? FileManager.default.removeItem(atPath: dir)) != nil
+        return trash(dir)
+    }
+
+    /// TO THE TRASH, as Finder deletes — a session deleted by mistake is one
+    /// drag back, not gone. The launch sweep, which nobody asked for in the
+    /// moment, still removes outright; it is off unless somebody set it.
+    static func trash(_ path: String) -> Bool {
+        (try? FileManager.default.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: nil)) != nil
     }
 
     /// Remove every past session. The open one, if any, survives.
@@ -209,7 +216,7 @@ enum Sessions {
         let openName = open.map { ($0 as NSString).lastPathComponent }
         var removed = 0
         for name in list(root: root) where name != openName {
-            if (try? FileManager.default.removeItem(atPath: "\(root)/\(name)")) != nil {
+            if trash("\(root)/\(name)") {
                 removed += 1
             }
         }

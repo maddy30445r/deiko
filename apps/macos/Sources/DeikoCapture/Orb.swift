@@ -394,7 +394,7 @@ final class OrbController: NSObject {
         alert.alertStyle = .critical
         alert.messageText = "Delete this session?"
         alert.informativeText =
-            "The brief and its screenshots are removed from \(dir). This cannot be undone."
+            "The brief and its screenshots go to the Trash."
         alert.addButton(withTitle: "Delete")
         alert.addButton(withTitle: "Cancel")
         // ABOVE THE ORB, explicitly. An alert opens at the modal-panel level
@@ -440,7 +440,7 @@ final class OrbController: NSObject {
         // could also return early and do nothing at all, having just told the
         // user it would.
         do {
-            try FileManager.default.removeItem(atPath: dir)
+            guard Sessions.trash(dir) else { throw CocoaError(.fileWriteUnknown) }
             Emit.log("✕ session \((dir as NSString).lastPathComponent) deleted from the review panel")
         } catch {
             Emit.log("✕ could not delete \(dir): \(error.localizedDescription)")

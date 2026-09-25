@@ -1811,7 +1811,7 @@ struct ReviewView: View {
             // screenshots.
             Button("Delete session…", role: .destructive) { onDelete() }
                 .disabled(!isApprovable)
-                .help("Remove this session's brief and screenshots from disk.")
+                .help("Move this session's brief and screenshots to the Trash.")
             // Left of the primary action and unstyled, because it is the rarer
             // choice — but it must be reachable from the same place you decide
             // the brief is not complete.

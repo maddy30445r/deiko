@@ -599,7 +599,7 @@ struct SettingsView: View {
                             "Removes \(model.sessionCount) session\(model.sessionCount == 1 ? "" : "s") "
                             + "and their screenshots, and the task notes made from them. "
                             + "A session being recorded right now is kept. "
-                            + "This cannot be undone."
+                            + "The sessions go to the Trash; the task notes are deleted."
                         alert.addButton(withTitle: "Delete")
                         alert.addButton(withTitle: "Cancel")
                         guard alert.runModal() == .alertFirstButtonReturn else { return }
