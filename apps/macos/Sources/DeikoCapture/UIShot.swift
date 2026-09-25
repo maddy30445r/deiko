@@ -287,8 +287,8 @@ enum UIShot {
     private static func shoot<V: View>(_ view: V, size: NSSize, look: NSAppearance, to path: String) {
         let host = NSHostingView(rootView: view)
         host.frame = NSRect(origin: .zero, size: size)
-        let window = NSWindow(
-            contentRect: NSRect(origin: NSPoint(x: 80, y: 80), size: size),
+        let window = ShotWindow(
+            contentRect: NSRect(origin: NSPoint(x: -30_000, y: -30_000), size: size),
             styleMask: titled ? [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView] : [.borderless],
             backing: .buffered, defer: false
         )
@@ -300,12 +300,15 @@ enum UIShot {
         window.contentView = host
         window.isOpaque = false
         window.backgroundColor = .clear
-        // KEY, not merely visible. macOS draws accented controls — a tinted
-        // progress bar, a focus ring — in grey when their window is not key,
-        // so a shot of an inactive window reports a design bug that is not
-        // there.
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        // OFF SCREEN AND NEVER ACTIVATED: a run of shots used to throw a
+        // window in front of whatever somebody was working in, forty times.
+        // `ShotWindow` still answers "key", because macOS draws accented
+        // controls — a tinted progress bar, a focus ring — in grey in a
+        // window that is not, and the shot would report a bug that is not
+        // there. `cacheDisplay` draws the view itself, wherever it sits.
+        window.alphaValue = 0
+        window.ignoresMouseEvents = true
+        window.orderFrontRegardless()
         RunLoop.current.run(until: Date().addingTimeInterval(0.8))
 
         guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return }
@@ -314,6 +317,13 @@ enum UIShot {
             .write(to: URL(fileURLWithPath: path))
         window.orderOut(nil)
     }
+}
+
+/// A window that draws as the key window without being made one, and stays
+/// where it is put — off every screen (see `UIShot.shoot`).
+private final class ShotWindow: NSWindow {
+    override var isKeyWindow: Bool { true }
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 }
 
 /// States `ui-shot` poses that no click can reach in a still picture: the
