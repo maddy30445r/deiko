@@ -856,13 +856,20 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSWorkspace.shared.open(URL(fileURLWithPath: root))
     }
 
-    @objc private func quit() {
-        // Route through the same close-out as the button, so quitting can never
-        // truncate a session that still has crops in flight.
+    @objc private func quit() { NSApp.terminate(nil) }
+
+    /// EVERY QUIT CLOSES THE SESSION OUT FIRST — this menu's Quit, ⌘Q from the
+    /// app menu, a relaunch, logout and restart all land here. Only the menu's
+    /// Quit used to stop the recorder, so the others cut a live session off
+    /// mid-crop: its WAV never finished, and it came back as an unfinished
+    /// recording. The stop is the one the button does, crops in flight and all.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard recorder.sessionDir != nil else { return .terminateNow }
         Task { @MainActor in
             await recorder.stop()
-            NSApplication.shared.terminate(nil)
+            sender.reply(toApplicationShouldTerminate: true)
         }
+        return .terminateLater
     }
 
     func menuWillOpen(_ menu: NSMenu) {
