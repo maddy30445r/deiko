@@ -283,11 +283,11 @@ final class SettingsModel: ObservableObject {
             // this sentence exists to avoid, just moved one line down.
             let goesToGroq = "Your narration goes straight to Groq with your key. \(narration.comesBackAs)"
             guard sortBriefs, Credentials.relayURL != nil else { return goesToGroq }
-            return goesToGroq + " To sort each brief into its task, what you said, a one-line summary, your window and page titles, web addresses (just the host and path, never what's after the ?), open document names and notes on earlier work go to Deiko, which passes them to a sorting model and keeps nothing."
+            return goesToGroq + " To sort each brief into its task, what you said, a one-line summary, your window and page titles, web addresses (just the host and path, never what's after the ?), open document names and notes on earlier work go to Deiko, which passes them to TypeSafe's Jev sorting model and keeps nothing."
         }
         if Credentials.relayURL != nil {
             let ownKey = sortBriefs
-                ? "Add your own key below and transcription and the summary happen at Groq instead; sorting still sends what you said, a one-line summary, your window and page titles, web addresses (just the host and path, never what's after the ?), open document names and notes on earlier work through Deiko, which keeps nothing."
+                ? "Add your own key below and transcription and the summary happen at Groq instead; sorting still sends what you said, a one-line summary, your window and page titles, web addresses (just the host and path, never what's after the ?), open document names and notes on earlier work through Deiko to TypeSafe's Jev sorting model; Deiko keeps nothing."
                 : "Add your own key below and transcription and the summary happen at Groq instead."
             return isPro
                 ? "Your narration goes to Deiko, which passes it to a transcription service and keeps nothing. \(narration.comesBackAs) \(ownKey)"
@@ -347,7 +347,7 @@ struct SettingsView: View {
                 SectionLabel("Transcription")
                 language
                 keys
-                Text("Keys never leave the login keychain. Your recording is deleted as soon as the brief is made — what stays on this Mac is the brief and its screenshots.")
+                Text("Keys are kept in your login keychain. Your recording is deleted as soon as the brief is made — what stays on this Mac is the brief and its screenshots. If a brief fails, its recording stays until you delete that session.")
                     .font(.system(size: 11))
                     .foregroundStyle(DeikoStyle.ink2)
                     .fixedSize(horizontal: false, vertical: true)
@@ -444,7 +444,7 @@ struct SettingsView: View {
                     set: { model.setSortBriefs($0) }
                 ))
                 .font(.system(size: 13))
-                Text("Files each brief with the earlier work it belongs to. To do that, what you said, a one-line summary, your window and page titles, web addresses (just the host and path, never what's after the ?), open document names and notes on earlier work go to Deiko's relay, which keeps nothing. Off: nothing is sent to file them, and a new brief joins earlier work only when you move it there or it's a short follow-up on the same window.")
+                Text("Files each brief with the earlier work it belongs to. To do that, what you said, a one-line summary, your window and page titles, web addresses (just the host and path, never what's after the ?), open document names and notes on earlier work go through Deiko's relay to TypeSafe's Jev sorting model; the relay keeps nothing. Off: nothing is sent to file them, and a new brief joins earlier work only when you move it there or it's a short follow-up on the same window.")
                     .font(.system(size: 11))
                     .foregroundStyle(DeikoStyle.ink2)
                     .fixedSize(horizontal: false, vertical: true)

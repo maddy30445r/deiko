@@ -310,7 +310,7 @@ struct WelcomeView: View {
         guard model.keyPresent else { return "optional — transcription works without one" }
         let local = "in your login keychain — transcription and the summary go straight to Groq"
         guard Credentials.filesBriefs else { return local }
-        return local + "; to sort briefs, what you said and notes on earlier work pass through Deiko to a sorting model, and Deiko keeps nothing"
+        return local + "; to sort briefs, what you said and notes on earlier work pass through Deiko to TypeSafe's Jev sorting model, and Deiko keeps nothing"
     }
 
     private var setupRows: some View {

@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE LICENCE — WHICH IS NOT AN ACCOUNT
@@ -54,25 +55,44 @@ enum License {
     private static let quotaName = "DEIKO_QUOTA_CACHE"
 
     /// The key the user pasted, or nil.
+    ///
+    /// IN THE KEYCHAIN, beside the Groq key. It sat in plain preferences —
+    /// readable by anything that can read `~/Library/Preferences` — while
+    /// Settings said keys are kept in the keychain. A key still in the old
+    /// place moves across the first time it is read.
+    ///
+    /// READ ONCE PER LAUNCH. Settings redraws and every menu open ask for it,
+    /// and a keychain miss is not cached below, so each ask went to the
+    /// keychain — it made a render of the windows take minutes.
     static var key: String? {
-        let stored = UserDefaults.standard.string(forKey: keyName)
-        guard let stored, !stored.isEmpty else { return nil }
-        return stored
+        if let known = memo.withLock({ $0 }) { return known }
+        let defaults = UserDefaults.standard
+        if let old = defaults.string(forKey: keyName) {
+            defaults.removeObject(forKey: keyName)
+            if !old.isEmpty { Credentials.store(old, for: keyName) }
+        }
+        let value = Credentials.value(for: keyName)
+        memo.withLock { $0 = .some(value) }
+        return value
     }
+
+    /// `key`, once read: nil until then, `.some(nil)` for "no key".
+    private static let memo = OSAllocatedUnfairLock<String??>(initialState: nil)
 
     /// Store or clear. Clearing forgets the cached verdict too — a removed key
     /// must not leave the app believing it is still Pro for a week.
     static func store(_ value: String) {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         let defaults = UserDefaults.standard
+        Credentials.store(trimmed, for: keyName)
+        memo.withLock { $0 = .some(trimmed.isEmpty ? nil : trimmed) }
+        defaults.removeObject(forKey: keyName)
         guard !trimmed.isEmpty else {
-            defaults.removeObject(forKey: keyName)
             defaults.removeObject(forKey: tierName)
             defaults.removeObject(forKey: checkedName)
             defaults.removeObject(forKey: quotaName)
             return
         }
-        defaults.set(trimmed, forKey: keyName)
         // The tier is NOT assumed here. Whether this key is worth anything is
         // the relay's answer, and `refresh()` is what asks.
         defaults.removeObject(forKey: tierName)

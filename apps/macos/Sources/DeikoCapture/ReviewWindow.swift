@@ -1799,7 +1799,7 @@ struct ReviewView: View {
                 // unless their own sentence changed, and how many did not is
                 // reported beside the thumbnails, so this line can go back to
                 // saying the one thing that is always true here.
-                Text("Nothing is sent until you throw the coin.")
+                Text("Nothing goes to your agent until you throw the coin.")
                     .font(.system(size: 12))
                     .foregroundStyle(DeikoStyle.ink2)
             }
@@ -1825,7 +1825,7 @@ struct ReviewView: View {
             .keyboardShortcut(.defaultAction)
             .tint(DeikoStyle.accent)
             .disabled(!isApprovable)
-            .help("Apply your correction and return to the coin. Nothing is sent until you throw it.")
+            .help("Apply your correction and return to the coin. Nothing goes to your agent until you throw it.")
         }
         .padding(20)
     }

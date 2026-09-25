@@ -1370,7 +1370,7 @@ struct OrbRootView: View {
         // said to the relay. Here because every brief passes this card, and
         // the next one never shows it again — nothing to dismiss.
         if model.sortingNotice {
-            Text("Deiko can now sort briefs into tasks. To do that it sends what you said, a one-line summary, your window and page titles, web addresses (just the host and path, never what's after the ?), open document names and notes on earlier work to its relay, which keeps nothing. You can turn this off in Settings.")
+            Text("Deiko can now sort briefs into tasks. To do that it sends what you said, a one-line summary, your window and page titles, web addresses (just the host and path, never what's after the ?), open document names and notes on earlier work through its relay to TypeSafe's Jev sorting model; the relay keeps nothing. You can turn this off in Settings.")
                 .font(.system(size: 11))
                 .foregroundStyle(DeikoStyle.ink2)
                 .fixedSize(horizontal: false, vertical: true)
