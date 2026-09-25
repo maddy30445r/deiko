@@ -25,6 +25,15 @@ enum UIShot {
         let out = args.string("out") ?? "/tmp/deiko-ui"
         titled = args.has("titled")
         let root = args.string("root") ?? Sessions.defaultRoot
+        // Never read or write the real seen-markers: a shot must not use up
+        // somebody's one showing of "Added to … · Undo".
+        SessionsStore.seenDefaults = nil
+        let store = SessionsStore.shared
+        Task { await store.load(root: root) }
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+        // One filing still announcing — the newest — as the board looks the
+        // first time it is opened after Deiko filed it.
+        store.seen = Set(store.items.filter(\.filedByDeiko).dropFirst().map(\.id))
 
         for (name, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
             guard let look = NSAppearance(named: appearance) else { continue }
@@ -48,14 +57,30 @@ enum UIShot {
                 size: NSSize(width: 980, height: 1500), look: look,
                 to: "\(out)-settings-full-\(name).png"
             )
-            // THE WHOLE BOARD, tall enough to show shelves, "On their own" and
-            // odds and ends together — 900pt showed two shelves and nothing else.
+            // THE WHOLE BOARD, tall enough to run the timeline back past this
+            // week into the months, set-aside briefs and all.
             MainNav.shared.section = .board
             shoot(
                 MainWindowView(openSessionDir: nil, sessionRoot: root),
                 size: NSSize(width: 980, height: 2900), look: look,
                 to: "\(out)-board-full-\(name).png"
             )
+            // A brief held over the second card, and the board opened on the
+            // biggest piece of work — neither reachable by a still first paint.
+            UIShotPose.dropTarget = store.items.dropFirst().first?.id
+            shoot(
+                MainWindowView(openSessionDir: nil, sessionRoot: root),
+                size: NSSize(width: 980, height: 660), look: look,
+                to: "\(out)-board-drop-\(name).png"
+            )
+            UIShotPose.dropTarget = nil
+            UIShotPose.work = store.workCounts.max { $0.value < $1.value }?.key
+            shoot(
+                MainWindowView(openSessionDir: nil, sessionRoot: root),
+                size: NSSize(width: 980, height: 1000), look: look,
+                to: "\(out)-board-work-\(name).png"
+            )
+            UIShotPose.work = nil
             shoot(orbCard(), size: NSSize(width: 400, height: 130), look: look, to: "\(out)-orb-\(name).png")
             shoot(orbReady(), size: NSSize(width: 400, height: 190), look: look, to: "\(out)-orbready-\(name).png")
             shoot(orbReady(notice: true), size: NSSize(width: 400, height: 250), look: look,
@@ -95,7 +120,7 @@ enum UIShot {
             }
         }
 
-        Emit.log("wrote \(out)-{welcome,orb,orbready,orbnotice,orbsent,review,review-odds,review-related,dashboard,board,board-shelf,board-spine,personas,settings,settings-full}-{light,dark}.png")
+        Emit.log("wrote \(out)-{welcome,orb,orbready,orbnotice,orbsent,review,review-odds,review-related,dashboard,board,board-full,board-drop,board-work,personas,settings,settings-full}-{light,dark}.png")
     }
 
     /// The collapsed card, mid-session: the state the orb spends most of its
@@ -255,4 +280,12 @@ enum UIShot {
             .write(to: URL(fileURLWithPath: path))
         window.orderOut(nil)
     }
+}
+
+/// States `ui-shot` poses that no click can reach in a still picture: the
+/// board opened on one piece of work, and a card with a brief held over it.
+@MainActor
+enum UIShotPose {
+    static var work: String?
+    static var dropTarget: String?
 }

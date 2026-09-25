@@ -113,6 +113,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         // Back to the menu bar. Not on minimize: a minimized window needs
         // its Dock tile to come back from.
+        SessionsStore.shared.windowClosed()
         if holdsDock {
             DockPresence.release()
             holdsDock = false
@@ -357,33 +358,45 @@ final class SessionsStore: ObservableObject {
         /// Where this brief sits in what Deiko remembers — see `Context.swift`.
         /// All three come from the same detached pass that reads the manifest,
         /// so the memory costs the board one more small decode per session.
-        let collection: String?
+        var collection: String?
         /// The task this brief belongs to; its own when nobody moved it. An
         /// odds brief still carries its own id here but is in no task, so
         /// every lookup by task id skips it.
-        let task: String
-        /// In odds and ends: in no task, shown together at the board's end.
-        let odds: Bool
+        var task: String
+        /// In odds and ends: in no task, set aside in the timeline.
+        var odds: Bool
         /// The first line an agent wrote back about what it did, if one did.
         let outcome: String?
-        /// No brief.json: a recording that never finished rendering. Shown in
-        /// odds and ends as "Unfinished recording".
+        /// No brief.json: a recording that never finished rendering. Set
+        /// aside as "Unfinished recording".
         /// ponytail: a brief mid-pipeline reads as unfinished for the seconds
         /// before its first render; the board reloads when it lands.
         let unfinished: Bool
         /// A brief.json exists but this build could not decode it — an older
         /// schema, or a write that was cut short. Distinct from `unfinished`:
         /// the recording finished, this build just can't read what it wrote.
-        /// Shown alongside it in odds and ends, as "Couldn't read this brief".
+        /// Set aside alongside it, as "Couldn't read this brief".
         let unreadable: Bool
         /// The likeliest task the classifier asked "Which one?" about, while
         /// this brief is still its own task — the board's "Looks like …?".
-        let maybe: String?
+        var maybe: String?
         /// A task this brief is related to but not part of.
-        let related: String?
+        var related: String?
+        /// Deiko put this brief in another brief's task on its own — the card
+        /// says "Added to … · Undo" until it has been seen once.
+        var filedByDeiko: Bool
+
+        /// Odds and ends and recordings that never finished: in the timeline
+        /// with everything else, but quiet, and in no task.
+        var setAside: Bool { odds || unfinished || unreadable }
     }
 
-    @Published private(set) var items: [Item] = []
+    @Published private(set) var items: [Item] = [] {
+        didSet { workCounts = BoardTimeline.workCounts(items.map { $0.setAside ? nil : $0.task }) }
+    }
+    /// Briefs per task, set-aside ones in none. A card wears its task's tag
+    /// only where this is 2 or more.
+    @Published private(set) var workCounts: [String: Int] = [:]
     @Published private(set) var loaded = false
     /// The projects briefs are filed under, reloaded beside them: a collection
     /// created by the classifier during a brief must appear on the board
@@ -444,6 +457,15 @@ final class SessionsStore: ObservableObject {
         context.placeTask(id)
         try? context.write(sessionDir: item.dir)
         SessionContext.noteCorrection(sessionDir: item.dir, task: id)
+        // On the board at once — a drag that takes a re-render to land reads
+        // as a drag that did nothing. The reload after it says the same.
+        if let index = items.firstIndex(where: { $0.id == item.id }) {
+            items[index].task = id
+            items[index].odds = false
+            items[index].filedByDeiko = false
+            items[index].maybe = nil
+            if items[index].related == id { items[index].related = nil }
+        }
         Task {
             _ = try? await BriefPipeline.rerender(sessionDir: item.dir)
             await load(root: root)
@@ -484,12 +506,43 @@ final class SessionsStore: ObservableObject {
         guard let index = items.firstIndex(where: { $0.id == item.id }) else { return }
         if let was = item.collection { counts[was, default: 1] -= 1 } else { unsortedCount -= 1 }
         if let now = collection { counts[now, default: 0] += 1 } else { unsortedCount += 1 }
-        items[index] = Item(
-            id: item.id, dir: item.dir, date: item.date, line: item.line,
-            crops: item.crops, apps: item.apps, repo: item.repo,
-            collection: collection, task: item.task, odds: item.odds, outcome: item.outcome,
-            unfinished: item.unfinished, unreadable: item.unreadable, maybe: item.maybe, related: item.related
-        )
+        items[index].collection = collection
+    }
+
+    // ── "Added to … · Undo", shown once ─────────────────────────────────────
+
+    /// Where the seen-markers live. Nil in `ui-shot`, which must never mark
+    /// a real brief as seen.
+    nonisolated(unsafe) static var seenDefaults: UserDefaults? = .standard
+    private static let seenKey = "DEIKO_FILING_SEEN"
+    /// Brief ids whose filing has had its one showing. Internal so `ui-shot`
+    /// can pose which ones still announce.
+    var seen: Set<String> = Set(SessionsStore.seenDefaults?.stringArray(forKey: SessionsStore.seenKey) ?? [])
+    /// Shown while this window has been open: seen now, but not taken away
+    /// from under the pointer mid-look. Cleared when the window closes.
+    private var showing: Set<String> = []
+
+    func announces(_ item: Item) -> Bool {
+        item.filedByDeiko && (showing.contains(item.id) || !seen.contains(item.id))
+    }
+
+    /// Called as the card comes on screen.
+    func sawFiling(_ item: Item) {
+        guard announces(item), !seen.contains(item.id) else { return }
+        showing.insert(item.id)
+        seen.insert(item.id)
+        Self.seenDefaults?.set(Array(seen), forKey: Self.seenKey)
+    }
+
+    func windowClosed() { showing = [] }
+
+    /// FIRST RUN OF THE TIMELINE: every filing already on the board is old
+    /// news. Without this the first open wore an Undo on every joined brief
+    /// Deiko ever made; the announcement is for filings from now on.
+    private func seedSeen(_ read: [Item]) {
+        guard let defaults = Self.seenDefaults, defaults.object(forKey: Self.seenKey) == nil else { return }
+        seen = Set(read.filter(\.filedByDeiko).map(\.id))
+        defaults.set(Array(seen), forKey: Self.seenKey)
     }
 
     var thisWeek: Int {
@@ -556,6 +609,7 @@ final class SessionsStore: ObservableObject {
                     .first { !$0.isEmpty }
                 let own = Tasks.own(name)
                 let isOwnTask = stored?.task == nil || stored?.task == own
+                let odds = stored?.isOdds == true
                 return Item(
                     id: name,
                     dir: dir,
@@ -566,15 +620,20 @@ final class SessionsStore: ObservableObject {
                     repo: digest?.summary.repoHints.first,
                     collection: context?.collection,
                     task: stored?.task ?? own,
-                    odds: stored?.isOdds == true,
+                    odds: odds,
                     outcome: outcome,
                     unfinished: !hasBrief,
                     unreadable: hasBrief && digest == nil,
                     maybe: isOwnTask ? stored?.candidates?.first : nil,
-                    related: isOwnTask ? stored?.related : nil
+                    related: isOwnTask ? stored?.related : nil,
+                    filedByDeiko: BoardTimeline.filedByDeiko(
+                        decidedBy: stored?.decidedBy, taskBy: stored?.taskBy,
+                        task: stored?.task, own: own, odds: odds
+                    )
                 )
             }
         }.value
+        seedSeen(read)
         items = read
         collections = Collections.all()
         taskTitles = Dictionary(Tasks.all().map { ($0.id, $0.title) }, uniquingKeysWith: { a, _ in a })
@@ -739,6 +798,12 @@ private struct BoardPane: View {
     @ObservedObject var sessions: SessionsStore
     @State private var query = ""
     @State private var filter: Filter = .all
+    /// One piece of work, oldest first — what a card's tag opens.
+    @State private var work: String? = UIShotPose.work
+    /// Where a carried brief lands if it is let go now: on a card, or on the
+    /// timeline's empty space. The lede says which.
+    @State private var overCard: String?
+    @State private var overSpace = false
     @FocusState private var searching: Bool
 
     /// Which slice of the board is on screen. Unsorted is its own answer
@@ -749,24 +814,27 @@ private struct BoardPane: View {
     }
 
     private var shown: [SessionsStore.Item] {
-        let inFilter = sessions.items.filter { item in
+        var inFilter = sessions.items.filter { item in
             switch filter {
             case .all: return true
             case .unsorted: return item.collection == nil
             case .collection(let id): return item.collection == id
             }
         }
+        // ONE PIECE OF WORK READS FORWARDS: how it started, then what came of
+        // it. The timeline reads the other way, newest on top.
+        if let work { inFilter = inFilter.filter { $0.task == work && !$0.setAside }.reversed() }
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         guard !q.isEmpty else { return inFilter }
-        // A TASK IS FOUND BY ITS NAME, and found whole: its header counts
-        // its briefs, so showing only the ones whose words also matched made
-        // the count and the cards disagree. Titled from the group, not per
-        // brief — `title(ofTask:)` walks the board for an untitled task.
+        // A TASK IS FOUND BY ITS NAME, and found whole: its tag counts its
+        // briefs, so showing only the ones whose words also matched made the
+        // count and the cards disagree. Titled from the group, not per brief
+        // — `title(ofTask:)` walks the board for an untitled task.
         let named = Set(sessions.groups(of: inFilter).filter { group in
             (sessions.taskTitles[group.id] ?? group.items.last?.title ?? "").lowercased().contains(q)
         }.map(\.id))
         return inFilter.filter {
-            (!$0.odds && named.contains($0.task))
+            (!$0.setAside && named.contains($0.task))
                 || ($0.line ?? "").lowercased().contains(q)
                 || ($0.repo ?? "").lowercased().contains(q)
                 || $0.apps.contains { $0.lowercased().contains(q) }
@@ -802,6 +870,47 @@ private struct BoardPane: View {
         }
     }
 
+    /// The way back from one piece of work, in the band for the same reason
+    /// the chips are: nothing clickable lives above the cards in their own
+    /// scroll view.
+    @ViewBuilder private var workRow: some View {
+        if let work {
+            HStack(spacing: 10) {
+                Button { self.work = nil } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left").font(.system(size: 9, weight: .semibold))
+                        Text("Show all briefs").font(.system(size: 11, weight: .medium))
+                    }
+                }
+                .buttonStyle(ChipButtonStyle(on: false))
+                .deikoFocusRing(Capsule())
+                .keyboardShortcut(.cancelAction)
+                .help("Back to every brief, newest first (Esc)")
+                Text("One piece of work, oldest first")
+                    .font(.system(size: 11))
+                    .foregroundStyle(DeikoStyle.ink2)
+                Spacer()
+                Menu {
+                    TaskMenu(task: work, store: sessions)
+                } label: {
+                    Image(systemName: "ellipsis.circle").font(.system(size: 12))
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .tint(DeikoStyle.ink2)
+                .help("Rename this work or open its note")
+            }
+        }
+    }
+
+    private var lede: String {
+        if overCard != nil { return "Let go and they're one piece of work." }
+        if overSpace { return "Let go and it stands on its own." }
+        if work != nil { return "Drag one out onto empty space and it stands on its own." }
+        return "Newest first. Drag one brief onto another to group them."
+    }
+
     /// CHROME ABOVE, CONTENT BELOW, AND NEVER IN THE SAME SCROLL VIEW.
     ///
     /// The other panes use `PaneScroll`, where the title scrolls away with
@@ -821,10 +930,13 @@ private struct BoardPane: View {
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 16) {
-                PaneHeader(title: "Board", lede: "Every brief you have thrown, still on this Mac.") {
+                PaneHeader(title: "Board", lede: lede) {
                     searchField
                 }
-                filterRow
+                VStack(alignment: .leading, spacing: 10) {
+                    filterRow
+                    workRow
+                }
             }
             .padding(.horizontal, 26)
             .padding(.top, 44)
@@ -843,37 +955,7 @@ private struct BoardPane: View {
                                 : "Try another project, a task name, an app name, or a word you said."
                         )
                     } else {
-                        // THREE PARTS, EACH NAMED. Tasks of two briefs or
-                        // more on shelves, lone briefs together under a
-                        // heading of their own, odds and ends last and faded.
-                        // One grid for the lot made a task's last card and
-                        // the next lone brief look like neighbours in the
-                        // same thing. No pinned headers: a pinned view fights
-                        // the scroll view for the same tracking areas the
-                        // fixed band escaped.
-                        let groups = sessions.groups(of: shown)
-                        let alone = groups.filter { $0.items.count == 1 }.flatMap(\.items)
-                        let odds = shown.filter { $0.odds || $0.unfinished || $0.unreadable }.sorted { $0.date > $1.date }
-                        LazyVStack(alignment: .leading, spacing: 22) {
-                            ForEach(groups.filter { $0.items.count > 1 }) { group in
-                                TaskShelf(group: group, store: sessions)
-                            }
-                            if !alone.isEmpty {
-                                BoardPart(title: "On their own", count: alone.count,
-                                          help: "Briefs that are their own task so far.",
-                                          items: alone, store: sessions)
-                            }
-                            if !odds.isEmpty {
-                                BoardPart(title: "Odds and ends", count: odds.count,
-                                          help: "Briefs too short or unclear to file, and recordings that never finished. Move one to a task from its menu.",
-                                          items: odds, store: sessions)
-                                    // SET ASIDE BY ITS PICTURES, NOT ITS WORDS:
-                                    // the thumbnails fade, the text keeps full
-                                    // contrast (an opacity of 0.6 on the whole
-                                    // part put it under AA).
-                                    .environment(\.setAside, true)
-                            }
-                        }
+                        timeline
                     }
                 }
                 .padding(.horizontal, 26)
@@ -881,7 +963,102 @@ private struct BoardPane: View {
                 .padding(.bottom, 28)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            // EMPTY SPACE IS A PLACE TO DROP. A card's own destination wins
+            // over this one, so only a drop between or below cards lands here.
+            .dropDestination(for: String.self) { ids, _ in
+                standAlone(ids)
+            } isTargeted: { overSpace = $0 }
         }
+    }
+
+    /// NOTHING MOVES UNLESS YOU MOVE IT. Newest first under the day it was
+    /// said, so a brief just recorded is always the first card — never
+    /// halfway down the page inside whichever task Deiko thought it was.
+    /// No pinned headers: a pinned view fights the scroll view for the same
+    /// tracking areas the fixed band escaped.
+    private var timeline: some View {
+        let sections = work == nil
+            ? BoardTimeline.sections(shown, date: \.date, now: Date())
+            : [(title: "", items: shown)]
+        return LazyVStack(alignment: .leading, spacing: 26) {
+            if let work { WorkNotes(task: work, store: sessions) }
+            ForEach(sections, id: \.title) { section in
+                VStack(alignment: .leading, spacing: 10) {
+                    if !section.title.isEmpty {
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Text(section.title).deikoTitle(15)
+                            Text("· \(section.items.count)")
+                                .font(.system(size: 11))
+                                .foregroundStyle(DeikoStyle.ink2)
+                        }
+                        .accessibilityAddTraits(.isHeader)
+                    }
+                    // `.top`, because the default is `.center`: cards of
+                    // unequal height were centred in their row, which
+                    // staggered the top edge and read as a rendering fault.
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), spacing: 14, alignment: .top)], spacing: 14) {
+                        ForEach(section.items) { item in
+                            BoardCard(
+                                item: item, store: sessions, showsTag: work == nil,
+                                openWork: { task in
+                                    query = ""
+                                    work = task
+                                },
+                                dropped: { join($0, onto: item) },
+                                targeted: { overCard = $0 ? item.id : (overCard == item.id ? nil : overCard) }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// A brief dropped on another: the same work from now on, by hand, so the
+    /// classifier never files it anywhere else. A name is asked for only when
+    /// the work is new and has none, prefilled from the brief it was dropped on.
+    private func join(_ ids: [String], onto target: SessionsStore.Item) -> Bool {
+        guard let id = ids.first,
+              let dragged = sessions.items.first(where: { $0.id == id }),
+              !dragged.unfinished, !dragged.unreadable, !target.unfinished, !target.unreadable,
+              let plan = BoardTimeline.drop(
+                  dragged: (dragged.id, dragged.setAside ? "" : dragged.task),
+                  target: (target.id, target.task, Tasks.own(target.id), target.setAside),
+                  count: { sessions.workCounts[$0] ?? 0 }
+              )
+        else { return false }
+        let named = sessions.taskTitles[plan.task] != nil
+        // After the drop returns: a modal inside a drop handler holds the
+        // drag session open under it.
+        DispatchQueue.main.async {
+            if !named {
+                guard let name = Collections.askText(
+                    title: "Name this piece of work",
+                    informative: "These two briefs go together now. The next one that belongs with them joins them.",
+                    value: target.title,
+                    placeholder: "What the work is",
+                    confirm: "Group them"
+                ), !name.isEmpty else { return }
+                Tasks.name(plan.task, name)
+            }
+            if plan.placeTarget { sessions.move(target, toTask: plan.task) }
+            sessions.move(dragged, toTask: plan.task)
+        }
+        return true
+    }
+
+    /// A brief dropped on empty space: its own work again. Refused when it
+    /// already is, or when other briefs have since joined the task it
+    /// started — "its own" would join them (see `ownTaskTakenHelp`).
+    private func standAlone(_ ids: [String]) -> Bool {
+        guard let id = ids.first,
+              let item = sessions.items.first(where: { $0.id == id }),
+              !item.unfinished, !item.unreadable
+        else { return false }
+        let own = Tasks.own(item.id)
+        guard item.odds || item.task != own, !sessions.hasOthers(inTask: own, besides: item.id) else { return false }
+        sessions.move(item, toTask: own)
+        return true
     }
 
     private var searchField: some View {
@@ -978,16 +1155,28 @@ private struct ChipButton: View {
 }
 
 private struct BoardCard: View {
-    @Environment(\.setAside) private var setAside
     let item: SessionsStore.Item
     let store: SessionsStore
+    /// Off inside one piece of work, where every card would wear the same one.
+    let showsTag: Bool
+    let openWork: (String) -> Void
+    let dropped: ([String]) -> Bool
+    let targeted: (Bool) -> Void
     @State private var hovering = false
+    @State private var dropping = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// A brief is being held over this card.
+    private var lit: Bool { dropping || UIShotPose.dropTarget == item.id }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             if let first = item.crops.first {
+                // SET ASIDE BY ITS PICTURES, NOT ITS WORDS: the thumbnail
+                // fades, the text keeps full contrast (an opacity of 0.6 on
+                // the whole card put it under AA).
                 CropThumbnail(path: first, height: 74)
-                    .opacity(setAside ? 0.4 : 1)
+                    .opacity(item.setAside ? 0.4 : 1)
             }
             // EVERYTHING THIS CARD CAN DO, VISIBLE AT REST.
             //
@@ -1046,9 +1235,8 @@ private struct BoardCard: View {
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            // ONE LINE, the date whole. A card on a shelf is a few points
-            // narrower than one on the page, and that was enough to break
-            // "Sat, 19 Sep at 19:01" in two; the repo gives way first.
+            // ONE LINE, the date whole: "Sat, 19 Sep at 19:01" broke in two
+            // on a narrow card; the repo gives way first.
             HStack(spacing: 6) {
                 Text(Self.stamp(item.date)).layoutPriority(1)
                 if !item.crops.isEmpty {
@@ -1060,26 +1248,85 @@ private struct BoardCard: View {
             .lineLimit(1)
             .font(.system(size: 11))
             .foregroundStyle(DeikoStyle.ink2)
+            footer
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(11)
         .background(
             RoundedRectangle(cornerRadius: DeikoStyle.insetRadius)
-                .fill(DeikoStyle.card)
+                .fill(lit ? DeikoStyle.accentSoft : DeikoStyle.card)
                 .overlay(
                     RoundedRectangle(cornerRadius: DeikoStyle.insetRadius)
-                        .strokeBorder(hovering ? DeikoStyle.accent : DeikoStyle.hairline, lineWidth: 1)
+                        .strokeBorder(lit || hovering ? DeikoStyle.accent : DeikoStyle.hairline, lineWidth: lit ? 1.5 : 1)
                 )
-                .shadow(color: DeikoStyle.shadow, radius: hovering ? 16 : 10, x: 0, y: hovering ? 9 : 5)
+                .shadow(color: DeikoStyle.shadow, radius: hovering || lit ? 16 : 10, x: 0, y: hovering || lit ? 9 : 5)
         )
-        .offset(y: hovering ? -1 : 0)
-        .animation(.easeOut(duration: 0.14), value: hovering)
+        .scaleEffect(lit && !reduceMotion ? 1.02 : 1)
+        .offset(y: hovering && !reduceMotion ? -1 : 0)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: hovering)
+        .animation(reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.8), value: lit)
         .onHover { hovering = $0 }
         .onTapGesture(count: 2) { NSWorkspace.shared.open(URL(fileURLWithPath: item.dir)) }
         // Kept beside the button: somebody who already reaches for a
         // right-click should not have to learn a new way to do it.
         .contextMenu { SessionMenu(item: item, store: store) }
-        .help("Double-click to open this session's folder · ⋯ for everything else")
+        .help("Double-click to open this session's folder · drag onto another brief to group them")
+        .onAppear { store.sawFiling(item) }
+        .draggable(item.id) { preview }
+        .dropDestination(for: String.self) { ids, _ in
+            dropped(ids)
+        } isTargeted: { over in
+            dropping = over && !item.unfinished && !item.unreadable
+            targeted(dropping)
+        }
+    }
+
+    /// Where this brief belongs, in one line at the foot of the card. While a
+    /// brief is held over it, what letting go will do instead.
+    @ViewBuilder private var footer: some View {
+        let count = store.workCounts[item.task] ?? 0
+        if lit {
+            Label("Same work as this", systemImage: "link")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(DeikoStyle.mark)
+                .padding(.vertical, 3)
+        } else if store.announces(item) {
+            // FILING IS VISIBLE. Deiko put this with earlier work on its own;
+            // said once, beside the way to take it back.
+            HStack(spacing: 8) {
+                WorkTag(text: "Added to \(store.title(ofTask: item.task))") { openWork(item.task) }
+                    .help("Deiko put this with \(count - 1) earlier brief\(count == 2 ? "" : "s") in “\(store.title(ofTask: item.task))”. Click to see them together.")
+                let own = Tasks.own(item.id)
+                let taken = store.hasOthers(inTask: own, besides: item.id)
+                Button("Undo") { store.move(item, toTask: own) }
+                    .buttonStyle(TextButtonStyle())
+                    .disabled(taken)
+                    .help(taken ? SessionsStore.ownTaskTakenHelp : "Make it its own work again")
+                    .fixedSize()
+            }
+        } else if item.setAside {
+            Text("Set aside")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(DeikoStyle.ink2)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 3)
+                .overlay(Capsule().strokeBorder(DeikoStyle.hairline, lineWidth: 1))
+                .help(item.odds
+                      ? "Too short or unclear to file — a mic check, a thank-you. Drag it onto a brief to put it with that work."
+                      : "This recording never became a brief.")
+        } else if showsTag, count >= 2 {
+            WorkTag(text: store.title(ofTask: item.task), count: count) { openWork(item.task) }
+                .help("Show this work on its own, oldest first")
+        }
+    }
+
+    private var preview: some View {
+        Text(item.title)
+            .font(.system(size: 12.5))
+            .lineLimit(2)
+            .padding(11)
+            .frame(width: 220, alignment: .leading)
+            .background(DeikoStyle.card, in: RoundedRectangle(cornerRadius: DeikoStyle.insetRadius))
     }
 
     /// Which task this brief might belong to, or is linked to — only while
@@ -1116,147 +1363,155 @@ private struct BoardCard: View {
     }
 }
 
-/// Odds and ends: cards whose thumbnails fade so the part reads as set aside.
-private struct SetAsideKey: EnvironmentKey { static let defaultValue = false }
-extension EnvironmentValues {
-    var setAside: Bool {
-        get { self[SetAsideKey.self] }
-        set { self[SetAsideKey.self] = newValue }
-    }
-}
-
-/// A task of two briefs or more: its name, then its briefs, held together
-/// so the next task — or the next lone brief — cannot read as more of it.
-private struct TaskShelf: View {
-    let group: SessionsStore.Group
-    let store: SessionsStore
-    @Environment(\.colorScheme) private var scheme
+/// A card's work tag: the wash chip (DESIGN.md §Chips), name first and the
+/// count quiet, the name giving way before the count does. Clicking it opens
+/// that work on its own.
+private struct WorkTag: View {
+    let text: String
+    var count: Int?
+    let open: () -> Void
 
     var body: some View {
-        // A TRAY, NOT A CARD: sunk a step below the paper, so the white cards
-        // stand up out of it — and never a card on a card. Paper itself, with
-        // only a hairline, was a box you had to look for. (The owner picked
-        // this over a thin accent "spine" on 2026-09-25.)
-        VStack(alignment: .leading, spacing: 10) {
-            TaskHeader(group: group, store: store)
-            CardGrid(items: group.items, store: store)
+        Button(action: open) {
+            HStack(spacing: 4) {
+                Text(text).lineLimit(1).truncationMode(.tail)
+                if let count { Text("· \(count)").opacity(0.7).fixedSize() }
+            }
+            .font(.system(size: 11, weight: .medium))
         }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: DeikoStyle.panelRadius)
-                .fill(scheme == .dark
-                      ? Color.black.opacity(0.2)
-                      : Color(red: 30 / 255, green: 36 / 255, blue: 90 / 255).opacity(0.065))
-                .overlay(
-                    RoundedRectangle(cornerRadius: DeikoStyle.panelRadius)
-                        .strokeBorder(DeikoStyle.hairline, lineWidth: 1)
-                )
-        )
+        .buttonStyle(ChipButtonStyle(on: true))
+        .deikoFocusRing(Capsule())
     }
 }
 
-/// "On their own" and "Odds and ends": a named run of cards, headed even for
-/// one, so no brief on the board sits under nothing.
-private struct BoardPart: View {
-    let title: String
-    let count: Int
-    let help: String
-    let items: [SessionsStore.Item]
+/// A verb said as a word: mark indigo, underlined under the pointer. A
+/// `ButtonStyle` for the reason `ChipButtonStyle` gives — a `.plain` button
+/// in a scrolling pane took no clicks.
+private struct TextButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View { Word(configuration: configuration) }
+
+    private struct Word: View {
+        let configuration: ButtonStyleConfiguration
+        @Environment(\.isEnabled) private var enabled
+        @State private var hovering = false
+
+        var body: some View {
+            configuration.label
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(enabled ? DeikoStyle.mark : DeikoStyle.ink2)
+                .underline(hovering && enabled)
+                .padding(.vertical, 3)
+                .contentShape(Rectangle())
+                .opacity(configuration.isPressed ? 0.6 : 1)
+                .onHover { hovering = $0 }
+        }
+    }
+}
+
+/// The head of one piece of work: its name, its span, and its note — where
+/// it stands and what was decided, from `tasks/<id>.md`, the same note the
+/// next brief carries to the agent. On the wall, because it is a header; no
+/// controls in it, because nothing clickable sits above cards in their scroll
+/// view (see `BoardPane.body`).
+private struct WorkNotes: View {
+    let task: String
     let store: SessionsStore
+    @State private var note: (now: [String], decided: [String]) = ([], [])
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(title).deikoTitle(15)
-                Text("· \(count)")
-                    .font(.system(size: 11))
+        let briefs = store.items.filter { $0.task == task && !$0.setAside }
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(store.title(ofTask: task))
+                    .deikoTitle(19)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(span(briefs))
+                    .font(.system(size: 11.5))
                     .foregroundStyle(DeikoStyle.ink2)
             }
-            .help(help)
-            CardGrid(items: items, store: store)
-        }
-    }
-}
-
-/// `.top`, because the default is `.center`: cards of unequal height were
-/// centred in their row, which staggered the top edge and read as a
-/// rendering fault rather than masonry.
-private struct CardGrid: View {
-    let items: [SessionsStore.Item]
-    let store: SessionsStore
-
-    var body: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), spacing: 14, alignment: .top)], spacing: 14) {
-            ForEach(items) { item in BoardCard(item: item, store: store) }
-        }
-    }
-}
-
-/// A task's name above its briefs: what it is, how many, which project —
-/// and the same ⋯ a board card has, because a menu found only by
-/// right-click is a menu most people never find.
-private struct TaskHeader: View {
-    let group: SessionsStore.Group
-    let store: SessionsStore
-
-    var body: some View {
-        let title = store.title(ofTask: group.id)
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(title)
-                .font(.system(size: 13, weight: .medium))
-                .lineLimit(1)
-                .help(title)
-            Text("· \(group.items.count) briefs")
-                .font(.system(size: 11))
-                .foregroundStyle(DeikoStyle.ink2)
-                .fixedSize()
-            Spacer(minLength: 8)
-            // Unsorted has no chip: nothing is filed, so there is nothing to name.
-            if let project = store.collections.first(where: { $0.id == group.items[0].collection })?.name {
-                Text(project)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(DeikoStyle.mark)
-                    .lineLimit(1)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 2)
-                    .background(Capsule().fill(DeikoStyle.accentSoft))
-                    .fixedSize()
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 28) { blocks }
+                VStack(alignment: .leading, spacing: 14) { blocks }
             }
-            Menu {
-                TaskMenu(group: group, store: store)
-            } label: {
-                Image(systemName: "ellipsis.circle")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18)
+        .background(DeikoStyle.wall, in: RoundedRectangle(cornerRadius: DeikoStyle.insetRadius))
+        .task(id: task) {
+            let text = (try? String(contentsOf: Tasks.notePath(for: task), encoding: .utf8)) ?? ""
+            note = BoardTimeline.noteSections(text)
+        }
+    }
+
+    @ViewBuilder private var blocks: some View {
+        block("Where it stands", note.now.isEmpty
+              ? ["Nothing written back yet. This fills in as your agent reports what it did."]
+              : note.now)
+        if !note.decided.isEmpty { block("Decided", note.decided) }
+    }
+
+    private func block(_ title: String, _ lines: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title).font(.system(size: 12, weight: .semibold))
+            ForEach(Array(lines.prefix(6).enumerated()), id: \.offset) { _, line in
+                Self.line(line)
                     .font(.system(size: 12))
+                    .foregroundStyle(DeikoStyle.ink2)
+                    .lineLimit(4)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .tint(DeikoStyle.ink2)
-            .help("Rename this task or open its note")
         }
-        .contentShape(Rectangle())
-        .contextMenu { TaskMenu(group: group, store: store) }
+        .frame(maxWidth: 420, alignment: .leading)
+    }
+
+    /// "Last asked: …", "Still open from Sep 18: …", "Sep 18: …" — the short
+    /// lead-in before the colon carries the weight, the rest reads as prose.
+    private static func line(_ text: String) -> Text {
+        guard let colon = text.firstIndex(of: ":"), text.distance(from: text.startIndex, to: colon) <= 24 else {
+            return Text(text)
+        }
+        return Text(text[...colon]).fontWeight(.medium) + Text(text[text.index(after: colon)...])
+    }
+
+    private static let day: DateFormatter = {
+        let f = DateFormatter()
+        f.setLocalizedDateFormatFromTemplate("d MMM")
+        return f
+    }()
+
+    /// "5 briefs · 16 Sep – 18 Sep · build"
+    private func span(_ briefs: [SessionsStore.Item]) -> String {
+        let dates = briefs.map(\.date)
+        var parts = ["\(briefs.count) brief\(briefs.count == 1 ? "" : "s")"]
+        if let first = dates.min(), let last = dates.max() {
+            let a = Self.day.string(from: first), b = Self.day.string(from: last)
+            parts.append(a == b ? a : "\(a) – \(b)")
+        }
+        if let project = store.collections.first(where: { $0.id == briefs.first?.collection })?.name {
+            parts.append(project)
+        }
+        return parts.joined(separator: " · ")
     }
 }
 
 private struct TaskMenu: View {
-    let group: SessionsStore.Group
+    let task: String
     let store: SessionsStore
 
     var body: some View {
         Button("Rename…") {
             guard let title = Collections.askText(
-                title: "Rename this task",
+                title: "Rename this work",
                 informative: "Its briefs stay together. The next one that belongs here joins them.",
-                value: store.title(ofTask: group.id),
+                value: store.title(ofTask: task),
                 placeholder: "What the work is",
                 confirm: "Rename"
             ), !title.isEmpty else { return }
-            Tasks.name(group.id, title)
+            Tasks.name(task, title)
             Task { await store.load(root: store.root) }
         }
         Button("Open the task note") {
-            let note = Tasks.notePath(for: group.id)
+            let note = Tasks.notePath(for: task)
             if FileManager.default.fileExists(atPath: note.path) { NSWorkspace.shared.open(note) }
         }
     }
