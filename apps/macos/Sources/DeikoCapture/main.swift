@@ -255,8 +255,10 @@ func runAXProbe(_ args: Args) async {
 func runApp(_ args: Args) {
     let app = NSApplication.shared
     // .accessory: no Dock icon, no app switcher. It is an input peripheral,
-    // not something you alt-tab to.
+    // not something you alt-tab to — except while its board window is open,
+    // when `MainWindowController` makes it a regular app for as long.
     app.setActivationPolicy(.accessory)
+    AppMenu.install()
 
     // A ROOT, not a session directory. The session folder is minted on the
     // first hold and named `20260728-011253` — see `Recorder.startSessionIfNeeded`.

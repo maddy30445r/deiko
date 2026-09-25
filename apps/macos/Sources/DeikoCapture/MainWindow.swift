@@ -53,6 +53,7 @@ final class MainNav: ObservableObject {
 final class MainWindowController: NSObject, NSWindowDelegate {
 
     private var window: NSWindow?
+    private var holdsDock = false
     /// Handed in rather than read from a global: "Delete all past sessions"
     /// must be able to spare the session being recorded right now, and this
     /// window has no recorder of its own.
@@ -63,7 +64,15 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         MainNav.shared.section = section
         // Every time, not only on the first open.
         Task { await SessionsStore.shared.load(root: sessionRoot) }
+        // A REGULAR APP WHILE THIS WINDOW IS OPEN: a Dock tile for a
+        // minimized window to come back from, ⌘-Tab, full screen and the
+        // menu bar. `windowWillClose` hands the Dock tile back.
+        if !holdsDock {
+            DockPresence.acquire()
+            holdsDock = true
+        }
         if let window {
+            if window.isMiniaturized { window.deminiaturize(nil) }
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
@@ -80,6 +89,16 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         // the window reads as a dialog wearing a sidebar.
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
+        // THE CORNERS. On macOS 26 a window's corner radius follows its title
+        // bar: a bare one gets 16pt, a compact unified toolbar 20pt, a full one
+        // 26pt. Compact, and empty: its 40pt bar stays above the 44pt this
+        // layout already leaves clear (sidebar brand row, pane headers), so no
+        // control ends up under the window's drag area. A full toolbar's 66pt
+        // bar would swallow the page headers' clicks.
+        window.useRoundedTitleBar("DeikoMainWindow")
+        // The green button goes full screen, as in every other Mac app;
+        // Option-click (or a double-click on the bar) zooms.
+        window.collectionBehavior.insert(.fullScreenPrimary)
         window.setContentSize(NSSize(width: 980, height: 660))
         window.minSize = NSSize(width: 860, height: 560)
         window.center()
@@ -89,6 +108,23 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         self.window = window
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        // Back to the menu bar. Not on minimize: a minimized window needs
+        // its Dock tile to come back from.
+        if holdsDock {
+            DockPresence.release()
+            holdsDock = false
+        }
+    }
+
+    /// ZOOM FILLS THE SCREEN'S HEIGHT, NOT ITS WIDTH: a board three cards
+    /// wide reads the same at 1320pt as at 2560, and an ultrawide stretch
+    /// only puts the cards further from each other.
+    func windowWillUseStandardFrame(_ window: NSWindow, defaultFrame: NSRect) -> NSRect {
+        let width = min(defaultFrame.width, 1320)
+        return NSRect(x: defaultFrame.midX - width / 2, y: defaultFrame.minY, width: width, height: defaultFrame.height)
     }
 }
 

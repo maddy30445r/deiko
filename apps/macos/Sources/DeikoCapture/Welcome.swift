@@ -27,6 +27,7 @@ import DeikoHandoff
 final class WelcomeWindowController: NSObject, NSWindowDelegate {
 
     private var window: NSWindow?
+    private var holdsDock = false
 
     /// Whether the user has ever finished first-run.
     private static let seenKey = "hasSeenWelcome"
@@ -47,6 +48,10 @@ final class WelcomeWindowController: NSObject, NSWindowDelegate {
     }
 
     func present() {
+        if !holdsDock {
+            DockPresence.acquire()
+            holdsDock = true
+        }
         if let window {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -67,7 +72,9 @@ final class WelcomeWindowController: NSObject, NSWindowDelegate {
         hosting.sizingOptions = []
         let window = NSWindow(contentViewController: hosting)
         window.title = "Welcome to Deiko"
-        window.styleMask = [.titled, .closable]
+        // Minimizable, not resizable: the design's size is the window's size.
+        window.styleMask = [.titled, .closable, .miniaturizable]
+        window.useRoundedTitleBar("DeikoWelcome")
         // Tall enough that nothing scrolls. At 560 the content overflowed and
         // the window opened showing the description with the title scrolled off
         // the top — the first screen of a first run, missing its own name.
@@ -85,6 +92,10 @@ final class WelcomeWindowController: NSObject, NSWindowDelegate {
         // Closing counts as seen. Re-presenting a window somebody dismissed is
         // the behaviour that makes people uninstall things.
         Self.hasBeenSeen = true
+        if holdsDock {
+            DockPresence.release()
+            holdsDock = false
+        }
     }
 }
 
