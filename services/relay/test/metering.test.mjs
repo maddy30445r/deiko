@@ -21,7 +21,6 @@ import { GATE as CLIENT_GATE, ASK as CLIENT_ASK, RELATIONS as CLIENT_RELATIONS }
 
 import {
   CLASSIFIES_PER_CALLER_PER_DAY,
-  FREE_SECONDS_PER_IP_PER_DAY,
   FREE_TRIAL_SECONDS,
   MIN_SECONDS_PER_REQUEST,
   PLAYGROUND_TICKETS_PER_IP_PER_DAY,
@@ -1420,24 +1419,6 @@ test("rotating bearers from one address does not reset the address's cap, and th
       "a fresh bearer from the same address is still that address");
     assert.equal((await summarize("dev_rot2", undefined, { ip: "198.51.100.1" })).status, 200,
       "another address is not");
-  }));
-
-test("a made-up device token from a spent address gets no fresh trial; a licence from it still does", () =>
-  withPlayground(async () => {
-    assert.equal((await post("dev_forge0", 20, { ip: "203.0.113.9" })).status, 200);
-    const ipRow = [...rows.keys()].find((k) => k.startsWith("transcribe:ip:"));
-    assert.ok(ipRow && !ipRow.includes("203.0.113.9"), "the address is counted, as a salted hash");
-    assert.equal(rows.get(ipRow).audioSeconds, 20, "in seconds of audio, beside the device's own row");
-    seed(ipRow, FREE_SECONDS_PER_IP_PER_DAY);
-    const before = upstream.length;
-    const forged = await post("dev_forge1", 20, { ip: "203.0.113.9" });
-    assert.equal(forged.status, 429, "a fresh token is still that address");
-    assert.equal(upstream.length, before, "and buys nothing upstream");
-    assert.equal(rows.get(ipRow).audioSeconds, FREE_SECONDS_PER_IP_PER_DAY, "the refusal is not charged");
-    assert.equal(rows.get("dev:forge1")?.audioSeconds ?? 0, 0, "on any row");
-    assert.equal((await post("dev_forge2", 20, { ip: "198.51.100.1" })).status, 200, "another address is not");
-    assert.equal((await post(`lic_${REAL}`, 20, { ip: "203.0.113.9" })).status, 200,
-      "a paying customer behind that address is not on the free row");
   }));
 
 // ── /health ─────────────────────────────────────────────────────────────────

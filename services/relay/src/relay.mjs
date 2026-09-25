@@ -41,7 +41,6 @@ import {
   CLASSIFIES_PER_DAY,
   CLASSIFIES_PER_CALLER_PER_DAY,
   TEXT_CALLS_PER_IP_PER_DAY,
-  FREE_SECONDS_PER_IP_PER_DAY,
   BYTES_PER_SECOND,
   MAX_SECONDS_PER_REQUEST,
   audioSeconds,
@@ -1236,31 +1235,23 @@ export async function handle({ method, path, query = "", token, contentType, bod
     // so two chunks arriving together cannot both see room that only one of
     // them has. Being over by one chunk costs a few paise; a race that lets a
     // cap be exceeded by however many containers are warm does not.
-    let verdict, tier, ipRow;
+    let verdict, tier;
     try {
       tier = await tierFor(subject, now);
-      // The address's free row (FREE_SECONDS_PER_IP_PER_DAY); null for Pro,
-      // and with no secret to hash the address under.
-      const who = tier === "pro" ? null : ipHash(ip);
-      ipRow = who ? callerKey("transcribe", `ip:${who}`, now) : null;
       // REFUSED WITHOUT A WRITE when the answer is already known: the day's
-      // ceiling or the address's was found full earlier in this container, or
-      // the subject has no allowance at all (a licence that is not Pro — a
-      // junk key included). Counting those and then refunding them was two
-      // writes per refusal.
+      // ceiling was found full earlier in this container, or the subject has
+      // no allowance at all (a licence that is not Pro — a junk key included).
+      // Counting those and then refunding them was two writes per refusal.
       const ceiling = `${globalKey(now)}#${tier === "pro" ? "pro" : "free"}`;
       const known = isFull(ceiling, now)
         ? decide({ tier, kind: subject.kind, usedSeconds: 0, globalUsedSeconds: Infinity })
-        : ipRow && isFull(ipRow, now)
-          ? decide({ tier, kind: subject.kind, usedSeconds: 0, globalUsedSeconds: 0, ipUsedSeconds: Infinity })
-          : capFor(tier, subject.kind) === 0
-            ? decide({ tier, kind: subject.kind, usedSeconds: seconds, globalUsedSeconds: 0 })
-            : null;
+        : capFor(tier, subject.kind) === 0
+          ? decide({ tier, kind: subject.kind, usedSeconds: seconds, globalUsedSeconds: 0 })
+          : null;
       if (known) return json(known.status, { error: known.error });
-      const { usedSeconds, globalUsedSeconds, ipUsedSeconds } = await record({ subject, seconds, tier, now, ipRow });
-      verdict = decide({ tier, kind: subject.kind, usedSeconds, globalUsedSeconds, ipUsedSeconds });
+      const { usedSeconds, globalUsedSeconds } = await record({ subject, seconds, tier, now });
+      verdict = decide({ tier, kind: subject.kind, usedSeconds, globalUsedSeconds });
       if (globalUsedSeconds > globalCapFor(tier)) markFull(ceiling, now);
-      if (ipRow && ipUsedSeconds > FREE_SECONDS_PER_IP_PER_DAY) markFull(ipRow, now);
     } catch (err) {
       // FAILING CLOSED, DELIBERATELY. If the usage table cannot be reached we
       // do not know what anybody has spent, and the honest answer is to stop
@@ -1276,7 +1267,7 @@ export async function handle({ method, path, query = "", token, contentType, bod
       // requests that would never be transcribed walked the whole service to
       // its daily ceiling in twelve minutes and 429'd every paying customer.
       // Best-effort: a failed refund just restores the old over-counting.
-      await refund({ subject, seconds, tier, now, ipRow }).catch(() => {});
+      await refund({ subject, seconds, tier, now }).catch(() => {});
       return json(verdict.status, { error: verdict.error });
     }
 
@@ -1297,7 +1288,7 @@ export async function handle({ method, path, query = "", token, contentType, bod
     // would otherwise eat it for nothing. A 400-class answer about the audio
     // stays billed: the audio is the caller's, and refunding it would let
     // junk bodies probe Groq off the meter. `proxy` draws that line.
-    if (out.providerFault) await refund({ subject, seconds, tier, now, ipRow }).catch(() => {});
+    if (out.providerFault) await refund({ subject, seconds, tier, now }).catch(() => {});
     return out;
   }
 
