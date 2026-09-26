@@ -123,6 +123,11 @@ final class ReviewModel: ObservableObject {
         return store.title(ofTask: id)
     }
 
+    /// Deiko joined it on its own and nobody has said yes or no yet. The card
+    /// asks once ("Same work?"), the coin says "Looks like", and either
+    /// answer is a hand placement, which also joins the filing eval's key.
+    var joinUnconfirmed: Bool { joinedTask != nil && context?.taskBy != "you" }
+
     /// "from 3 weeks ago" when the joined task's newest OTHER brief — before
     /// this one — is more than a day old; nil otherwise. A stale join is then
     /// easy to spot, and one click undoes it.
@@ -1131,6 +1136,7 @@ struct ReviewView: View {
                 personaRow
                 contextRow
                 whichOneRow
+                sameRow
                 relatedRow
             }
         }
@@ -1359,6 +1365,37 @@ struct ReviewView: View {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 6) { candidateChips(known) }
                     VStack(alignment: .leading, spacing: 5) { candidateChips(known) }
+                }
+            }
+            .padding(.top, 3)
+        }
+    }
+
+    /// A JOIN DEIKO MADE ON ITS OWN, settled in one tap. Optional: left
+    /// alone, the brief stays where it is and the send is never blocked.
+    /// "It's new" is left out when its own task id is taken by briefs moved
+    /// into it since (the task menu explains that case).
+    @ViewBuilder private var sameRow: some View {
+        if model.joinUnconfirmed, let id = model.context?.task {
+            HStack(spacing: 6) {
+                Text("Same work?")
+                    .font(.system(size: 11))
+                    .foregroundStyle(DeikoStyle.ink2)
+                Button { model.setTask(id) } label: {
+                    Text("Same").font(.system(size: 11, weight: .medium))
+                }
+                .buttonStyle(ChipButtonStyle(on: true))
+                .deikoFocusRing(Capsule())
+                .fixedSize()
+                .tip("Yes, this carries on that task. Deiko files the next one like it with more confidence.")
+                if let own = model.ownTask, !store.hasOthers(inTask: own, besides: model.sessionID ?? "") {
+                    Button { model.setTask(own) } label: {
+                        Text("It's new").font(.system(size: 11))
+                    }
+                    .buttonStyle(ChipButtonStyle(on: false))
+                    .deikoFocusRing(Capsule())
+                    .fixedSize()
+                    .tip("No, this is different work. It starts a task of its own.")
                 }
             }
             .padding(.top, 3)

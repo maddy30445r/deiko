@@ -159,6 +159,8 @@ enum UIShot {
                   to: "\(out)-review-odds-\(name).png")
             shoot(reviewPanel(related: true), size: NSSize(width: 620, height: 640), look: look,
                   to: "\(out)-review-related-\(name).png")
+            shoot(reviewPanel(joined: true), size: NSSize(width: 620, height: 640), look: look,
+                  to: "\(out)-review-joined-\(name).png")
         }
         // The status item, at the size it is actually drawn — 1x and 2x — so a
         // mark that looks wrong in the menu bar can be looked at without
@@ -184,7 +186,7 @@ enum UIShot {
             }
         }
 
-        Emit.log("wrote \(out)-{welcome,orb,orbready,orbnotice,orbsent,review,review-odds,review-related,dashboard,board,board-full,board-fold,board-drop,board-work,board-brief,board-brief-alone,board-brief-scrap,board-brief-sent,personas,settings,settings-full}-{light,dark}.png")
+        Emit.log("wrote \(out)-{welcome,orb,orbready,orbnotice,orbsent,review,review-odds,review-related,review-joined,dashboard,board,board-full,board-fold,board-drop,board-work,board-brief,board-brief-alone,board-brief-scrap,board-brief-sent,personas,settings,settings-full}-{light,dark}.png")
     }
 
     /// The collapsed card, mid-session: the state the orb spends most of its
@@ -262,7 +264,7 @@ enum UIShot {
     /// `odds`: posed in odds and ends instead, as `classify.mjs` writes it.
     /// `related`: posed linked to an earlier task instead of unsure between a
     /// few, as `classify.mjs` writes a related-but-separate brief.
-    private static func reviewPanel(odds: Bool = false, related: Bool = false) -> some View {
+    private static func reviewPanel(odds: Bool = false, related: Bool = false, joined: Bool = false) -> some View {
         let model = ReviewModel()
         model.phase = .ready
         model.summary = "Make the Save button use the header indigo, and give it more padding."
@@ -276,7 +278,16 @@ enum UIShot {
         // Posed unsure between two earlier tasks, so "Which one?" is in the
         // shot: the brief is a new task and the row offers the likely ones.
         let others = SessionsStore.shared.groups(of: items).map(\.id).filter { $0 != items.first?.task }
-        model.context = odds ? SessionContext(decidedBy: "local", pile: "odds") : related ? SessionContext(
+        model.context = odds ? SessionContext(decidedBy: "local", pile: "odds") : joined ? SessionContext(
+            collection: Collections.all().first?.id,
+            // Joined by Deiko on its own, so "Same work?" asks. A task with
+            // more than one brief, so the row reads "carries on from".
+            task: SessionsStore.shared.groups(of: items).first { $0.items.count > 1 }?.id,
+            tier: "quick",
+            confidence: .init(collection: 0.9, task: 0.8, tier: 0.9),
+            decidedBy: "jev",
+            model: "jev-1.13.0"
+        ) : related ? SessionContext(
             collection: Collections.all().first?.id,
             // No `task`: still its own, unjoined task — the posed model never
             // carries a `sessionDir` (no pose here does; see the type comment

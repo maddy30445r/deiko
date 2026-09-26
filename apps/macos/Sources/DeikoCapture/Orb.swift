@@ -1608,7 +1608,7 @@ struct OrbRootView: View {
         if model.notFiled { return model.filingQueued ? "Not filed yet" : "Not filed" }
         if !model.openCandidates.isEmpty { return "Which task? Open the card to choose" }
         if model.context?.isOdds == true { return "In odds and ends" }
-        if let joined = model.joinedTask { return "Carries on from \(joined)" }
+        if let joined = model.joinedTask { return model.joinUnconfirmed ? "Looks like \(joined)" : "Carries on from \(joined)" }
         return model.context == nil ? nil : "A new task"
     }
 
