@@ -486,26 +486,35 @@ enum BriefPipeline {
     /// (`scripts/search-briefs.mjs`). Empty on any failure — the word
     /// filter on the board still works on its own.
     static func search(query: String) async -> [String] {
-        guard let layout = Layout.resolve() else { return [] }
-        let root = Collections.root
-        let output: String?
-        switch layout {
-        case .development(let repo):
-            output = try? await shell(
-                "node scripts/search-briefs.mjs \(quoted(root)) \(quoted(query))", in: repo, stage: "Searching"
-            )
-        case .bundled(let resources):
-            guard let node = NodeRuntime.resolve() else { return [] }
-            output = try? await exec(
-                node,
-                arguments: [resources.appendingPathComponent("scripts/search-briefs.mjs").path, root, query],
-                stage: "Searching"
-            )
-        }
+        let output = await script("search-briefs.mjs", [Collections.root, query], label: "Searching")
         guard let line = output?.split(separator: "\n").last(where: { $0.hasPrefix("BRIEFS ") }),
               let ids = try? JSONDecoder().decode([String].self, from: Data(line.dropFirst(7).utf8))
         else { return [] }
         return ids
+    }
+
+    /// A piece of work as Markdown for a person (`scripts/handoff.mjs`):
+    /// `<dir>/handoff.md`, and the kept screenshots beside it unless
+    /// `images` is off. The file's text, or nil when it could not be made.
+    static func handoff(task: String, into dir: URL, images: Bool) async -> String? {
+        var args = [Collections.root, task, dir.path]
+        if !images { args.append("--no-images") }
+        // Never mistaken for this run's: an earlier export into the same folder.
+        try? FileManager.default.removeItem(at: dir.appendingPathComponent("handoff.md"))
+        _ = await script("handoff.mjs", args, label: "Writing the hand-off")
+        return try? String(contentsOf: dir.appendingPathComponent("handoff.md"), encoding: .utf8)
+    }
+
+    /// A script that is not a pipeline stage, with its own arguments.
+    private static func script(_ name: String, _ args: [String], label: String) async -> String? {
+        guard let layout = Layout.resolve() else { return nil }
+        switch layout {
+        case .development(let repo):
+            return try? await shell((["node", "scripts/\(name)"] + args.map(quoted)).joined(separator: " "), in: repo, stage: label)
+        case .bundled(let resources):
+            guard let node = NodeRuntime.resolve() else { return nil }
+            return try? await exec(node, arguments: [resources.appendingPathComponent("scripts/\(name)").path] + args, stage: label)
+        }
     }
 
     static func classify(sessionDir: String) async -> SessionContext? {

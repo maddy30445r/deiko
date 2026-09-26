@@ -1808,8 +1808,11 @@ private struct WorkNotes: View {
                 Text(span(items))
                     .font(.system(size: 11.5))
                     .foregroundStyle(DeikoStyle.ink2)
-                PickUpRow(task: task)
-                    .padding(.top, 4)
+                HStack(spacing: 16) {
+                    PickUpRow(task: task)
+                    HandoffButtons(task: task, name: name)
+                }
+                .padding(.top, 4)
             }
             if let asked = state.lastAsked {
                 VStack(alignment: .leading, spacing: 4) {
@@ -2418,6 +2421,61 @@ private struct BestMatches: View {
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(DeikoStyle.wall, in: RoundedRectangle(cornerRadius: DeikoStyle.insetRadius))
+        }
+    }
+}
+
+/// A HAND-OFF: this work as clean Markdown for a person — a PR description,
+/// a teammate, a ticket. Copy is the text alone; Export is a folder with the
+/// screenshots beside it.
+private struct HandoffButtons: View {
+    let task: String
+    let name: String
+    @State private var copied = false
+    @State private var busy = false
+
+    var body: some View {
+        HStack(spacing: 16) {
+            Button(copied ? "Copied" : "Copy hand-off") { Task { await copy() } }
+                .buttonStyle(TextButtonStyle())
+                .disabled(busy)
+                .tip("Where this work stands, what was decided and how it went, as Markdown for a PR or a teammate.")
+            Button("Export hand-off…") { Task { await export() } }
+                .buttonStyle(TextButtonStyle())
+                .disabled(busy)
+                .tip("The same, as a folder with the screenshots you kept.")
+        }
+    }
+
+    private func copy() async {
+        busy = true
+        defer { busy = false }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("deiko-handoff-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        guard let text = await BriefPipeline.handoff(task: task, into: dir, images: false) else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        copied = true
+        try? await Task.sleep(for: .seconds(2))
+        copied = false
+    }
+
+    private func export() async {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "\(name) hand-off"
+        panel.canCreateDirectories = true
+        panel.prompt = "Export"
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let dir = panel.url else { return }
+        busy = true
+        defer { busy = false }
+        if await BriefPipeline.handoff(task: task, into: dir, images: true) != nil {
+            NSWorkspace.shared.activateFileViewerSelecting([dir.appendingPathComponent("handoff.md")])
+        } else {
+            let alert = NSAlert()
+            alert.messageText = "Couldn't write the hand-off"
+            alert.informativeText = "Try another folder, like your Desktop."
+            alert.runModal()
         }
     }
 }

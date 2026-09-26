@@ -346,6 +346,34 @@ export function sameDecision(retired, decision) {
   return r === d || (Math.min(r.length, d.length) >= 12 && (d.startsWith(r) || r.startsWith(d)));
 }
 
+/**
+ * The decisions that still hold on a task, each once, credited to the brief
+ * that made it, newest brief first; and how many a later brief retired.
+ * `briefs` newest first, as a task's group comes. Redacted.
+ */
+export function currentDecisions(briefs) {
+  const credited = new Map();   // decision → the brief it currently counts for
+  let retiredCount = 0;
+  for (const b of [...briefs].reverse()) {
+    for (const r of b.outcome?.retired ?? []) {
+      for (const k of [...credited.keys()]) {
+        if (sameDecision(r, k)) { credited.delete(k); retiredCount += 1; }
+      }
+    }
+    for (const d of b.outcome?.decided ?? []) if (!credited.has(decisionKey(d))) credited.set(decisionKey(d), b.id);
+  }
+  const decisions = briefs.flatMap((b) => {
+    const seen = new Set();
+    const kept = (b.outcome?.decided ?? []).filter((d) => {
+      const k = decisionKey(d);
+      if (credited.get(k) !== b.id || seen.has(k)) return false;
+      return seen.add(k);
+    });
+    return redactNote(kept).map((text) => ({ id: b.id, text }));
+  });
+  return { decisions, retiredCount };
+}
+
 export function renderTaskNote({ id, title, collection = null, briefs }) {
   const first = briefDate(briefs.at(-1).id);
   const last = briefDate(briefs[0].id);
@@ -374,25 +402,8 @@ export function renderTaskNote({ id, title, collection = null, briefs }) {
   // RETIRED, NOT DELETED: a decision a later brief quotes under "## Retired"
   // stops being current (it stays in its own outcome.md), and one made again
   // after that is a new decision. So: walk the history oldest first.
-  const credited = new Map();   // decision → the brief it currently counts for
-  let retiredCount = 0;
-  for (const b of [...said].reverse()) {
-    for (const r of b.outcome?.retired ?? []) {
-      for (const k of [...credited.keys()]) {
-        if (sameDecision(r, k)) { credited.delete(k); retiredCount += 1; }
-      }
-    }
-    for (const d of b.outcome?.decided ?? []) if (!credited.has(decisionKey(d))) credited.set(decisionKey(d), b.id);
-  }
-  const decisions = said.flatMap((b) => {
-    const seen = new Set();
-    const kept = (b.outcome?.decided ?? []).filter((d) => {
-      const k = decisionKey(d);
-      if (credited.get(k) !== b.id || seen.has(k)) return false;
-      return seen.add(k);
-    });
-    return redactNote(kept).map((d) => `- ${briefDate(b.id)} (${b.id}): ${d}`);
-  });
+  const { decisions: current, retiredCount } = currentDecisions(said);
+  const decisions = current.map((d) => `- ${briefDate(d.id)} (${d.id}): ${d.text}`);
   const decided = decisions.slice(0, CAP.decided);
   // Trimmed, never silently: the older ones are still in their briefs.
   if (decisions.length > CAP.decided) {

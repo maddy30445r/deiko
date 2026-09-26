@@ -484,3 +484,32 @@ test("Forget and Edit on a task's notes reach every reader, and outcome.md is ne
   writeFileSync(join(root, "tasks", "t-20260915-100000.overrides.json"), "{ half");
   assert.match(note({ id: "t-20260915-100000", title: "Stale price", briefs: [...readBoard(`${root}/.`)].reverse() }), /It's the cache/);
 });
+
+test("a hand-off is clean Markdown for a person: redacted, corrected, screenshots beside it", async () => {
+  const { handoff } = await import("../handoff.mjs");
+  const root = mkdtempSync(join(tmpdir(), "deiko-handoff-"));
+  const a = join(root, "20260915-100000");
+  mkdirSync(join(a, "crops"), { recursive: true });
+  writeFileSync(join(a, "crops", "one.png"), "png");
+  writeFileSync(join(a, "crops", "gone.png"), "png");
+  writeFileSync(join(a, "brief.json"), JSON.stringify({
+    summary: { narration: "the price is stale, key AKIAIOSFODNN7EXAMPLE" },
+    referents: [{ cropPath: join(a, "crops", "one.png"), said: "this price" }, { cropPath: join(a, "crops", "gone.png"), said: "removed" }],
+  }));
+  writeFileSync(join(a, "crops.excluded.json"), JSON.stringify(["gone.png"]));
+  writeFileSync(join(a, "review-summary.txt"), "Fix the stale price.\n");
+  writeFileSync(join(a, "outcome.md"), "## Decided\n- It's the cache.\n- Keep the toast.\n## Open\n- Listing page.\n");
+  mkdirSync(join(root, "tasks"));
+  writeFileSync(join(root, "tasks", "t-20260915-100000.overrides.json"), JSON.stringify({ forget: ["It's the cache."] }));
+  const out = join(root, "out");
+  mkdirSync(out);
+  const md = handoff({ root, task: "t-20260915-100000", outDir: out });
+  assert.match(md, /^# Fix the stale price/);
+  assert.match(md, /## Where it stands\n\n- Listing page\./);
+  assert.match(md, /## Decided\n\n- Keep the toast\. \(Sep 15\)/);
+  assert.doesNotMatch(md, /It's the cache|AKIAIOSFODNN7EXAMPLE|removed/);
+  assert.match(md, /!\[this price\]\(screenshots\/20260915-100000-1\.png\)/);
+  assert.equal(existsSync(join(out, "screenshots", "20260915-100000-1.png")), true);
+  assert.equal(existsSync(join(out, "screenshots", "20260915-100000-2.png")), false, "a removed screenshot never travels");
+  assert.doesNotMatch(handoff({ root, task: "t-20260915-100000", images: false }), /!\[/);
+});
