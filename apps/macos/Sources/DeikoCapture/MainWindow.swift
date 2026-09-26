@@ -412,9 +412,17 @@ final class SessionsStore: ObservableObject {
     @Published private(set) var items: [Item] = [] {
         didSet {
             workCounts = BoardTimeline.workCounts(items.map { $0.setAside ? nil : $0.task })
+            // Once per board, not once per card: see `BoardTimeline.TaskIndex`.
+            taskIndex = BoardTimeline.TaskIndex(items.map {
+                .init(id: $0.id, task: $0.task, odds: $0.odds, date: $0.date, title: $0.title)
+            })
+            allGroups = groups(of: items)
             nameWork()
         }
     }
+    private var taskIndex = BoardTimeline.TaskIndex()
+    /// `groups(of: items)`, kept: every card's Move-to-task menu asks for it.
+    private var allGroups: [Group] = []
     /// Briefs per task, set-aside ones in none. A card wears its task's tag
     /// only where this is 2 or more.
     @Published private(set) var workCounts: [String: Int] = [:]
@@ -470,19 +478,17 @@ final class SessionsStore: ObservableObject {
     }
 
     func title(ofTask id: String) -> String {
-        taskTitles[id]
-            ?? items.filter { $0.task == id && !$0.odds }.min { $0.date < $1.date }?.title
-            ?? "A task"
+        taskTitles[id] ?? taskIndex.firstTitle(ofTask: id) ?? "A task"
     }
 
     func recentTasks(excluding id: String?) -> [Group] {
-        Array(groups(of: items).filter { $0.id != id }.prefix(20))
+        Array(allGroups.filter { $0.id != id }.prefix(20))
     }
 
     /// Whether any brief but `id` is in `task` — so "Start a new task" for a
     /// brief whose own id that is, and which is not in it, would join them.
     func hasOthers(inTask task: String, besides id: String) -> Bool {
-        items.contains { $0.task == task && !$0.odds && $0.id != id }
+        taskIndex.hasOthers(inTask: task, besides: id)
     }
 
     static let ownTaskTakenHelp = "Other briefs are already in the task this one started, so this would join them rather than start a new one."

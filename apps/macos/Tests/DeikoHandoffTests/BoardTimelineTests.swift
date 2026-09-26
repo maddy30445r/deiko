@@ -176,3 +176,31 @@ func fold() {
     #expect(String(out.folded) == "abdefg")
     #expect(String(BoardTimeline.fold(Array("Ca"), setAside: \.isLowercase).folded) == "a")
 }
+
+@Test("the task index answers exactly what walking the whole board answered, on random boards")
+func taskIndexMatchesTheWalk() {
+    var rng = SystemRandomNumberGenerator()
+    for _ in 0..<300 {
+        let tasks = (0..<Int.random(in: 1...6, using: &rng)).map { "t-\($0)" }
+        let briefs: [BoardTimeline.TaskIndex.Brief] = (0..<Int.random(in: 0...40, using: &rng)).map { i in
+            .init(
+                id: "b\(i)",
+                task: tasks.randomElement(using: &rng)!,
+                odds: Int.random(in: 0..<5, using: &rng) == 0,
+                // Few distinct dates, so ties happen and the first of equals must win.
+                date: Date(timeIntervalSince1970: Double(Int.random(in: 0..<6, using: &rng)) * 60),
+                title: "title \(i)"
+            )
+        }
+        let index = BoardTimeline.TaskIndex(briefs)
+        for task in tasks + ["t-none"] {
+            // The old code, verbatim in spirit: filter the whole board each time.
+            let walked = briefs.filter { $0.task == task && !$0.odds }.min { $0.date < $1.date }?.title
+            #expect(index.firstTitle(ofTask: task) == walked)
+            for id in briefs.map(\.id) + ["b-none"] {
+                let walkedOthers = briefs.contains { $0.task == task && !$0.odds && $0.id != id }
+                #expect(index.hasOthers(inTask: task, besides: id) == walkedOthers)
+            }
+        }
+    }
+}

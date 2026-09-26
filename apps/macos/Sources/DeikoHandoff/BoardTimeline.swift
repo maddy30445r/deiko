@@ -54,6 +54,41 @@ public enum BoardTimeline {
         tasks.reduce(into: [:]) { tally, task in if let task { tally[task, default: 0] += 1 } }
     }
 
+    /// THE TWO QUESTIONS EVERY CARD ASKS — "is anyone else in this task?" and
+    /// "what is this task called?" — answered once per board instead of once
+    /// per card. Each used to walk every brief, so a board of n cards did n²
+    /// work on every redraw. Same answers exactly: odds and ends are in no
+    /// task, and a task's fallback title is its OLDEST brief's (the first of
+    /// equal dates, as `min(by:)` picks).
+    public struct TaskIndex: Sendable {
+        public struct Brief: Sendable {
+            public let id: String, task: String, odds: Bool, date: Date, title: String
+            public init(id: String, task: String, odds: Bool, date: Date, title: String) {
+                self.id = id; self.task = task; self.odds = odds; self.date = date; self.title = title
+            }
+        }
+        private var members: [String: Int] = [:]
+        private var taskOf: [String: String] = [:]
+        private var oldest: [String: (date: Date, title: String)] = [:]
+
+        public init(_ briefs: [Brief] = []) {
+            for b in briefs where !b.odds {
+                members[b.task, default: 0] += 1
+                taskOf[b.id] = b.task
+                if let seen = oldest[b.task], !(b.date < seen.date) { continue }
+                oldest[b.task] = (b.date, b.title)
+            }
+        }
+
+        /// Whether any brief but `id` is in `task`.
+        public func hasOthers(inTask task: String, besides id: String) -> Bool {
+            (members[task] ?? 0) - (taskOf[id] == task ? 1 : 0) > 0
+        }
+
+        /// The oldest brief's title, for a task nobody named.
+        public func firstTitle(ofTask task: String) -> String? { oldest[task]?.title }
+    }
+
     /// Whether Deiko put this brief in another brief's task on its own — the
     /// case the card announces as "Added to … · Undo". Its own task, a hand
     /// placement or odds and ends is nothing to announce.
