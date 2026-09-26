@@ -10,7 +10,8 @@
  * Pure, except `readTasks` and `writeTaskNotes`.
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
+import { writeAtomic } from "./session-io.mjs";
 import { join } from "node:path";
 
 import { redact, redactNote } from "./redact.mjs";
@@ -393,7 +394,7 @@ export function writeTaskNotes(root) {
     const path = join(dir, `${id}.md`);
     if (existsSync(path) && readFileSync(path, "utf8") === text) continue;
     mkdirSync(dir, { recursive: true });
-    writeFileSync(path, text);
+    writeAtomic(path, text);
     written += 1;
   }
   return written;

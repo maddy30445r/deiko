@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import {
-  closeSync, constants, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync, writeSync,
+  closeSync, constants, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, writeSync,
 } from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 import { readBriefLine } from "../lib/context.mjs";
-import { readListToRewrite } from "../lib/session-io.mjs";
+import { readListToRewrite, writeAtomic } from "../lib/session-io.mjs";
 import { DEFAULT_MODEL, briefText, isReady, vectorIsCurrent } from "../lib/meaning.mjs";
 
 const run = promisify(execFile);
@@ -588,6 +588,26 @@ test("readListToRewrite: missing is empty, unreadable is null, a list is a list"
   }
   writeFileSync(path, '[{"id":"shop","name":"Shop"}]');
   assert.deepEqual(readListToRewrite(path), [{ id: "shop", name: "Shop" }]);
+});
+
+test("writeAtomic: the file is the old version or the new one, and no temp file is left", () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-atomic-"));
+  const path = join(root, "tasks.json");
+  writeAtomic(path, "[1]");
+  writeAtomic(path, "[1,2]");
+  assert.equal(readFileSync(path, "utf8"), "[1,2]");
+  // A write that cannot land (the target is a folder) throws and cleans up after itself.
+  const folder = join(root, "notes");
+  mkdirSync(folder);
+  assert.throws(() => writeAtomic(folder, "x"));
+  assert.equal(statSync(folder).isDirectory(), true);
+  assert.deepEqual(readdirSync(root).sort(), ["notes", "tasks.json"]);
+});
+
+test("every board write in the pipeline goes through writeAtomic", () => {
+  for (const f of ["classify.mjs", "render-brief.mjs", "summarize.mjs", "transcribe.mjs", "lib/tasks.mjs", "lib/meaning.mjs"]) {
+    assert.doesNotMatch(readFileSync(join(scripts, f), "utf8"), /\bwriteFileSync\(/, f);
+  }
 });
 
 test("a request that never connected leaves no sent marker; one that got an answer keeps it", async () => {

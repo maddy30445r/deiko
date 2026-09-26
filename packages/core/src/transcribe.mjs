@@ -17,7 +17,7 @@
  * Whisper, and the aligner never noticed the swap.
  */
 
-import { readFileSync, writeFileSync, existsSync, rmSync, statSync } from "node:fs";
+import { readFileSync, existsSync, rmSync, statSync } from "node:fs";
 import { resolve, join, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -27,7 +27,7 @@ import { fileURLToPath } from "node:url";
 // because the whole point of normalising here is to match what the aligner
 // will match on.
 import { normalizeWord } from "../packages/alignment/dist/src/deictic.js";
-import { awaitPrecomputed, loadEvents } from "./lib/session-io.mjs";
+import { awaitPrecomputed, loadEvents, writeAtomic } from "./lib/session-io.mjs";
 import { refusalReason, REFUSAL_IS_FINAL, withOneRetry } from "./lib/cloud.mjs";
 
 
@@ -1189,7 +1189,7 @@ async function main() {
 
   const out = join(dir, "transcript.json");
   await timed("write", async () =>
-    writeFileSync(
+    writeAtomic(
       out,
       JSON.stringify(
         // Carried into the file, not just printed: the renderer and the orb
@@ -1220,7 +1220,7 @@ async function main() {
   // Best effort. A cache that cannot be written costs time on the next run and
   // nothing else — never fail a good transcript over it.
   try {
-    writeFileSync(cachePath, JSON.stringify(cache));
+    writeAtomic(cachePath, JSON.stringify(cache));
   } catch { /* not worth reporting */ }
 
   const anchored = allWords.filter((w) => w.anchored).length;

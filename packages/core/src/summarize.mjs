@@ -20,7 +20,8 @@
  * simply absent and the window shows no summary. Nothing downstream waits on it.
  */
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
+import { writeAtomic } from "./lib/session-io.mjs";
 import { resolve, join } from "node:path";
 import { homedir } from "node:os";
 
@@ -166,7 +167,7 @@ async function main() {
   }
 
   const out = join(dir, "review-summary.txt");
-  writeFileSync(out, `${text}\n`);
+  writeAtomic(out, `${text}\n`);
   console.error(`✓ summary → ${out}`);
 }
 

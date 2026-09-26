@@ -7,9 +7,28 @@
  * yet; this is here so nothing has to be.
  */
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+
+/**
+ * Write a board file so it is either the old version or the new one, never half.
+ *
+ * `writeFileSync` empties the file and then writes it: a quit, a crash or a full
+ * disk in between leaves it empty or cut off, and the next reader takes that for
+ * the truth. Writing a temp file beside it and renaming it over the original is
+ * one step the filesystem does all at once.
+ */
+export function writeAtomic(path, data) {
+  const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    writeFileSync(tmp, data);
+    renameSync(tmp, path);
+  } catch (e) {
+    rmSync(tmp, { force: true });
+    throw e;
+  }
+}
 
 /**
  * A JSON list that is about to be REWRITTEN (`tasks.json`, `collections.json`).

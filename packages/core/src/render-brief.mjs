@@ -19,13 +19,13 @@
  * payload the end user has to read in their own chat.
  */
 
-import { readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
+import { readFileSync, existsSync, rmSync } from "node:fs";
 import { resolve, join, basename, dirname } from "node:path";
 
 import { align, joinWords } from "../packages/alignment/dist/src/align.js";
 import { loadSession } from "../packages/alignment/dist/src/referents/session.js";
 import { toCandidates } from "../packages/alignment/dist/src/referents/candidates.js";
-import { loadEvents } from "./lib/session-io.mjs";
+import { loadEvents, writeAtomic } from "./lib/session-io.mjs";
 import { carriesSecret, assertNoSecrets, redact, redactBlock } from "./lib/redact.mjs";
 import { briefKeys, repoHints } from "./lib/labels.mjs";
 import { buildPrompt, quoteSurvives } from "./lib/prompt.mjs";
@@ -379,14 +379,14 @@ const attached = buildPrompt({
 // `evidence` is narration and screen text only, which is the only place a
 // secret this renderer didn't put there could hide.
 assertNoSecrets(evidence);
-writeFileSync(outPath, text);
+writeAtomic(outPath, text);
 // One assertion covers both: the two variants differ only in how the SCREENSHOT
 // SECTION is written — Deiko's own words either way — and are built from the
 // same narration and the same referents, so their evidence is identical. Guard
 // it anyway rather than assume: the cost is microseconds and the assumption is
 // exactly the kind that quietly stops being true.
 assertNoSecrets(attached.evidence);
-writeFileSync(join(dir, "prompt-attached.txt"), attached.text);
+writeAtomic(join(dir, "prompt-attached.txt"), attached.text);
 
 /** The most frequent words read off the screen, redacted. Local only. */
 function screenTerms(referents) {
@@ -489,7 +489,7 @@ const manifest = {
   })),
 };
 const withheld = manifest.referents.filter((r) => r.cropWithheld).length;
-writeFileSync(join(dir, "brief.json"), JSON.stringify(manifest, null, 2) + "\n");
+writeAtomic(join(dir, "brief.json"), JSON.stringify(manifest, null, 2) + "\n");
 // After brief.json, so this brief is in its own task's note. One unwritable
 // note (a full disk, a permissions error, `tasks` existing as a plain file)
 // must not fail a render that already wrote prompt.txt and brief.json.

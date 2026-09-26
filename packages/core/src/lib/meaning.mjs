@@ -15,7 +15,8 @@
  * Keep a resident process if that is ever felt.
  */
 import { createHash } from "node:crypto";
-import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
+import { writeAtomic } from "./session-io.mjs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -163,8 +164,8 @@ export function vectorIsCurrent(sessionDir, key, text) {
 }
 
 export function writeVector(sessionDir, key, vec, text) {
-  writeFileSync(join(sessionDir, "meaning.f32"), Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength));
-  writeFileSync(join(sessionDir, "meaning.json"), JSON.stringify({ model: key, dims: vec.length, text: digest(text) }) + "\n");
+  writeAtomic(join(sessionDir, "meaning.f32"), Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength));
+  writeAtomic(join(sessionDir, "meaning.json"), JSON.stringify({ model: key, dims: vec.length, text: digest(text) }) + "\n");
 }
 
 async function sha256File(path) {
@@ -216,5 +217,5 @@ export async function download({
     }
     renameSync(part, dest);
   }
-  writeFileSync(join(dir, ".complete"), JSON.stringify({ model: key, at: new Date().toISOString() }) + "\n");
+  writeAtomic(join(dir, ".complete"), JSON.stringify({ model: key, at: new Date().toISOString() }) + "\n");
 }

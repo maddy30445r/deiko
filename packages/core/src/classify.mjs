@@ -52,14 +52,14 @@
  * decided here or by Jev is, when there is more to go on.
  */
 
-import { readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 
 import { CLASSIFIER, unplaceable } from "./lib/context.mjs";
 import { briefText, loadModel, readVector, vectorIsCurrent, writeVector } from "./lib/meaning.mjs";
 import { readTasks, titleFor } from "./lib/tasks.mjs";
-import { readListToRewrite } from "./lib/session-io.mjs";
+import { readListToRewrite, writeAtomic } from "./lib/session-io.mjs";
 import {
   decideLocally, olderBoard, place, prepare, rankLocally, readCollections, requestClassify, sessionInputs,
 } from "./lib/filing.mjs";
@@ -148,7 +148,7 @@ async function main() {
       console.error("· placed by hand while we were looking — leaving it");
       return;
     }
-    writeFileSync(contextPath, JSON.stringify(context, null, 2) + "\n");
+    writeAtomic(contextPath, JSON.stringify(context, null, 2) + "\n");
     console.error(context.task ? `✓ context → joins ${context.task} here (${why})` : `· ${why} — odds and ends`);
     return;
   }
@@ -207,7 +207,7 @@ async function main() {
     // Before the network call, not after: everything below can fail or
     // never resolve, and by the time any of them do, the body — narration,
     // summary, window titles — has already gone out.
-    writeFileSync(sentMarker, JSON.stringify(mine) + "\n");
+    writeAtomic(sentMarker, JSON.stringify(mine) + "\n");
     let response = await post();
     answered = true;
     // ONE RETRY, ON A 5XX ONLY. Measured live: about one call in ten came
@@ -237,7 +237,7 @@ async function main() {
     // Only this run's marker: a newer request's is that one's to keep.
     if (!answered && NEVER_CONNECTED.has(err?.cause?.code) && sentAt() === mine.at) {
       if (previous === null) rmSync(sentMarker, { force: true });
-      else writeFileSync(sentMarker, previous);
+      else writeAtomic(sentMarker, previous);
     }
     console.error(`· classification failed (${err.message.slice(0, 80)}) — skipping`);
     return;
@@ -289,7 +289,7 @@ async function main() {
       if (!listed) unreadable("collections.json");
       else if (!listed.some((c) => c?.id === decision.newCollection.id)) {
         listed.push({ ...decision.newCollection, hint: "" });
-        writeFileSync(join(root, "collections.json"), JSON.stringify(listed, null, 2) + "\n");
+        writeAtomic(join(root, "collections.json"), JSON.stringify(listed, null, 2) + "\n");
       } else {
         decision.collection = decision.newCollection.id;
       }
@@ -304,7 +304,7 @@ async function main() {
       if (!list) unreadable("tasks.json");
       else if (!list.some((t) => t?.id === decision.newTask.id)) {
         list.push({ ...decision.newTask, from: me.summaryLine ? "summary" : "narration" });
-        writeFileSync(join(root, "tasks.json"), JSON.stringify(list, null, 2) + "\n");
+        writeAtomic(join(root, "tasks.json"), JSON.stringify(list, null, 2) + "\n");
       }
     }
 
@@ -316,7 +316,7 @@ async function main() {
       const row = list?.find((t) => t?.id === decision.task);
       if (row?.from === "narration") {
         Object.assign(row, { title: titleFor(me), from: "summary" });
-        writeFileSync(join(root, "tasks.json"), JSON.stringify(list, null, 2) + "\n");
+        writeAtomic(join(root, "tasks.json"), JSON.stringify(list, null, 2) + "\n");
       }
     }
   }
@@ -337,7 +337,7 @@ async function main() {
       // Every probability, and the shortlist in the order sent, for tuning.
       jev: decision.jev,
     };
-  writeFileSync(contextPath, JSON.stringify(context, null, 2) + "\n");
+  writeAtomic(contextPath, JSON.stringify(context, null, 2) + "\n");
   console.error(decision.pile === "odds"
     ? `✓ context → odds and ends (not a request, ${decision.jev.gate})`
     : `✓ context → ${context.collection ?? "unsorted"} · ${decision.newTask ? "new task" : `joins ${context.task}`}`
