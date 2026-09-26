@@ -182,6 +182,9 @@ async function searchBriefs({ query, limit = 8 } = {}) {
       return {
         brief: b.id, date: briefDate(b.id), task,
         taskTitle: redact(titles.get(task) ?? titleFor(b.me)),
+        // Search spans every project; this says which one, so an agent can
+        // pass over another project's brief rather than take it as its own.
+        project: redact(collectionName(ROOT, b.me.collection) ?? "Unsorted"),
         said: said(b.me.line),
         prompt: join(b.dir, "prompt.txt"),
       };
@@ -249,7 +252,7 @@ function getBrief({ id } = {}) {
 const TOOLS = [
   {
     name: "search_briefs",
-    description: "Search the developer's past Deiko briefs on this Mac: what they said, the screens they pointed at and what agents wrote back. Returns brief ids, dates, their task and one line each. Open one with get_brief, or its task with get_task.",
+    description: "Search the developer's past Deiko briefs on this Mac: what they said, the screens they pointed at and what agents wrote back. Returns brief ids, dates, their task and project, and one line each; results can come from any project. Open one with get_brief, or its task with get_task.",
     inputSchema: { type: "object", properties: { query: { type: "string", description: "What to look for, in plain words" }, limit: { type: "integer", minimum: 1, maximum: 20 } }, required: ["query"] },
   },
   {

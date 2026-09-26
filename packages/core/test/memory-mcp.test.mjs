@@ -41,7 +41,8 @@ function board() {
     { type: "probe", t: 2, windowTitle: "Pricing — build", snapshot: { elements: [] }, crop: { path: gone, ocr: [{ text: `${REMOVED_WORDS} on the removed shot` }] } },
   ].map((e) => JSON.stringify(e)).join("\n") + "\n");
   writeFileSync(join(b, "brief.json"), JSON.stringify({ summary: { narration: "same price bug on the listing page", apps: [], windows: [] }, referents: [] }));
-  writeFileSync(join(b, "context.json"), JSON.stringify({ task: "t-20260918-100000", decidedBy: "you" }));
+  writeFileSync(join(b, "context.json"), JSON.stringify({ task: "t-20260918-100000", decidedBy: "you", collection: "shop" }));
+  writeFileSync(join(root, "collections.json"), JSON.stringify([{ id: "shop", name: "Shop", hint: "" }]));
   return root;
 }
 
@@ -96,6 +97,8 @@ test("the memory helper speaks MCP and hands back only what a brief already shar
     const found = await s.tool("search_briefs", { query: "price listing" });
     assert.ok(found.value.some((r) => r.brief === "20260918-100000"));
     assert.ok(found.value.every((r) => r.prompt.endsWith("/prompt.txt")));
+    assert.equal(found.value.find((r) => r.brief === "20260918-110000")?.project, "Shop", "each result names its project");
+    assert.equal(found.value.find((r) => r.brief === "20260918-100000")?.project, "Unsorted");
 
     // A REMOVED SCREENSHOT IS INVISIBLE TO SEARCH TOO — not only to answers.
     // A match alone would tell the agent something about a screenshot the
