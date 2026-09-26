@@ -55,6 +55,13 @@ final class MainNav: ObservableObject {
     /// The one brief the board is showing, by session id, or nil.
     @Published var brief: String?
 
+    /// Open one piece of work on the board.
+    func open(work id: String) {
+        section = .board
+        brief = nil
+        work = id
+    }
+
     /// Show one brief on the board, from wherever it was picked.
     func open(brief id: String) {
         section = .board
@@ -719,6 +726,7 @@ final class SessionsStore: ObservableObject {
 private struct DashboardPane: View {
     @ObservedObject var sessions: SessionsStore
     @State private var copied: String?
+    @State private var week: [WeekDigest.Row] = []
 
     var body: some View {
         PaneScroll(title: "Dashboard", lede: "What Deiko has heard on this Mac.") {
@@ -741,6 +749,10 @@ private struct DashboardPane: View {
                     stat("\(sessions.items.reduce(0) { $0 + $1.crops.count })", "screenshots drawn",
                          "the crops that travelled with your briefs")
                 }
+                // On a view that is always there: a task on an empty one never runs.
+                .task(id: WeekDigest.key(sessions)) { week = await WeekDigest.load(sessions) }
+
+                WeekDigest(rows: week)
 
                 if !sessions.topApps.isEmpty {
                     SectionLabel("Where you point")
@@ -861,6 +873,92 @@ private struct DashboardPane: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
         .deikoCard()
+    }
+}
+
+/// THIS WEEK, WHERE THINGS STAND: every piece of work that had a brief in
+/// the last seven days, busiest first, with what its last agent left open —
+/// read the way the work view reads it, corrections applied. All on this Mac.
+struct WeekDigest: View {
+    let rows: [Row]
+
+    struct Row: Identifiable, Sendable {
+        let id: String
+        let name: String
+        let briefs: Int
+        let open: [String]
+        let wroteBack: Bool
+    }
+
+    var body: some View {
+        if !rows.isEmpty {
+            SectionLabel("This week")
+            InsetCard {
+                ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                    if index > 0 { Divider().padding(.horizontal, 14) }
+                    Button { MainNav.shared.open(work: row.id) } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(alignment: .firstTextBaseline) {
+                                Text(row.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                                Spacer()
+                                Text("\(row.briefs) brief\(row.briefs == 1 ? "" : "s")")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(DeikoStyle.ink2)
+                            }
+                            Text(Self.summary(row))
+                                .font(.system(size: 12))
+                                .foregroundStyle(DeikoStyle.ink2)
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .tip("Open this work on the board")
+                }
+            }
+        }
+    }
+
+    /// What changes this section: the briefs of the last seven days.
+    @MainActor static func key(_ sessions: SessionsStore) -> String {
+        recent(sessions).map(\.id).joined(separator: ",")
+    }
+
+    @MainActor private static func recent(_ sessions: SessionsStore) -> [SessionsStore.Item] {
+        let since = Date().addingTimeInterval(-7 * 24 * 3600)
+        return sessions.items.filter { $0.date > since && !$0.setAside }
+    }
+
+    /// Busiest first, six at most; where each stands is its newest outcome in
+    /// the whole work, not only this week's, with its corrections applied.
+    @MainActor static func load(_ sessions: SessionsStore) async -> [Row] {
+        struct Work: Sendable { let task: String; let count: Int; let name: String; let dirs: [String] }
+        let groups: [String: [SessionsStore.Item]] = Dictionary(grouping: recent(sessions), by: \.task)
+        let counted: [(task: String, count: Int)] = groups.map { (task: $0.key, count: $0.value.count) }
+        let order = counted.sorted { a, b in a.count != b.count ? a.count > b.count : a.task > b.task }.prefix(6)
+        let work: [Work] = order.map { entry in
+            let dirs = sessions.items.filter { $0.task == entry.task && !$0.setAside }.map(\.dir)
+            return Work(task: entry.task, count: entry.count, name: sessions.workName(ofTask: entry.task), dirs: dirs)
+        }
+        return await Task.detached(priority: .utility) {
+            let fixes = TaskMemoryEdits.all()
+            return work.map { w in
+                let newest = w.dirs.lazy.compactMap { dir in
+                    try? String(contentsOf: URL(fileURLWithPath: dir).appendingPathComponent("outcome.md"), encoding: .utf8)
+                }.first
+                let o = newest.map { fixes[w.task]?.applied(to: BoardTimeline.outcome($0)) ?? BoardTimeline.outcome($0) }
+                return Row(id: w.task, name: w.name, briefs: w.count, open: o?.open ?? [], wroteBack: o != nil)
+            }
+        }.value
+    }
+
+    private static func summary(_ row: Row) -> String {
+        if !row.wroteBack { return "No agent has written back on this yet." }
+        guard let first = row.open.first else { return "Nothing left open." }
+        return row.open.count == 1 ? "Still open: \(first)" : "Still open: \(first) (+\(row.open.count - 1) more)"
     }
 }
 

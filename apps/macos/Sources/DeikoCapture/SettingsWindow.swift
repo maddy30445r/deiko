@@ -179,6 +179,14 @@ final class SettingsModel: ObservableObject {
     /// judgement where it actually sits.
     @Published var optimizeCosts = UserDefaults.standard.bool(forKey: BriefPipeline.optimizeCostsKey)
 
+    /// The Monday note — see `WeeklyNote`. Off unless turned on.
+    @Published var weeklyNote = WeeklyNote.enabled
+
+    func setWeeklyNote(_ on: Bool) {
+        WeeklyNote.setEnabled(on)
+        weeklyNote = on
+    }
+
     func setOptimizeCosts(_ on: Bool) {
         UserDefaults.standard.set(on, forKey: BriefPipeline.optimizeCostsKey)
         optimizeCosts = on
@@ -426,6 +434,18 @@ struct SettingsView: View {
                 ))
                 .font(.system(size: 13))
                 Text("Adds one line to a small brief saying a fast model is probably enough. Your agent still decides for itself — Deiko has never picked the model and this does not change that.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(DeikoStyle.ink2)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Divider()
+
+                Toggle("A Monday note on where things stand", isOn: Binding(
+                    get: { model.weeklyNote },
+                    set: { model.setWeeklyNote($0) }
+                ))
+                .font(.system(size: 13))
+                Text("Monday morning, one notification: how many pieces of work moved last week and how many still have something open. Click it for the list. Made on your Mac from your board.")
                     .font(.system(size: 11))
                     .foregroundStyle(DeikoStyle.ink2)
                     .fixedSize(horizontal: false, vertical: true)

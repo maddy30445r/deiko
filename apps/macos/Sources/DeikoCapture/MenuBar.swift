@@ -294,6 +294,8 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Briefs that couldn't be filed when they were made (offline, the
         // filing service busy) are filed when the network is back.
         FilingQueue.shared.start()
+        WeeklyNote.shared.onOpen = { [weak self] in self?.main.present(.dashboard) }
+        WeeklyNote.shared.start()
         // Remove the MCP entry earlier versions wrote. Nothing registers
         // anything any more; this is only clearing up after what did.
         LegacyMCP.cleanUpOnce()
