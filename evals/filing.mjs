@@ -6,6 +6,7 @@
  *     [--labels ~/Documents/Deiko-eval/filing-labels.json]
  *     [--shortlist-only] [--relay <url>] [--pace <ms>] [--all] [--draft]
  *     [--model <key>|off] [--replay key|guessed]
+ *     [--record <answers.json>] [--answers <answers.json> [--sweep]]
  *   node scripts/eval-filing.mjs --from-corrections [--write]
  *     every brief placed by hand since, proposed as new answer-key entries
  *
@@ -30,14 +31,22 @@
  * memory only, from this run's own briefs; nothing is read from or written to
  * a brief's meaning.f32, so either model can be compared without touching
  * the board.
+ *
+ * THE SWEEP (4.3). --record saves every relay answer of a full run; --answers
+ * replays them instead of asking the relay (no network, no allowance), and
+ * --sweep then scores a grid of join and ask numbers on those same answers.
+ * It prints; a person picks. Valid because on the answer key's board what
+ * Jev is asked never depends on how earlier briefs were filed. Two limits:
+ * the relay asks its second look only above its own floor (0.35), so asks
+ * below that and gates below 0.5 can't be judged offline.
  */
-import { copyFileSync, readdirSync } from "node:fs";
+import { copyFileSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
-import { STAMP, readBriefLine, unplaceable } from "./lib/context.mjs";
+import { RULES, STAMP, readBriefLine, unplaceable } from "./lib/context.mjs";
 import { decideLocally, place, prepare, rankLocally, requestClassify, sessionInputs } from "./lib/filing.mjs";
-import { correctionLabels, draftLabels, expectations, formatReport, outcomeOf, rankOf, readLabels } from "./lib/eval.mjs";
+import { correctionLabels, draftLabels, expectations, formatReport, outcomeOf, rankOf, readLabels, tally } from "./lib/eval.mjs";
 import { DEIKO_HOME, briefText, currentModel, loadModel } from "./lib/meaning.mjs";
 import { readTasks, titleFor } from "./lib/tasks.mjs";
 import { writeAtomic } from "./lib/session-io.mjs";
@@ -81,6 +90,13 @@ if (flag("--draft")) {
 
 const shortlistOnly = flag("--shortlist-only");
 const replayGuessed = value("--replay", "key") === "guessed";
+const recordPath = value("--record") && home(value("--record"));
+const recorded = value("--answers") ? JSON.parse(readFileSync(home(value("--answers")), "utf8")) : null;
+const answers = {};
+if (flag("--sweep") && (!recorded || replayGuessed)) {
+  console.error("✗ --sweep needs --answers <file> from a --record run, on the answer key's board (not --replay guessed)");
+  process.exit(2);
+}
 if (replayGuessed && shortlistOnly) {
   console.error("✗ --replay guessed needs the classifier's answers — drop --shortlist-only");
   process.exit(2);
@@ -90,18 +106,22 @@ if (replayGuessed && shortlistOnly) {
 const paceMs = Number(value("--pace", "1500"));
 const relay = value("--relay", process.env.DEIKO_CLASSIFY_URL || process.env.DEIKO_RELAY_URL);
 const token = process.env.DEIKO_CLASSIFY_TOKEN || process.env.DEIKO_RELAY_TOKEN || null;
-if (!shortlistOnly && !relay) {
+if (!shortlistOnly && !relay && !recorded) {
   console.error("✗ no relay — pass --relay <url>, set DEIKO_CLASSIFY_URL, or use --shortlist-only");
   process.exit(2);
 }
 // The app's "Sort briefs into tasks" switch, as `make eval` passes it: off means
 // no narration leaves for sorting, so full mode needs an explicit --relay.
-if (!shortlistOnly && process.env.DEIKO_SORT_BRIEFS === "0" && !flag("--relay")) {
+if (!shortlistOnly && !recorded && process.env.DEIKO_SORT_BRIEFS === "0" && !flag("--relay")) {
   console.error("✗ sorting is off in Settings — pass --relay <url> to send the briefs anyway, or use --shortlist-only");
   process.exit(2);
 }
 
-async function ask(body, pause = 0) {
+async function ask(body, pause = 0, stamp = null) {
+  if (recorded) {
+    if (!recorded[stamp]) throw new Error("not in --answers");
+    return recorded[stamp];
+  }
   if (pause > 0) await new Promise((r) => setTimeout(r, pause));
   let res = await requestClassify({ url: relay, token, body });
   if (res.status >= 500) {
@@ -109,7 +129,9 @@ async function ask(body, pause = 0) {
     res = await requestClassify({ url: relay, token, body });
   }
   if (!res.ok) throw new Error(`relay ${res.status}`);
-  return res.json();
+  const answer = await res.json();
+  if (stamp) answers[stamp] = answer;
+  return answer;
 }
 
 const inputsOf = new Map();
@@ -151,9 +173,11 @@ for (const [stamp, e] of exp) {
     const why = unplaceable(me);
     const use = blended ?? prep;
     try {
+      const args = why ? null : { answer: await ask(use.body, paceMs, stamp), id: stamp, me, summary, groups: use.groups, shortlist: use.shortlist, collections: [...collections] };
       const decision = why
         ? decideLocally({ me, ...rankLocally({ me, summary, windowTitles, board, taskTitles }), collections })
-        : place({ answer: await ask(use.body, paceMs), id: stamp, me, summary, groups: use.groups, shortlist: use.shortlist, collections });
+        : place(args);
+      row.args = args;
       if (decision.newCollection && !collections.some((c) => c.id === decision.newCollection.id)) {
         collections.push({ ...decision.newCollection, hint: "" });
       }
@@ -187,6 +211,25 @@ for (const [stamp, e] of exp) {
     done.push({ ...me, task: e.task, odds: e.want === "odds", decidedBy: "you", taskBy: "you" });
     if (e.want === "new") taskTitles.set(e.task, titleFor(me));
   }
+}
+if (recordPath) {
+  writeAtomic(recordPath, JSON.stringify(answers) + "\n");
+  console.error(`· ${Object.keys(answers).length} relay answers saved to ${recordPath}`);
+}
+if (flag("--sweep")) {
+  const scored = [];
+  for (const first of [0.5, 0.55, 0.6, 0.65, 0.7]) for (const second of [0.3, 0.4, 0.5]) for (const gap of [0.1, 0.15, 0.2, 0.25])
+    for (const askAt of [0.35, 0.4, 0.45, 0.5]) for (const gate of [0.5, 0.6]) {
+      const rules = { gate, ask: askAt, join: { ...RULES.join, first, second, gap } };
+      const t = tally(rows.filter((r) => r.out).map((r) => ({ ...r, out: r.args ? outcomeOf(place({ ...r.args, rules }), r.stamp) : r.out })));
+      scored.push({ t, label: `gate ${gate} · join first ${first} second ${second} gap ${gap} · ask ${askAt}`, now: gate === RULES.gate && askAt === RULES.ask && first === RULES.join.first && second === RULES.join.second && gap === RULES.join.gap });
+    }
+  scored.sort((a, b) => b.t.correct - a.t.correct || a.t.asks - b.t.asks);
+  const line = ({ t, label, now }) => `${now ? "→" : " "} ${String(t.correct).padStart(3)}/${t.n} right · asks ${t.asks}/${t.real} · ${label}`;
+  console.log(`THE SWEEP, on ${rows.filter((r) => r.out).length} recorded briefs (→ is today's numbers). Printed only: a person picks.`);
+  for (const r of scored.slice(0, 15)) console.log(line(r));
+  if (!scored.slice(0, 15).some((r) => r.now)) console.log(line(scored.find((r) => r.now)));
+  process.exit(0);
 }
 const report = formatReport({ rows, shortlistOnly, errored, all: flag("--all") });
 process.stdout.write(`meaning model: ${model ? model.key : "none (word matching only)"} · replayed on ${replayGuessed ? "its own guesses" : "the answer key"}\n${report}\n`);

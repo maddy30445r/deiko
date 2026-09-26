@@ -199,7 +199,7 @@ export function decideLocally({ me, local, groups, collections }) {
   return context;
 }
 
-export function place({ answer, id, me, summary, groups, shortlist, collections }) {
+export function place({ answer, id, me, summary, groups, shortlist, collections, rules }) {
   const ids = shortlist.map((t) => t.id);
   return decide({
     answers: answer?.answers ?? {},
@@ -215,6 +215,7 @@ export function place({ answer, id, me, summary, groups, shortlist, collections 
     taskCollections: Object.fromEntries(ids.map((t) => [t, groups.get(t).find((b) => b.collection)?.collection ?? null])),
     sessionId: id,
     title: titleFor(me),
+    rules,
   });
 }
 

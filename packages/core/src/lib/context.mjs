@@ -132,6 +132,9 @@ export const GATE = 0.5;
 /// same page or file needs less from round one (`recent`).
 export const JOIN = { first: 0.6, second: 0.4, gap: 0.2, recent: 0.5, recentMs: 30 * 60e3 };
 export const ASK = 0.35;
+/// The three together, as `decide` takes them. Only the filing eval's
+/// `--sweep` passes others, to show what different numbers would have done.
+export const RULES = { gate: GATE, join: JOIN, ask: ASK };
 /// The relation levels, in order. MIRRORS `RELATION_RUBRIC` in the relay.
 export const RELATIONS = ["different", "related", "same"];
 
@@ -198,7 +201,7 @@ const otherTicket = (a, b) => {
 export function decide({
   answers = {}, second = {}, collections = [], keys = {}, apps = [],
   shortlist = [], taskKeys = {}, newest = {}, now = 0,
-  taskCollections = {}, sessionId = null, title = null,
+  taskCollections = {}, sessionId = null, title = null, rules = RULES,
 } = {}) {
   // AN UNREADABLE GATE IS A MISSING ONE, as the relay reads it (`finalists`):
   // `Number(null)` is 0, so coercing first would send a real brief to odds.
@@ -225,7 +228,7 @@ export function decide({
     out.confidence.tier = answers.tier.confidence ?? null;
   }
 
-  if (gate < GATE) {
+  if (gate < rules.gate) {
     out.pile = "odds";
     out.why = jev.why = "odds";
     return out;
@@ -244,16 +247,16 @@ export function decide({
     const look = looks[best];
     const theirs = taskKeys[best] ?? {};
     const next = Math.max(0, ...open.filter((id) => id !== best).map(p));
-    const recent = now - (newest[best] ?? -Infinity) < JOIN.recentMs
+    const recent = now - (newest[best] ?? -Infinity) < rules.join.recentMs
       && (meets(keys.pages, theirs.pages) || meets(keys.files, theirs.files));
-    if (look.relation === "same" && look.same >= JOIN.second
-      && first >= (recent ? JOIN.recent : JOIN.first) && first - next >= JOIN.gap) {
+    if (look.relation === "same" && look.same >= rules.join.second
+      && first >= (recent ? rules.join.recent : rules.join.first) && first - next >= rules.join.gap) {
       // A bug found on one page is often fixed on another: ask, don't block.
       if (differ(keys.pages, theirs.pages)) {
         why = "ask-page";
         candidates = [best];
       } else {
-        why = first < JOIN.first ? "join-recent" : "join";
+        why = first < rules.join.first ? "join-recent" : "join";
         task = best;
       }
     }
@@ -261,7 +264,7 @@ export function decide({
   if (!task && why !== "ask-page") {
     related = ranked.find((id) => looks[id].relation === "related") ?? null;
     candidates = open
-      .filter((id) => p(id) >= ASK && !["different", "related"].includes(looks[id]?.relation))
+      .filter((id) => p(id) >= rules.ask && !["different", "related"].includes(looks[id]?.relation))
       .sort((a, b) => p(b) - p(a))
       .slice(0, MAX_CANDIDATES);
     why = candidates.length ? "ask" : related ? "related" : "new";

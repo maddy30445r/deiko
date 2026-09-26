@@ -354,3 +354,15 @@ test("filler says nothing; a short real follow-up does", () => {
   for (const n of [".", "I", "Thank you.", "hello hello", "testing, testing", "", "Haan theek hai"]) assert.equal(saysNothing(n), true, n);
   for (const n of ["make it blue", "fix this", "same here", "kal wala bug"]) assert.equal(saysNothing(n), false, n);
 });
+
+test("decide takes other numbers only when handed them (the eval's --sweep)", async () => {
+  const { RULES } = await import("../lib/context.mjs");
+  const input = {
+    answers: { is_work_brief: { noul: 0.9 }, "same_t-20260918-100000": { noul: 0.55 } },
+    second: { "t-20260918-100000": { same_task: { noul: 0.45 }, relation: { score: 2 } } },
+    shortlist: ["t-20260918-100000"], sessionId: "20260918-110000", now: 0,
+  };
+  assert.notEqual(decide(input).task, "t-20260918-100000", "today's numbers: 0.55 is short of a join");
+  assert.equal(decide({ ...input, rules: { ...RULES, join: { ...RULES.join, first: 0.5 } } }).task, "t-20260918-100000");
+  assert.deepEqual(RULES, { gate: 0.5, join: RULES.join, ask: 0.35 });
+});
