@@ -10,7 +10,7 @@
  * Pure, except `readTasks` and `writeTaskNotes`.
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { writeAtomic } from "./session-io.mjs";
 import { join } from "node:path";
 
@@ -383,8 +383,10 @@ export function writeTaskNotes(root) {
   }
   const dir = join(root, "tasks");
   let written = 0;
+  const kept = new Set();
   for (const [id, briefs] of groupTasks(readBoard(root))) {
     if (briefs.length < 2) continue;
+    kept.add(id);
     const text = renderTaskNote({
       id,
       title: titles.get(id) ?? titleFor(briefs.at(-1)),
@@ -396,6 +398,19 @@ export function writeTaskNotes(root) {
     mkdirSync(dir, { recursive: true });
     writeAtomic(path, text);
     written += 1;
+  }
+  // A NOTE OUTLIVING ITS TASK kept the words of briefs that were moved out or
+  // deleted, and prompts still pointed agents at it. A task under two briefs
+  // has no note; only files named like a task are touched.
+  let files = [];
+  try {
+    files = readdirSync(dir);
+  } catch {
+    // no notes yet
+  }
+  for (const f of files) {
+    const id = f.endsWith(".md") ? f.slice(0, -3) : null;
+    if (id && TASK_ID.test(id) && !kept.has(id)) rmSync(join(dir, f), { force: true });
   }
   return written;
 }

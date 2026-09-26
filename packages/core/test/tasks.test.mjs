@@ -336,4 +336,12 @@ test("notes are written for tasks with two briefs or more, titled from tasks.jso
   assert.match(note, /^# The price bug\nUnsorted · 2 briefs/);
   assert.equal(existsSync(join(root, "tasks", "t-20260919-140923.md")), false, "a single brief gets no note");
   assert.equal(writeTaskNotes(root), 0, "an unchanged note is not rewritten");
+
+  // Moved out: the task is down to one brief, so its note (and the moved
+  // brief's words in it) goes. A file that isn't a task's note stays.
+  writeFileSync(join(root, "20260918-160606", "context.json"), JSON.stringify({ task: "t-20260918-160606", decidedBy: "you" }));
+  writeFileSync(join(root, "tasks", "README.md"), "mine");
+  writeTaskNotes(root);
+  assert.equal(existsSync(join(root, "tasks", "t-20260918-155836.md")), false, "a note outliving its task is removed");
+  assert.equal(readFileSync(join(root, "tasks", "README.md"), "utf8"), "mine");
 });

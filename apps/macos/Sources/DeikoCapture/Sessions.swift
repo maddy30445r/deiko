@@ -196,7 +196,20 @@ enum Sessions {
     static func delete(dir: String) -> Bool {
         let name = (dir as NSString).lastPathComponent
         guard stamp(name) != nil else { return false }
-        return trash(dir)
+        // Its task's note quotes it. Read which task before the folder goes;
+        // the note is rebuilt on the next render if the task still has two
+        // briefs, and never again with this one's words.
+        let context = (try? JSONSerialization.jsonObject(
+            with: Data(contentsOf: URL(fileURLWithPath: dir).appendingPathComponent("context.json"))
+        )) as? [String: Any]
+        let task = context?["task"] as? String ?? Tasks.own(name)
+        guard trash(dir) else { return false }
+        if task.range(of: #"^t-\d{8}-\d{6}$"#, options: .regularExpression) != nil {
+            let note = ((dir as NSString).deletingLastPathComponent as NSString)
+                .appendingPathComponent("tasks/\(task).md")
+            try? FileManager.default.removeItem(atPath: note)
+        }
+        return true
     }
 
     /// TO THE TRASH, as Finder deletes — a session deleted by mistake is one
