@@ -548,6 +548,7 @@ test("a new task's title says where it came from, and a narration title gives wa
   const joining = await relay(join1("t-20260918-090000"));
   await classify(second, joining.url);
   assert.deepEqual(json(join(root, "tasks.json")), [{ id: "t-20260918-090000", title: "Fix the stale price on the listing page", from: "summary" }]);
+  assert.equal(json(join(root, "tasks.json.prev"))[0].title, "the price still shows 99 after I save it", "the version it replaced is kept one step back");
 
   // A title somebody typed, or one from before `from` existed, is theirs.
   for (const row of [{ from: "you" }, {}]) {

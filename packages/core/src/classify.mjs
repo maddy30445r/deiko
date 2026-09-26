@@ -59,7 +59,7 @@ import { homedir } from "node:os";
 import { CLASSIFIER, unplaceable } from "./lib/context.mjs";
 import { briefText, loadModel, readVector, vectorIsCurrent, writeVector } from "./lib/meaning.mjs";
 import { readTasks, titleFor } from "./lib/tasks.mjs";
-import { readListToRewrite, withBoardLock, writeAtomic } from "./lib/session-io.mjs";
+import { readListToRewrite, withBoardLock, writeAtomic, writeList } from "./lib/session-io.mjs";
 import {
   decideLocally, olderBoard, place, prepare, rankLocally, readCollections, requestClassify, sessionInputs,
 } from "./lib/filing.mjs";
@@ -323,7 +323,7 @@ async function main() {
         if (!listed) unreadable("collections.json");
         else if (!listed.some((c) => c?.id === decision.newCollection.id)) {
           listed.push({ ...decision.newCollection, hint: "" });
-          writeAtomic(join(root, "collections.json"), JSON.stringify(listed, null, 2) + "\n");
+          writeList(join(root, "collections.json"), JSON.stringify(listed, null, 2) + "\n");
         } else {
           decision.collection = decision.newCollection.id;
         }
@@ -340,7 +340,7 @@ async function main() {
         if (!list) unreadable("tasks.json");
         else if (!list.some((t) => t?.id === decision.newTask.id)) {
           list.push({ ...decision.newTask, from: me.summaryLine ? "summary" : "narration" });
-          writeAtomic(join(root, "tasks.json"), JSON.stringify(list, null, 2) + "\n");
+          writeList(join(root, "tasks.json"), JSON.stringify(list, null, 2) + "\n");
         }
       });
     }
@@ -354,7 +354,7 @@ async function main() {
         const row = list?.find((t) => t?.id === decision.task);
         if (row?.from === "narration") {
           Object.assign(row, { title: titleFor(me), from: "summary" });
-          writeAtomic(join(root, "tasks.json"), JSON.stringify(list, null, 2) + "\n");
+          writeList(join(root, "tasks.json"), JSON.stringify(list, null, 2) + "\n");
         }
       });
     }

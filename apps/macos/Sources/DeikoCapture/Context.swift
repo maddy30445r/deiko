@@ -401,6 +401,7 @@ enum Collections {
             )
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            BoardLock.keepPrevious(file)
             try encoder.encode(list).write(to: file, options: .atomic)
             return true
         } catch {
@@ -446,6 +447,15 @@ enum BoardLock {
         defer { if held { try? fm.removeItem(at: url) } }
         return body()
     }
+
+    /// The list as it was before this change, beside it as `<name>.prev`:
+    /// one step back when an edit goes wrong. Called under the lock, right
+    /// before the list is rewritten.
+    static func keepPrevious(_ file: URL) {
+        let prev = file.appendingPathExtension("prev")
+        try? FileManager.default.removeItem(at: prev)
+        try? FileManager.default.copyItem(at: file, to: prev)
+    }
 }
 
 /// Task titles, beside the collections. Membership is not here — it is each
@@ -485,6 +495,7 @@ enum Tasks {
             return
         }
         do {
+            BoardLock.keepPrevious(file)
             try data.write(to: file, options: .atomic)
         } catch {
             Emit.log("tasks: could not write \(file.lastPathComponent) — \(error.localizedDescription)")

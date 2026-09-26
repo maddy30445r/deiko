@@ -7,7 +7,7 @@
  * yet; this is here so nothing has to be.
  */
 
-import { readFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, readFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
@@ -38,6 +38,13 @@ export function writeAtomic(path, data) {
  * ahead anyway (a filing must never fail over this); a lock older than
  * `staleMs` was left by a crash and is broken.
  */
+/** A task or project list: the version it replaces stays beside it as
+ *  `<name>.prev`, one step back when an edit goes wrong. */
+export function writeList(path, data) {
+  if (existsSync(path)) copyFileSync(path, `${path}.prev`);
+  writeAtomic(path, data);
+}
+
 export function withBoardLock(root, fn, { waitMs = 3000, staleMs = 15000 } = {}) {
   const lock = join(root, ".lists.lock");
   const until = Date.now() + waitMs;

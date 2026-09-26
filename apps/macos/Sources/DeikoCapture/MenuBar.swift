@@ -2,6 +2,7 @@ import AppKit
 import AVFoundation
 import Foundation
 import Speech
+import UniformTypeIdentifiers
 import DeikoGesture
 import DeikoHandoff
 
@@ -545,6 +546,11 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
             keyEquivalent: ""
         ))
         menu.addItem(NSMenuItem(
+            title: "Export memory…",
+            action: #selector(exportMemory),
+            keyEquivalent: ""
+        ))
+        menu.addItem(NSMenuItem(
             title: "Open Deiko",
             action: #selector(openMain),
             keyEquivalent: "d"
@@ -893,6 +899,38 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
             atPath: root, withIntermediateDirectories: true
         )
         NSWorkspace.shared.open(URL(fileURLWithPath: root))
+    }
+
+    /// A zip of the board: every brief's words, screenshots, notes and task
+    /// and project lists. Not the recordings (the words are already written
+    /// down from them), the meaning vectors (rebuilt from the words) or the
+    /// downloaded models, which together are most of the folder's size.
+    @objc private func exportMemory() {
+        let root = URL(fileURLWithPath: Collections.root)
+        let day = ISO8601DateFormatter.string(from: Date(), timeZone: .current, formatOptions: .withFullDate)
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "Deiko memory \(day).zip"
+        panel.allowedContentTypes = [.zip]
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let dest = panel.url else { return }
+        let name = root.lastPathComponent
+        Task.detached {
+            try? FileManager.default.removeItem(at: dest)
+            let zip = Process()
+            zip.executableURL = URL(fileURLWithPath: "/usr/bin/zip")
+            zip.currentDirectoryURL = root.deletingLastPathComponent()
+            zip.arguments = ["-r", "-q", "-y", dest.path, name, "-x",
+                             "\(name)/models/*", "*.wav", "*.f32", "*.DS_Store", "*/.lists.lock/*", "*.tmp-*"]
+            let ok = (try? zip.run()).map { zip.waitUntilExit(); return zip.terminationStatus == 0 } ?? false
+            await MainActor.run {
+                if ok { NSWorkspace.shared.activateFileViewerSelecting([dest]); return }
+                Emit.log("export: zip failed for \(dest.lastPathComponent)")
+                let alert = NSAlert()
+                alert.messageText = "Couldn't export your memory"
+                alert.informativeText = "Nothing was changed. Try saving it somewhere else, like your Desktop."
+                alert.runModal()
+            }
+        }
     }
 
     @objc private func quit() { NSApp.terminate(nil) }
