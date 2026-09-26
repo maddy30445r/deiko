@@ -34,6 +34,11 @@ export function stampTime(stamp) {
 
 export const tokens = (text) => String(text ?? "").toLowerCase().match(/[a-z0-9$]{2,}/g) ?? [];
 
+/// A line in an agent's write-back that is shaped like an order to the next
+/// agent rather than a note about the work. Screen text an agent read can
+/// carry one, and a note would pass it on to every later brief. Dropped.
+const INSTRUCTION = /\b(ignore|disregard|forget|override)\b[^.\n]{0,40}\b(previous|prior|above|earlier|all|any|your)\b[^.\n]{0,24}\b(instructions?|prompts?|rules|guidelines)\b|\bsystem prompt\b|\byou are now\b|\bnew instructions?:/i;
+
 /// The four headings, as agents actually title them.
 const HEADS = {
   decided: /^decisions?\b|^decided\b/i,
@@ -85,7 +90,7 @@ export function parseOutcome(text) {
       continue;
     }
     const line = raw.replace(/^\s*[-*]\s*/, "").trim();
-    if (line && into) (out[into] ??= []).push(line);
+    if (line && into && !INSTRUCTION.test(line)) (out[into] ??= []).push(line);
   }
   return out;
 }
@@ -325,11 +330,12 @@ export function shortlist({ query, queryKeys = {}, window = null, queryVec = nul
  * agent may copy the note's "Sep 18 (…): " prefix, change the punctuation, or
  * quote only the start. Too short to be sure is never a match.
  */
+export const decisionKey = (s) => String(s ?? "").toLowerCase()
+  .replace(/^[a-z]{3} \d{1,2}(\s*\(\d{8}-\d{6}\))?:\s*/, "")
+  .replace(/[^a-z0-9$ ]+/g, " ").replace(/\s+/g, " ").trim();
+
 export function sameDecision(retired, decision) {
-  const norm = (s) => String(s ?? "").toLowerCase()
-    .replace(/^[a-z]{3} \d{1,2}(\s*\(\d{8}-\d{6}\))?:\s*/, "")
-    .replace(/[^a-z0-9$ ]+/g, " ").replace(/\s+/g, " ").trim();
-  const [r, d] = [norm(retired), norm(decision)];
+  const [r, d] = [decisionKey(retired), decisionKey(decision)];
   if (!r || !d) return false;
   return r === d || (Math.min(r.length, d.length) >= 12 && (d.includes(r) || r.includes(d)));
 }
@@ -351,13 +357,28 @@ export function renderTaskNote({ id, title, collection = null, briefs }) {
   // (get_brief) rather than take a line on trust.
   // RETIRED, NOT DELETED: a decision a LATER brief's agent quoted under
   // "## Retired" no longer shows as current. It stays in its own outcome.md.
+  // ONE DECISION, ONE LINE, credited to the brief that made it. Agents read
+  // the note and copy decisions into their own write-backs; counting each copy
+  // as a new decision is how memory systems end up repeating themselves.
+  // RETIRED, NOT DELETED: a decision a later brief quotes under "## Retired"
+  // stops being current (it stays in its own outcome.md), and one made again
+  // after that is a new decision. So: walk the history oldest first.
+  const credited = new Map();   // decision → the brief it currently counts for
   let retiredCount = 0;
-  const decisions = briefs.flatMap((b, i) => {
-    const laterRetired = briefs.slice(0, i).flatMap((n) => n.outcome?.retired ?? []);
+  for (const b of [...briefs].reverse()) {
+    for (const r of b.outcome?.retired ?? []) {
+      for (const k of [...credited.keys()]) {
+        if (sameDecision(r, k)) { credited.delete(k); retiredCount += 1; }
+      }
+    }
+    for (const d of b.outcome?.decided ?? []) if (!credited.has(decisionKey(d))) credited.set(decisionKey(d), b.id);
+  }
+  const decisions = briefs.flatMap((b) => {
+    const seen = new Set();
     const kept = (b.outcome?.decided ?? []).filter((d) => {
-      const gone = laterRetired.some((r) => sameDecision(r, d));
-      if (gone) retiredCount += 1;
-      return !gone;
+      const k = decisionKey(d);
+      if (credited.get(k) !== b.id || seen.has(k)) return false;
+      return seen.add(k);
     });
     return redactNote(kept).map((d) => `- ${briefDate(b.id)} (${b.id}): ${d}`);
   });
