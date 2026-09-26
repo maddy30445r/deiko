@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 import { readBriefLine } from "../lib/context.mjs";
-import { readListToRewrite, writeAtomic } from "../lib/session-io.mjs";
+import { readListToRewrite, withBoardLock, writeAtomic } from "../lib/session-io.mjs";
 import { DEFAULT_MODEL, briefText, isReady, vectorIsCurrent } from "../lib/meaning.mjs";
 
 const run = promisify(execFile);
@@ -588,6 +588,24 @@ test("readListToRewrite: missing is empty, unreadable is null, a list is a list"
   }
   writeFileSync(path, '[{"id":"shop","name":"Shop"}]');
   assert.deepEqual(readListToRewrite(path), [{ id: "shop", name: "Shop" }]);
+});
+
+test("withBoardLock: an edit waits for another process holding the lock, and a crash's leftover is broken", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-lock-"));
+  const lock = join(root, ".lists.lock");
+  // Another process holds it for 400 ms.
+  const holder = execFile(process.execPath, ["-e", `require("fs").mkdirSync(${JSON.stringify(lock)}); setTimeout(() => require("fs").rmdirSync(${JSON.stringify(lock)}), 400)`]);
+  while (!existsSync(lock)) await new Promise((r) => setTimeout(r, 5));
+  const t0 = Date.now();
+  const got = withBoardLock(root, () => (existsSync(lock) ? "held" : "free"));
+  assert.equal(got, "held", "it ran while holding the lock itself");
+  assert.ok(Date.now() - t0 >= 250, `waited its turn (${Date.now() - t0} ms)`);
+  assert.equal(existsSync(lock), false, "released after");
+  await new Promise((r) => holder.on("exit", r));
+  // A lock nobody released (a crash) is broken once it is stale.
+  mkdirSync(lock);
+  assert.equal(withBoardLock(root, () => 7, { staleMs: 0, waitMs: 1000 }), 7);
+  assert.equal(existsSync(lock), false);
 });
 
 test("writeAtomic: the file is the old version or the new one, and no temp file is left", () => {

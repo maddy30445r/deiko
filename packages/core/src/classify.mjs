@@ -59,7 +59,7 @@ import { homedir } from "node:os";
 import { CLASSIFIER, unplaceable } from "./lib/context.mjs";
 import { briefText, loadModel, readVector, vectorIsCurrent, writeVector } from "./lib/meaning.mjs";
 import { readTasks, titleFor } from "./lib/tasks.mjs";
-import { readListToRewrite, writeAtomic } from "./lib/session-io.mjs";
+import { readListToRewrite, withBoardLock, writeAtomic } from "./lib/session-io.mjs";
 import {
   decideLocally, olderBoard, place, prepare, rankLocally, readCollections, requestClassify, sessionInputs,
 } from "./lib/filing.mjs";
@@ -318,14 +318,16 @@ async function main() {
       // `acme-portal` when the list already holds one called `Acme Portal`, and
       // two rows with one id give the board two identical chips, a rename that
       // moves one of them and a delete that takes both.
-      const listed = readListToRewrite(join(root, "collections.json"));
-      if (!listed) unreadable("collections.json");
-      else if (!listed.some((c) => c?.id === decision.newCollection.id)) {
-        listed.push({ ...decision.newCollection, hint: "" });
-        writeAtomic(join(root, "collections.json"), JSON.stringify(listed, null, 2) + "\n");
-      } else {
-        decision.collection = decision.newCollection.id;
-      }
+      withBoardLock(root, () => {
+        const listed = readListToRewrite(join(root, "collections.json"));
+        if (!listed) unreadable("collections.json");
+        else if (!listed.some((c) => c?.id === decision.newCollection.id)) {
+          listed.push({ ...decision.newCollection, hint: "" });
+          writeAtomic(join(root, "collections.json"), JSON.stringify(listed, null, 2) + "\n");
+        } else {
+          decision.collection = decision.newCollection.id;
+        }
+      });
     }
     if (decision.newTask) {
       // RE-READ, AND CHECK THE ID. The id is this brief's own stamp, so a
@@ -333,24 +335,28 @@ async function main() {
       // first one wrote and leaves it.
       // `from` says what the title was made from, so a narration title can
       // give way to the first summary line that joins its task (below).
-      const list = readTaskRows(root);
-      if (!list) unreadable("tasks.json");
-      else if (!list.some((t) => t?.id === decision.newTask.id)) {
-        list.push({ ...decision.newTask, from: me.summaryLine ? "summary" : "narration" });
-        writeAtomic(join(root, "tasks.json"), JSON.stringify(list, null, 2) + "\n");
-      }
+      withBoardLock(root, () => {
+        const list = readTaskRows(root);
+        if (!list) unreadable("tasks.json");
+        else if (!list.some((t) => t?.id === decision.newTask.id)) {
+          list.push({ ...decision.newTask, from: me.summaryLine ? "summary" : "narration" });
+          writeAtomic(join(root, "tasks.json"), JSON.stringify(list, null, 2) + "\n");
+        }
+      });
     }
 
     // A TITLE MADE FROM WHAT WAS SAID gives way to the first summary line that
     // joins its task. Only a row written from narration: one somebody typed
     // (`from: "you"`), or one with no `from` at all, is left as it is.
     if (!decision.newTask && decision.task && me.summaryLine) {
-      const list = readTaskRows(root);
-      const row = list?.find((t) => t?.id === decision.task);
-      if (row?.from === "narration") {
-        Object.assign(row, { title: titleFor(me), from: "summary" });
-        writeAtomic(join(root, "tasks.json"), JSON.stringify(list, null, 2) + "\n");
-      }
+      withBoardLock(root, () => {
+        const list = readTaskRows(root);
+        const row = list?.find((t) => t?.id === decision.task);
+        if (row?.from === "narration") {
+          Object.assign(row, { title: titleFor(me), from: "summary" });
+          writeAtomic(join(root, "tasks.json"), JSON.stringify(list, null, 2) + "\n");
+        }
+      });
     }
   }
 

@@ -305,7 +305,9 @@ enum Collections {
 
     /// Add a collection by name, or return the one that already has it.
     @discardableResult
-    static func add(name raw: String) -> Collection? {
+    static func add(name raw: String) -> Collection? { BoardLock.with { addLocked(name: raw) } }
+
+    private static func addLocked(name raw: String) -> Collection? {
         let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, var list = editable() else { return nil }
         if let existing = list.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
@@ -318,7 +320,9 @@ enum Collections {
         return save(list) ? made : nil
     }
 
-    static func rename(id: String, to raw: String) {
+    static func rename(id: String, to raw: String) { BoardLock.with { renameLocked(id: id, to: raw) } }
+
+    private static func renameLocked(id: String, to raw: String) {
         let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, var list = editable() else { return }
         guard let index = list.firstIndex(where: { $0.id == id }) else { return }
@@ -326,7 +330,9 @@ enum Collections {
         save(list)
     }
 
-    static func describe(id: String, hint: String) {
+    static func describe(id: String, hint: String) { BoardLock.with { describeLocked(id: id, hint: hint) } }
+
+    private static func describeLocked(id: String, hint: String) {
         guard var list = editable() else { return }
         guard let index = list.firstIndex(where: { $0.id == id }) else { return }
         list[index].hint = hint.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -339,8 +345,10 @@ enum Collections {
     /// reachable from a chip rather than from the All list alone. Nothing
     /// else on disk is touched.
     static func delete(id: String) {
-        guard let list = editable() else { return }
-        save(list.filter { $0.id != id })
+        BoardLock.with {
+            guard let list = editable() else { return }
+            save(list.filter { $0.id != id })
+        }
     }
 
     /// ONE WAY TO ASK FOR A LINE OF TEXT, because three surfaces need it —
@@ -409,6 +417,37 @@ struct BriefTask: Decodable, Identifiable, Equatable {
     var from: String?
 }
 
+/// ONE WRITER AT A TIME for `tasks.json` and `collections.json`, shared with
+/// the scripts (`withBoardLock` in `scripts/lib/session-io.mjs`): a lock folder
+/// beside them. Waits up to three seconds, then goes ahead anyway; a lock older
+/// than fifteen was left by a crash and is broken.
+enum BoardLock {
+    static func with<T>(_ body: () -> T) -> T {
+        let url = URL(fileURLWithPath: Collections.root).appendingPathComponent(".lists.lock")
+        let fm = FileManager.default
+        let deadline = Date().addingTimeInterval(3)
+        var held = false
+        while !held {
+            do {
+                try fm.createDirectory(at: url, withIntermediateDirectories: false)
+                held = true
+            } catch {
+                // Not "someone holds it" (no board folder yet, no permission): go ahead.
+                guard fm.fileExists(atPath: url.path) else { break }
+                if let made = (try? fm.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date,
+                   Date().timeIntervalSince(made) > 15 {
+                    try? fm.removeItem(at: url)
+                    continue
+                }
+                if Date() > deadline { break }
+                usleep(25_000)
+            }
+        }
+        defer { if held { try? fm.removeItem(at: url) } }
+        return body()
+    }
+}
+
 /// Task titles, beside the collections. Membership is not here — it is each
 /// brief's `context.json` — so this file only ever answers "what is it called".
 enum Tasks {
@@ -437,6 +476,10 @@ enum Tasks {
     static func name(_ id: String, _ raw: String) {
         let title = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return }
+        BoardLock.with { nameLocked(id, title) }
+    }
+
+    private static func nameLocked(_ id: String, _ title: String) {
         guard let data = TaskTitles.renaming(try? Data(contentsOf: file), id: id, to: title) else {
             Emit.log("tasks: \(file.lastPathComponent) is not a list — left as it is rather than overwritten")
             return

@@ -7,7 +7,7 @@
  * yet; this is here so nothing has to be.
  */
 
-import { readFileSync, existsSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
@@ -27,6 +27,37 @@ export function writeAtomic(path, data) {
   } catch (e) {
     rmSync(tmp, { force: true });
     throw e;
+  }
+}
+
+/**
+ * ONE WRITER AT A TIME for the board's shared lists (`tasks.json`,
+ * `collections.json`). The app renames a task while a filing adds one: both
+ * read, both write, and one change is lost. A lock folder beside them, taken
+ * the same way by `BoardLock` in the app. Waits up to `waitMs`, then goes
+ * ahead anyway (a filing must never fail over this); a lock older than
+ * `staleMs` was left by a crash and is broken.
+ */
+export function withBoardLock(root, fn, { waitMs = 3000, staleMs = 15000 } = {}) {
+  const lock = join(root, ".lists.lock");
+  const until = Date.now() + waitMs;
+  let held = false;
+  while (!held) {
+    try {
+      mkdirSync(lock);
+      held = true;
+    } catch (e) {
+      if (e?.code !== "EEXIST") break;
+      const age = Date.now() - (statSync(lock, { throwIfNoEntry: false })?.mtimeMs ?? Date.now());
+      if (age > staleMs) { rmSync(lock, { recursive: true, force: true }); continue; }
+      if (Date.now() > until) break;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    if (held) rmSync(lock, { recursive: true, force: true });
   }
 }
 
