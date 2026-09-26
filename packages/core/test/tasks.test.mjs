@@ -7,8 +7,7 @@ import { join } from "node:path";
 import {
   COMMON_LABEL, RRF_K, SEAT_KINDS, SHORTLIST, TASK_ID, TIME_SEATS, bm25, cosine, firm, groupTasks,
   parseOutcome, renderTaskNote, rrf, shortlist, stampTime, taskIdFor, taskLabels, taskState, terms,
-  timeWindow, titleFor, tokens, readBoard, readTasks, writeTaskNotes,
-} from "../lib/tasks.mjs";
+  timeWindow, titleFor, tokens, readBoard, readTasks, writeTaskNotes, sameDecision } from "../lib/tasks.mjs";
 
 const brief = (id, line, extra = {}) => ({
   id, dir: `/Users/dev/Documents/Deiko/${id}`, line, summaryLine: line, narration: line,
@@ -286,6 +285,25 @@ test("the note is deterministic, capped and names two files, never a folder", ()
   const capped = renderTaskNote({ id: "t-x", title: "many", briefs: deciding });
   assert.equal((capped.match(/^- Sep 18 \(20260918-\d{6}\): decision/gm) ?? []).length, 20);
   assert.match(capped, /- … and 3 earlier decisions, in older briefs' outcome\.md \(search_briefs finds them\)\n/);
+});
+
+test("a decision a later brief retires no longer shows as current, and the note says so", () => {
+  const tue = brief("20260915-100000", "the price is stale", { outcome: parseOutcome("## Decided\n- It's the cache; clear it on save.\n") });
+  const fri = brief("20260918-100000", "still stale", { outcome: parseOutcome("## Retired\n- Sep 15 (20260915-100000): It's the cache — clear it on save\n## Decided\n- Refetch after save instead.\n") });
+  const note = renderTaskNote({ id: "t-20260915-100000", title: "Stale price", briefs: [fri, tue] });
+  assert.match(note, /Refetch after save instead\./);
+  assert.doesNotMatch(note, /clear it on save\.$/m);
+  assert.match(note, /- 1 earlier decision was retired by a later brief \(still in its outcome\.md\)/);
+  // A decision made AFTER the retirement stands.
+  const mon = brief("20260921-100000", "back again", { outcome: parseOutcome("## Decided\n- It's the cache; clear it on save.\n") });
+  assert.match(renderTaskNote({ id: "t-20260915-100000", title: "Stale price", briefs: [mon, fri, tue] }), /20260921-100000\): It's the cache/);
+});
+
+test("sameDecision: loose about prefixes and punctuation, never about short words", () => {
+  assert.equal(sameDecision("Sep 15 (20260915-100000): It's the cache — clear it on save", "It's the cache; clear it on save."), true);
+  assert.equal(sameDecision("it's the cache", "It's the cache; clear it on save."), true);
+  assert.equal(sameDecision("cache", "It's the cache; clear it on save."), false);
+  assert.equal(sameDecision("", "anything"), false);
 });
 
 test("a note whose only Now line would repeat its title has no Now section", () => {

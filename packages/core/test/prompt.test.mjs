@@ -685,7 +685,7 @@ test("the task's words are evidence; its path is not", () => {
 });
 
 const OUTCOME = "/Users/dev/Documents/Deiko/20260923-161205/outcome.md";
-const WRITE_BACK = `When you are done — and again if we keep going — rewrite ${OUTCOME} under four headings — ## Did, ## Decided, ## Open, ## Files — a few lines each. Deiko folds it into this task's memory for the next brief.`;
+const WRITE_BACK = `When you are done — and again if we keep going — rewrite ${OUTCOME} under four headings — ## Did, ## Decided, ## Open, ## Files — a few lines each. If an earlier decision on this task no longer holds, quote it under ## Retired. Deiko folds it into this task's memory for the next brief.`;
 
 test("the write-back asks only a destination that can write a file", () => {
   const plain = buildPrompt(oneShot());

@@ -230,6 +230,8 @@ public enum BoardTimeline {
     /// who wrote it, and is not a note.
     public struct Outcome: Equatable, Sendable {
         public var did: [String] = [], decided: [String] = [], open: [String] = [], files: [String] = []
+        /// Earlier decisions an agent says no longer hold, quoted.
+        public var retired: [String] = []
         public var agent: String?
         public init() {}
     }
@@ -239,6 +241,7 @@ public enum BoardTimeline {
         (\.open, #"^(open|next( steps)?|todo|to do|remaining)\b"#),
         (\.did, #"^(did|done|changes?|what i did)\b"#),
         (\.files, #"^files?( touched| changed)?\b"#),
+        (\.retired, #"^(retired|reversed|superseded|no longer (holds?|true|applies))\b"#),
     ] }
 
     private static func head(_ name: String) -> WritableKeyPath<Outcome, [String]>? {

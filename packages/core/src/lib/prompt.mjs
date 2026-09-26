@@ -440,7 +440,7 @@ export function buildPrompt({
   // Asked again for a conversation that keeps going, or the next brief
   // carries on from where the first answer left it.
   if (outcomePath && !attached) {
-    out.push("", `When you are done — and again if we keep going — rewrite ${outcomePath} under four headings — ## Did, ## Decided, ## Open, ## Files — a few lines each. Deiko folds it into this task's memory for the next brief.`);
+    out.push("", `When you are done — and again if we keep going — rewrite ${outcomePath} under four headings — ## Did, ## Decided, ## Open, ## Files — a few lines each. If an earlier decision on this task no longer holds, quote it under ## Retired. Deiko folds it into this task's memory for the next brief.`);
   }
 
   return { text: out.join("\n") + "\n", evidence };

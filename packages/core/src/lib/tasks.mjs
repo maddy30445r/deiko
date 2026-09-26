@@ -40,6 +40,8 @@ const HEADS = {
   open: /^(open|next( steps)?|todo|to do|remaining)\b/i,
   did: /^(did|done|changes?|what i did)\b/i,
   files: /^files?( touched| changed)?\b/i,
+  // An earlier decision on the task that no longer holds, quoted.
+  retired: /^(retired|reversed|superseded|no longer (holds?|true|applies))\b/i,
 };
 const section = (heading) => {
   const name = heading.replace(/[*_`]/g, "").trim();
@@ -57,6 +59,7 @@ const section = (heading) => {
  * headings inside them included.
  */
 export function parseOutcome(text) {
+  // `retired` only when there is one: every outcome without it reads as before.
   const out = { did: [], decided: [], open: [], files: [] };
   let into = "did";
   let fence = null;
@@ -82,7 +85,7 @@ export function parseOutcome(text) {
       continue;
     }
     const line = raw.replace(/^\s*[-*]\s*/, "").trim();
-    if (line && into) out[into].push(line);
+    if (line && into) (out[into] ??= []).push(line);
   }
   return out;
 }
@@ -317,6 +320,20 @@ export function shortlist({ query, queryKeys = {}, window = null, queryVec = nul
 
 /** The compiled note. `briefs` newest first. Every line from another
  *  session is redacted here, where it is written. */
+/**
+ * Whether a quoted retired line names this decision. Loose on purpose: an
+ * agent may copy the note's "Sep 18 (…): " prefix, change the punctuation, or
+ * quote only the start. Too short to be sure is never a match.
+ */
+export function sameDecision(retired, decision) {
+  const norm = (s) => String(s ?? "").toLowerCase()
+    .replace(/^[a-z]{3} \d{1,2}(\s*\(\d{8}-\d{6}\))?:\s*/, "")
+    .replace(/[^a-z0-9$ ]+/g, " ").replace(/\s+/g, " ").trim();
+  const [r, d] = [norm(retired), norm(decision)];
+  if (!r || !d) return false;
+  return r === d || (Math.min(r.length, d.length) >= 12 && (d.includes(r) || r.includes(d)));
+}
+
 export function renderTaskNote({ id, title, collection = null, briefs }) {
   const first = briefDate(briefs.at(-1).id);
   const last = briefDate(briefs[0].id);
@@ -332,12 +349,25 @@ export function renderTaskNote({ id, title, collection = null, briefs }) {
   // Each brief's decisions as one block, like its Now: see `redactNote`.
   // EVERY LINE SAYS WHICH BRIEF IT CAME FROM, so an agent can open that brief
   // (get_brief) rather than take a line on trust.
-  const decisions = briefs
-    .flatMap((b) => redactNote(b.outcome?.decided ?? []).map((d) => `- ${briefDate(b.id)} (${b.id}): ${d}`));
+  // RETIRED, NOT DELETED: a decision a LATER brief's agent quoted under
+  // "## Retired" no longer shows as current. It stays in its own outcome.md.
+  let retiredCount = 0;
+  const decisions = briefs.flatMap((b, i) => {
+    const laterRetired = briefs.slice(0, i).flatMap((n) => n.outcome?.retired ?? []);
+    const kept = (b.outcome?.decided ?? []).filter((d) => {
+      const gone = laterRetired.some((r) => sameDecision(r, d));
+      if (gone) retiredCount += 1;
+      return !gone;
+    });
+    return redactNote(kept).map((d) => `- ${briefDate(b.id)} (${b.id}): ${d}`);
+  });
   const decided = decisions.slice(0, CAP.decided);
   // Trimmed, never silently: the older ones are still in their briefs.
   if (decisions.length > CAP.decided) {
     decided.push(`- … and ${decisions.length - CAP.decided} earlier decisions, in older briefs' outcome.md (search_briefs finds them)`);
+  }
+  if (retiredCount) {
+    decided.push(`- ${retiredCount} earlier decision${retiredCount === 1 ? " was" : "s were"} retired by a later brief (still in ${retiredCount === 1 ? "its" : "their"} outcome.md)`);
   }
   if (decided.length) out.push("", "## Decided", ...decided);
   out.push("", "## Briefs");
