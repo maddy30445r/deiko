@@ -481,6 +481,33 @@ enum BriefPipeline {
         _ = try? await run(.notes, sessionDir: Collections.root)
     }
 
+    /// The board's search by meaning as well as words: brief ids, best
+    /// first, ranked the way the memory helper ranks for agents
+    /// (`scripts/search-briefs.mjs`). Empty on any failure — the word
+    /// filter on the board still works on its own.
+    static func search(query: String) async -> [String] {
+        guard let layout = Layout.resolve() else { return [] }
+        let root = Collections.root
+        let output: String?
+        switch layout {
+        case .development(let repo):
+            output = try? await shell(
+                "node scripts/search-briefs.mjs \(quoted(root)) \(quoted(query))", in: repo, stage: "Searching"
+            )
+        case .bundled(let resources):
+            guard let node = NodeRuntime.resolve() else { return [] }
+            output = try? await exec(
+                node,
+                arguments: [resources.appendingPathComponent("scripts/search-briefs.mjs").path, root, query],
+                stage: "Searching"
+            )
+        }
+        guard let line = output?.split(separator: "\n").last(where: { $0.hasPrefix("BRIEFS ") }),
+              let ids = try? JSONDecoder().decode([String].self, from: Data(line.dropFirst(7).utf8))
+        else { return [] }
+        return ids
+    }
+
     static func classify(sessionDir: String) async -> SessionContext? {
         _ = try? await run(.classify, sessionDir: sessionDir)
         return SessionContext.read(sessionDir: sessionDir)

@@ -342,3 +342,19 @@ test("a line forgotten in the app is gone from get_task, get_brief and search", 
     s.close();
   }
 });
+
+test("the board's search ranks like the helper, prints one line, and exits (it never starts the helper's server)", async () => {
+  const root = board();
+  const search = fileURLToPath(new URL("../search-briefs.mjs", import.meta.url));
+  const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("DEIKO_"))), DEIKO_MEANING_MODEL: "off" };
+  const out = await new Promise((resolve, reject) => {
+    // stdin left open, as the app's Process leaves it: a server would never exit.
+    const child = spawn(process.execPath, [search, root, "price", "listing"], { env, stdio: ["pipe", "pipe", "ignore"] });
+    let text = "";
+    child.stdout.on("data", (d) => { text += d; });
+    const timer = setTimeout(() => { child.kill(); reject(new Error("search-briefs did not exit")); }, 10_000);
+    child.on("exit", () => { clearTimeout(timer); resolve(text); });
+  });
+  const line = out.split("\n").find((l) => l.startsWith("BRIEFS "));
+  assert.ok(JSON.parse(line.slice(7)).includes("20260918-110000"));
+});

@@ -870,7 +870,11 @@ private struct BoardPane: View {
     @ObservedObject var sessions: SessionsStore
     @Environment(\.undoManager) private var undoManager
     @ObservedObject private var nav = MainNav.shared
-    @State private var query = ""
+    @State private var query = UIShotPose.query
+    /// Briefs the search finds by meaning, best first, a moment after the
+    /// words filter the board (see `BriefPipeline.search`).
+    @State private var best: [String] = []
+    @State private var lookingByMeaning = false
     @State private var filter: Filter = .all
     /// One piece of work, oldest first — what a card's tag opens.
     private var work: String? {
@@ -1102,12 +1106,14 @@ private struct BoardPane: View {
             ScrollView {
                 Color.clear.frame(height: 0).id("top")
                 Group {
-                    if shown.isEmpty && openBrief == nil {
+                    if shown.isEmpty && openBrief == nil && best.isEmpty {
                         EmptyPane(
                             title: sessions.items.isEmpty ? "The board is empty" : "Nothing here yet",
                             line: sessions.items.isEmpty
                                 ? "Briefs pin themselves here as you record them. Nothing is uploaded — they live in a folder on this Mac."
-                                : "Try another project, a task name, an app name, or a word you said."
+                                : lookingByMeaning
+                                    ? "No brief has those words. Looking for what you meant…"
+                                    : "Try another project, a task name, an app name, or a word you said."
                         )
                     } else if let item = openBrief {
                         BriefView(item: item, store: sessions) { task in
@@ -1150,6 +1156,9 @@ private struct BoardPane: View {
             // Above the cards, for the reason the day heading is: it must
             // win the click where the two meet.
             if let work { WorkNotes(task: work, store: sessions).zIndex(1) }
+            if work == nil && !query.trimmingCharacters(in: .whitespaces).isEmpty {
+                BestMatches(ids: best, store: sessions) { nav.brief = $0 }.zIndex(1)
+            }
             ForEach(sections, id: \.title) { section in
                 let fold = BoardTimeline.fold(section.items, setAside: \.setAside)
                 VStack(alignment: .leading, spacing: 14) {
@@ -1273,6 +1282,19 @@ private struct BoardPane: View {
 
     private var searchField: some View {
         TextField("Search briefs", text: $query)
+            .task(id: query) {
+                let q = query.trimmingCharacters(in: .whitespaces)
+                best = []
+                lookingByMeaning = q.count >= 3
+                guard lookingByMeaning else { return }
+                // Typing settles first: one search per pause, not per key.
+                try? await Task.sleep(for: .milliseconds(450))
+                guard !Task.isCancelled else { return }
+                let ids = await BriefPipeline.search(query: q)
+                guard !Task.isCancelled else { return }
+                best = ids
+                lookingByMeaning = false
+            }
             .textFieldStyle(.roundedBorder)
             .font(.system(size: 12))
             .frame(width: 190)
@@ -2361,6 +2383,45 @@ private struct LargeCrop: View {
 /// The note blocks the work view and the brief view both write in: a 12pt
 /// semibold heading with quiet meta, 12pt ink-2 notes, and the text toggle.
 @MainActor
+/// "BEST MATCHES": what the search found by meaning, above the board's own
+/// word matches, so "the graph thing" finds the chart work. Five at most.
+private struct BestMatches: View {
+    let ids: [String]
+    let store: SessionsStore
+    let open: (String) -> Void
+
+    var body: some View {
+        let items = ids.compactMap { id in store.items.first { $0.id == id } }.prefix(5)
+        if !items.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Best matches")
+                    .font(.system(size: 12, weight: .semibold))
+                    .tip("Found by what you meant as well as the words you typed")
+                ForEach(Array(items)) { item in
+                    Button { open(item.id) } label: {
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            Text(item.title)
+                                .font(.system(size: 12.5))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                            Text("\(BoardCard.stamp(item.date)) · \(store.title(ofTask: item.task))")
+                                .font(.system(size: 11))
+                                .foregroundStyle(DeikoStyle.ink2)
+                                .lineLimit(1)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .deikoFocusRingLoose()
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(DeikoStyle.wall, in: RoundedRectangle(cornerRadius: DeikoStyle.insetRadius))
+        }
+    }
+}
+
 /// "Pick this up": the next brief joins this work from its first word.
 private struct PickUpRow: View {
     let task: String

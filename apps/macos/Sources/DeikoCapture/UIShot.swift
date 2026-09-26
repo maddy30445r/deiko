@@ -85,6 +85,16 @@ enum UIShot {
                 to: "\(out)-board-drop-\(name).png"
             )
             UIShotPose.dropTarget = nil
+            // A search: the word matches, and what meaning found above them.
+            UIShotPose.query = "the price does not refresh after saving"
+            UIShotPose.settle = 5
+            shoot(
+                MainWindowView(openSessionDir: nil, sessionRoot: root),
+                size: NSSize(width: 980, height: 800), look: look,
+                to: "\(out)-board-search-\(name).png"
+            )
+            UIShotPose.query = ""
+            UIShotPose.settle = 0.8
             MainNav.shared.work = store.workCounts.max { $0.value < $1.value }?.key
             shoot(
                 MainWindowView(openSessionDir: nil, sessionRoot: root),
@@ -188,7 +198,7 @@ enum UIShot {
             }
         }
 
-        Emit.log("wrote \(out)-{welcome,orb,orbready,orbnotice,orbsent,review,review-odds,review-related,review-joined,dashboard,board,board-full,board-fold,board-drop,board-work,board-brief,board-brief-alone,board-brief-scrap,board-brief-sent,personas,settings,settings-full}-{light,dark}.png")
+        Emit.log("wrote \(out)-{welcome,orb,orbready,orbnotice,orbsent,review,review-odds,review-related,review-joined,dashboard,board,board-full,board-fold,board-drop,board-search,board-work,board-brief,board-brief-alone,board-brief-scrap,board-brief-sent,personas,settings,settings-full}-{light,dark}.png")
     }
 
     /// The collapsed card, mid-session: the state the orb spends most of its
@@ -352,7 +362,7 @@ enum UIShot {
         window.alphaValue = 0
         window.ignoresMouseEvents = true
         window.orderFrontRegardless()
-        RunLoop.current.run(until: Date().addingTimeInterval(0.8))
+        RunLoop.current.run(until: Date().addingTimeInterval(UIShotPose.settle))
 
         guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return }
         host.cacheDisplay(in: host.bounds, to: rep)
@@ -382,4 +392,8 @@ enum UIShotPose {
     /// The work panel with every note shown, and with its full history open.
     static var notesExpanded = false
     static var historyOpen = false
+    /// The board with this typed in its search box, and how long a shot
+    /// waits for what it shows (a search by meaning takes a second or two).
+    static var query = ""
+    static var settle: TimeInterval = 0.8
 }

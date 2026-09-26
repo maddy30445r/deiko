@@ -32,6 +32,7 @@ import { lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "no
 import { homedir } from "node:os";
 import { basename, dirname, join, sep } from "node:path";
 import { createInterface } from "node:readline";
+import { fileURLToPath } from "node:url";
 
 import { STAMP, briefDate, readBriefLine } from "./lib/context.mjs";
 import { redact, redactBlock, redactNote } from "./lib/redact.mjs";
@@ -294,8 +295,16 @@ async function answer(msg) {
   }
 }
 
+// The app's board search (search-briefs.mjs) ranks with this same function,
+// so what the board finds and what an agent finds cannot drift apart.
+export { searchBriefs };
+
 const send = (obj) => process.stdout.write(JSON.stringify(obj) + "\n");
-createInterface({ input: process.stdin }).on("line", async (line) => {
+// Served only when run as the helper, not when imported by search-briefs.mjs.
+const isMain = (() => {
+  try { return realpathSync(process.argv[1] ?? "") === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; }
+})();
+if (isMain) createInterface({ input: process.stdin }).on("line", async (line) => {
   if (!line.trim()) return;
   let msg;
   try {
