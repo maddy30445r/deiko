@@ -537,6 +537,7 @@ final class Recorder {
             do {
                 try FileManager.default.removeItem(atPath: dir)
                 Emit.log("✕ session \(id) discarded")
+                PickUp.shared.discarded(sessionDir: dir)
             } catch {
                 Emit.log("✕ session \(id) — could not discard: \(error.localizedDescription)")
             }

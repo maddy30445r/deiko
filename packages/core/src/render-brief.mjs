@@ -32,7 +32,7 @@ import { buildPrompt, quoteSurvives } from "./lib/prompt.mjs";
 import { degradedReason as cloudDegradedReason } from "./lib/cloud.mjs";
 import { briefDate, readBriefLine, relativeAge, wantsQuickHint } from "./lib/context.mjs";
 import { briefText, currentModel, isReady, loadModel, vectorIsCurrent, writeVector } from "./lib/meaning.mjs";
-import { firm, groupTasks, readBoard, readTasks, stampTime, taskIdFor, taskState, titleFor, tokens, writeTaskNotes } from "./lib/tasks.mjs";
+import { firm, groupTasks, historyPath, readBoard, readTasks, stampTime, taskIdFor, taskState, titleFor, tokens, writeTaskNotes } from "./lib/tasks.mjs";
 
 // ── Rendering ───────────────────────────────────────────────────────────────
 
@@ -321,11 +321,8 @@ const maybe = !task && Array.isArray(context?.candidates) && context.candidates.
       id,
       title,
       now: taskState(bs, title).now,
-      // A task of one has no note (`writeTaskNotes` skips it), so its history
-      // is that brief's own file — by name, never the folder.
-      notePath: bs.length > 1
-        ? join(root, "tasks", `${id}.md`)
-        : join(bs[0].dir, bs[0].outcome ? "outcome.md" : "prompt.txt"),
+      // A task of one has no note unless it was corrected — see `historyPath`.
+      notePath: historyPath(root, id, bs),
     };
   })
   : null;
@@ -344,9 +341,7 @@ const related = relatedId ? (() => {
     title: taskTitles.get(relatedId) ?? titleFor(bs.at(-1)),
     why: shares("pages") ? "same page" : shares("files") ? "same file" : shares("sites") ? "same site" : null,
     age: relativeAge(stampTime(basename(dir)) - stampTime(bs[0].id)),
-    notePath: bs.length > 1
-      ? join(root, "tasks", `${relatedId}.md`)
-      : join(bs[0].dir, bs[0].outcome ? "outcome.md" : "prompt.txt"),
+    notePath: historyPath(root, relatedId, bs),
   };
 })() : null;
 

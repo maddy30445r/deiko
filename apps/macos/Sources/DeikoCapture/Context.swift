@@ -570,7 +570,7 @@ enum TaskMemoryEdits {
         (try? JSONDecoder().decode(Edits.self, from: Data(contentsOf: file(task)))) ?? Edits()
     }
 
-    static func forget(_ line: String, in task: String) {
+    @MainActor static func forget(_ line: String, in task: String) {
         var e = read(task)
         if !e.forget.contains(line) { e.forget.append(line) }
         save(e, task)
@@ -578,21 +578,21 @@ enum TaskMemoryEdits {
 
     /// An empty replacement, or one the same as what the agent wrote, puts
     /// the original back.
-    static func edit(_ line: String, to text: String, in task: String) {
+    @MainActor static func edit(_ line: String, to text: String, in task: String) {
         var e = read(task)
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         e.edit[line] = text.isEmpty || text == line ? nil : text
         save(e, task)
     }
 
-    static func bringBack(in task: String) {
+    @MainActor static func bringBack(in task: String) {
         var e = read(task)
         e.forget = []
         save(e, task)
     }
 
     /// Then the task notes are rebuilt at once: an agent may be reading one.
-    private static func save(_ e: Edits, _ task: String) {
+    @MainActor private static func save(_ e: Edits, _ task: String) {
         let url = file(task)
         do {
             if e.isEmpty {
@@ -606,7 +606,25 @@ enum TaskMemoryEdits {
         } catch {
             Emit.log("tasks: could not save the edits to \(url.lastPathComponent) — \(error.localizedDescription)")
         }
-        Task.detached { await BriefPipeline.rebuildNotes() }
+        rebuild()
+    }
+
+    /// ONE REBUILD AT A TIME, the last one after the last edit: two runs side
+    /// by side could finish in either order, and the one that read the edits
+    /// first would write the older note last.
+    @MainActor private static var rebuilding = false
+    @MainActor private static var again = false
+
+    @MainActor private static func rebuild() {
+        guard !rebuilding else { again = true; return }
+        rebuilding = true
+        Task {
+            repeat {
+                again = false
+                await BriefPipeline.rebuildNotes()
+            } while again
+            rebuilding = false
+        }
     }
 }
 
@@ -618,14 +636,25 @@ enum TaskMemoryEdits {
 final class PickUp: ObservableObject {
     static let shared = PickUp()
     @Published private(set) var task: String?
+    /// The session it went to, until that session makes a brief or goes.
+    private var placed: (dir: String, task: String)?
 
     func arm(_ task: String) { self.task = task }
     func cancel() { task = nil }
+
+    /// A session discarded before it made a brief (Escape, too short): the
+    /// promise "your next brief joins this work" still stands.
+    func discarded(sessionDir: String) {
+        guard let placed, placed.dir == sessionDir else { return }
+        self.placed = nil
+        task = task ?? placed.task
+    }
 
     /// The recorder, with the folder of a session it just started.
     func place(sessionDir: String) {
         guard let task else { return }
         self.task = nil
+        placed = (sessionDir, task)
         var context = SessionContext()
         // Its project is the work's own.
         context.placeCollection(SessionsStore.shared.items.first { $0.task == task && !$0.odds }?.collection)

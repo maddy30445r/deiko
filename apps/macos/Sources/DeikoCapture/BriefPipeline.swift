@@ -467,14 +467,6 @@ enum BriefPipeline {
         return try digest(sessionDir: sessionDir)
     }
 
-    /// Place the brief: which collection, which task it belongs to, how much
-    /// work it looks like. Written to `context.json`
-    /// by the script; nil when it decided nothing — no relay, a short
-    /// narration, a network that was not there.
-    ///
-    /// Separate from `run`, like `summary`, and for the same reason: it is a
-    /// network round trip and the brief must not wait on it. The caller
-    /// re-renders afterwards so the prompt on disk carries what was placed.
     /// Every task note, rebuilt now (after Forget or Edit on one). The
     /// "session" handed to the script is the board root.
     static func rebuildNotes() async {
@@ -485,8 +477,17 @@ enum BriefPipeline {
     /// first, ranked the way the memory helper ranks for agents
     /// (`scripts/search-briefs.mjs`). Empty on any failure — the word
     /// filter on the board still works on its own.
-    static func search(query: String) async -> [String] {
-        let output = await script("search-briefs.mjs", [Collections.root, query], label: "Searching")
+    @MainActor private static var searching: Task<String?, Never>?
+
+    @MainActor static func search(query: String) async -> [String] {
+        // ONE AT A TIME. Each search is a Node process that loads the meaning
+        // model; a slow typist's pauses would otherwise stack several of them
+        // side by side. A newer query waits for the running one, then goes.
+        _ = await searching?.value
+        guard !Task.isCancelled else { return [] }
+        let run = Task { await script("search-briefs.mjs", [Collections.root, query], label: "Searching") }
+        searching = run
+        let output = await run.value
         guard let line = output?.split(separator: "\n").last(where: { $0.hasPrefix("BRIEFS ") }),
               let ids = try? JSONDecoder().decode([String].self, from: Data(line.dropFirst(7).utf8))
         else { return [] }
@@ -517,6 +518,14 @@ enum BriefPipeline {
         }
     }
 
+    /// Place the brief: which collection, which task it belongs to, how much
+    /// work it looks like. Written to `context.json`
+    /// by the script; nil when it decided nothing — no relay, a short
+    /// narration, a network that was not there.
+    ///
+    /// Separate from `run`, like `summary`, and for the same reason: it is a
+    /// network round trip and the brief must not wait on it. The caller
+    /// re-renders afterwards so the prompt on disk carries what was placed.
     static func classify(sessionDir: String) async -> SessionContext? {
         _ = try? await run(.classify, sessionDir: sessionDir)
         return SessionContext.read(sessionDir: sessionDir)

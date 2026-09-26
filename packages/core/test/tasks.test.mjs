@@ -513,3 +513,53 @@ test("a hand-off is clean Markdown for a person: redacted, corrected, screenshot
   assert.equal(existsSync(join(out, "screenshots", "20260915-100000-2.png")), false, "a removed screenshot never travels");
   assert.doesNotMatch(handoff({ root, task: "t-20260915-100000", images: false }), /!\[/);
 });
+
+test("overrideText takes whole lines only, however a prompt quoted them", async () => {
+  const { overrideText } = await import("../lib/tasks.mjs");
+  const o = { forget: new Set(["Done", "Keep  the toast."]), edit: new Map([["tests", "Tests pass on CI"]]) };
+  const text = [
+    "Done", "- Done.", "Still open from Sep 18: Done", "- Sep 18 (20260918-100000): Keep the toast.",
+    "Last done: Done", "we are Done with the header", "run the tests please", "- tests",
+  ].join("\n");
+  assert.equal(overrideText(text, o), ["we are Done with the header", "run the tests please", "- Tests pass on CI"].join("\n"));
+});
+
+test("an outcome.md with Windows line endings reads like any other", () => {
+  const o = parseOutcome("## Decided\r\n- Keep the toast.\r\n## Open\r\n- Listing page.\r\n");
+  assert.deepEqual(o.decided, ["Keep the toast."]);
+  assert.deepEqual(o.open, ["Listing page."]);
+});
+
+test("a one-brief task that was corrected gets a note, and prompts point at it rather than the raw outcome", async () => {
+  const { historyPath, writeTaskNotes: write } = await import("../lib/tasks.mjs");
+  const root = mkdtempSync(join(tmpdir(), "deiko-onebrief-"));
+  const a = join(root, "20260915-100000");
+  mkdirSync(a);
+  writeFileSync(join(a, "brief.json"), JSON.stringify({ summary: { narration: "rotate the prod key" } }));
+  writeFileSync(join(a, "outcome.md"), "## Open\n- Rotate the prod key on Friday.\n- Tell ops.\n");
+  const brief = readBoard(root);
+  assert.equal(historyPath(root, "t-20260915-100000", brief), join(a, "outcome.md"), "uncorrected: its own file, as before");
+  mkdirSync(join(root, "tasks"));
+  writeFileSync(join(root, "tasks", "t-20260915-100000.overrides.json"), JSON.stringify({ forget: ["Rotate the prod key on Friday."] }));
+  assert.equal(historyPath(root, "t-20260915-100000", brief), join(root, "tasks", "t-20260915-100000.md"));
+  write(root);
+  const note = readFileSync(join(root, "tasks", "t-20260915-100000.md"), "utf8");
+  assert.doesNotMatch(note, /Rotate the prod key/);
+  assert.match(note, /Tell ops\./);
+});
+
+test("a hand-off never copies a screenshot that is a link to somewhere else", async () => {
+  const { handoff } = await import("../handoff.mjs");
+  const { symlinkSync } = await import("node:fs");
+  const root = mkdtempSync(join(tmpdir(), "deiko-handoff-link-"));
+  const a = join(root, "20260915-100000");
+  mkdirSync(join(a, "crops"), { recursive: true });
+  const secret = join(root, "..", `secret-${Date.now()}.txt`);
+  writeFileSync(secret, "aws_secret_access_key");
+  symlinkSync(secret, join(a, "crops", "x.png"));
+  writeFileSync(join(a, "brief.json"), JSON.stringify({ summary: { narration: "look" }, referents: [{ cropPath: join(a, "crops", "x.png"), said: "this" }] }));
+  const out = join(root, "out");
+  mkdirSync(out);
+  assert.doesNotMatch(handoff({ root, task: "t-20260915-100000", outDir: out }), /!\[/);
+  assert.equal(existsSync(join(out, "screenshots")), false);
+});

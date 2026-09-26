@@ -795,6 +795,7 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 // now showing it.
                 try? FileManager.default.removeItem(atPath: dir)
                 Emit.log("✕ session \((dir as NSString).lastPathComponent) discarded after it had stopped")
+                PickUp.shared.discarded(sessionDir: dir)
                 review.dismissIfShowing(dir)
             }
         }

@@ -2481,9 +2481,6 @@ private struct LargeCrop: View {
     }
 }
 
-/// The note blocks the work view and the brief view both write in: a 12pt
-/// semibold heading with quiet meta, 12pt ink-2 notes, and the text toggle.
-@MainActor
 /// "BEST MATCHES": what the search found by meaning, above the board's own
 /// word matches, so "the graph thing" finds the chart work. Five at most.
 private struct BestMatches: View {
@@ -2642,6 +2639,8 @@ private struct MemoryLine: View {
     }
 }
 
+/// The note blocks the work view and the brief view both write in: a 12pt
+/// semibold heading with quiet meta, 12pt ink-2 notes, and the text toggle.
 @MainActor
 private enum NoteStyle {
     static func heading(_ title: String, meta: String?) -> some View {

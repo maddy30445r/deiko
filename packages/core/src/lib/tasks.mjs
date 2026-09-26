@@ -72,7 +72,7 @@ export function parseOutcome(text) {
   const out = { did: [], decided: [], open: [], files: [] };
   let into = "did";
   let fence = null;
-  for (const raw of String(text ?? "").split("\n")) {
+  for (const raw of String(text ?? "").replace(/\r\n?/g, "\n").split("\n")) {
     const marker = raw.match(/^\s*(`{3,}|~{3,})/)?.[1];
     if (fence) {
       if (marker?.[0] === fence[0] && marker.length >= fence.length) fence = null;
@@ -549,10 +549,31 @@ export function withOverrides(b, o) {
  *  line quoting a forgotten one goes, an edited one is replaced in place. */
 export function overrideText(text, o) {
   if (!o || text == null) return text;
-  return String(text).split("\n")
-    .filter((l) => ![...o.forget].some((f) => f && l.includes(f)))
-    .map((l) => [...o.edit].reduce((acc, [from, to]) => (from ? acc.split(from).join(to) : acc), l))
-    .join("\n");
+  // WHOLE LINES, compared the way they were written: a prompt quotes a note
+  // line redacted and with its spaces collapsed, behind a bullet or a
+  // "Still open from Sep 18:" / "- Sep 18 (id):" / "Last done:" lead-in.
+  // Never a substring: forgetting "Done" must not take out a sentence that
+  // merely contains it.
+  const norm = (s) => redact(String(s)).replace(/\s+/g, " ").trim().replace(/[.!?]+$/, "").toLowerCase();
+  const LEAD = /^(\s*(?:[-*]\s+)?(?:Still open from [^:]+:\s*|Last done:\s*|[A-Z][a-z]{2} \d{1,2}(?:, \d{4})?(?: \(\d{8}-\d{6}\))?:\s*)?)(.*)$/;
+  const forget = new Set([...o.forget].map(norm).filter(Boolean));
+  const edits = new Map([...o.edit].map(([from, to]) => [norm(from), to]));
+  const out = [];
+  for (const line of String(text).split("\n")) {
+    const [, lead, body] = LEAD.exec(line) ?? [null, "", line];
+    const key = norm(body);
+    if (key && forget.has(key)) continue;
+    out.push(key && edits.has(key) ? `${lead}${edits.get(key)}` : line);
+  }
+  return out.join("\n");
+}
+
+/** Where a task's history is read, for a prompt's "History:" line: its note
+ *  when it has one (two briefs or more, or corrected by hand), else its one
+ *  brief's own file — by name, never the folder. */
+export function historyPath(root, id, briefs, overrides = readOverrides(root)) {
+  if (briefs.length > 1 || overrides.has(id)) return join(root, "tasks", `${id}.md`);
+  return join(briefs[0].dir, briefs[0].outcome ? "outcome.md" : "prompt.txt");
 }
 
 /** Lines read off the board, each with its task's corrections applied. */
@@ -587,8 +608,11 @@ export function writeTaskNotes(root) {
   const dir = join(root, "tasks");
   let written = 0;
   const kept = new Set();
+  // A task of one has no note, unless it was corrected: then its note is the
+  // one place its history reads as corrected (see `historyPath`).
+  const corrected = readOverrides(root);
   for (const [id, briefs] of groupTasks(readBoard(root))) {
-    if (briefs.length < 2) continue;
+    if (briefs.length < 2 && !corrected.has(id)) continue;
     kept.add(id);
     const text = renderTaskNote({
       id,

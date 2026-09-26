@@ -10,7 +10,7 @@
 // Writes <out dir>/handoff.md, and with images the kept screenshots beside it
 // in <out dir>/screenshots/, linked relatively so the folder travels whole.
 // `--no-images` is the "Copy hand-off" text: no files, no image links.
-import { copyFileSync, mkdirSync, readFileSync } from "node:fs";
+import { copyFileSync, lstatSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -18,6 +18,21 @@ import { briefDate } from "./lib/context.mjs";
 import { redact, redactNote } from "./lib/redact.mjs";
 import { writeAtomic } from "./lib/session-io.mjs";
 import { TASK_ID, currentDecisions, firm, groupTasks, readBoard, readTasks, taskState, titleFor } from "./lib/tasks.mjs";
+
+/** A real file, no symlink and no hard link, resolving inside the board —
+ *  the check memory-mcp.mjs makes: an agent can write inside the board, and
+ *  a planted link would copy something else into a folder that gets shared. */
+function plainFileInside(path, root) {
+  try {
+    const st = lstatSync(path);
+    if (!st.isFile() || st.nlink > 1) return false;
+    const real = realpathSync(path);
+    const top = realpathSync(root);
+    return real.startsWith(top + "/");
+  } catch {
+    return false;
+  }
+}
 
 /** Screenshots the developer kept: released by the render, not removed
  *  since, inside the brief's own crops folder. With what was said over each. */
@@ -71,7 +86,7 @@ export function handoff({ root, task, outDir = null, images = true }) {
       }
     }
     if (images && outDir) {
-      const shots = keptShots(b.dir);
+      const shots = keptShots(b.dir).filter((s) => plainFileInside(s.path, root));
       if (shots.length) out.push("");
       shots.forEach((s, i) => {
         const name = `${b.id}-${i + 1}.png`;

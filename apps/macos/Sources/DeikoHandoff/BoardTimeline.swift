@@ -288,7 +288,9 @@ public enum BoardTimeline {
         var out = Outcome()
         var into: WritableKeyPath<Outcome, [String]>? = \.did
         var fence: String?
-        for raw in markdown.components(separatedBy: "\n") {
+        // CRLF read as LF, as the scripts read it: override keys must match.
+        let unix = markdown.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+        for raw in unix.components(separatedBy: "\n") {
             let trimmed = raw.trimmingCharacters(in: .whitespaces)
             let marker = trimmed.range(of: #"^(`{3,}|~{3,})"#, options: .regularExpression).map { String(trimmed[$0]) }
             if let open = fence {

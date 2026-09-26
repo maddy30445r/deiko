@@ -15,3 +15,9 @@ import Testing
     #expect(partial.isEmpty)
     #expect(partial.applied(to: o) == o)
 }
+
+@Test func outcomeWithWindowsLineEndingsReadsLikeAnyOther() {
+    let o = BoardTimeline.outcome("## Decided\r\n- Keep the toast.\r\n## Open\r\n- Listing page.\r\n")
+    #expect(o.decided == ["Keep the toast."])
+    #expect(o.open == ["Listing page."])
+}
