@@ -108,6 +108,24 @@ async function main() {
     }
   };
 
+  // THE QUEUE. A brief that could not be filed (offline, the filing service
+  // busy or refusing) keeps a `filing.pending` marker, and the app files it
+  // again when it can: on reconnect, on launch, after the next brief that
+  // files. Its own file, not a field in `context.json` — a context without
+  // `decidedBy` reads as placed by hand in the app, and would never be filed.
+  // Cleared by anything that settles where the brief goes.
+  const pendingPath = join(dir, "filing.pending");
+  const markPending = (reason) => {
+    let since = new Date().toISOString(), tries = 0;
+    try {
+      ({ since, tries = 0 } = JSON.parse(readFileSync(pendingPath, "utf8")));
+    } catch {
+      // first time
+    }
+    writeAtomic(pendingPath, JSON.stringify({ since, reason, tries: tries + 1 }) + "\n");
+  };
+  const settled = () => rmSync(pendingPath, { force: true });
+
   /** `context.json` as it is now. Missing or unreadable is none: not "decided", and rewritten below. */
   const current = () => {
     try {
@@ -118,6 +136,7 @@ async function main() {
   };
 
   if (current()?.decidedBy === "you") {
+    settled();
     console.error("· placed by hand — leaving it");
     return;
   }
@@ -131,6 +150,7 @@ async function main() {
   const why = unplaceable(me);
   // Only a relay needs the rest; a brief with nothing to ask decides without one.
   if (!why && !relay) {
+    settled(); // nothing will ever file it: not waiting, just not sorted
     console.error(`· ${sorting ? "no relay configured" : "sorting is off"} — skipping the classification`);
     return;
   }
@@ -145,10 +165,12 @@ async function main() {
     // CHECKED AGAIN, as before the answer's write below: the board walk above
     // reads every brief on the Mac, and a "Move to task" can land meanwhile.
     if (current()?.decidedBy === "you") {
+      settled();
       console.error("· placed by hand while we were looking — leaving it");
       return;
     }
     writeAtomic(contextPath, JSON.stringify(context, null, 2) + "\n");
+    settled();
     console.error(context.task ? `✓ context → joins ${context.task} here (${why})` : `· ${why} — odds and ends`);
     return;
   }
@@ -226,7 +248,8 @@ async function main() {
       // bin. Truncated, because a gateway that echoes its input back in an
       // error must not turn a log line into a content log.
       const why = (await response.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 160);
-      console.error(`· deiko relay ${response.status}${why ? ` — ${why}` : ""} — skipping the classification`);
+      console.error(`· deiko relay ${response.status}${why ? ` — ${why}` : ""} — queued to file later`);
+      markPending(response.status === 429 || response.status >= 500 ? "busy" : "refused");
       return;
     }
     answer = await response.json();
@@ -239,7 +262,8 @@ async function main() {
       if (previous === null) rmSync(sentMarker, { force: true });
       else writeAtomic(sentMarker, previous);
     }
-    console.error(`· classification failed (${err.message.slice(0, 80)}) — skipping`);
+    console.error(`· classification failed (${err.message.slice(0, 80)}) — queued to file later`);
+    markPending(!answered && NEVER_CONNECTED.has(err?.cause?.code) ? "offline" : "unreachable");
     return;
   }
 
@@ -260,6 +284,7 @@ async function main() {
   // then left would outlive it.
   const placed = current();
   if (placed?.decidedBy === "you") {
+    settled();
     console.error("· placed by hand while we were asking — leaving it");
     return;
   }
@@ -338,6 +363,7 @@ async function main() {
       jev: decision.jev,
     };
   writeAtomic(contextPath, JSON.stringify(context, null, 2) + "\n");
+  settled();
   console.error(decision.pile === "odds"
     ? `✓ context → odds and ends (not a request, ${decision.jev.gate})`
     : `✓ context → ${context.collection ?? "unsorted"} · ${decision.newTask ? "new task" : `joins ${context.task}`}`

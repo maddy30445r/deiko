@@ -1077,6 +1077,7 @@ private struct BoardPane: View {
                     }
                 }
                 if let item = openBrief { briefRow(item) } else { workRow }
+                if openBrief == nil, work == nil { FilingQueueRow() }
             }
             .padding(.horizontal, 26)
             .padding(.top, 44)
@@ -1672,6 +1673,35 @@ private struct TightLabel: LabelStyle {
 /// A verb said as a word: mark indigo, underlined under the pointer. A
 /// `ButtonStyle` for the reason `ChipButtonStyle` gives — a `.plain` button
 /// in a scrolling pane took no clicks.
+/// "Waiting to be filed": briefs that went to their agent while Deiko
+/// couldn't reach its filing service, and are filed when it can.
+private struct FilingQueueRow: View {
+    @ObservedObject private var queue = FilingQueue.shared
+
+    var body: some View {
+        if queue.waiting > 0 {
+            HStack(spacing: 10) {
+                Image(systemName: "tray.and.arrow.down")
+                    .foregroundStyle(DeikoStyle.mark)
+                Text(queue.waiting == 1 ? "1 brief is waiting to be filed" : "\(queue.waiting) briefs are waiting to be filed")
+                    .font(.system(size: 12, weight: .semibold))
+                Text("They reached your agent. Deiko files them into their tasks when it can reach its filing service.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(DeikoStyle.ink2)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 8)
+                Button(queue.working ? "Filing…" : "Try now") { queue.fileAll(tryStuck: true) }
+                    .buttonStyle(TextButtonStyle())
+                    .disabled(queue.working)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: 10).fill(DeikoStyle.accentSoft))
+        }
+    }
+}
+
 private struct TextButtonStyle: ButtonStyle {
     /// Ink 2 instead of the mark: the verb beside a stronger one.
     var quiet = false

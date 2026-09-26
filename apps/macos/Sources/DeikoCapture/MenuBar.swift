@@ -290,6 +290,9 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Collections sit beside the sessions, wherever `--out` put them —
         // the scripts resolve the same file from a session's own parent.
         Collections.root = recorder.sessionRoot
+        // Briefs that couldn't be filed when they were made (offline, the
+        // filing service busy) are filed when the network is back.
+        FilingQueue.shared.start()
         // Remove the MCP entry earlier versions wrote. Nothing registers
         // anything any more; this is only clearing up after what did.
         LegacyMCP.cleanUpOnce()

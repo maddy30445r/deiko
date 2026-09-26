@@ -1412,7 +1412,7 @@ struct OrbRootView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(DeikoStyle.ink2)
                 .lineLimit(1)
-                .tip(model.notFiled ? ReviewView.notFiledHelp : "")
+                .tip(model.notFiled ? ReviewView.notFiledHelp(queued: model.filingQueued) : "")
         }
         // ONCE, for somebody on their own key: filing now sends what they
         // said to the relay. Here because every brief passes this card, and
@@ -1605,7 +1605,7 @@ struct OrbRootView: View {
     /// shrink under the coin as "Filing…" goes.
     private var placementLine: String? {
         if model.placing { return "Filing…" }
-        if model.notFiled { return "Not filed" }
+        if model.notFiled { return model.filingQueued ? "Not filed yet" : "Not filed" }
         if !model.openCandidates.isEmpty { return "Which task? Open the card to choose" }
         if model.context?.isOdds == true { return "In odds and ends" }
         if let joined = model.joinedTask { return "Carries on from \(joined)" }

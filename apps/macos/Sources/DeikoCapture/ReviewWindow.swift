@@ -175,6 +175,8 @@ final class ReviewModel: ObservableObject {
     @Published private(set) var filedSummary = false
     /// The request went out and no placement came back.
     @Published private(set) var notFiled = false
+    /// Not filed YET: queued, and filed by `FilingQueue` when it can be.
+    @Published private(set) var filingQueued = false
     /// The throw went before the filing finished, so the brief it pasted
     /// carries no task. Said on the sent pill. Settable so `UIShot` can pose
     /// that pill.
@@ -436,6 +438,7 @@ final class ReviewModel: ObservableObject {
         filed = sent != nil
         filedSummary = sent == true
         notFiled = false
+        filingQueued = false
         sentUnfiled = false
         sortingNotice = false
         summary = nil
@@ -722,8 +725,12 @@ final class ReviewModel: ObservableObject {
                 // or started. After the render lane, not inside it.
                 await SessionsStore.shared.load(root: root)
             }
+            // Filed: anything that waited behind the network can go too. And
+            // either way the board's "waiting" count is current.
+            if placed != nil { FilingQueue.shared.fileAll() } else { FilingQueue.shared.refresh() }
             guard run == placingRun, stillCurrent(sessionDir) else { return }
-            notFiled = files && placed == nil && filed
+            filingQueued = files && FilingQueue.isPending(sessionDir)
+            notFiled = files && (filingQueued || (placed == nil && filed))
             placing = false
         }
     }
@@ -850,6 +857,7 @@ final class ReviewModel: ObservableObject {
         self.sessionDir = sessionDir
         summary = nil
         notFiled = false
+        filingQueued = false
         // The classifier reads this file, and it describes the shorter
         // session. Left in place, a summary that failed now filed the longer
         // brief on the old one. Only here: reopening a brief keeps its summary
@@ -1252,16 +1260,20 @@ struct ReviewView: View {
             }
             .padding(.top, 1)
         } else if model.notFiled {
-            Text("Not filed")
+            Text(model.filingQueued ? "Not filed yet" : "Not filed")
                 .font(.system(size: 11))
                 .foregroundStyle(DeikoStyle.ink2)
-                .tip(Self.notFiledHelp)
+                .tip(Self.notFiledHelp(queued: model.filingQueued))
                 .padding(.top, 1)
         }
     }
 
     /// Shared with the collapsed card, which says "Not filed" too.
-    static let notFiledHelp = "Deiko couldn't file this one, so it starts a new task."
+    static func notFiledHelp(queued: Bool) -> String {
+        queued
+            ? "Deiko couldn't reach its filing service, so this brief isn't in a task yet. It has already gone to your agent, and Deiko files it into the right task as soon as it can."
+            : "Deiko couldn't file this one, so it starts a new task."
+    }
 
     @ViewBuilder private func taskMenu(
         _ context: SessionContext, label: String, linked: Bool

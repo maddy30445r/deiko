@@ -125,6 +125,7 @@ struct SessionContext: Codable, Equatable {
             withJSONObject: merged, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         )
         try data.write(to: url, options: .atomic)
+        if decidedBy == "you" { FilingQueue.settle(sessionDir) }
     }
 
     /// Note, in `jev.correctedRank`, where the task somebody picked sat on the

@@ -610,6 +610,39 @@ test("every board write in the pipeline goes through writeAtomic", () => {
   }
 });
 
+test("a brief that can't be filed is queued, counted, and settled once it files", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-queue-"));
+  const pending = (dir) => existsSync(join(dir, "filing.pending")) ? json(join(dir, "filing.pending")) : null;
+
+  // Offline: nothing listening.
+  const closed = await relay();
+  await closed.close();
+  const offline = filed(root, "20260918-090000", { narration: "the price still shows 99 after I save it" });
+  await classify(offline, closed.url);
+  assert.equal(pending(offline).reason, "offline");
+  assert.equal(existsSync(join(offline, "context.json")), false, "not guessed into a task of its own");
+
+  // Busy: a 5xx after the retry, twice — the count goes up, the start stays.
+  const busy = await relay(() => [503, { error: "upstream" }]);
+  const first = pending(offline).since;
+  await classify(offline, busy.url);
+  busy.close();
+  assert.deepEqual([pending(offline).reason, pending(offline).tries, pending(offline).since], ["busy", 2, first]);
+
+  // Back online: filed through the normal flow, and the marker is gone.
+  const good = await relay();
+  await classify(offline, good.url);
+  good.close();
+  assert.equal(pending(offline), null);
+  assert.equal(existsSync(join(offline, "context.json")), true);
+
+  // Placed by hand while it waited: settled too.
+  const handPlaced = filed(root, "20260918-100000", { narration: "the cart shows it too", context: { task: "t-20260918-090000", decidedBy: "you" } });
+  writeFileSync(join(handPlaced, "filing.pending"), JSON.stringify({ since: "x", reason: "offline", tries: 1 }));
+  await classify(handPlaced, closed.url);
+  assert.equal(pending(handPlaced), null);
+});
+
 test("a request that never connected leaves no sent marker; one that got an answer keeps it", async () => {
   const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
   const closed = await relay();
