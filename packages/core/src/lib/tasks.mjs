@@ -10,12 +10,14 @@
  * Pure, except `readTasks` and `writeTaskNotes`.
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { writeAtomic } from "./session-io.mjs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { redact, redactNote } from "./redact.mjs";
-import { COULD_NOT_TELL, STAMP, briefDate, readBriefLine } from "./context.mjs";
+import { BRIEF_LINE_FILES, COULD_NOT_TELL, STAMP, briefDate, readBriefLine } from "./context.mjs";
 
 export const TASK_ID = /^t-\d{8}-\d{6}$/;
 /// How many tasks Jev is asked about, one yes/no each.
@@ -419,13 +421,84 @@ export function readTasks(root) {
   }
 }
 
+/**
+ * THE BOARD INDEX. Every brief folder under `root` as its `readBriefLine`,
+ * in folder order — but read from disk only when one of the files it comes
+ * from changed. Reading ~4 small files per brief is most of what a big board
+ * costs (about 2.5 s at 10,000 briefs); checking them costs a tenth of that.
+ *
+ * A brief is re-read when any `BRIEF_LINE_FILES` entry changed inode, size or
+ * mtime (ns) — the pipeline and the app replace files by rename, which moves
+ * the inode, and an agent editing outcome.md in place moves the mtime. And
+ * the whole index is dropped when any script in lib/ changes, so a change to
+ * how a line is read never serves a line read the old way.
+ *
+ * `.board-index.json` beside the briefs is a cache only: deleting it, or two
+ * processes writing it at once (last one wins), costs one slow read. The same
+ * lines are kept in the process too, so a second read in one run is only the
+ * checks. `save: false` never writes (the memory helper writes nothing).
+ */
+const INDEX = ".board-index.json";
+const inProcess = new Map(); // root -> { name: { fp, line } }
+let libKey;
+function codeKey() {
+  if (!libKey) {
+    const dir = dirname(fileURLToPath(import.meta.url));
+    const h = createHash("sha1");
+    for (const f of readdirSync(dir).sort()) if (f.endsWith(".mjs")) h.update(f).update(readFileSync(join(dir, f)));
+    libKey = h.digest("hex");
+  }
+  return libKey;
+}
+const fingerprint = (dir) => BRIEF_LINE_FILES.map((f) => {
+  const s = statSync(join(dir, f), { bigint: true, throwIfNoEntry: false });
+  return s ? `${s.ino}:${s.size}:${s.mtimeNs}` : "-";
+}).join("|");
+
+export function readBriefLines(root, { save = true } = {}) {
+  let known = inProcess.get(root);
+  if (!known) {
+    try {
+      const saved = JSON.parse(readFileSync(join(root, INDEX), "utf8"));
+      known = saved?.code === codeKey() && saved.briefs && typeof saved.briefs === "object" ? saved.briefs : {};
+    } catch {
+      known = {};
+    }
+  }
+  const next = {};
+  let changed = false;
+  const lines = readdirSync(root).filter((name) => STAMP.test(name)).map((name) => {
+    const dir = join(root, name);
+    const fp = fingerprint(dir);
+    const hit = known[name];
+    if (hit?.fp === fp) {
+      next[name] = hit;
+      // `dir` is not kept (the board can move); put back where the reader puts it.
+      const { id, ...rest } = hit.line;
+      return { id, dir, ...rest };
+    }
+    changed = true;
+    const line = readBriefLine(dir);
+    const { dir: _, ...kept } = line;
+    next[name] = { fp, line: kept };
+    return line;
+  });
+  if (Object.keys(known).length !== lines.length) changed = true;
+  inProcess.set(root, next);
+  if (changed && save) {
+    try {
+      writeAtomic(join(root, INDEX), JSON.stringify({ code: codeKey(), briefs: next }));
+    } catch {
+      // A cache: the next run reads the slow way.
+    }
+  }
+  return lines;
+}
+
 /** Every sibling under `root` as a `readBriefLine`, briefs with nothing said
  *  skipped, and odds and ends too: never shortlisted, never in a note. */
 export function readBoard(root) {
-  return readdirSync(root)
-    .filter((name) => STAMP.test(name))
-    .map((name) => readBriefLine(join(root, name)))
-    .filter((b) => b.line && !b.odds);
+  return readBriefLines(root).filter((b) => b.line && !b.odds);
 }
 
 /**

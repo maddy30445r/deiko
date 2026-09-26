@@ -36,7 +36,7 @@ import { createInterface } from "node:readline";
 import { STAMP, briefDate, readBriefLine } from "./lib/context.mjs";
 import { redact, redactBlock, redactNote } from "./lib/redact.mjs";
 import { loadEvents } from "./lib/session-io.mjs";
-import { TASK_ID, bm25, cosine, groupTasks, readTasks, renderTaskNote, rrf, terms, titleFor } from "./lib/tasks.mjs";
+import { TASK_ID, bm25, cosine, groupTasks, readBriefLines, readTasks, renderTaskNote, rrf, terms, titleFor } from "./lib/tasks.mjs";
 import { DEIKO_HOME, loadModel, readVector } from "./lib/meaning.mjs";
 
 const ROOT = (process.env.DEIKO_ROOT ?? DEIKO_HOME).replace(/^~/, homedir());
@@ -83,6 +83,22 @@ function stamps() {
     if (err.code === "ENOENT") return []; // no board yet: an empty one, not an error
     throw new Error(`can't read ${ROOT} (${err.code ?? err.message})`);
   }
+}
+/** Every brief's `readBriefLine`, oldest first, from the board index — read
+ *  only (this helper writes nothing), re-read only where a file changed. */
+const lines = () => (stamps().length ? readBriefLines(ROOT, { save: false }).sort((a, b) => (a.id < b.id ? -1 : 1)) : []);
+/// Meaning vectors by folder, re-read only when their files change.
+const vectors = new Map(); // dir -> { fp, vec }
+function vectorOf(dir, key) {
+  const fp = key + ["meaning.json", "meaning.f32"].map((f) => {
+    const s = statSync(join(dir, f), { bigint: true, throwIfNoEntry: false });
+    return s ? `${s.ino}:${s.size}:${s.mtimeNs}` : "-";
+  }).join("|");
+  const hit = vectors.get(dir);
+  if (hit?.fp === fp) return hit.vec;
+  const vec = readVector(dir, key);
+  vectors.set(dir, { fp, vec });
+  return vec;
 }
 const removed = (dir) => new Set(readJSON(join(dir, "crops.excluded.json")) ?? []);
 const events = (dir) => { try { return loadEvents(dir).filter((e) => e.type === "probe"); } catch { return []; } };
@@ -148,13 +164,13 @@ async function searchBriefs({ query, limit = 8 } = {}) {
   const q = String(query ?? "").trim();
   if (!q) throw new Error("query is required");
   const n = Math.min(Math.max(1, Number(limit) || 8), 20);
-  const briefs = stamps().map((id) => ({ id, dir: join(ROOT, id), me: readBriefLine(join(ROOT, id)) }))
+  const briefs = lines().map((me) => ({ id: me.id, dir: join(ROOT, me.id), me }))
     .filter((b) => b.me.narration != null);
   const words = bm25(terms(q), briefs.map((b) => terms(everythingCached(b.dir, b.me))));
   let meaning = briefs.map(() => null);
   const model = await meaningModel();
   const qv = model ? await model.embed(q, "query") : null;
-  if (qv) meaning = briefs.map((b) => { const v = readVector(b.dir, model.key); return v ? cosine(qv, v) : null; });
+  if (qv) meaning = briefs.map((b) => { const v = vectorOf(b.dir, model.key); return v ? cosine(qv, v) : null; });
   const fused = rrf([{ scores: words.map((s) => (s > 0 ? s : null)), weight: 1 }, { scores: meaning, weight: 1 }]);
   const titles = readTasks(ROOT);
   return briefs.map((b, i) => ({ b, score: fused[i] }))
@@ -187,7 +203,7 @@ function collectionName(root, id) {
 
 function getTask({ id } = {}) {
   if (!TASK_ID.test(String(id ?? ""))) throw new Error("id must look like t-20260918-155836");
-  const board = stamps().map((s) => readBriefLine(join(ROOT, s))).filter((b) => b.line && !b.odds);
+  const board = lines().filter((b) => b.line && !b.odds);
   const briefs = groupTasks(board).get(id);
   if (!briefs) throw new Error(`no task ${id} on this Mac`);
   const title = readTasks(ROOT).get(id) ?? titleFor(briefs.at(-1));

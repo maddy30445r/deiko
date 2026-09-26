@@ -392,3 +392,50 @@ test("notes are written for tasks with two briefs or more, titled from tasks.jso
   assert.equal(existsSync(join(root, "tasks", "t-20260918-155836.md")), false, "a note outliving its task is removed");
   assert.equal(readFileSync(join(root, "tasks", "README.md"), "utf8"), "mine");
 });
+
+test("the board index gives exactly what reading every brief gives, and re-reads what changed", async () => {
+  const { buildBoard } = await import("../bench-board.mjs");
+  const { readBriefLines } = await import("../lib/tasks.mjs");
+  const { readBriefLine, STAMP } = await import("../lib/context.mjs");
+  const { readdirSync, renameSync, rmSync, statSync } = await import("node:fs");
+  const root = buildBoard(300);
+  const direct = () => readdirSync(root).filter((n) => STAMP.test(n)).map((n) => readBriefLine(join(root, n)));
+  // Each call below uses a fresh spelling of the root, which skips the
+  // in-process copy and reads `.board-index.json` from disk.
+  let n = 0;
+  const fromDisk = () => readBriefLines(`${root}/${".".repeat(1)}${"/.".repeat(n++)}`);
+
+  assert.deepEqual(readBriefLines(root), direct(), "cold");
+  assert.ok(existsSync(join(root, ".board-index.json")));
+  assert.deepEqual(readBriefLines(root), direct(), "in this process");
+  assert.deepEqual(fromDisk(), direct(), "from the index on disk");
+
+  const [a, b, c] = readdirSync(root).filter((x) => STAMP.test(x));
+  // The app replaces context.json by rename; an agent edits outcome.md in place.
+  writeFileSync(join(root, a, "context.json.tmp"), JSON.stringify({ task: `t-${a}`, decidedBy: "you", taskBy: "you" }));
+  renameSync(join(root, a, "context.json.tmp"), join(root, a, "context.json"));
+  writeFileSync(join(root, b, "outcome.md"), "## Decided\n- keep the price in the cache\n");
+  rmSync(join(root, c), { recursive: true });
+  mkdirSync(join(root, "20300101-000000"));
+  writeFileSync(join(root, "20300101-000000", "brief.json"), JSON.stringify({ summary: { narration: "a brand new one" } }));
+  assert.deepEqual(readBriefLines(root), direct(), "after changes, in this process");
+  assert.deepEqual(fromDisk(), direct(), "after changes, from disk");
+  assert.equal(readBriefLines(root).find((l) => l.id === b).outcome.decided[0], "keep the price in the cache");
+
+  // A broken index, or one written by other code, is read past, never trusted.
+  writeFileSync(join(root, ".board-index.json"), "{ half");
+  assert.deepEqual(fromDisk(), direct(), "broken index");
+  const idx = JSON.parse(readFileSync(join(root, ".board-index.json"), "utf8"));
+  idx.code = "older scripts";
+  idx.briefs[a].line.narration = "stale words";
+  writeFileSync(join(root, ".board-index.json"), JSON.stringify(idx));
+  assert.deepEqual(fromDisk(), direct(), "index from other code");
+
+  // save: false writes nothing.
+  rmSync(join(root, ".board-index.json"));
+  const before = statSync(root).mtimeMs;
+  assert.deepEqual(readBriefLines(`${root}/./././././././.`, { save: false }), direct());
+  assert.equal(existsSync(join(root, ".board-index.json")), false);
+  assert.equal(statSync(root).mtimeMs, before);
+  rmSync(root, { recursive: true, force: true });
+});

@@ -920,7 +920,7 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
             zip.executableURL = URL(fileURLWithPath: "/usr/bin/zip")
             zip.currentDirectoryURL = root.deletingLastPathComponent()
             zip.arguments = ["-r", "-q", "-y", dest.path, name, "-x",
-                             "\(name)/models/*", "*.wav", "*.f32", "*.DS_Store", "*/.lists.lock/*", "*.tmp-*"]
+                             "\(name)/models/*", "*.wav", "*.f32", "*.DS_Store", "*/.lists.lock/*", "*.tmp-*", "*/.board-index.json"]
             let ok = (try? zip.run()).map { zip.waitUntilExit(); return zip.terminationStatus == 0 } ?? false
             await MainActor.run {
                 if ok { NSWorkspace.shared.activateFileViewerSelecting([dest]); return }

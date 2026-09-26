@@ -319,6 +319,11 @@ const OUTCOME_LINES = 40;
  * What a sibling session says, read the one way every script reads it.
  * Missing pieces are null or empty, never a throw.
  */
+/// Every file `readBriefLine` reads. The board index (`readBriefLines` in
+/// tasks.mjs) re-reads a brief when any of these changes, so a new read here
+/// must be added to this list.
+export const BRIEF_LINE_FILES = ["brief.json", "context.json", "review-summary.txt", "outcome.md"];
+
 export function readBriefLine(sessionDir) {
   const json = (name) => {
     try { return JSON.parse(readFileSync(join(sessionDir, name), "utf8")); } catch { return null; }
