@@ -273,12 +273,19 @@ test("the note is deterministic, capped and names two files, never a folder", ()
   assert.equal(note, renderTaskNote({ id: "t-20260918-155836", title: "Price display doesn't update", collection: "acme-portal", briefs: members }));
   assert.match(note, /^# Price display doesn't update\nacme-portal · 3 briefs · Sep 18 · updated from 20260918-162340\n/);
   assert.match(note, /\nCompiled by Deiko from each brief's outcome\.md — edit those, not this file\.\n\n## Now\n/);
-  assert.match(note, /## Now\nThe listing page still caches the old price\.\n/);
-  assert.match(note, /## Decided\n- Sep 18: Reject negative prices in the form\.\n/);
+  assert.match(note, /## Now\nThe listing page still caches the old price\.\n\(from the brief of Sep 18, 20260918-\d{6}\)\n/);
+  assert.match(note, /## Decided\n- Sep 18 \(20260918-\d{6}\): Reject negative prices in the form\.\n/);
   assert.match(note, /\/20260918-162340\/prompt\.txt · \/Users\/dev\/Documents\/Deiko\/20260918-162340\/outcome\.md/);
   assert.equal(/20260918-\d{6}(?!\/(prompt\.txt|outcome\.md))\b/.test(note.split("## Briefs")[1].replace(/updated from \S+/, "")), false);
   const fifty = Array.from({ length: 60 }, (_, i) => brief(`202609${String(10 + (i % 18)).padStart(2, "0")}-${String(100000 + i)}`, `brief ${i}`));
   assert.match(renderTaskNote({ id: "t-x", title: "big", briefs: fifty }), /- … and 10 earlier\n$/);
+  // More decisions than the cap: trimmed, and the note says so.
+  const deciding = Array.from({ length: 23 }, (_, i) => brief(`20260918-1${String(10000 + i)}`, `brief ${i}`, {
+    outcome: { did: [], decided: [`decision ${i}`], open: [], files: [] },
+  }));
+  const capped = renderTaskNote({ id: "t-x", title: "many", briefs: deciding });
+  assert.equal((capped.match(/^- Sep 18 \(20260918-\d{6}\): decision/gm) ?? []).length, 20);
+  assert.match(capped, /- … and 3 earlier decisions, in older briefs' outcome\.md \(search_briefs finds them\)\n/);
 });
 
 test("a note whose only Now line would repeat its title has no Now section", () => {
@@ -306,7 +313,7 @@ test("a note's Now and Decided are redacted as blocks: a secret on the line afte
   assert.equal(note.includes("UzvkZx7oHzB3KjQ9"), false, "decided");
   assert.equal(note.includes("Xk9f2LmQpR7sT1uVwq"), false, "now");
   assert.match(note, /\nsrc\/components\/PriceDisplay\.tsx\n/, "a path line stays readable");
-  assert.match(note, /- Sep 18: Staging API key is below\.\n- Sep 18: <REDACTED>\n/);
+  assert.match(note, /- Sep 18 \(20260918-155836\): Staging API key is below\.\n- Sep 18 \(20260918-155836\): <REDACTED>\n/);
 });
 
 test("odds and ends are not on the board tasks are read from, so never in a task or its note", () => {

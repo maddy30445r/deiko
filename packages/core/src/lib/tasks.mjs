@@ -134,6 +134,8 @@ export function taskState(briefs, title = null) {
   const same = (a, b) => trimTitle(a).toLowerCase() === trimTitle(b).toLowerCase();
   const asked = newest && !(title && same(newest.line, title)) ? [`Last asked: ${newest.line}`] : [];
   let now;
+  // Which brief "Now" speaks for, so a note can say where it came from.
+  const from = newest?.outcome ? newest.id : (last?.outcome.open.length ? last.id : newest?.id) ?? null;
   if (newest?.outcome) {
     const { open, did } = newest.outcome;
     now = open.length ? open : did.length ? [`Last done: ${did[0]}`] : asked;
@@ -143,6 +145,7 @@ export function taskState(briefs, title = null) {
   }
   // As blocks, not line by line: see `redactNote`.
   return {
+    from,
     now: redactNote(now.slice(0, CAP.now)),
     lastDid: redactNote((last?.outcome.did ?? []).slice(0, CAP.now)),
   };
@@ -324,12 +327,18 @@ export function renderTaskNote({ id, title, collection = null, briefs }) {
     // Rewritten whole on every render, so an edit here would not last.
     "Compiled by Deiko from each brief's outcome.md — edit those, not this file.",
   ];
-  const now = taskState(briefs, title).now;
-  if (now.length) out.push("", "## Now", ...now);
+  const state = taskState(briefs, title);
+  if (state.now.length) out.push("", "## Now", ...state.now, ...(state.from ? [`(from the brief of ${briefDate(state.from)}, ${state.from})`] : []));
   // Each brief's decisions as one block, like its Now: see `redactNote`.
-  const decided = briefs
-    .flatMap((b) => redactNote(b.outcome?.decided ?? []).map((d) => `- ${briefDate(b.id)}: ${d}`))
-    .slice(0, CAP.decided);
+  // EVERY LINE SAYS WHICH BRIEF IT CAME FROM, so an agent can open that brief
+  // (get_brief) rather than take a line on trust.
+  const decisions = briefs
+    .flatMap((b) => redactNote(b.outcome?.decided ?? []).map((d) => `- ${briefDate(b.id)} (${b.id}): ${d}`));
+  const decided = decisions.slice(0, CAP.decided);
+  // Trimmed, never silently: the older ones are still in their briefs.
+  if (decisions.length > CAP.decided) {
+    decided.push(`- … and ${decisions.length - CAP.decided} earlier decisions, in older briefs' outcome.md (search_briefs finds them)`);
+  }
   if (decided.length) out.push("", "## Decided", ...decided);
   out.push("", "## Briefs");
   for (const b of briefs.slice(0, CAP.briefs)) {
