@@ -1204,14 +1204,12 @@ private struct BoardPane: View {
             ScrollView {
                 Color.clear.frame(height: 0).id("top")
                 Group {
-                    if shown.isEmpty && openBrief == nil && best.isEmpty {
+                    if shown.isEmpty && openBrief == nil && best.isEmpty && !lookingByMeaning {
                         EmptyPane(
                             title: sessions.items.isEmpty ? "The board is empty" : "Nothing here yet",
                             line: sessions.items.isEmpty
                                 ? "Briefs pin themselves here as you record them. Nothing is uploaded — they live in a folder on this Mac."
-                                : lookingByMeaning
-                                    ? "No brief has those words. Looking for what you meant…"
-                                    : "Try another project, a task name, an app name, or a word you said."
+                                : "Try another project, a task name, an app name, or a word you said."
                         )
                     } else if let item = openBrief {
                         BriefView(item: item, store: sessions) { task in
@@ -1255,7 +1253,7 @@ private struct BoardPane: View {
             // win the click where the two meet.
             if let work { WorkNotes(task: work, store: sessions).zIndex(1) }
             if work == nil && !query.trimmingCharacters(in: .whitespaces).isEmpty {
-                BestMatches(ids: best, store: sessions) { nav.brief = $0 }.zIndex(1)
+                BestMatches(ids: best, looking: lookingByMeaning, store: sessions) { nav.brief = $0 }.zIndex(1)
             }
             ForEach(sections, id: \.title) { section in
                 let fold = BoardTimeline.fold(section.items, setAside: \.setAside)
@@ -2485,12 +2483,28 @@ private struct LargeCrop: View {
 /// word matches, so "the graph thing" finds the chart work. Five at most.
 private struct BestMatches: View {
     let ids: [String]
+    /// The search by meaning is still running: said, so a pause never reads
+    /// as "that's all there is".
+    let looking: Bool
     let store: SessionsStore
     let open: (String) -> Void
 
     var body: some View {
-        let items = ids.compactMap { id in store.items.first { $0.id == id } }.prefix(5)
-        if !items.isEmpty {
+        // Never a mic check or a scrap, whatever the ranking says.
+        let items = ids.compactMap { id in store.items.first { $0.id == id && !$0.setAside } }.prefix(5)
+        if looking && items.isEmpty {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Looking for what you meant…")
+                    .font(.system(size: 12))
+                    .foregroundStyle(DeikoStyle.ink2)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(DeikoStyle.wall, in: RoundedRectangle(cornerRadius: DeikoStyle.insetRadius))
+            .accessibilityElement(children: .combine)
+        } else if !items.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Best matches")
                     .font(.system(size: 12, weight: .semibold))

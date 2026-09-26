@@ -162,13 +162,21 @@ async function meaningModel() {
   return (modelP ??= loadModel());
 }
 
+const FILLER = /\b(the|a|an|this|that|these|those|thing|things|stuff|it|its|is|was|what|which|one|some|of|to|in|on|for|and|or|my|our|with|about)\b/gi;
+
 async function searchBriefs({ query, limit = 8 } = {}) {
   const q = String(query ?? "").trim();
   if (!q) throw new Error("query is required");
   const n = Math.min(Math.max(1, Number(limit) || 8), 20);
+  // Not mic checks and scraps (odds and ends): a vague query sits closest,
+  // by meaning, to a brief that says nothing — "Hello, hello" topped "graph".
   const briefs = lines().map((me) => ({ id: me.id, dir: join(ROOT, me.id), me }))
-    .filter((b) => b.me.narration != null);
-  const words = bm25(terms(q), briefs.map((b) => terms(everythingCached(b.dir, b.me))));
+    .filter((b) => b.me.narration != null && !b.me.odds);
+  // WORDS THAT FIND EVERYTHING are left to the meaning half: in "the graph
+  // thing", "thing" matched a sitemap brief's screen text thirteen times over
+  // and outranked the one word that mattered. The model still reads it all.
+  const kept = q.replace(FILLER, " ").trim();
+  const words = bm25(terms(kept || q), briefs.map((b) => terms(everythingCached(b.dir, b.me))));
   let meaning = briefs.map(() => null);
   const model = await meaningModel();
   const qv = model ? await model.embed(q, "query") : null;
