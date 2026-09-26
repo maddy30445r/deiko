@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
-import { draftLabels, expectations, formatReport, outcomeOf, rankOf, readLabels, recall, tally } from "../lib/eval.mjs";
+import { draftLabels, expectations, formatReport, outcomeOf, rankOf, readLabels, recall, tally, correctionLabels } from "../lib/eval.mjs";
 
 const run = promisify(execFile);
 const scripts = fileURLToPath(new URL("..", import.meta.url));
@@ -186,4 +186,22 @@ test("--draft prints a starting answer key and writes nothing", async () => {
   assert.equal(draft.version, 1);
   assert.equal(Object.keys(draft.briefs).length, 4);
   assert.deepEqual(snapshot(board), before);
+});
+
+test("every hand placement becomes a proposed answer-key entry; nothing already in the key moves", () => {
+  const labels = { version: 1, groups: { price: "Stale price" }, briefs: { "20260915-100000": "price", "20260916-100000": "odds" } };
+  const b = (id, extra) => ({ id, narration: "x", line: `line ${id}`, task: null, odds: false, taskBy: null, decidedBy: "jev", collectionBy: null, ...extra });
+  const briefs = [
+    b("20260915-100000"),                                                    // in the key already
+    b("20260916-100000", { taskBy: "you", task: "t-20260915-100000" }),     // in the key already: untouched
+    b("20260917-100000", { taskBy: "you", task: "t-20260915-100000" }),     // moved into the price task
+    b("20260918-100000", { taskBy: "you", task: "t-20260918-100000" }),     // "it's new"
+    b("20260919-100000", { decidedBy: "you", odds: true }),                  // put in odds and ends
+    b("20260920-100000", { task: "t-20260915-100000" }),                    // filed by Jev: not a correction
+    b("20260921-100000", { decidedBy: "you", collectionBy: "you" }),        // only the project was placed
+  ];
+  const got = correctionLabels(labels, briefs, new Map([["t-20260918-100000", "Signups chart dip"]]));
+  assert.deepEqual(got.briefs, { "20260917-100000": "price", "20260918-100000": "signups-chart-dip", "20260919-100000": "odds" });
+  assert.deepEqual(got.groups, { "signups-chart-dip": "Signups chart dip" });
+  assert.deepEqual(got.reasons.map((r) => r.why), ["you placed it in this task", "you said it's new", "you put it in odds and ends"]);
 });

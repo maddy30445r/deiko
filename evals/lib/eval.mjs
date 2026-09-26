@@ -6,7 +6,7 @@
  */
 import { readFileSync } from "node:fs";
 
-import { STAMP } from "./context.mjs";
+import { STAMP, slug } from "./context.mjs";
 
 export function readLabels(path) {
   let labels;
@@ -148,4 +148,56 @@ export function draftLabels(briefs) {
     out[b.id] = slugOf.get(task);
   }
   return { version: 1, groups, briefs: out };
+}
+
+/**
+ * EVERY CORRECTION IS A TEST CASE. A brief somebody placed by hand (moved,
+ * "Which one?" answered, "Not this one", dragged) is ground truth about where
+ * it belongs. Returns the answer-key entries those add — nothing already in
+ * the key is touched — with a reason each, for the owner to accept.
+ *
+ * A hand-placed brief joins the group its task already has in the key (the
+ * group most of that task's labelled briefs carry); a task the key has never
+ * seen becomes a new group named after its title.
+ */
+export function correctionLabels(labels, briefs, titles = new Map()) {
+  const handPlaced = (b) => b.taskBy === "you" || (b.decidedBy === "you" && b.collectionBy !== "you");
+  // Which group each board task already is, by majority of its labelled briefs.
+  const votes = new Map();
+  for (const b of briefs) {
+    const v = labels.briefs[b.id];
+    if (!v || v === "odds" || v === "skip") continue;
+    const task = b.task ?? `t-${b.id}`;
+    const tally = votes.get(task) ?? new Map();
+    tally.set(v, (tally.get(v) ?? 0) + 1);
+    votes.set(task, tally);
+  }
+  const groupOf = (task) => {
+    const tally = votes.get(task);
+    return tally ? [...tally].sort((a, b) => b[1] - a[1])[0][0] : null;
+  };
+  const groups = {};
+  const added = {};
+  const reasons = [];
+  for (const b of [...briefs].sort((x, y) => (x.id < y.id ? -1 : 1))) {
+    if (Object.hasOwn(labels.briefs, b.id) || !handPlaced(b) || b.narration == null) continue;
+    if (b.odds) {
+      added[b.id] = "odds";
+      reasons.push({ id: b.id, label: "odds", why: "you put it in odds and ends" });
+      continue;
+    }
+    const task = b.task ?? `t-${b.id}`;
+    let group = groupOf(task);
+    if (!group) {
+      const title = titles.get(task) ?? b.line ?? task;
+      const base = slug(title).slice(0, 48) || "task";
+      group = base;
+      for (let n = 2; Object.hasOwn(labels.groups, group) || Object.hasOwn(groups, group); n++) group = `${base}-${n}`;
+      groups[group] = String(title).slice(0, 80);
+      votes.set(task, new Map([[group, 1]]));
+    }
+    added[b.id] = group;
+    reasons.push({ id: b.id, label: group, why: task === `t-${b.id}` ? "you said it's new" : "you placed it in this task" });
+  }
+  return { groups, briefs: added, reasons };
 }

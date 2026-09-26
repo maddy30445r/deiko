@@ -6,6 +6,8 @@
  *     [--labels ~/Documents/Deiko-eval/filing-labels.json]
  *     [--shortlist-only] [--relay <url>] [--pace <ms>] [--all] [--draft]
  *     [--model <key>|off]
+ *   node scripts/eval-filing.mjs --from-corrections [--write]
+ *     every brief placed by hand since, proposed as new answer-key entries
  *
  * READ-ONLY. Nothing under --board is written, ever. Briefs are replayed oldest
  * first against an in-memory board on which every earlier brief sits where the
@@ -27,15 +29,16 @@
  * a brief's meaning.f32, so either model can be compared without touching
  * the board.
  */
-import { readdirSync } from "node:fs";
+import { copyFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { STAMP, readBriefLine, unplaceable } from "./lib/context.mjs";
 import { decideLocally, place, prepare, rankLocally, requestClassify, sessionInputs } from "./lib/filing.mjs";
-import { draftLabels, expectations, formatReport, outcomeOf, rankOf, readLabels } from "./lib/eval.mjs";
+import { correctionLabels, draftLabels, expectations, formatReport, outcomeOf, rankOf, readLabels } from "./lib/eval.mjs";
 import { DEIKO_HOME, briefText, currentModel, loadModel } from "./lib/meaning.mjs";
-import { titleFor } from "./lib/tasks.mjs";
+import { readTasks, titleFor } from "./lib/tasks.mjs";
+import { writeAtomic } from "./lib/session-io.mjs";
 
 const args = process.argv.slice(2);
 const flag = (name) => args.includes(name);
@@ -46,6 +49,28 @@ const value = (name, fallback) => {
 const home = (p) => resolve(String(p).replace(/^~/, homedir()));
 
 const boardDir = home(value("--board", DEIKO_HOME));
+const labelsPath = home(value("--labels", join(homedir(), "Documents", "Deiko-eval", "filing-labels.json")));
+if (flag("--from-corrections")) {
+  // Hand placements since the key was last extended, as proposed entries.
+  // Printed only; --write adds them (the old key is kept beside it as .prev).
+  const labels = readLabels(labelsPath);
+  const briefs = readdirSync(boardDir).filter((n) => STAMP.test(n)).sort().map((n) => readBriefLine(join(boardDir, n)));
+  const found = correctionLabels(labels, briefs, readTasks(boardDir));
+  if (!found.reasons.length) {
+    console.log("No new corrections since the key was last extended.");
+    process.exit(0);
+  }
+  for (const r of found.reasons) console.log(`${r.id} → ${r.label}  (${r.why})`);
+  if (!flag("--write")) {
+    console.log(`\n${found.reasons.length} to add. Check them, then run again with --write.`);
+    process.exit(0);
+  }
+  copyFileSync(labelsPath, `${labelsPath}.prev`);
+  const next = { ...labels, groups: { ...labels.groups, ...found.groups }, briefs: { ...labels.briefs, ...found.briefs } };
+  writeAtomic(labelsPath, JSON.stringify(next, null, 2) + "\n");
+  console.log(`\nAdded ${found.reasons.length} to ${labelsPath} (the old key is ${labelsPath}.prev).`);
+  process.exit(0);
+}
 if (flag("--draft")) {
   const briefs = readdirSync(boardDir).filter((n) => STAMP.test(n)).sort().map((n) => readBriefLine(join(boardDir, n)));
   process.stdout.write(JSON.stringify(draftLabels(briefs), null, 2) + "\n");
@@ -86,7 +111,7 @@ const readable = (stamp) => {
   if (!inputsOf.get(stamp)) console.error(`· ${stamp} has no readable brief.json — skipped`);
   return inputsOf.get(stamp) != null;
 };
-const exp = expectations(readLabels(home(value("--labels", "~/Documents/Deiko-eval/filing-labels.json"))).briefs, readable);
+const exp = expectations(readLabels(labelsPath).briefs, readable);
 
 // THE BAKE-OFF. --model off forces none whatever the environment says;
 // otherwise the flag names a model, or DEIKO_MEANING_MODEL does. Loaded once,
