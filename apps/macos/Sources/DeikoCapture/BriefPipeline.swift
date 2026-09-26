@@ -152,7 +152,7 @@ enum BriefPipeline {
     /// script. A bundle ships `dist/` already built, so there is nothing to
     /// build and nothing to wrap.
     private enum Stage {
-        case transcribe, brief, summarize, classify
+        case transcribe, brief, summarize, classify, notes
 
         var script: String {
             switch self {
@@ -160,6 +160,7 @@ enum BriefPipeline {
             case .brief: return "render-brief.mjs"
             case .summarize: return "summarize.mjs"
             case .classify: return "classify.mjs"
+            case .notes: return "task-notes.mjs"
             }
         }
 
@@ -169,6 +170,7 @@ enum BriefPipeline {
             case .brief: return "brief"
             case .summarize: return "summarize"
             case .classify: return "classify"
+            case .notes: return "task-notes"
             }
         }
 
@@ -179,6 +181,7 @@ enum BriefPipeline {
             case .brief: return "Rendering the brief"
             case .summarize: return "Summarising"
             case .classify: return "Placing it"
+            case .notes: return "Updating task notes"
             }
         }
     }
@@ -472,6 +475,12 @@ enum BriefPipeline {
     /// Separate from `run`, like `summary`, and for the same reason: it is a
     /// network round trip and the brief must not wait on it. The caller
     /// re-renders afterwards so the prompt on disk carries what was placed.
+    /// Every task note, rebuilt now (after Forget or Edit on one). The
+    /// "session" handed to the script is the board root.
+    static func rebuildNotes() async {
+        _ = try? await run(.notes, sessionDir: Collections.root)
+    }
+
     static func classify(sessionDir: String) async -> SessionContext? {
         _ = try? await run(.classify, sessionDir: sessionDir)
         return SessionContext.read(sessionDir: sessionDir)

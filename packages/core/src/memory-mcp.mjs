@@ -36,7 +36,9 @@ import { createInterface } from "node:readline";
 import { STAMP, briefDate, readBriefLine } from "./lib/context.mjs";
 import { redact, redactBlock, redactNote } from "./lib/redact.mjs";
 import { fileStamp, loadEvents } from "./lib/session-io.mjs";
-import { TASK_ID, bm25, cosine, groupTasks, readBriefLines, readTasks, renderTaskNote, rrf, terms, titleFor } from "./lib/tasks.mjs";
+import {
+  TASK_ID, bm25, corrected, cosine, groupTasks, overrideText, readBriefLines, readOverrides, readTasks, renderTaskNote, rrf, terms, titleFor,
+} from "./lib/tasks.mjs";
 import { DEIKO_HOME, loadModel, readVector } from "./lib/meaning.mjs";
 
 const ROOT = (process.env.DEIKO_ROOT ?? DEIKO_HOME).replace(/^~/, homedir());
@@ -86,7 +88,7 @@ function stamps() {
 }
 /** Every brief's `readBriefLine`, oldest first, from the board index — read
  *  only (this helper writes nothing), re-read only where a file changed. */
-const lines = () => (stamps().length ? readBriefLines(ROOT, { save: false }).sort((a, b) => (a.id < b.id ? -1 : 1)) : []);
+const lines = () => (stamps().length ? corrected(ROOT, readBriefLines(ROOT, { save: false })).sort((a, b) => (a.id < b.id ? -1 : 1)) : []);
 /// Meaning vectors by folder, re-read only when their files change.
 const vectors = new Map(); // dir -> { fp, vec }
 function vectorOf(dir, key) {
@@ -130,7 +132,9 @@ function fingerprint(dir) {
   return fp;
 }
 function everythingCached(dir, me) {
-  const fp = fingerprint(dir);
+  // The outcome as corrected is part of the key: a line forgotten in the app
+  // stops matching without any file in the brief changing.
+  const fp = `${fingerprint(dir)}|${JSON.stringify(me.outcome ?? null)}`;
   const hit = indexCache.get(dir);
   if (hit && hit.fp === fp) return hit.text;
   const text = everything(dir, me);
@@ -230,10 +234,12 @@ function getBrief({ id } = {}) {
   if (!manifest) throw new Error(`no brief ${id} on this Mac`);
   const me = readBriefLine(dir);
   const s = manifest.summary ?? {};
-  const outcome = readText(join(dir, "outcome.md"));
+  // What the person told Deiko to forget or reword, out of both texts.
+  const fixes = readOverrides(ROOT).get(me.task ?? `t-${id}`);
+  const outcome = overrideText(readText(join(dir, "outcome.md")), fixes);
   return {
     brief: id, date: briefDate(id), task: me.task ?? `t-${id}`,
-    prompt: readText(join(dir, "prompt.txt")),
+    prompt: overrideText(readText(join(dir, "prompt.txt")), fixes),
     outcome: outcome == null ? null : redactOutcome(outcome),
     summary: {
       narration: redact(String(s.narration ?? "")),

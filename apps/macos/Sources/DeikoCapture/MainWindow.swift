@@ -647,7 +647,9 @@ final class SessionsStore: ObservableObject {
         // Manifests are small but there can be hundreds; read them off the main
         // actor so opening the window never stutters.
         let read = await Task.detached(priority: .userInitiated) { () -> [Item] in
-            names.compactMap { name in
+            // A card's "What happened" follows its task's Forget and Edit too.
+            let fixes = TaskMemoryEdits.all()
+            return names.compactMap { name in
                 guard name != openName else { return nil }
                 let dir = (root as NSString).appendingPathComponent(name)
                 guard let date = Sessions.stamp(name) else { return nil }
@@ -662,11 +664,15 @@ final class SessionsStore: ObservableObject {
                 // answered to no chip at all.
                 let stored = SessionContext.read(sessionDir: dir)
                 let context = known.contains(stored?.collection ?? "") ? stored : nil
+                let own = Tasks.own(name)
                 let outcome = (try? String(
                     contentsOf: URL(fileURLWithPath: dir).appendingPathComponent("outcome.md"),
                     encoding: .utf8
-                )).flatMap(BoardTimeline.outcomeLine)
-                let own = Tasks.own(name)
+                )).flatMap { text -> String? in
+                    let o = BoardTimeline.outcome(text)
+                    let fixed = fixes[stored?.task ?? own]?.applied(to: o) ?? o
+                    return fixed.did.first ?? fixed.decided.first ?? fixed.open.first
+                }
                 let isOwnTask = stored?.task == nil || stored?.task == own
                 let odds = stored?.isOdds == true
                 return Item(
@@ -1745,6 +1751,10 @@ private struct WorkNotes: View {
     @State private var briefs: [Brief] = []
     @State private var expanded = UIShotPose.notesExpanded
     @State private var history = UIShotPose.historyOpen
+    /// What the person told Deiko to forget or reword here, and a counter
+    /// that reloads the notes once they have.
+    @State private var edits = TaskMemoryEdits.Edits()
+    @State private var version = 0
 
     /// One brief as read off disk for this panel.
     struct Brief: Identifiable {
@@ -1797,6 +1807,17 @@ private struct WorkNotes: View {
                                open: expanded) { expanded.toggle() }
                             .padding(.top, -6)
                     }
+                    if !edits.forget.isEmpty {
+                        HStack(spacing: 6) {
+                            Text("\(edits.forget.count) forgotten")
+                                .font(.system(size: 11))
+                                .foregroundStyle(DeikoStyle.ink2)
+                            Button("Bring back") { change { TaskMemoryEdits.bringBack(in: task) } }
+                                .buttonStyle(TextButtonStyle())
+                                .tip("Every note you told Deiko to forget on this work comes back, for you and your agent.")
+                        }
+                        .padding(.top, -6)
+                    }
                 }
             } else {
                 Text("No notes yet. When an agent finishes work here, what's left and what got decided shows up here.")
@@ -1813,14 +1834,16 @@ private struct WorkNotes: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(18)
         .background(DeikoStyle.wall, in: RoundedRectangle(cornerRadius: DeikoStyle.insetRadius))
-        .task(id: items.map(\.id).joined(separator: ",")) {
+        .task(id: items.map(\.id).joined(separator: ",") + "#\(version)") {
             let sources = items.map { (id: $0.id, dir: $0.dir, date: $0.date, said: $0.line) }
+            let fixes = TaskMemoryEdits.read(task)
+            edits = fixes
             briefs = await Task.detached(priority: .userInitiated) {
                 sources.map { b in
                     let url = URL(fileURLWithPath: b.dir)
                     let summary = try? String(contentsOf: url.appendingPathComponent("review-summary.txt"), encoding: .utf8)
                     let outcome = (try? String(contentsOf: url.appendingPathComponent("outcome.md"), encoding: .utf8))
-                        .map(BoardTimeline.outcome)
+                        .map { fixes.applied(to: BoardTimeline.outcome($0)) }
                         .flatMap { o in o.did.isEmpty && o.decided.isEmpty && o.open.isEmpty && o.files.isEmpty ? nil : o }
                     return Brief(id: b.id, date: b.date,
                                  asked: BoardTimeline.asked(summary: summary, narration: b.said), outcome: outcome)
@@ -1836,7 +1859,7 @@ private struct WorkNotes: View {
             if state.open.isEmpty {
                 note("Nothing left open.")
             } else {
-                ForEach(Array(state.open.prefix(limit).enumerated()), id: \.offset) { note($0.element.text) }
+                ForEach(Array(state.open.prefix(limit).enumerated()), id: \.offset) { memoryLine($0.element.text) }
             }
         }
         .frame(maxWidth: 560, alignment: .leading)
@@ -1845,7 +1868,7 @@ private struct WorkNotes: View {
                 heading("Decided", meta: nil)
                 ForEach(Array(state.decided.prefix(limit).enumerated()), id: \.offset) { _, line in
                     VStack(alignment: .leading, spacing: 1) {
-                        note(line.text)
+                        memoryLine(line.text)
                         Text(meta(line.date, line.agent))
                             .font(.system(size: 10.5))
                             .foregroundStyle(DeikoStyle.ink2)
@@ -1915,6 +1938,31 @@ private struct WorkNotes: View {
 
     private func heading(_ title: String, meta: String?) -> some View { NoteStyle.heading(title, meta: meta) }
     private func note(_ text: String) -> some View { NoteStyle.note(text) }
+
+    /// One line of what Deiko remembers, with Edit and Forget on it.
+    private func memoryLine(_ text: String) -> some View {
+        let original = edits.original(of: text)
+        return MemoryLine(
+            text: text,
+            edited: original != text,
+            onEdit: {
+                guard let new = Collections.askText(
+                    title: "Edit this note",
+                    informative: "Deiko tells your agent this instead, from the next brief on. What the agent wrote stays in its brief.",
+                    value: text, placeholder: "The note", confirm: "Save"
+                ) else { return }
+                change { TaskMemoryEdits.edit(original, to: new, in: task) }
+            },
+            onForget: { change { TaskMemoryEdits.forget(original, in: task) } },
+            onRestore: { change { TaskMemoryEdits.edit(original, to: "", in: task) } }
+        )
+    }
+
+    private func change(_ apply: () -> Void) {
+        apply()
+        version += 1
+        Task { await store.load(root: Collections.root) }
+    }
     private func toggle(_ label: String, open: Bool, action: @escaping () -> Void) -> some View {
         NoteStyle.toggle(label, open: open, action: action)
     }
@@ -1982,7 +2030,9 @@ private struct BriefDetail: Sendable {
         d.context = SessionContext.read(sessionDir: dir)
         let outcomeFile = url.appendingPathComponent("outcome.md")
         if let text = read("outcome.md") {
-            let o = BoardTimeline.outcome(text)
+            // As corrected on its task ("Forget", "Edit"), the way agents get it.
+            let task = d.context?.task ?? Tasks.own((dir as NSString).lastPathComponent)
+            let o = TaskMemoryEdits.read(task).applied(to: BoardTimeline.outcome(text))
             if !(o.did.isEmpty && o.decided.isEmpty && o.open.isEmpty && o.files.isEmpty) {
                 d.outcome = o
                 d.wroteBack = (try? FileManager.default.attributesOfItem(atPath: outcomeFile.path))?[.modificationDate] as? Date
@@ -2308,6 +2358,49 @@ private struct LargeCrop: View {
 
 /// The note blocks the work view and the brief view both write in: a 12pt
 /// semibold heading with quiet meta, 12pt ink-2 notes, and the text toggle.
+@MainActor
+/// A note line with its own small menu, shown on hover and on right-click:
+/// the controls stay out of the way of reading until you reach for them.
+private struct MemoryLine: View {
+    let text: String
+    let edited: Bool
+    let onEdit: () -> Void
+    let onForget: () -> Void
+    let onRestore: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            NoteStyle.note(text)
+            if edited {
+                Text("edited")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(DeikoStyle.ink2)
+                    .tip("You changed this note. Your agent gets your words.")
+            }
+            Menu { actions } label: {
+                Image(systemName: "ellipsis").font(.system(size: 11, weight: .medium))
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .opacity(hovering ? 1 : 0)
+            .accessibilityLabel("Change this note")
+            .tip("Edit or forget this note")
+        }
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .contextMenu { actions }
+    }
+
+    @ViewBuilder private var actions: some View {
+        Button("Edit…", action: onEdit)
+        if edited { Button("Put back what the agent wrote", action: onRestore) }
+        Divider()
+        Button("Forget", action: onForget)
+    }
+}
+
 @MainActor
 private enum NoteStyle {
     static func heading(_ title: String, meta: String?) -> some View {

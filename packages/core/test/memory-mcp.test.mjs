@@ -324,3 +324,21 @@ test(
     }
   },
 );
+
+test("a line forgotten in the app is gone from get_task, get_brief and search", async () => {
+  const root = board();
+  mkdirSync(join(root, "tasks"));
+  writeFileSync(join(root, "tasks", "t-20260918-100000.overrides.json"), JSON.stringify({ forget: ["Synced the price after save."] }));
+  const s = await session(root);
+  try {
+    await s.call("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "0" } });
+    const task = await s.tool("get_task", { id: "t-20260918-100000" });
+    assert.doesNotMatch(task.value.note, /Synced the price/);
+    const brief = await s.tool("get_brief", { id: "20260918-100000" });
+    assert.doesNotMatch(brief.value.outcome ?? "", /Synced the price/);
+    const found = await s.tool("search_briefs", { query: "Synced" });
+    assert.equal(found.value.length, 0);
+  } finally {
+    s.close();
+  }
+});

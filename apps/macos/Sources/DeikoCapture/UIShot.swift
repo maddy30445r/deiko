@@ -26,6 +26,8 @@ enum UIShot {
         let out = args.string("out") ?? "/tmp/deiko-ui"
         titled = args.has("titled")
         let root = args.string("root") ?? Sessions.defaultRoot
+        // Titles, projects and note edits are read beside the briefs too.
+        Collections.root = root
         // Never read or write the real seen-markers: a shot must not use up
         // somebody's one showing of "Added to … · Undo".
         SessionsStore.seenDefaults = nil

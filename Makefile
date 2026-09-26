@@ -599,6 +599,11 @@ SORT_BRIEFS = DEIKO_SORT_BRIEFS="$${DEIKO_SORT_BRIEFS-$$(defaults read com.deiko
 classify:
 	@$(SORT_BRIEFS) node scripts/classify.mjs $(SESSION)
 
+## task-notes — rebuild every task note under a board (SESSION is the board
+## root here); the app runs it after Forget or Edit on a task's notes
+task-notes:
+	@node scripts/task-notes.mjs $(SESSION)
+
 ## reclassify — group an existing board into tasks, oldest brief first
 ##
 ## Renders, classifies, renders again, so each brief's brief.json carries the

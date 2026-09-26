@@ -456,3 +456,31 @@ test("the board index gives exactly what reading every brief gives, and re-reads
   assert.equal(statSync(root).mtimeMs, before);
   rmSync(root, { recursive: true, force: true });
 });
+
+test("Forget and Edit on a task's notes reach every reader, and outcome.md is never touched", async () => {
+  const { readBoard, overrideText, renderTaskNote: note } = await import("../lib/tasks.mjs");
+  const root = mkdtempSync(join(tmpdir(), "deiko-overrides-"));
+  const mk = (id, extra, outcome) => {
+    mkdirSync(join(root, id));
+    writeFileSync(join(root, id, "brief.json"), JSON.stringify({ summary: { narration: `the price is still stale ${id}` } }));
+    writeFileSync(join(root, id, "context.json"), JSON.stringify(extra));
+    if (outcome) writeFileSync(join(root, id, "outcome.md"), outcome);
+  };
+  mk("20260915-100000", {}, "## Decided\n- It's the cache.\n- Keep the toast.\n## Open\n- The listing page.\n");
+  mk("20260916-100000", { task: "t-20260915-100000", taskBy: "you" }, "## Open\n- Check Safari.\n");
+  mkdirSync(join(root, "tasks"));
+  writeFileSync(join(root, "tasks", "t-20260915-100000.overrides.json"),
+    JSON.stringify({ forget: ["It's the cache."], edit: { "Check Safari.": "Check Safari 17 and 18." } }));
+  const board = readBoard(root);
+  const text = note({ id: "t-20260915-100000", title: "Stale price", briefs: [...board].reverse() });
+  assert.doesNotMatch(text, /It's the cache/);
+  assert.match(text, /Keep the toast\./);
+  assert.match(text, /Check Safari 17 and 18\./);
+  assert.equal(readFileSync(join(root, "20260915-100000", "outcome.md"), "utf8").includes("It's the cache."), true, "the history stays");
+  // Free text that quotes the lines (a prompt already sent) is corrected too.
+  const o = { forget: new Set(["It's the cache."]), edit: new Map([["Check Safari.", "Check Safari 17 and 18."]]) };
+  assert.equal(overrideText("- Sep 15: It's the cache.\n- Check Safari.\nother", o), "- Check Safari 17 and 18.\nother");
+  // A broken overrides file corrects nothing and remembers everything.
+  writeFileSync(join(root, "tasks", "t-20260915-100000.overrides.json"), "{ half");
+  assert.match(note({ id: "t-20260915-100000", title: "Stale price", briefs: [...readBoard(`${root}/.`)].reverse() }), /It's the cache/);
+});

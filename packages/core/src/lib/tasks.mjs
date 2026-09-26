@@ -495,10 +495,65 @@ export function readBriefLines(root, { save = true } = {}) {
   return lines;
 }
 
+/**
+ * WHAT DEIKO REMEMBERS, AS YOU CORRECTED IT. "Forget" and "Edit" on a task's
+ * notes in the app write `tasks/<id>.overrides.json`:
+ * `{ "forget": [line], "edit": { line: replacement } }`, keyed by a line's
+ * text as the agent wrote it in outcome.md. Applied wherever an outcome is
+ * read for memory — notes, prompts, filing, the memory helper — and never to
+ * outcome.md itself, so the history stays and every change can be undone.
+ */
+export function readOverrides(root) {
+  const out = new Map();
+  let names = [];
+  try {
+    names = readdirSync(join(root, "tasks"));
+  } catch {
+    return out;
+  }
+  for (const f of names) {
+    const id = /^(t-\d{8}-\d{6})\.overrides\.json$/.exec(f)?.[1];
+    if (!id) continue;
+    try {
+      const o = JSON.parse(readFileSync(join(root, "tasks", f), "utf8"));
+      out.set(id, {
+        forget: new Set((Array.isArray(o?.forget) ? o.forget : []).filter((s) => typeof s === "string")),
+        edit: new Map(Object.entries(o?.edit ?? {}).filter(([, v]) => typeof v === "string" && v.trim())),
+      });
+    } catch {
+      // Unreadable: nothing corrected, rather than nothing remembered.
+    }
+  }
+  return out;
+}
+
+/** One brief's outcome as corrected — a copy; the cached line is never touched. */
+export function withOverrides(b, o) {
+  if (!o || !b.outcome) return b;
+  const fix = (lines) => lines.filter((l) => !o.forget.has(l)).map((l) => o.edit.get(l) ?? l);
+  return { ...b, outcome: Object.fromEntries(Object.entries(b.outcome).map(([k, v]) => [k, fix(v)])) };
+}
+
+/** Free text that quotes outcome lines (a sent prompt, a raw outcome.md): a
+ *  line quoting a forgotten one goes, an edited one is replaced in place. */
+export function overrideText(text, o) {
+  if (!o || text == null) return text;
+  return String(text).split("\n")
+    .filter((l) => ![...o.forget].some((f) => f && l.includes(f)))
+    .map((l) => [...o.edit].reduce((acc, [from, to]) => (from ? acc.split(from).join(to) : acc), l))
+    .join("\n");
+}
+
+/** Lines read off the board, each with its task's corrections applied. */
+export function corrected(root, lines) {
+  const all = readOverrides(root);
+  return all.size ? lines.map((b) => withOverrides(b, all.get(b.task ?? taskIdFor(b.id)))) : lines;
+}
+
 /** Every sibling under `root` as a `readBriefLine`, briefs with nothing said
  *  skipped, and odds and ends too: never shortlisted, never in a note. */
 export function readBoard(root) {
-  return readBriefLines(root).filter((b) => b.line && !b.odds);
+  return corrected(root, readBriefLines(root)).filter((b) => b.line && !b.odds);
 }
 
 /**

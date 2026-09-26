@@ -507,3 +507,71 @@ enum Tasks {
         URL(fileURLWithPath: Collections.root).appendingPathComponent("tasks/\(id).md")
     }
 }
+
+/// WHAT DEIKO REMEMBERS, AS YOU CORRECTED IT. "Forget" and "Edit" on a task's
+/// notes write `tasks/<id>.overrides.json` — `{ forget: [line], edit: {line:
+/// replacement} }`, keyed by the line as the agent wrote it — and every
+/// script applies it (`readOverrides` in scripts/lib/tasks.mjs): the note,
+/// the next prompt, filing, the memory helper. outcome.md is never touched,
+/// so the history stays and every change can be taken back.
+enum TaskMemoryEdits {
+    typealias Edits = MemoryEdits
+
+    static func file(_ task: String) -> URL {
+        Tasks.notePath(for: task).deletingLastPathComponent().appendingPathComponent("\(task).overrides.json")
+    }
+
+    /// Every task's edits at once, for a board load.
+    static func all() -> [String: Edits] {
+        let dir = Tasks.notePath(for: "x").deletingLastPathComponent()
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        return Dictionary(uniqueKeysWithValues: names.compactMap { name -> (String, Edits)? in
+            guard name.hasSuffix(".overrides.json") else { return nil }
+            let task = String(name.dropLast(".overrides.json".count))
+            return (task, read(task))
+        })
+    }
+
+    static func read(_ task: String) -> Edits {
+        (try? JSONDecoder().decode(Edits.self, from: Data(contentsOf: file(task)))) ?? Edits()
+    }
+
+    static func forget(_ line: String, in task: String) {
+        var e = read(task)
+        if !e.forget.contains(line) { e.forget.append(line) }
+        save(e, task)
+    }
+
+    /// An empty replacement, or one the same as what the agent wrote, puts
+    /// the original back.
+    static func edit(_ line: String, to text: String, in task: String) {
+        var e = read(task)
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        e.edit[line] = text.isEmpty || text == line ? nil : text
+        save(e, task)
+    }
+
+    static func bringBack(in task: String) {
+        var e = read(task)
+        e.forget = []
+        save(e, task)
+    }
+
+    /// Then the task notes are rebuilt at once: an agent may be reading one.
+    private static func save(_ e: Edits, _ task: String) {
+        let url = file(task)
+        do {
+            if e.isEmpty {
+                try? FileManager.default.removeItem(at: url)
+            } else {
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                try encoder.encode(e).write(to: url, options: .atomic)
+            }
+        } catch {
+            Emit.log("tasks: could not save the edits to \(url.lastPathComponent) — \(error.localizedDescription)")
+        }
+        Task.detached { await BriefPipeline.rebuildNotes() }
+    }
+}
