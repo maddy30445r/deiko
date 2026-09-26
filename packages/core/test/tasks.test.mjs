@@ -267,7 +267,7 @@ test("meaning finds a paraphrase words miss, from the task's closest brief", () 
 });
 
 test("the note is deterministic, capped and names two files, never a folder", () => {
-  const members = [...price].reverse().map((b) => ({ ...b, task: "t-20260918-155836" }));
+  const members = [...price].reverse().map((b) => ({ ...b, task: "t-20260918-155836", taskBy: "you" }));
   const note = renderTaskNote({ id: "t-20260918-155836", title: "Price display doesn't update", collection: "acme-portal", briefs: members });
   assert.equal(note, renderTaskNote({ id: "t-20260918-155836", title: "Price display doesn't update", collection: "acme-portal", briefs: members }));
   assert.match(note, /^# Price display doesn't update\nacme-portal · 3 briefs · Sep 18 · updated from 20260918-162340\n/);
@@ -280,7 +280,7 @@ test("the note is deterministic, capped and names two files, never a folder", ()
   assert.match(renderTaskNote({ id: "t-x", title: "big", briefs: fifty }), /- … and 10 earlier\n$/);
   // More decisions than the cap: trimmed, and the note says so.
   const deciding = Array.from({ length: 23 }, (_, i) => brief(`20260918-1${String(10000 + i)}`, `brief ${i}`, {
-    outcome: { did: [], decided: [`decision ${i}`], open: [], files: [] },
+    taskBy: "you", outcome: { did: [], decided: [`decision ${i}`], open: [], files: [] },
   }));
   const capped = renderTaskNote({ id: "t-x", title: "many", briefs: deciding });
   assert.equal((capped.match(/^- Sep 18 \(20260918-\d{6}\): decision/gm) ?? []).length, 20);
@@ -289,19 +289,19 @@ test("the note is deterministic, capped and names two files, never a folder", ()
 
 test("a decision a later brief retires no longer shows as current, and the note says so", () => {
   const tue = brief("20260915-100000", "the price is stale", { outcome: parseOutcome("## Decided\n- It's the cache; clear it on save.\n") });
-  const fri = brief("20260918-100000", "still stale", { outcome: parseOutcome("## Retired\n- Sep 15 (20260915-100000): It's the cache — clear it on save\n## Decided\n- Refetch after save instead.\n") });
+  const fri = brief("20260918-100000", "still stale", { taskBy: "you", outcome: parseOutcome("## Retired\n- Sep 15 (20260915-100000): It's the cache — clear it on save\n## Decided\n- Refetch after save instead.\n") });
   const note = renderTaskNote({ id: "t-20260915-100000", title: "Stale price", briefs: [fri, tue] });
   assert.match(note, /Refetch after save instead\./);
   assert.doesNotMatch(note, /clear it on save\.$/m);
   assert.match(note, /- 1 earlier decision was retired by a later brief \(still in its outcome\.md\)/);
   // A decision made AFTER the retirement stands.
-  const mon = brief("20260921-100000", "back again", { outcome: parseOutcome("## Decided\n- It's the cache; clear it on save.\n") });
+  const mon = brief("20260921-100000", "back again", { taskBy: "you", outcome: parseOutcome("## Decided\n- It's the cache; clear it on save.\n") });
   assert.match(renderTaskNote({ id: "t-20260915-100000", title: "Stale price", briefs: [mon, fri, tue] }), /20260921-100000\): It's the cache/);
 });
 
 test("a decision an agent copied back from the note counts once, credited to where it was first made", () => {
   const tue = brief("20260915-100000", "stale price", { outcome: parseOutcome("## Decided\n- Refetch after save.\n") });
-  const fri = brief("20260918-100000", "still stale", { outcome: parseOutcome("## Decided\n- Sep 15 (20260915-100000): Refetch after save.\n- Keep the toast.\n") });
+  const fri = brief("20260918-100000", "still stale", { taskBy: "you", outcome: parseOutcome("## Decided\n- Sep 15 (20260915-100000): Refetch after save.\n- Keep the toast.\n") });
   const note = renderTaskNote({ id: "t-20260915-100000", title: "Stale price", briefs: [fri, tue] });
   assert.equal((note.match(/Refetch after save/g) ?? []).length, 1);
   assert.match(note, /- Sep 15 \(20260915-100000\): Refetch after save\./);
@@ -328,9 +328,26 @@ test("sameDecision: loose about prefixes and punctuation, never about short word
   assert.equal(sameDecision("Use Postgres everywhere", "Do not use Postgres for the cache"), false);
 });
 
+test("a brief guessed into a task is listed but never says where the task stands", () => {
+  const tue = brief("20260915-100000", "the price is stale", { outcome: parseOutcome("## Decided\n- Refetch after save.\n## Open\n- The listing page.\n") });
+  // Filed before v3, never confirmed: a mic check that landed here by mistake.
+  const guessed = brief("20260916-100000", "testing my mic one two", { task: "t-20260915-100000", decidedBy: "jev", classifier: "jev",
+    outcome: parseOutcome("## Decided\n- Use the USB mic.\n## Open\n- Buy a pop filter.\n") });
+  const v3 = brief("20260917-100000", "still stale on the listing", { task: "t-20260915-100000", classifier: "v3", confidence: { task: 0.8 },
+    outcome: parseOutcome("## Decided\n- Keep the toast.\n") });
+  const note = renderTaskNote({ id: "t-20260915-100000", title: "Stale price", briefs: [v3, guessed, tue] });
+  assert.doesNotMatch(note, /USB mic|pop filter/);
+  assert.match(note, /Refetch after save\./);
+  assert.match(note, /Keep the toast\./);
+  assert.match(note, /"testing my mic one two" \(not confirmed\)/);
+  assert.doesNotMatch(note, /"still stale on the listing" \(not confirmed\)/);
+  // Confirmed by hand, it counts.
+  assert.match(renderTaskNote({ id: "t-20260915-100000", title: "Stale price", briefs: [v3, { ...guessed, taskBy: "you" }, tue] }), /Use the USB mic\./);
+});
+
 test("a note whose only Now line would repeat its title has no Now section", () => {
   const [first, second] = price;
-  const note = renderTaskNote({ id: "t-20260918-155836", title: titleFor(second), briefs: [second, first] });
+  const note = renderTaskNote({ id: "t-20260918-155836", title: titleFor(second), briefs: [{ ...second, taskBy: "you" }, first] });
   assert.equal(note.includes("## Now"), false);
   assert.match(note, /\n\n## Briefs\n/);
 });

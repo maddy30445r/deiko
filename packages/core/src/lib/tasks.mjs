@@ -356,7 +356,12 @@ export function renderTaskNote({ id, title, collection = null, briefs }) {
     // Rewritten whole on every render, so an edit here would not last.
     "Compiled by Deiko from each brief's outcome.md — edit those, not this file.",
   ];
-  const state = taskState(briefs, title);
+  // WHAT THE TASK SAYS comes from its confirmed briefs only (`firm`), like the
+  // shortlist's face and the prompt's history: one brief guessed in here by
+  // mistake must not become where the task stands. It is still listed below.
+  const sure = briefs.filter((b) => firm(b, id));
+  const said = sure.length ? sure : [briefs.at(-1)];
+  const state = taskState(said, title);
   if (state.now.length) out.push("", "## Now", ...state.now, ...(state.from ? [`(from the brief of ${briefDate(state.from)}, ${state.from})`] : []));
   // Each brief's decisions as one block, like its Now: see `redactNote`.
   // EVERY LINE SAYS WHICH BRIEF IT CAME FROM, so an agent can open that brief
@@ -371,7 +376,7 @@ export function renderTaskNote({ id, title, collection = null, briefs }) {
   // after that is a new decision. So: walk the history oldest first.
   const credited = new Map();   // decision → the brief it currently counts for
   let retiredCount = 0;
-  for (const b of [...briefs].reverse()) {
+  for (const b of [...said].reverse()) {
     for (const r of b.outcome?.retired ?? []) {
       for (const k of [...credited.keys()]) {
         if (sameDecision(r, k)) { credited.delete(k); retiredCount += 1; }
@@ -379,7 +384,7 @@ export function renderTaskNote({ id, title, collection = null, briefs }) {
     }
     for (const d of b.outcome?.decided ?? []) if (!credited.has(decisionKey(d))) credited.set(decisionKey(d), b.id);
   }
-  const decisions = briefs.flatMap((b) => {
+  const decisions = said.flatMap((b) => {
     const seen = new Set();
     const kept = (b.outcome?.decided ?? []).filter((d) => {
       const k = decisionKey(d);
@@ -401,7 +406,7 @@ export function renderTaskNote({ id, title, collection = null, briefs }) {
   for (const b of briefs.slice(0, CAP.briefs)) {
     const apps = b.apps.length ? ` · ${b.apps.map(redact).join(", ")}` : "";
     const windows = b.windows.length ? ` · ${b.windows.slice(0, 3).map(redact).join(" · ")}` : "";
-    out.push(`- ${briefDate(b.id)}, "${redact(b.line)}"${apps}${windows}`);
+    out.push(`- ${briefDate(b.id)}, "${redact(b.line)}"${said.includes(b) ? "" : " (not confirmed)"}${apps}${windows}`);
     // TWO FILES BY NAME, NEVER THE FOLDER — see `prompt.mjs`.
     out.push(`  ${b.dir}/prompt.txt${b.outcome ? ` · ${b.dir}/outcome.md` : ""}`);
   }
