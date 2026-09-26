@@ -267,6 +267,23 @@ enum Collections {
         return all().first { $0.id == id }?.name
     }
 
+    /// The list to EDIT. `all()` reads an unreadable file as empty, which is
+    /// right for showing chips and wrong for saving: adding one project to
+    /// that "empty" list used to write it back with a single row, and every
+    /// other project was gone. Nil here means refused, left as it is. Missing
+    /// or empty (a crash already lost it) is a fresh list, as in
+    /// `readListToRewrite` on the scripts' side.
+    private static func editable() -> [Collection]? {
+        guard FileManager.default.fileExists(atPath: file.path) else { return [] }
+        guard let data = try? Data(contentsOf: file) else { return nil }
+        if String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return [] }
+        guard let list = try? JSONDecoder().decode([Collection].self, from: data) else {
+            Emit.log("collections: \(file.lastPathComponent) is unreadable — left as it is rather than overwritten")
+            return nil
+        }
+        return list
+    }
+
     /// A collection id from its name. MIRRORS `slug` in `scripts/lib/context.mjs`:
     /// the classifier creates collections too, and the two must agree on what
     /// "Deiko" is called.
@@ -289,8 +306,7 @@ enum Collections {
     @discardableResult
     static func add(name raw: String) -> Collection? {
         let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else { return nil }
-        var list = all()
+        guard !name.isEmpty, var list = editable() else { return nil }
         if let existing = list.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
             return existing
         }
@@ -303,15 +319,14 @@ enum Collections {
 
     static func rename(id: String, to raw: String) {
         let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else { return }
-        var list = all()
+        guard !name.isEmpty, var list = editable() else { return }
         guard let index = list.firstIndex(where: { $0.id == id }) else { return }
         list[index].name = name
         save(list)
     }
 
     static func describe(id: String, hint: String) {
-        var list = all()
+        guard var list = editable() else { return }
         guard let index = list.firstIndex(where: { $0.id == id }) else { return }
         list[index].hint = hint.trimmingCharacters(in: .whitespacesAndNewlines)
         save(list)
@@ -323,7 +338,8 @@ enum Collections {
     /// reachable from a chip rather than from the All list alone. Nothing
     /// else on disk is touched.
     static func delete(id: String) {
-        save(all().filter { $0.id != id })
+        guard let list = editable() else { return }
+        save(list.filter { $0.id != id })
     }
 
     /// ONE WAY TO ASK FOR A LINE OF TEXT, because three surfaces need it —

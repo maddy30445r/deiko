@@ -12,6 +12,33 @@ import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 /**
+ * A JSON list that is about to be REWRITTEN (`tasks.json`, `collections.json`).
+ *
+ * `[]` when the file does not exist yet, or is empty (a crash already lost it;
+ * refusing would block every write from then on). A file with text that will not
+ * parse (half-written by a crash mid-save, or edited by hand) is `null`, and the
+ * caller must skip its write: treating it as empty and appending one row used
+ * to replace every task title, or every project, with that single row. Readers
+ * that never write can stay forgiving; this one cannot.
+ */
+export function readListToRewrite(path) {
+  let text;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (e) {
+    return e?.code === "ENOENT" ? [] : null;
+  }
+  // Nothing left to lose: an empty file is a fresh list, or it would refuse every write from now on.
+  if (!text.trim()) return [];
+  try {
+    const list = JSON.parse(text);
+    return Array.isArray(list) ? list : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Parse `events.jsonl` into an array of events.
  *
  * Malformed lines are skipped rather than fatal. The recorder appends from

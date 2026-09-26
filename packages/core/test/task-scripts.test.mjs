@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 import { readBriefLine } from "../lib/context.mjs";
+import { readListToRewrite } from "../lib/session-io.mjs";
 import { DEFAULT_MODEL, briefText, isReady, vectorIsCurrent } from "../lib/meaning.mjs";
 
 const run = promisify(execFile);
@@ -556,6 +557,37 @@ test("a new task's title says where it came from, and a narration title gives wa
     assert.equal(json(join(root, "tasks.json"))[0].title, "Mine");
   }
   joining.close();
+});
+
+test("a task list left unreadable by a crash is never replaced with one row", async () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));
+  const stub = await relay();
+  const broken = '[{"id":"t-20260917-080000","title":"Pricing bug"}, {"id":"t-2026';
+  writeFileSync(join(root, "tasks.json"), broken);
+  const dir = filed(root, "20260918-090000", { narration: "the price still shows 99 after I save it" });
+  await classify(dir, stub.url);
+  assert.equal(readFileSync(join(root, "tasks.json"), "utf8"), broken, "left byte for byte");
+  assert.equal(existsSync(join(dir, "context.json")), true, "the brief is still filed");
+  // An empty file has nothing left to lose, so it is written to rather than refused forever.
+  writeFileSync(join(root, "tasks.json"), "");
+  const next = filed(root, "20260918-100000", { narration: "the cart total is wrong too" });
+  await classify(next, stub.url);
+  assert.deepEqual(json(join(root, "tasks.json")).map((t) => t.id), ["t-20260918-100000"]);
+  stub.close();
+});
+
+test("readListToRewrite: missing is empty, unreadable is null, a list is a list", () => {
+  const root = mkdtempSync(join(tmpdir(), "deiko-lists-"));
+  const path = join(root, "collections.json");
+  assert.deepEqual(readListToRewrite(path), []);
+  writeFileSync(path, "  \n");
+  assert.deepEqual(readListToRewrite(path), [], "empty is a fresh list");
+  for (const bad of ["{", '{"id":"shop"}', "null", '[{"id":"sh']) {
+    writeFileSync(path, bad);
+    assert.equal(readListToRewrite(path), null, JSON.stringify(bad));
+  }
+  writeFileSync(path, '[{"id":"shop","name":"Shop"}]');
+  assert.deepEqual(readListToRewrite(path), [{ id: "shop", name: "Shop" }]);
 });
 
 test("a request that never connected leaves no sent marker; one that got an answer keeps it", async () => {

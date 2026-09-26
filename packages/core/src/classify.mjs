@@ -59,6 +59,7 @@ import { homedir } from "node:os";
 import { CLASSIFIER, unplaceable } from "./lib/context.mjs";
 import { briefText, loadModel, readVector, vectorIsCurrent, writeVector } from "./lib/meaning.mjs";
 import { readTasks, titleFor } from "./lib/tasks.mjs";
+import { readListToRewrite } from "./lib/session-io.mjs";
 import {
   decideLocally, olderBoard, place, prepare, rankLocally, readCollections, requestClassify, sessionInputs,
 } from "./lib/filing.mjs";
@@ -66,15 +67,9 @@ import {
 /// Failures that happen before a connection exists, so nothing was sent.
 const NEVER_CONNECTED = new Set(["ENOTFOUND", "ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "EAI_AGAIN"]);
 
-/** `tasks.json` as rows. Missing or unreadable is none. */
-function readTaskRows(root) {
-  try {
-    const list = JSON.parse(readFileSync(join(root, "tasks.json"), "utf8"));
-    return Array.isArray(list) ? list : [];
-  } catch {
-    return [];
-  }
-}
+/** `tasks.json` as rows to rewrite: `null` when it exists but won't parse (see `readListToRewrite`). */
+const readTaskRows = (root) => readListToRewrite(join(root, "tasks.json"));
+const unreadable = (file) => console.error(`classify: ${file} is unreadable; left as it is rather than rewritten`);
 
 async function main() {
   const sessionArg = process.argv[2];
@@ -290,8 +285,9 @@ async function main() {
       // `acme-portal` when the list already holds one called `Acme Portal`, and
       // two rows with one id give the board two identical chips, a rename that
       // moves one of them and a delete that takes both.
-      const listed = readCollections(root);
-      if (!listed.some((c) => c.id === decision.newCollection.id)) {
+      const listed = readListToRewrite(join(root, "collections.json"));
+      if (!listed) unreadable("collections.json");
+      else if (!listed.some((c) => c?.id === decision.newCollection.id)) {
         listed.push({ ...decision.newCollection, hint: "" });
         writeFileSync(join(root, "collections.json"), JSON.stringify(listed, null, 2) + "\n");
       } else {
@@ -305,7 +301,8 @@ async function main() {
       // `from` says what the title was made from, so a narration title can
       // give way to the first summary line that joins its task (below).
       const list = readTaskRows(root);
-      if (!list.some((t) => t?.id === decision.newTask.id)) {
+      if (!list) unreadable("tasks.json");
+      else if (!list.some((t) => t?.id === decision.newTask.id)) {
         list.push({ ...decision.newTask, from: me.summaryLine ? "summary" : "narration" });
         writeFileSync(join(root, "tasks.json"), JSON.stringify(list, null, 2) + "\n");
       }
@@ -316,7 +313,7 @@ async function main() {
     // (`from: "you"`), or one with no `from` at all, is left as it is.
     if (!decision.newTask && decision.task && me.summaryLine) {
       const list = readTaskRows(root);
-      const row = list.find((t) => t?.id === decision.task);
+      const row = list?.find((t) => t?.id === decision.task);
       if (row?.from === "narration") {
         Object.assign(row, { title: titleFor(me), from: "summary" });
         writeFileSync(join(root, "tasks.json"), JSON.stringify(list, null, 2) + "\n");
