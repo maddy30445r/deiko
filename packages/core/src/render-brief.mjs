@@ -351,10 +351,21 @@ const related = relatedId ? (() => {
 })() : null;
 
 const quickHint = wantsQuickHint(context, process.env.DEIKO_OPTIMIZE_COSTS === "1");
+// The project's pinned rules (`rules` in collections.json), when it has any.
+const rules = (() => {
+  try {
+    const list = JSON.parse(readFileSync(join(root, "collections.json"), "utf8"));
+    const c = Array.isArray(list) ? list.find((x) => x?.id === context?.collection) : null;
+    const lines = Array.isArray(c?.rules) ? c.rules.filter((l) => typeof l === "string" && l.trim()) : [];
+    return lines.length ? { project: c.name, lines } : null;
+  } catch {
+    return null;
+  }
+})();
 const outcomePath = join(dir, "outcome.md");
 
 const { text, evidence } = buildPrompt({
-  narration, referents: released, personaPath, task, maybe, related, outcomePath, quickHint,
+  narration, referents: released, personaPath, task, maybe, related, outcomePath, quickHint, rules,
 });
 
 // The same message for a destination that cannot open a local path.
@@ -369,7 +380,7 @@ const { text, evidence } = buildPrompt({
 // until the developer throws it — and re-running the renderer at that moment
 // would put a Node spawn between letting go and the paste landing.
 const attached = buildPrompt({
-  narration, referents: released, attached: true, task, maybe, related, outcomePath, quickHint,
+  narration, referents: released, attached: true, task, maybe, related, outcomePath, quickHint, rules,
 });
 
 // Fail closed on the captured content, not on the assembled prompt. `text`

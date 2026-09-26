@@ -243,6 +243,9 @@ struct Collection: Codable, Identifiable, Equatable {
     /// One line the classifier reads as the option's description — "the
     /// mobile app, not the website". The cheapest accuracy there is.
     var hint: String = ""
+    /// Standing rules every brief in this project carries ("we use pnpm"),
+    /// one per line, at most five (see `buildPrompt` in scripts/lib/prompt.mjs).
+    var rules: [String]? = nil
 }
 
 enum Collections {
@@ -331,6 +334,37 @@ enum Collections {
     }
 
     static func describe(id: String, hint: String) { BoardLock.with { describeLocked(id: id, hint: hint) } }
+
+    static func setRules(id: String, rules: [String]) {
+        BoardLock.with {
+            guard var list = editable(), let index = list.firstIndex(where: { $0.id == id }) else { return }
+            let kept = rules.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            list[index].rules = kept.isEmpty ? nil : Array(kept.prefix(5))
+            save(list)
+        }
+    }
+
+    /// Several lines at once, one per line: a project's rules.
+    @MainActor
+    static func askLines(title: String, informative: String, value: [String], confirm: String) -> [String]? {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = informative
+        let scroll = NSTextView.scrollableTextView()
+        scroll.frame = NSRect(x: 0, y: 0, width: 320, height: 110)
+        scroll.borderType = .bezelBorder
+        let text = scroll.documentView as! NSTextView
+        text.string = value.joined(separator: "\n")
+        text.font = .systemFont(ofSize: 13)
+        text.isRichText = false
+        text.isAutomaticQuoteSubstitutionEnabled = false
+        alert.accessoryView = scroll
+        alert.addButton(withTitle: confirm)
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = text
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        return text.string.components(separatedBy: .newlines)
+    }
 
     private static func describeLocked(id: String, hint: String) {
         guard var list = editable() else { return }

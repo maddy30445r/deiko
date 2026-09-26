@@ -190,9 +190,13 @@ function markLabel(r, endpoints) {
  * Both variants are rendered up front because the renderer runs long before
  * anybody knows where the coin will land.
  */
+/// Project rules: a few short lines, never a second brief.
+export const RULE_LINES = 5;
+const RULE_CHARS = 200;
+
 export function buildPrompt({
   narration, referents, attached = false, personaPath = null,
-  task = null, maybe = null, related = null, outcomePath = null, quickHint = false,
+  task = null, maybe = null, related = null, outcomePath = null, quickHint = false, rules = null,
 }) {
   const narrationRedacted = redact(narration ?? "").trim();
   const out = [narrationRedacted, "", REPLY_LANGUAGE];
@@ -409,6 +413,15 @@ export function buildPrompt({
   const evidence = screenText.length
     ? [...spoken, "```", ...screenText, "```"].join("\n")
     : spoken.join("\n");
+
+  // PROJECT RULES, pinned once in the app ("Rules for this project…") and
+  // carried by every brief filed in that project: the lines a developer would
+  // otherwise retype ("we use pnpm", "never touch the payments module").
+  // Short on purpose, and in both variants: they are the developer's own words.
+  const pinned = (rules?.lines ?? []).map((l) => redact(String(l)).trim()).filter(Boolean).slice(0, RULE_LINES);
+  if (pinned.length) {
+    out.push("", `My standing rules for ${redact(rules.project ?? "this project")}:`, ...pinned.map((l) => `- ${l.slice(0, RULE_CHARS)}`));
+  }
 
   // HOW I WANT IT WRITTEN UP, as a path rather than as a wall of prose.
   //

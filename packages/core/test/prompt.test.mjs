@@ -864,3 +864,15 @@ test("an agent's note keeps plain file paths and scrubs a token, even one shaped
   assert.equal(out[2].includes("eyJ"), false, "a JWT is not a path");
   assert.equal(out[3].includes("Zx9Qm2Lk8Pw3Rt6Yv1Nb4Hc7Df0Gs5Aj"), false, "a token segment is caught");
 });
+
+test("a project's pinned rules ride in every brief for it, short and redacted", () => {
+  const rules = { project: "Shop", lines: ["We use pnpm, never npm.", "Never touch the payments module.", "", "a", "b", "c", "d"] };
+  const { text } = buildPrompt({ narration: "fix the price", referents: [], rules });
+  assert.match(text, /My standing rules for Shop:\n- We use pnpm, never npm\.\n- Never touch the payments module\.\n/);
+  assert.equal((text.match(/^- /gm) ?? []).length, 5, "five lines at most");
+  const attached = buildPrompt({ narration: "fix the price", referents: [], attached: true, rules });
+  assert.match(attached.text, /My standing rules for Shop:/);
+  assert.doesNotMatch(buildPrompt({ narration: "x", referents: [], rules: { project: "Shop", lines: [] } }).text, /standing rules/);
+  const secret = buildPrompt({ narration: "x", referents: [], rules: { project: "Shop", lines: ["key AKIAIOSFODNN7EXAMPLE"] } }).text;
+  assert.doesNotMatch(secret, /AKIAIOSFODNN7EXAMPLE/);
+});

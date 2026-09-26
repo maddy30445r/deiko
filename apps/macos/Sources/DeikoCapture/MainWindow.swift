@@ -2594,6 +2594,16 @@ private struct CollectionMenu: View {
             Collections.describe(id: collection.id, hint: hint)
             reload()
         }
+        Button(collection.rules?.isEmpty == false ? "Rules for this project (\(collection.rules?.count ?? 0))…" : "Rules for this project…") {
+            guard let rules = Collections.askLines(
+                title: "Rules for \(collection.name)",
+                informative: "One per line, up to five. Every new brief in this project tells your agent these, so you never type them again. They stay on your Mac and only travel inside your briefs.",
+                value: collection.rules ?? [],
+                confirm: "Save"
+            ) else { return }
+            Collections.setRules(id: collection.id, rules: rules)
+            reload()
+        }
         Button("Rename…") {
             guard let name = Collections.askText(
                 title: "Rename \(collection.name)",
