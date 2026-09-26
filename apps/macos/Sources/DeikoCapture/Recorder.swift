@@ -411,6 +411,7 @@ final class Recorder {
         sessionDir = dir
         sessionId = stamp
         sessionStartedMs = Clock.nowMs()
+        PickUp.shared.place(sessionDir: dir)
         holdIndex = 0
         globalReferentIndex = 0
         markIndex = 0

@@ -1786,6 +1786,8 @@ private struct WorkNotes: View {
                 Text(span(items))
                     .font(.system(size: 11.5))
                     .foregroundStyle(DeikoStyle.ink2)
+                PickUpRow(task: task)
+                    .padding(.top, 4)
             }
             if let asked = state.lastAsked {
                 VStack(alignment: .leading, spacing: 4) {
@@ -2359,6 +2361,28 @@ private struct LargeCrop: View {
 /// The note blocks the work view and the brief view both write in: a 12pt
 /// semibold heading with quiet meta, 12pt ink-2 notes, and the text toggle.
 @MainActor
+/// "Pick this up": the next brief joins this work from its first word.
+private struct PickUpRow: View {
+    let task: String
+    @ObservedObject private var pickUp = PickUp.shared
+
+    var body: some View {
+        if pickUp.task == task {
+            HStack(spacing: 8) {
+                Text("Your next brief joins this work. Double-tap Right Option and talk.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(DeikoStyle.mark)
+                Button("Cancel") { pickUp.cancel() }
+                    .buttonStyle(TextButtonStyle(quiet: true))
+            }
+        } else {
+            Button("Pick this up") { pickUp.arm(task) }
+                .buttonStyle(TextButtonStyle())
+                .tip("Your next brief joins this work, and your agent gets where it stands from the first word.")
+        }
+    }
+}
+
 /// A note line with its own small menu, shown on hover and on right-click:
 /// the controls stay out of the way of reading until you reach for them.
 private struct MemoryLine: View {

@@ -575,3 +575,27 @@ enum TaskMemoryEdits {
         Task.detached { await BriefPipeline.rebuildNotes() }
     }
 }
+
+/// PICK UP A TASK. "Pick this up" on a piece of work arms it, and the next
+/// session the recorder starts is written into that task as placed by you
+/// before anything renders: filing leaves it be, and its very first prompt
+/// already carries where the work stands. One brief, then it disarms.
+@MainActor
+final class PickUp: ObservableObject {
+    static let shared = PickUp()
+    @Published private(set) var task: String?
+
+    func arm(_ task: String) { self.task = task }
+    func cancel() { task = nil }
+
+    /// The recorder, with the folder of a session it just started.
+    func place(sessionDir: String) {
+        guard let task else { return }
+        self.task = nil
+        var context = SessionContext()
+        // Its project is the work's own.
+        context.placeCollection(SessionsStore.shared.items.first { $0.task == task && !$0.odds }?.collection)
+        context.placeTask(task)
+        try? context.write(sessionDir: sessionDir)
+    }
+}
