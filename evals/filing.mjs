@@ -5,7 +5,7 @@
  *   node scripts/eval-filing.mjs [--board ~/Library/Application\ Support/Deiko]
  *     [--labels ~/Documents/Deiko-eval/filing-labels.json]
  *     [--shortlist-only] [--relay <url>] [--pace <ms>] [--all] [--draft]
- *     [--model <key>|off]
+ *     [--model <key>|off] [--replay key|guessed]
  *   node scripts/eval-filing.mjs --from-corrections [--write]
  *     every brief placed by hand since, proposed as new answer-key entries
  *
@@ -13,8 +13,10 @@
  * first against an in-memory board on which every earlier brief sits where the
  * ANSWER KEY puts it (not where a classifier put it), so each brief is judged
  * on its own and one miss cannot cascade into the next.
- * ponytail: that hides snowballing (one wrong join describing a task badly);
- * replay on the guessed board as a second mode if that ever needs measuring.
+ *
+ * --replay guessed is the other half: every earlier brief sits where THIS RUN
+ * filed it, as on a real board. A wrong join then describes its task badly for
+ * the briefs after it — snowballing — and the score shows it. Full mode only.
  *
  * --shortlist-only needs no network: recall of the right task in the top 5 and
  * top 20. Full mode calls the relay exactly as classify.mjs does (same body,
@@ -78,6 +80,11 @@ if (flag("--draft")) {
 }
 
 const shortlistOnly = flag("--shortlist-only");
+const replayGuessed = value("--replay", "key") === "guessed";
+if (replayGuessed && shortlistOnly) {
+  console.error("✗ --replay guessed needs the classifier's answers — drop --shortlist-only");
+  process.exit(2);
+}
 /// Gap between briefs in full mode. Each brief is up to three Jev requests,
 /// and the gateway answers a burst with 429s. ponytail: a fixed pause.
 const paceMs = Number(value("--pace", "1500"));
@@ -167,11 +174,19 @@ for (const [stamp, e] of exp) {
     const vec = await model.embed(briefText(me), "doc");
     if (vec) docs.set(stamp, vec);
   }
-  // THE KEY, NOT THE GUESS, goes on the in-memory board. A placement the key
-  // makes is a hand placement of the TASK — which is also what lets it
-  // describe its task (`firm` in tasks.mjs), as a corrected brief would.
-  done.push({ ...me, task: e.task, odds: e.want === "odds", decidedBy: "you", taskBy: "you" });
-  if (e.want === "new") taskTitles.set(e.task, titleFor(me));
+  if (replayGuessed && row.out) {
+    // THE GUESS goes on the board, stamped as a v3 filing so it describes its
+    // task (`firm`) exactly as a real one would.
+    const odds = row.out.got === "odds";
+    done.push({ ...me, task: odds ? null : row.out.task, odds, decidedBy: "jev", classifier: "v3.0", confidence: { task: 1 } });
+    if (!odds && row.out.got !== "join") taskTitles.set(row.out.task, titleFor(me));
+  } else {
+    // THE KEY, NOT THE GUESS, goes on the in-memory board. A placement the key
+    // makes is a hand placement of the TASK — which is also what lets it
+    // describe its task (`firm` in tasks.mjs), as a corrected brief would.
+    done.push({ ...me, task: e.task, odds: e.want === "odds", decidedBy: "you", taskBy: "you" });
+    if (e.want === "new") taskTitles.set(e.task, titleFor(me));
+  }
 }
 const report = formatReport({ rows, shortlistOnly, errored, all: flag("--all") });
-process.stdout.write(`meaning model: ${model ? model.key : "none (word matching only)"}\n${report}\n`);
+process.stdout.write(`meaning model: ${model ? model.key : "none (word matching only)"} · replayed on ${replayGuessed ? "its own guesses" : "the answer key"}\n${report}\n`);
