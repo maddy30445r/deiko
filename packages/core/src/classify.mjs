@@ -67,6 +67,21 @@ import {
 /// Failures that happen before a connection exists, so nothing was sent.
 const NEVER_CONNECTED = new Set(["ENOTFOUND", "ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "EAI_AGAIN"]);
 
+/**
+ * Leave the queue marker for a brief that could not be filed (see `main`).
+ * At module level so the last-resort catch below can use it too.
+ */
+function markPendingIn(dir, reason) {
+  const path = join(dir, "filing.pending");
+  let since = new Date().toISOString(), tries = 0;
+  try {
+    ({ since, tries = 0 } = JSON.parse(readFileSync(path, "utf8")));
+  } catch {
+    // first time
+  }
+  writeAtomic(path, JSON.stringify({ since, reason, tries: tries + 1 }) + "\n");
+}
+
 /** `tasks.json` as rows to rewrite: `null` when it exists but won't parse (see `readListToRewrite`). */
 const readTaskRows = (root) => readListToRewrite(join(root, "tasks.json"));
 const unreadable = (file) => console.error(`classify: ${file} is unreadable; left as it is rather than rewritten`);
@@ -115,16 +130,9 @@ async function main() {
   // `decidedBy` reads as placed by hand in the app, and would never be filed.
   // Cleared by anything that settles where the brief goes.
   const pendingPath = join(dir, "filing.pending");
-  const markPending = (reason) => {
-    let since = new Date().toISOString(), tries = 0;
-    try {
-      ({ since, tries = 0 } = JSON.parse(readFileSync(pendingPath, "utf8")));
-    } catch {
-      // first time
-    }
-    writeAtomic(pendingPath, JSON.stringify({ since, reason, tries: tries + 1 }) + "\n");
-  };
   const settled = () => rmSync(pendingPath, { force: true });
+  // Placed by hand while the request was out: nothing waits any more.
+  const markPending = (reason) => (current()?.decidedBy === "you" ? settled() : markPendingIn(dir, reason));
 
   /** `context.json` as it is now. Missing or unreadable is none: not "decided", and rewritten below. */
   const current = () => {
@@ -373,5 +381,11 @@ async function main() {
 
 // Even an unexpected throw must not fail the pipeline that called us.
 main().catch((err) => {
-  console.error(`· classification failed (${err.message.slice(0, 80)}) — skipping`);
+  console.error(`· classification failed (${err.message.slice(0, 80)}) — queued to file later`);
+  // A throw is a brief that did not get filed: queued, never silently lost.
+  try {
+    if (process.argv[2]) markPendingIn(resolve(process.argv[2]), "error");
+  } catch {
+    // the folder itself is gone
+  }
 });

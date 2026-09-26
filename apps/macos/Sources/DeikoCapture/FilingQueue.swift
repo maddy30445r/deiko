@@ -14,8 +14,10 @@ import Network
 // then re-render so the prompt carries its memory), oldest first, one at a
 // time: when the network comes back, a few seconds after launch, after any
 // brief that files, and from "Try now" on the board. It stops at the first
-// brief that still can't get through, so a dead network is asked once, not
-// once per waiting brief.
+// brief that still can't get through the NETWORK, so a dead network is asked
+// once, not once per waiting brief; a brief the service refuses is passed
+// over so the ones behind it still file. The brief open on the review card is
+// handed back to the card, which files it in its own lane.
 // ─────────────────────────────────────────────────────────────────────────────
 
 @MainActor
@@ -35,7 +37,21 @@ final class FilingQueue: ObservableObject {
     private var online = true
     private var again = false
 
-    private struct Marker: Decodable { let tries: Int? }
+    private struct Marker: Decodable { let tries: Int?; let reason: String? }
+
+    /// The brief the review card is showing, and how to hand it back to the
+    /// card: its filing and re-render run in the card's own lane (narration
+    /// edits, "Point at more"), and the card shows the result. Filing it from
+    /// here instead could race that lane and leave the old words on disk.
+    var card: (dir: String, refile: @MainActor () -> Void)?
+
+    /// Why a brief still waits. Only the network pauses the whole queue; a
+    /// brief the service refuses is passed over so newer ones still file.
+    private nonisolated static func waitsOnNetwork(_ dir: String) -> Bool {
+        guard let data = try? Data(contentsOf: marker(dir)),
+              let reason = (try? JSONDecoder().decode(Marker.self, from: data))?.reason else { return true }
+        return ["offline", "busy", "unreachable"].contains(reason)
+    }
 
     nonisolated static func marker(_ sessionDir: String) -> URL {
         URL(fileURLWithPath: sessionDir).appendingPathComponent("filing.pending")
@@ -102,8 +118,12 @@ final class FilingQueue: ObservableObject {
         Task { [weak self] in
             var filed = false
             for dir in dirs where Self.isPending(dir) {
+                if let card = self?.card, card.dir == dir { card.refile(); continue }
                 let placed = await BriefPipeline.classify(sessionDir: dir)
-                if Self.isPending(dir) { break }           // still can't get through: later
+                if Self.isPending(dir) {
+                    if Self.waitsOnNetwork(dir) { break }  // the network: later, all of them
+                    continue                               // this one: passed over, the rest go on
+                }
                 if placed != nil {
                     _ = try? await BriefPipeline.rerender(sessionDir: dir)
                     filed = true

@@ -428,6 +428,7 @@ final class ReviewModel: ObservableObject {
             rerenderPending = false
         }
         self.sessionDir = sessionDir
+        FilingQueue.shared.card = (sessionDir, { [weak self] in self?.fetchContext(sessionDir: sessionDir) })
         // A brief opened again after it was filed keeps its row on screen and
         // its place: sorting it a second time could move it, and blanked the
         // row for the second or two that took.
@@ -727,9 +728,14 @@ final class ReviewModel: ObservableObject {
             }
             // Filed: anything that waited behind the network can go too. And
             // either way the board's "waiting" count is current.
-            if placed != nil { FilingQueue.shared.fileAll() } else { FilingQueue.shared.refresh() }
+            // FILED BY THIS RUN — not merely "has a context": "Point at more" on
+            // a filed brief keeps its old context when the refile fails.
+            let waiting = FilingQueue.isPending(sessionDir)
+            if placed != nil && !waiting { FilingQueue.shared.fileAll() } else { FilingQueue.shared.refresh() }
             guard run == placingRun, stillCurrent(sessionDir) else { return }
-            filingQueued = files && FilingQueue.isPending(sessionDir)
+            // "Not in a task yet" only when it isn't: a brief still in its old
+            // task waits quietly and keeps showing that task.
+            filingQueued = files && waiting && placed == nil
             notFiled = files && (filingQueued || (placed == nil && filed))
             placing = false
         }
@@ -855,6 +861,7 @@ final class ReviewModel: ObservableObject {
 
         cancelPendingWork()
         self.sessionDir = sessionDir
+        FilingQueue.shared.card = (sessionDir, { [weak self] in self?.fetchContext(sessionDir: sessionDir) })
         summary = nil
         notFiled = false
         filingQueued = false

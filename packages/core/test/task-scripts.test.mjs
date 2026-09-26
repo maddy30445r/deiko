@@ -636,6 +636,16 @@ test("a brief that can't be filed is queued, counted, and settled once it files"
   assert.equal(pending(offline), null);
   assert.equal(existsSync(join(offline, "context.json")), true);
 
+  // Placed by hand WHILE the request was out: the failure doesn't re-queue it.
+  const racing = filed(root, "20260918-093000", { narration: "and the listing page too" });
+  const handMidFlight = await relay(() => {
+    writeFileSync(join(racing, "context.json"), JSON.stringify({ task: "t-20260918-090000", decidedBy: "you", taskBy: "you" }));
+    return [503, { error: "upstream" }];
+  });
+  await classify(racing, handMidFlight.url);
+  handMidFlight.close();
+  assert.equal(pending(racing), null);
+
   // Placed by hand while it waited: settled too.
   const handPlaced = filed(root, "20260918-100000", { narration: "the cart shows it too", context: { task: "t-20260918-090000", decidedBy: "you" } });
   writeFileSync(join(handPlaced, "filing.pending"), JSON.stringify({ since: "x", reason: "offline", tries: 1 }));

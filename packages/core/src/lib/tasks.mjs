@@ -37,7 +37,9 @@ export const tokens = (text) => String(text ?? "").toLowerCase().match(/[a-z0-9$
 /// A line in an agent's write-back that is shaped like an order to the next
 /// agent rather than a note about the work. Screen text an agent read can
 /// carry one, and a note would pass it on to every later brief. Dropped.
-const INSTRUCTION = /\b(ignore|disregard|forget|override)\b[^.\n]{0,40}\b(previous|prior|above|earlier|all|any|your)\b[^.\n]{0,24}\b(instructions?|prompts?|rules|guidelines)\b|\bsystem prompt\b|\byou are now\b|\bnew instructions?:/i;
+/// Imperatives only: "Moved the system prompt into prompts/system.ts" or
+/// "Ignore all ESLint rules in generated/" are notes and stay.
+const INSTRUCTION = /^(please\s+)?(ignore|disregard|forget|override)\b[^.\n]{0,40}\b(previous|prior|above|earlier|all|any|your)\b[^.\n]{0,24}\b(instructions?|prompts?)\b|^you are now\b|^new instructions?:|\b(reveal|print|output|repeat|show)\b[^.\n]{0,30}\b(your|the) system prompt\b/i;
 
 /// The four headings, as agents actually title them.
 const HEADS = {
@@ -331,13 +333,15 @@ export function shortlist({ query, queryKeys = {}, window = null, queryVec = nul
  * quote only the start. Too short to be sure is never a match.
  */
 export const decisionKey = (s) => String(s ?? "").toLowerCase()
-  .replace(/^[a-z]{3} \d{1,2}(\s*\(\d{8}-\d{6}\))?:\s*/, "")
+  .replace(/^[a-z]{3} \d{1,2}(, \d{4})?(\s*\(\d{8}-\d{6}\))?:\s*/, "")
   .replace(/[^a-z0-9$ ]+/g, " ").replace(/\s+/g, " ").trim();
 
 export function sameDecision(retired, decision) {
   const [r, d] = [decisionKey(retired), decisionKey(decision)];
   if (!r || !d) return false;
-  return r === d || (Math.min(r.length, d.length) >= 12 && (d.includes(r) || r.includes(d)));
+  // The quote must be the decision's START (or the decision the quote's):
+  // retiring "Use Postgres" must not retire "Do not use Postgres for the cache".
+  return r === d || (Math.min(r.length, d.length) >= 12 && (d.startsWith(r) || r.startsWith(d)));
 }
 
 export function renderTaskNote({ id, title, collection = null, briefs }) {
