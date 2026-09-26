@@ -35,7 +35,7 @@ import { createInterface } from "node:readline";
 
 import { STAMP, briefDate, readBriefLine } from "./lib/context.mjs";
 import { redact, redactBlock, redactNote } from "./lib/redact.mjs";
-import { loadEvents } from "./lib/session-io.mjs";
+import { fileStamp, loadEvents } from "./lib/session-io.mjs";
 import { TASK_ID, bm25, cosine, groupTasks, readBriefLines, readTasks, renderTaskNote, rrf, terms, titleFor } from "./lib/tasks.mjs";
 import { DEIKO_HOME, loadModel, readVector } from "./lib/meaning.mjs";
 
@@ -90,10 +90,7 @@ const lines = () => (stamps().length ? readBriefLines(ROOT, { save: false }).sor
 /// Meaning vectors by folder, re-read only when their files change.
 const vectors = new Map(); // dir -> { fp, vec }
 function vectorOf(dir, key) {
-  const fp = key + ["meaning.json", "meaning.f32"].map((f) => {
-    const s = statSync(join(dir, f), { bigint: true, throwIfNoEntry: false });
-    return s ? `${s.ino}:${s.size}:${s.mtimeNs}` : "-";
-  }).join("|");
+  const fp = key + ["meaning.json", "meaning.f32"].map((f) => fileStamp(join(dir, f))).join("|");
   const hit = vectors.get(dir);
   if (hit?.fp === fp) return hit.vec;
   const vec = readVector(dir, key);

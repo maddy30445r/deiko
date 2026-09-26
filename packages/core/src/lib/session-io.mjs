@@ -30,14 +30,6 @@ export function writeAtomic(path, data) {
   }
 }
 
-/**
- * ONE WRITER AT A TIME for the board's shared lists (`tasks.json`,
- * `collections.json`). The app renames a task while a filing adds one: both
- * read, both write, and one change is lost. A lock folder beside them, taken
- * the same way by `BoardLock` in the app. Waits up to `waitMs`, then goes
- * ahead anyway (a filing must never fail over this); a lock older than
- * `staleMs` was left by a crash and is broken.
- */
 /** A task or project list: the version it replaces stays beside it as
  *  `<name>.prev`, one step back when an edit goes wrong. */
 export function writeList(path, data) {
@@ -45,6 +37,25 @@ export function writeList(path, data) {
   writeAtomic(path, data);
 }
 
+/** A file's identity for "changed since?": inode (a rename-into-place moves
+ *  it), size and mtime in ns. "-" when there is no such file. */
+export function fileStamp(path) {
+  const s = statSync(path, { bigint: true, throwIfNoEntry: false });
+  return s ? `${s.ino}:${s.size}:${s.mtimeNs}` : "-";
+}
+
+/**
+ * ONE WRITER AT A TIME for the board's shared lists (`tasks.json`,
+ * `collections.json`). The app renames a task while a filing adds one: both
+ * read, both write, and one change is lost. A lock folder beside them, taken
+ * the same way by `BoardLock` in the app. Waits up to `waitMs`, then goes
+ * ahead anyway (a filing must never fail over this); a lock older than
+ * `staleMs` was left by a crash and is broken.
+ * ponytail: two writers breaking the same crashed lock in the same instant
+ * can both get in (the break doesn't check whose lock it removes) — that
+ * loses one edit, as before the lock existed. A lock is held for
+ * milliseconds, so it needs a crash inside one and two writers right after.
+ */
 export function withBoardLock(root, fn, { waitMs = 3000, staleMs = 15000 } = {}) {
   const lock = join(root, ".lists.lock");
   const until = Date.now() + waitMs;

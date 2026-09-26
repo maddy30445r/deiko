@@ -11,8 +11,8 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
-import { writeAtomic } from "./session-io.mjs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { fileStamp, writeAtomic } from "./session-io.mjs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -406,7 +406,7 @@ export function renderTaskNote({ id, title, collection = null, briefs }) {
   for (const b of briefs.slice(0, CAP.briefs)) {
     const apps = b.apps.length ? ` · ${b.apps.map(redact).join(", ")}` : "";
     const windows = b.windows.length ? ` · ${b.windows.slice(0, 3).map(redact).join(" · ")}` : "";
-    out.push(`- ${briefDate(b.id)}, "${redact(b.line)}"${said.includes(b) ? "" : " (not confirmed)"}${apps}${windows}`);
+    out.push(`- ${briefDate(b.id)}, "${redact(b.line)}"${sure.includes(b) ? "" : " (not confirmed)"}${apps}${windows}`);
     // TWO FILES BY NAME, NEVER THE FOLDER — see `prompt.mjs`.
     out.push(`  ${b.dir}/prompt.txt${b.outcome ? ` · ${b.dir}/outcome.md` : ""}`);
   }
@@ -445,27 +445,22 @@ export function readTasks(root) {
  */
 const INDEX = ".board-index.json";
 const inProcess = new Map(); // root -> { name: { fp, line } }
-let libKey;
-function codeKey() {
-  if (!libKey) {
-    const dir = dirname(fileURLToPath(import.meta.url));
-    const h = createHash("sha1");
-    for (const f of readdirSync(dir).sort()) if (f.endsWith(".mjs")) h.update(f).update(readFileSync(join(dir, f)));
-    libKey = h.digest("hex");
-  }
-  return libKey;
-}
-const fingerprint = (dir) => BRIEF_LINE_FILES.map((f) => {
-  const s = statSync(join(dir, f), { bigint: true, throwIfNoEntry: false });
-  return s ? `${s.ino}:${s.size}:${s.mtimeNs}` : "-";
-}).join("|");
+// Hashed as this module loads, so it names the code this process runs even
+// if an update replaces the files mid-run.
+const CODE_KEY = (() => {
+  const dir = dirname(fileURLToPath(import.meta.url));
+  const h = createHash("sha1");
+  for (const f of readdirSync(dir).sort()) if (f.endsWith(".mjs")) h.update(f).update(readFileSync(join(dir, f)));
+  return h.digest("hex");
+})();
+const fingerprint = (dir) => BRIEF_LINE_FILES.map((f) => fileStamp(join(dir, f))).join("|");
 
 export function readBriefLines(root, { save = true } = {}) {
   let known = inProcess.get(root);
   if (!known) {
     try {
       const saved = JSON.parse(readFileSync(join(root, INDEX), "utf8"));
-      known = saved?.code === codeKey() && saved.briefs && typeof saved.briefs === "object" ? saved.briefs : {};
+      known = saved?.code === CODE_KEY && saved.briefs && typeof saved.briefs === "object" ? saved.briefs : {};
     } catch {
       known = {};
     }
@@ -492,7 +487,7 @@ export function readBriefLines(root, { save = true } = {}) {
   inProcess.set(root, next);
   if (changed && save) {
     try {
-      writeAtomic(join(root, INDEX), JSON.stringify({ code: codeKey(), briefs: next }));
+      writeAtomic(join(root, INDEX), JSON.stringify({ code: CODE_KEY, briefs: next }));
     } catch {
       // A cache: the next run reads the slow way.
     }

@@ -915,13 +915,21 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard panel.runModal() == .OK, let dest = panel.url else { return }
         let name = root.lastPathComponent
         Task.detached {
-            try? FileManager.default.removeItem(at: dest)
+            // Zipped beside it, then swapped in: a failed export leaves the
+            // file that was there untouched.
+            let partial = dest.deletingLastPathComponent().appendingPathComponent(".\(dest.lastPathComponent).partial")
+            try? FileManager.default.removeItem(at: partial)
             let zip = Process()
             zip.executableURL = URL(fileURLWithPath: "/usr/bin/zip")
             zip.currentDirectoryURL = root.deletingLastPathComponent()
-            zip.arguments = ["-r", "-q", "-y", dest.path, name, "-x",
+            zip.arguments = ["-r", "-q", "-y", partial.path, name, "-x",
                              "\(name)/models/*", "*.wav", "*.f32", "*.DS_Store", "*/.lists.lock/*", "*.tmp-*", "*/.board-index.json"]
-            let ok = (try? zip.run()).map { zip.waitUntilExit(); return zip.terminationStatus == 0 } ?? false
+            let zipped = (try? zip.run()).map { zip.waitUntilExit(); return zip.terminationStatus == 0 } ?? false
+            let fm = FileManager.default
+            let ok = zipped && (fm.fileExists(atPath: dest.path)
+                ? (try? fm.replaceItemAt(dest, withItemAt: partial)) != nil
+                : (try? fm.moveItem(at: partial, to: dest)) != nil)
+            if !ok { try? FileManager.default.removeItem(at: partial) }
             await MainActor.run {
                 if ok { NSWorkspace.shared.activateFileViewerSelecting([dest]); return }
                 Emit.log("export: zip failed for \(dest.lastPathComponent)")

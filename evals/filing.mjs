@@ -93,6 +93,10 @@ const replayGuessed = value("--replay", "key") === "guessed";
 const recordPath = value("--record") && home(value("--record"));
 const recorded = value("--answers") ? JSON.parse(readFileSync(home(value("--answers")), "utf8")) : null;
 const answers = {};
+if (recorded && recordPath) {
+  console.error("✗ --record and --answers together would overwrite the answers being replayed");
+  process.exit(2);
+}
 if (flag("--sweep") && (!recorded || replayGuessed)) {
   console.error("✗ --sweep needs --answers <file> from a --record run, on the answer key's board (not --replay guessed)");
   process.exit(2);
@@ -118,9 +122,14 @@ if (!shortlistOnly && !recorded && process.env.DEIKO_SORT_BRIEFS === "0" && !fla
 }
 
 async function ask(body, pause = 0, stamp = null) {
+  // SAVED WITH THE SHORTLIST IT ANSWERED: replayed against another one (a
+  // different --model, a changed board) its answers would be read for the
+  // wrong tasks, so it is refused instead.
+  const asked = body.tasks.map((t) => t.id).join(",");
   if (recorded) {
     if (!recorded[stamp]) throw new Error("not in --answers");
-    return recorded[stamp];
+    if (recorded[stamp].shortlist !== asked) throw new Error("shortlist differs from the recorded one (another --model?)");
+    return recorded[stamp].answer;
   }
   if (pause > 0) await new Promise((r) => setTimeout(r, pause));
   let res = await requestClassify({ url: relay, token, body });
@@ -130,7 +139,7 @@ async function ask(body, pause = 0, stamp = null) {
   }
   if (!res.ok) throw new Error(`relay ${res.status}`);
   const answer = await res.json();
-  if (stamp) answers[stamp] = answer;
+  if (stamp) answers[stamp] = { shortlist: asked, answer };
   return answer;
 }
 

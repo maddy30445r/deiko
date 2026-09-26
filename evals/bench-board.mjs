@@ -40,7 +40,6 @@ const stamp = (i) => {
 
 export function buildBoard(n, root = mkdtempSync(join(tmpdir(), "deiko-bench-"))) {
   const key = currentModel();
-  const dims = MODELS[key].dims;
   const tasks = [];
   const collections = [{ id: "shop", name: "Shop", hint: "" }, { id: "admin", name: "Admin", hint: "" }];
   for (let i = 0; i < n; i++) {
@@ -64,9 +63,11 @@ export function buildBoard(n, root = mkdtempSync(join(tmpdir(), "deiko-bench-"))
     if (rand() < 0.3) {
       writeFileSync(join(dir, "outcome.md"), `## Did\n- ${words(8)}\n\n## Decided\n- ${words(7)}\n\n## Open\n- ${words(5)}\n\n## Files\n- src/${pick(WORDS)}.ts\n`);
     }
-    const vec = new Float32Array(dims).map(() => rand() - 0.5);
-    writeFileSync(join(dir, "meaning.f32"), Buffer.from(vec.buffer));
-    writeFileSync(join(dir, "meaning.json"), JSON.stringify({ model: key, dims, text: "x" }));
+    if (key) {
+      const vec = new Float32Array(MODELS[key].dims).map(() => rand() - 0.5);
+      writeFileSync(join(dir, "meaning.f32"), Buffer.from(vec.buffer));
+      writeFileSync(join(dir, "meaning.json"), JSON.stringify({ model: key, dims: vec.length, text: "x" }));
+    }
   }
   writeFileSync(join(root, "tasks.json"), JSON.stringify(tasks));
   writeFileSync(join(root, "collections.json"), JSON.stringify(collections));

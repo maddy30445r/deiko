@@ -204,6 +204,10 @@ enum Sessions {
         )) as? [String: Any]
         let task = context?["task"] as? String ?? Tasks.own(name)
         guard trash(dir) else { return false }
+        // The board index keeps every brief's words too: a cache, rebuilt
+        // on the next read.
+        try? FileManager.default.removeItem(atPath: ((dir as NSString).deletingLastPathComponent as NSString)
+            .appendingPathComponent(".board-index.json"))
         if task.range(of: #"^t-\d{8}-\d{6}$"#, options: .regularExpression) != nil {
             let note = ((dir as NSString).deletingLastPathComponent as NSString)
                 .appendingPathComponent("tasks/\(task).md")
@@ -233,7 +237,7 @@ enum Sessions {
                 removed += 1
             }
         }
-        for memory in ["tasks", "tasks.json"] {
+        for memory in ["tasks", "tasks.json", "tasks.json.prev", ".board-index.json"] {
             try? FileManager.default.removeItem(atPath: "\(root)/\(memory)")
         }
         return removed
