@@ -38,7 +38,7 @@ import { STAMP, briefDate, readBriefLine } from "./lib/context.mjs";
 import { redact, redactBlock, redactNote } from "./lib/redact.mjs";
 import { fileStamp, loadEvents } from "./lib/session-io.mjs";
 import {
-  TASK_ID, bm25, corrected, cosine, groupTasks, overrideText, readBriefLines, readOverrides, readTasks, renderTaskNote, rrf, terms, titleFor,
+  TASK_ID, blendScores, bm25, corrected, cosine, groupTasks, overrideText, readBriefLines, readOverrides, readTasks, renderTaskNote, terms, titleFor,
 } from "./lib/tasks.mjs";
 import { DEIKO_HOME, loadModel, readVector } from "./lib/meaning.mjs";
 
@@ -181,7 +181,7 @@ async function searchBriefs({ query, limit = 8 } = {}) {
   const model = await meaningModel();
   const qv = model ? await model.embed(q, "query") : null;
   if (qv) meaning = briefs.map((b) => { const v = vectorOf(b.dir, model.key); return v ? cosine(qv, v) : null; });
-  const fused = rrf([{ scores: words.map((s) => (s > 0 ? s : null)), weight: 1 }, { scores: meaning, weight: 1 }]);
+  const fused = blendScores(words, meaning);
   const titles = readTasks(ROOT);
   return briefs.map((b, i) => ({ b, score: fused[i] }))
     .filter((r) => r.score > 0)

@@ -905,7 +905,7 @@ struct SettingsView: View {
             .font(.system(size: 12))
 
             HStack(spacing: 10) {
-                Text("Matching uses harrier-oss-v1-270m by Microsoft, under the MIT licence.")
+                Text("Matching uses EmbeddingGemma by Google, under the Gemma Terms of Use.")
                     .font(.system(size: 11))
                     .foregroundStyle(DeikoStyle.ink2)
                 Spacer()

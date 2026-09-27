@@ -16,12 +16,12 @@
  * BACKFILL WRITES INTO THE BOARD (<session>/meaning.f32). Only the app, once
  * after a download, and the controller (`make meaning-backfill`) run it.
  */
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { STAMP, readBriefLine } from "./lib/context.mjs";
-import { DEIKO_HOME, briefText, currentModel, download, isReady, loadModel, vectorIsCurrent, writeVector } from "./lib/meaning.mjs";
+import { DEIKO_HOME, MODELS, briefText, currentModel, download, isReady, loadModel, modelDir, vectorIsCurrent, writeVector } from "./lib/meaning.mjs";
 
 const [command, arg] = process.argv.slice(2);
 const key = currentModel();
@@ -45,6 +45,8 @@ if (command === "status") {
         console.log(`progress ${done} ${total}`);
       },
     });
+    // A model this build no longer uses is a ~200 MB folder nothing reads.
+    for (const other of Object.keys(MODELS)) if (other !== key) rmSync(modelDir(other), { recursive: true, force: true });
     console.log(`ready ${key}`);
   } catch (err) {
     console.log(`failed ${String(err?.message ?? err).replace(/\s+/g, " ").slice(0, 120)}`);

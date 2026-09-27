@@ -178,10 +178,6 @@ export function taskText(title, briefs) {
 export const TIME_SEATS = 5;
 /// A label on more than this many tasks ("App.tsx", "index.tsx") seats nobody.
 export const COMMON_LABEL = 5;
-/// Reciprocal-rank fusion. ponytail: try k ∈ {10, 30, 60} and a min-max blend
-/// weighted 0.5–0.7 towards meaning on the eval before changing these.
-export const RRF_K = 60;
-export const RRF_WEIGHTS = { words: 1, meaning: 1 };
 /// The labels that hand out seats. Sites and code projects do not: one site
 /// or one repo holds most of a board, so they say nothing about WHICH task.
 export const SEAT_KINDS = ["pages", "files", "urls", "errors", "tickets"];
@@ -215,18 +211,36 @@ export function bm25(query, docs) {
   });
 }
 
-/** Weighted reciprocal rank fusion. Equal scores share a rank, so a tie in
- *  one list stays a tie (recency breaks it later, not list order). */
-export function rrf(lists, k = RRF_K) {
-  const n = Math.max(0, ...lists.map((l) => l.scores.length));
-  const fused = new Array(n).fill(0);
-  for (const { scores, weight } of lists) {
-    const first = new Map();
-    scores.filter((s) => s != null).sort((a, b) => b - a)
-      .forEach((s, r) => { if (!first.has(s)) first.set(s, r); });
-    scores.forEach((s, i) => { if (s != null) fused[i] += weight / (k + first.get(s) + 1); });
-  }
-  return fused;
+
+/// How much meaning counts against words in search (see `blendScores`).
+/// Measured 27 Sep 2026 on 100 realistic queries against the owner's board
+/// (search-queries.json beside the filing labels, `scripts/eval-search.mjs`):
+/// every weight from 0.78 to 0.9 scored 88–89 right at #1, rank fusion at
+/// best 84, today's RRF 80. Below ~0.76 paraphrases fall away.
+export const SEARCH_MEANING_WEIGHT = 0.8;
+/// The same for filing's shortlist. Measured the same day, the 100 queries as
+/// new briefs plus each real brief filed against its board: 0.7 put the right
+/// task first 87/100 and 15/15 (RRF 80 and 15/15); 0.8 dropped a real brief.
+export const FILING_MEANING_WEIGHT = 0.7;
+
+/**
+ * SEARCH: words and meaning blended by SCORE, not by rank. Each list is
+ * scaled to 0–1 across the briefs and mixed. Rank fusion (what this replaced) kept only
+ * positions, so one stray word on a screen that tops the word list counted as
+ * much as a perfect match: "the graph thing" found a Sitemap brief with
+ * "Graph" once in its screen text over the signups chart it meant. Missing
+ * scores (no vector, no word) count as the bottom of their list.
+ */
+export function blendScores(words, meaning, weight = SEARCH_MEANING_WEIGHT) {
+  // Words from zero (no match), so on a board of two, the weaker of two real
+  // matches still counts; meaning from its lowest, since every cosine is some.
+  const scale = (xs, floor) => {
+    const v = xs.filter((x) => x != null);
+    const lo = floor ?? Math.min(...v), hi = Math.max(...v);
+    return xs.map((x) => (x == null || !(hi > lo) ? 0 : (x - lo) / (hi - lo)));
+  };
+  const W = scale(words, 0), M = scale(meaning);
+  return W.map((w, i) => weight * M[i] + (1 - weight) * w);
 }
 
 export function cosine(a, b) {
@@ -300,10 +314,9 @@ export function shortlist({ query, queryKeys = {}, window = null, queryVec = nul
   if (!tasks.length) return [];
   const grams = bm25(terms(query), tasks.map((t) => terms(t.text)));
   const meaning = tasks.map((t) => (queryVec && t.vecs?.length ? Math.max(...t.vecs.map((v) => cosine(queryVec, v))) : null));
-  const fused = rrf([
-    { scores: grams.map((s) => (s > 0 ? s : null)), weight: RRF_WEIGHTS.words },
-    { scores: meaning, weight: RRF_WEIGHTS.meaning },
-  ]);
+  // Blended by score, as search is (`blendScores`), with words weighing a
+  // little more: a whole brief carries far more real words than a search.
+  const fused = blendScores(grams, meaning, FILING_MEANING_WEIGHT);
   const count = new Map();
   for (const t of tasks) {
     for (const k of SEAT_KINDS) for (const v of t.labels?.[k] ?? []) count.set(`${k}\n${v}`, (count.get(`${k}\n${v}`) ?? 0) + 1);

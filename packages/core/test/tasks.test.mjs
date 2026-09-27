@@ -5,8 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
-  COMMON_LABEL, RRF_K, SEAT_KINDS, SHORTLIST, TASK_ID, TIME_SEATS, bm25, cosine, firm, groupTasks,
-  parseOutcome, renderTaskNote, rrf, shortlist, stampTime, taskIdFor, taskLabels, taskState, terms,
+  COMMON_LABEL, SEAT_KINDS, SHORTLIST, TASK_ID, TIME_SEATS, bm25, cosine, firm, groupTasks,
+  parseOutcome, renderTaskNote, shortlist, stampTime, taskIdFor, taskLabels, taskState, terms,
   timeWindow, titleFor, tokens, readBoard, readTasks, writeTaskNotes, sameDecision } from "../lib/tasks.mjs";
 
 const brief = (id, line, extra = {}) => ({
@@ -142,7 +142,6 @@ test("the starting values are the ones the owner agreed", () => {
   assert.equal(SHORTLIST, 20);
   assert.equal(TIME_SEATS, 5);
   assert.equal(COMMON_LABEL, 5);
-  assert.equal(RRF_K, 60);
 });
 
 test("terms add 3-grams so a speech-to-text slip still meets its word", () => {
@@ -150,15 +149,6 @@ test("terms add 3-grams so a speech-to-text slip still meets its word", () => {
   const [pricing, signup] = bm25(terms("the pricng bug"), [terms("pricing page"), terms("signup chart")]);
   assert.ok(pricing > 0);
   assert.equal(signup, 0);
-});
-
-test("reciprocal rank fusion blends by position, and an unranked doc adds nothing", () => {
-  const fused = rrf([{ scores: [3, 2, null], weight: 1 }, { scores: [0.1, 0.9, 0.5], weight: 1 }], 60);
-  assert.ok(Math.abs(fused[0] - (1 / 61 + 1 / 63)) < 1e-12);
-  assert.ok(Math.abs(fused[1] - (1 / 62 + 1 / 61)) < 1e-12);
-  assert.ok(Math.abs(fused[2] - 1 / 62) < 1e-12);
-  assert.deepEqual(rrf([{ scores: [1, null], weight: 2 }], 60), [2 / 61, 0]);
-  assert.deepEqual(rrf([{ scores: [1, 1], weight: 1 }], 60), [1 / 61, 1 / 61], "a tie stays a tie");
 });
 
 test("time words name a window, English and Hinglish, from the brief's own stamp", () => {
@@ -562,4 +552,16 @@ test("a hand-off never copies a screenshot that is a link to somewhere else", as
   mkdirSync(out);
   assert.doesNotMatch(handoff({ root, task: "t-20260915-100000", outDir: out }), /!\[/);
   assert.equal(existsSync(join(out, "screenshots")), false);
+});
+
+test("search blends scores, so one weak word hit can't beat a strong meaning match", async () => {
+  const { blendScores } = await import("../lib/tasks.mjs");
+  // Brief 0: a stray word on its screen, meaning far off. Brief 1: no word,
+  // meaning close. Rank fusion put brief 0 first (a 1st place in words).
+  const words = [0.4, 0, 0];
+  const meaning = [0.30, 0.62, 0.28];
+  const blended = blendScores(words, meaning);
+  assert.ok(blended[1] > blended[0], "the blend keeps the strong meaning match first");
+  // No model: words alone decide, and a brief matching nothing scores 0.
+  assert.deepEqual(blendScores([2, 0, 1], [null, null, null]).map((x) => +x.toFixed(2)), [0.2, 0, 0.1]);
 });

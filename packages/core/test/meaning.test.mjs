@@ -38,9 +38,9 @@ test("the model is chosen by DEIKO_MEANING_MODEL, and off means none", () => {
   } finally {
     if (was === undefined) delete process.env.DEIKO_MEANING_MODEL; else process.env.DEIKO_MEANING_MODEL = was;
   }
-  assert.equal(DEFAULT_MODEL, "harrier-oss-v1-270m");
-  assert.equal(MODELS[DEFAULT_MODEL].dims, 640);
-  assert.equal(MODELS["embeddinggemma-300m"].dims, 256);
+  assert.equal(DEFAULT_MODEL, "embeddinggemma-300m");
+  assert.equal(MODELS[DEFAULT_MODEL].dims, 256);
+  assert.equal(MODELS["harrier-oss-v1-270m"].dims, 640);
 });
 
 test("a brief's text for meaning is what was said, never the screen's words", () => {
@@ -139,6 +139,6 @@ test("the real model puts a graph near a chart", { skip: !isReady(DEFAULT_MODEL)
   const q = await model.embed("why did the graph drop in week 32", "query");
   const chart = await model.embed("The signup chart shows a drop in week 32.", "doc");
   const price = await model.embed("Fix the rounding of the price at checkout.", "doc");
-  assert.equal(q.length, 640);
+  assert.equal(q.length, MODELS[DEFAULT_MODEL].dims);
   assert.ok(cosine(q, chart) > cosine(q, price), `${cosine(q, chart)} vs ${cosine(q, price)}`);
 });

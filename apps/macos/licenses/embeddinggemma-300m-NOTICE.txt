@@ -1,0 +1,6 @@
+Gemma is provided under and subject to the Gemma Terms of Use found at ai.google.dev/gemma/terms
+
+EmbeddingGemma (embeddinggemma-300m) — https://huggingface.co/google/embeddinggemma-300m
+Modified: quantized to 4-bit ONNX (onnx-community/embeddinggemma-300m-ONNX, model_q4). Deiko downloads it once, to ~/Library/Application Support/Deiko/models, and uses it only on your Mac to match your briefs by meaning.
+
+Use of Gemma is subject to the use restrictions in Section 3.2 of the Gemma Terms of Use, including the Gemma Prohibited Use Policy at ai.google.dev/gemma/prohibited_use_policy.
