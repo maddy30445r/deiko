@@ -65,3 +65,8 @@ graphify-out/
 
 # Build ledgers and review packages from subagent-driven work, never part of the product
 .superpowers/
+
+# research scratch (deep-research skill)
+research_notes/
+reports/
+
