@@ -213,23 +213,25 @@ const JEV_MODEL = "jev-1.13.0";
 /// request in `{model, input}` and the answer in `{result}`.
 ///
 /// Why there are four: TypeSafe paused new signups two days after opening
-/// them, Cloudflare wants ten dollars up front for a partner model, Vercel
-/// pays for it out of a monthly credit on the free plan, and OpenRouter hands
-/// every new account a small allowance with no card. A solo developer should
-/// be able to try this for nothing, and today only the last two let them.
+/// them, Cloudflare wants ten dollars up front for a partner model, and
+/// OpenRouter hands every new account a small allowance with no card. Vercel
+/// served Jev from its free monthly credit until its launch promotion ended on
+/// 25 Sep 2026; since then it answers 403 without paid credit ($10 minimum).
+/// So OpenRouter comes before Vercel: a relay holding both keys must not keep
+/// asking the one that refuses.
 const JEV_SPEAKERS = [
   { name: "typesafe", env: "TYPESAFE_API_KEY", url: JEV_URL, model: JEV_MODEL },
-  {
-    name: "vercel",
-    env: "AI_GATEWAY_API_KEY",
-    url: "https://ai-gateway.vercel.sh/typesafe/v1/systemone",
-    model: "typesafe-ai/jev",
-  },
   {
     name: "openrouter",
     env: "OPENROUTER_API_KEY",
     url: "https://openrouter.ai/api/alpha/decisions",
     model: "typesafe/jev-1.13",
+  },
+  {
+    name: "vercel",
+    env: "AI_GATEWAY_API_KEY",
+    url: "https://ai-gateway.vercel.sh/typesafe/v1/systemone",
+    model: "typesafe-ai/jev",
   },
 ];
 const CLOUDFLARE_MODEL = "typesafe/jev";
