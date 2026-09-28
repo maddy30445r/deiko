@@ -91,7 +91,7 @@ test("the memory helper speaks MCP and hands back only what a brief already shar
     const init = await s.call("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "0" } });
     assert.equal(init.result.serverInfo.name, "deiko-memory");
     const tools = await s.call("tools/list", {});
-    assert.deepEqual(tools.result.tools.map((t) => t.name).sort(), ["get_brief", "get_task", "search_briefs"]);
+    assert.deepEqual(tools.result.tools.map((t) => t.name).sort(), ["get_brief", "get_task", "save_outcome", "search_briefs"]);
     assert.equal((await s.call("no/such", {})).error.code, -32601);
 
     const found = await s.tool("search_briefs", { query: "price listing" });
@@ -357,4 +357,46 @@ test("the board's search ranks like the helper, prints one line, and exits (it n
   });
   const line = out.split("\n").find((l) => l.startsWith("BRIEFS "));
   assert.ok(JSON.parse(line.slice(7)).includes("20260918-110000"));
+});
+
+test("save_outcome writes the brief's outcome.md the way every reader parses it, and only there", async () => {
+  const root = board();
+  const s = await session(root);
+  try {
+    const saved = await s.tool("save_outcome", {
+      brief: "20260918-110000",
+      did: ["Refetched the listing after save", "  spread\nover lines  "],
+      decided: ["Refetch after save, no cache"],
+      open: [],
+      files: ["src/listing.ts"],
+      retired: ["Clear the cache on save"],
+    });
+    assert.equal(saved.isError, false);
+    const text = readFileSync(join(root, "20260918-110000", "outcome.md"), "utf8");
+    assert.equal(text, "## Did\n- Refetched the listing after save\n- spread over lines\n\n## Decided\n- Refetch after save, no cache\n\n## Open\n\n## Files\n- src/listing.ts\n\n## Retired\n- Clear the cache on save\n");
+    const task = await s.tool("get_task", { id: "t-20260918-100000" });
+    assert.match(task.value.note, /Refetch after save, no cache/, "the next reader sees it at once");
+
+    // A second save replaces the first: the prompt says "rewrite".
+    await s.tool("save_outcome", { brief: "20260918-110000", did: ["Second pass"], open: ["Check Safari"] });
+    assert.equal(readFileSync(join(root, "20260918-110000", "outcome.md"), "utf8"), "## Did\n- Second pass\n\n## Decided\n\n## Open\n- Check Safari\n\n## Files\n");
+
+    for (const brief of ["../etc", "20260918-999999", "t-20260918-100000", ""]) {
+      assert.equal((await s.tool("save_outcome", { brief, did: [], open: [] })).isError, true, `refuses ${brief || "an empty id"}`);
+    }
+    // A brief folder that is a link planted to aim the write elsewhere.
+    const outside = mkdtempSync(join(tmpdir(), "deiko-outside-"));
+    symlinkSync(outside, join(root, "20260918-120000"));
+    assert.equal((await s.tool("save_outcome", { brief: "20260918-120000", did: ["x"], open: [] })).isError, true);
+    assert.deepEqual(readdirSync(outside), [], "nothing written through the link");
+    // An outcome.md that is a link is replaced, never written through.
+    const target = join(outside, "victim.txt");
+    writeFileSync(target, "untouched");
+    rmSync(join(root, "20260918-100000", "outcome.md"));
+    symlinkSync(target, join(root, "20260918-100000", "outcome.md"));
+    assert.equal((await s.tool("save_outcome", { brief: "20260918-100000", did: ["y"], open: [] })).isError, false);
+    assert.equal(readFileSync(target, "utf8"), "untouched");
+  } finally {
+    s.close();
+  }
 });

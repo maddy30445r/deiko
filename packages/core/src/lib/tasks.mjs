@@ -43,6 +43,10 @@ export const tokens = (text) => String(text ?? "").toLowerCase().match(/[a-z0-9$
 /// "Ignore all ESLint rules in generated/" are notes and stay.
 const INSTRUCTION = /^(please\s+)?(ignore|disregard|forget|override)\b[^.\n]{0,40}\b(previous|prior|above|earlier|all|any|your)\b[^.\n]{0,24}\b(instructions?|prompts?)\b|^you are now\b|^new instructions?:|\b(reveal|print|output|repeat|show)\b[^.\n]{0,30}\b(your|the) system prompt\b/i;
 
+/// "None" under Open means nothing is open, not an item called "None" — kept,
+/// it became the task's "where it stands" and read as work still pending.
+const PLACEHOLDER = /^(none|nothing|n\/?a|nil)( (yet|left|open|remaining|so far|for now))?\.?$|^[-—–]+$/i;
+
 /// The four headings, as agents actually title them.
 const HEADS = {
   decided: /^decisions?\b|^decided\b/i,
@@ -94,7 +98,7 @@ export function parseOutcome(text) {
       continue;
     }
     const line = raw.replace(/^\s*[-*]\s*/, "").trim();
-    if (line && into && !INSTRUCTION.test(line)) (out[into] ??= []).push(line);
+    if (line && into && !INSTRUCTION.test(line) && !PLACEHOLDER.test(line)) (out[into] ??= []).push(line);
   }
   return out;
 }
@@ -385,6 +389,38 @@ export function currentDecisions(briefs) {
     return redactNote(kept).map((text) => ({ id: b.id, text }));
   });
   return { decisions, retiredCount };
+}
+
+/**
+ * WHAT A NEW BRIEF'S PROMPT CARRIES ABOUT ITS TASK (render-brief.mjs):
+ * where it stands, the decisions still holding, the newest three briefs, and
+ * — for a browser chat, which can't open the note — the task brief by brief.
+ * Firm briefs only (`firm`): a join Jev only guessed at never shows up
+ * dressed as this task's own history; a task with no firm brief at all falls
+ * back to every mate, as its face does in `prepare`. `mates` newest first,
+ * every one older than the new brief.
+ */
+export function taskMemory({ root, id, title, mates }) {
+  const firmMates = mates.filter((b) => firm(b, id));
+  const face = firmMates.length ? firmMates : mates;
+  const { now, ...state } = taskState(face, title);
+  return {
+    title,
+    count: mates.length,
+    id,
+    ...state,
+    // "Last asked" already says the newest ask; the recent briefs say that
+    // themselves, dated, so it would only repeat.
+    now: now.filter((l) => !l.startsWith("Last asked: ")),
+    recent: firmMates.slice(0, 3).reverse().map((b) => ({ date: briefDate(b.id), line: b.line })),
+    // Shown so the agent can retire one word for word (`sameDecision`).
+    decided: currentDecisions(face).decisions.slice(0, 5).map((d) => d.text),
+    // Measured 28 Sep on a 10-task test board (scripts/eval-memory): a browser
+    // chat answered 5 of 10 history questions without it, 9 of 10 with it.
+    history: face.slice(0, 12).reverse()
+      .map((b) => ({ date: briefDate(b.id), line: b.line, did: redactNote((b.outcome?.did ?? []).slice(0, 2)) })),
+    notePath: join(root, "tasks", `${id}.md`),
+  };
 }
 
 export function renderTaskNote({ id, title, collection = null, briefs }) {

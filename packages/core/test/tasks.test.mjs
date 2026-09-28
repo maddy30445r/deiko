@@ -565,3 +565,12 @@ test("search blends scores, so one weak word hit can't beat a strong meaning mat
   // No model: words alone decide, and a brief matching nothing scores 0.
   assert.deepEqual(blendScores([2, 0, 1], [null, null, null]).map((x) => +x.toFixed(2)), [0.2, 0, 0.1]);
 });
+
+test("\"None\" under a heading means nothing there, not an item called None", () => {
+  const o = parseOutcome("## Did\n- Added the retry\n## Open\n- None\n## Decided\n- n/a\n## Files\n- Nothing left.\n");
+  assert.deepEqual(o.open, []);
+  assert.deepEqual(o.decided, []);
+  assert.deepEqual(o.files, []);
+  assert.deepEqual(parseOutcome("## Open\n- None of the Safari tests pass yet\n").open, ["None of the Safari tests pass yet"]);
+  assert.deepEqual(taskState([brief("20260910-100000", "retry", { outcome: o })]).now, ["Last done: Added the retry"]);
+});

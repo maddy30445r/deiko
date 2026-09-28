@@ -30,9 +30,9 @@ import { carriesSecret, assertNoSecrets, redact, redactBlock } from "./lib/redac
 import { briefKeys, repoHints } from "./lib/labels.mjs";
 import { buildPrompt, quoteSurvives } from "./lib/prompt.mjs";
 import { degradedReason as cloudDegradedReason } from "./lib/cloud.mjs";
-import { briefDate, readBriefLine, relativeAge, wantsQuickHint } from "./lib/context.mjs";
+import { readBriefLine, relativeAge, wantsQuickHint } from "./lib/context.mjs";
 import { briefText, currentModel, isReady, loadModel, vectorIsCurrent, writeVector } from "./lib/meaning.mjs";
-import { firm, groupTasks, historyPath, readBoard, readTasks, stampTime, taskIdFor, taskState, titleFor, tokens, writeTaskNotes } from "./lib/tasks.mjs";
+import { groupTasks, historyPath, readBoard, readTasks, stampTime, taskIdFor, taskMemory, taskState, titleFor, tokens, writeTaskNotes } from "./lib/tasks.mjs";
 
 // ── Rendering ───────────────────────────────────────────────────────────────
 
@@ -288,25 +288,8 @@ const mates = context?.pile === "odds" ? [] : groups.get(myTask) ?? [];
 // Every mate is older, so the oldest of them is the oldest brief of the task
 // counting this one — the brief `writeTaskNotes` titles an untitled task by.
 const myTitle = mates.length ? taskTitles.get(myTask) ?? titleFor(mates.at(-1)) : null;
-// RECENT BRIEFS, WHERE IT STANDS AND LAST TIME, for the prompt: firm ones
-// only (`firm` in tasks.mjs) — the founder, a hand placement, or a sure v3
-// join — so a join Jev only guessed at never shows up dressed as this task's
-// own history. Newest three, oldest first, dated. A task with no firm brief
-// at all falls back to every mate, as its face does in `prepare`.
-const firmMates = mates.filter((b) => firm(b, myTask));
-const task = mates.length
-  ? (({ now, ...state }) => ({
-    title: myTitle,
-    count: mates.length,
-    id: myTask,
-    ...state,
-    // "Last asked" already says the newest ask; the recent briefs below say
-    // that themselves, dated, so it would only repeat.
-    now: now.filter((l) => !l.startsWith("Last asked: ")),
-    recent: firmMates.slice(0, 3).reverse().map((b) => ({ date: briefDate(b.id), line: b.line })),
-    notePath: join(root, "tasks", `${myTask}.md`),
-  }))(taskState(firmMates.length ? firmMates : mates, myTitle))
-  : null;
+// What the prompt carries about the task: see `taskMemory` in tasks.mjs.
+const task = mates.length ? taskMemory({ root, id: myTask, title: myTitle, mates }) : null;
 // ON ITS OWN, BUT MAYBE NOT: the tasks `classify.mjs` could not choose
 // between. Only ids the board still has briefs for — which is also what makes
 // a hand-edited id safe to put in a path.

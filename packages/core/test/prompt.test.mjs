@@ -684,8 +684,38 @@ test("the task's words are evidence; its path is not", () => {
   assert.equal(withTask.evidence.includes("/Users/dev"), false);
 });
 
+test("the decisions still holding ride along, inside the memory budget, so the agent can retire them word for word", () => {
+  const decided = ["Refetch the listing after save", "Prices are stored in cents"];
+  const { text } = buildPrompt({ ...oneShot(), task: { ...priceTask(), decided } });
+  assert.match(text, /Where it stands:\nThe listing page still caches the old price\.\nDecided so far:\n- Refetch the listing after save\n- Prices are stored in cents\n/);
+  const attached = buildPrompt({ ...oneShot(), attached: true, task: { ...priceTask(), decided } }).text;
+  assert.match(attached, / Decided: Refetch the listing after save; Prices are stored in cents\./);
+  // A long "where it stands" gives way to them; the whole block stays within budget.
+  const now = Array.from({ length: 12 }, (_, i) => `Open item ${i + 1}`);
+  const recent = [1, 2, 3].map((d) => ({ date: `Sep ${d}`, line: `Brief ${d}` }));
+  const big = buildPrompt({ ...oneShot(), task: { ...priceTask(), now, recent, decided: [...decided, "c", "d", "e"] } }).text;
+  const block = big.slice(big.indexOf("This carries on"), big.indexOf("The full history"));
+  assert.ok(block.split("\n").filter(Boolean).length <= 20, "memory stays within its 20 lines");
+  assert.match(block, /Decided so far:\n(- .+\n){5}Recent briefs:/);
+});
+
+test("a browser chat gets the task brief by brief, since it can't open the note; a local agent keeps the short form", () => {
+  const history = [
+    { date: "Aug 22", line: "Row keeps showing $99 after save.", did: ["Wrapped the cell in useMemo. Did not fix it"] },
+    { date: "Aug 23", line: "Still broken", did: ["Removed the snapshot restore", "Rows render from the store"] },
+    { date: "Aug 25", line: "Reject negative prices", did: [] },
+  ];
+  const task = { ...priceTask(), recent: [{ date: "Aug 25", line: "Reject negative prices" }], history };
+  const attached = buildPrompt({ ...oneShot(), attached: true, task }).text;
+  assert.match(attached, / Brief by brief: Aug 22: Row keeps showing \$99 after save \(did: Wrapped the cell in useMemo\. Did not fix it\) \| Aug 23: Still broken \(did: Removed the snapshot restore; Rows render from the store\) \| Aug 25: Reject negative prices\./);
+  assert.equal(attached.includes("Recent briefs"), false, "the history replaces the last three, never repeats them");
+  const local = buildPrompt({ ...oneShot(), task }).text;
+  assert.equal(local.includes("Brief by brief"), false);
+  assert.match(local, /Recent briefs:\n- Aug 25: Reject negative prices\./);
+});
+
 const OUTCOME = "/Users/dev/Documents/Deiko/20260923-161205/outcome.md";
-const WRITE_BACK = `When you are done — and again if we keep going — rewrite ${OUTCOME} under four headings — ## Did, ## Decided, ## Open, ## Files — a few lines each. If an earlier decision on this task no longer holds, quote it under ## Retired. Deiko folds it into this task's memory for the next brief.`;
+const WRITE_BACK = `When you are done — and again if we keep going — save what you did, decided and left open: with the deiko-memory save_outcome tool if it is connected (brief 20260923-161205), or else by rewriting ${OUTCOME} under four headings — ## Did, ## Decided, ## Open, ## Files — a few lines each. If a decision above no longer holds, list it under Retired, copied exactly. Deiko folds it into this task's memory for the next brief.`;
 
 test("the write-back asks only a destination that can write a file", () => {
   const plain = buildPrompt(oneShot());
