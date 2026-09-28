@@ -13,8 +13,9 @@
 //
 // Opt-in and slow (it spends the Claude plan it runs under; never in npm test):
 //   node scripts/eval-memory/run.mjs [--only Q01,Q02] [--cond browser] [--out results.json]
-// Baseline 28 Sep 2026, graded by hand where the grader was wrong: fresh 21/22,
-// heavy 8/8, brief 10/10, browser 9/10 (5/10 before brief-by-brief history).
+// Baseline 28 Sep 2026: fresh 22/22 (21/22 before list_tasks — "what's open in
+// shopfront" missed a Hinglish task search didn't surface), heavy 8/8, brief
+// 10/10, browser 9/10 (5/10 before brief-by-brief history).
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -81,7 +82,7 @@ function claudeBin() {
 const CLAUDE = claudeBin();
 const MCP = join(work, "mcp.json");
 writeFileSync(MCP, JSON.stringify({ mcpServers: { "deiko-memory": { type: "stdio", command: process.execPath, args: [join(SCRIPTS, "memory-mcp.mjs")], env: { DEIKO_ROOT: BOARD } } } }));
-const HELPER = ["search_briefs", "get_task", "get_brief"].map((t) => `mcp__deiko-memory__${t}`).join(",");
+const HELPER = ["search_briefs", "list_tasks", "get_task", "get_brief"].map((t) => `mcp__deiko-memory__${t}`).join(",");
 const WITH_HELPER = ["--strict-mcp-config", "--mcp-config", MCP, "--allowedTools", HELPER];
 
 let heavy = "Earlier in this session we went through these Swift files of my Mac app together and cleaned them up. Here they are again for reference:\n\n";

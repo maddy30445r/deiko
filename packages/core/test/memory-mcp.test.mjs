@@ -91,7 +91,7 @@ test("the memory helper speaks MCP and hands back only what a brief already shar
     const init = await s.call("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "0" } });
     assert.equal(init.result.serverInfo.name, "deiko-memory");
     const tools = await s.call("tools/list", {});
-    assert.deepEqual(tools.result.tools.map((t) => t.name).sort(), ["get_brief", "get_task", "save_outcome", "search_briefs"]);
+    assert.deepEqual(tools.result.tools.map((t) => t.name).sort(), ["get_brief", "get_task", "list_tasks", "save_outcome", "search_briefs"]);
     assert.equal((await s.call("no/such", {})).error.code, -32601);
 
     const found = await s.tool("search_briefs", { query: "price listing" });
@@ -396,6 +396,34 @@ test("save_outcome writes the brief's outcome.md the way every reader parses it,
     symlinkSync(target, join(root, "20260918-100000", "outcome.md"));
     assert.equal((await s.tool("save_outcome", { brief: "20260918-100000", did: ["y"], open: [] })).isError, false);
     assert.equal(readFileSync(target, "utf8"), "untouched");
+  } finally {
+    s.close();
+  }
+});
+
+test("list_tasks lists every task with where it stands, by project, whatever words it was said in", async () => {
+  const root = board();
+  const s = await session(root);
+  try {
+    const all = await s.tool("list_tasks", {});
+    assert.equal(all.value.tasks.length, 1);
+    const [t] = all.value.tasks;
+    assert.deepEqual({ task: t.task, project: t.project, status: t.status, briefs: t.briefs, first: t.first, last: t.last },
+      { task: "t-20260918-100000", project: "Shop", status: "no report", briefs: 2, first: "Sep 18", last: "Sep 18" });
+    for (const project of ["shop", "Shop", " SHOP "]) assert.equal((await s.tool("list_tasks", { project })).value.tasks.length, 1, project);
+    assert.equal((await s.tool("list_tasks", { project: "Unsorted" })).value.tasks.length, 0);
+    const unknown = await s.tool("list_tasks", { project: "nope" });
+    assert.equal(unknown.isError, true);
+    assert.match(unknown.value, /projects: Shop, Unsorted/);
+    assert.equal((await s.tool("list_tasks", { open_only: true })).value.tasks.length, 0);
+
+    // Its status follows what the agents reported.
+    await s.tool("save_outcome", { brief: "20260918-110000", did: ["Refetched"], open: ["Check Safari"] });
+    const open = await s.tool("list_tasks", { open_only: true });
+    assert.equal(open.value.tasks[0].status, "open");
+    assert.deepEqual(open.value.tasks[0].now, ["Check Safari"]);
+    await s.tool("save_outcome", { brief: "20260918-110000", did: ["Checked Safari"], open: [] });
+    assert.equal((await s.tool("list_tasks", {})).value.tasks[0].status, "done");
   } finally {
     s.close();
   }
