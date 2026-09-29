@@ -154,7 +154,7 @@ report security issues privately as described in [SECURITY.md](SECURITY.md).
 
 ## License
 
-[MIT](LICENSE). Bundled third-party components keep their own licences; see
+[MIT](LICENSE). Bundled third-party components keep their own licences; see [NOTICE](NOTICE) and
 [apps/macos/licenses](apps/macos/licenses).
 
 <p align="center">

@@ -1,0 +1,8 @@
+Deiko
+Copyright (c) 2026 Madhur Mittal
+
+This product is licensed under the MIT License (see LICENSE).
+
+Third-party components bundled with the macOS app keep their own licences.
+Their notices are in apps/macos/licenses/, and the Bricolage Grotesque font's
+licence is apps/macos/Sources/DeikoCapture/Bricolage-OFL.txt.
