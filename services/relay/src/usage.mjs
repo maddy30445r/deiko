@@ -1,8 +1,7 @@
 // Usage counters and licence verdicts, kept in one DynamoDB table
 // (`deiko-usage`, partition key `subject`). Row shapes:
 //
-//   dev:<token>              lifetime free-trial seconds. No TTL: the trial is
-//                            once, and an expiring row would renew it.
+//   dev:<token>#YYYY-MM      a device's free audio seconds this month. 40-day TTL.
 //   lic:<key>#YYYY-MM        a licence's audio seconds this month. 40-day TTL.
 //   lic:<key>                the cached Polar verdict. Expires at four cache
 //                            lifetimes; refreshed when older than a day.
@@ -137,8 +136,8 @@ export async function peek(subject, tier, now = Date.now()) {
 /// new totals. The two writes run together to save a round trip.
 ///
 /// The TTL follows the key, not the token's shape: a monthly row expires so the
-/// next month starts clean, but a lifetime trial row must not, or the trial
-/// renews. Only a Pro licence gets a monthly row, so only Pro gets a TTL.
+/// next month starts clean. The `#trial` row of an unrecognised licence has a
+/// zero allowance and never expires.
 ///
 /// Both rows or neither: `Promise.all` rejects on the first failure while the
 /// other write may already have landed, banking seconds against the service's
@@ -149,7 +148,7 @@ export async function record({ subject, seconds, tier, now = Date.now() }) {
   const key = usageKey(subject, now, tier);
   const global = globalKey(now);
   const [subjectWrite, globalWrite] = await Promise.allSettled([
-    addSeconds(key, seconds, key.includes("#") && tier === "pro" ? MONTHLY_TTL_SECONDS : null),
+    addSeconds(key, seconds, /#\d{4}-\d{2}$/.test(key) ? MONTHLY_TTL_SECONDS : null),
     addSeconds(global, seconds, DAILY_TTL_SECONDS),
   ]);
 
@@ -273,7 +272,7 @@ export async function tierFor(subject, now = Date.now()) {
 
   // A verdict and an error are different facts, and only the verdict may be
   // cached for a day: an error-derived "free" would meter a paying customer
-  // against the lifetime trial row for 24 hours. On an error the last real
+  // against the free allowance for 24 hours. On an error the last real
   // verdict stands and is rechecked after five minutes (stale-Pro during an
   // outage is the accepted cancellation lag). A key with no history meters as
   // free during an outage, since an error must never promote, and is also

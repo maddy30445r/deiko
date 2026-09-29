@@ -18,7 +18,7 @@ import { GATE as CLIENT_GATE, ASK as CLIENT_ASK, RELATIONS as CLIENT_RELATIONS }
 
 import {
   CLASSIFIES_PER_CALLER_PER_DAY,
-  FREE_TRIAL_SECONDS,
+  FREE_MONTHLY_SECONDS,
   MIN_SECONDS_PER_REQUEST,
   PLAYGROUND_TICKETS_PER_IP_PER_DAY,
   SUMMARIES_PER_CALLER_PER_DAY,
@@ -288,6 +288,7 @@ const seed = (key, seconds) => rows.set(key, { ...(rows.get(key) ?? {}), audioSe
 const monthRow = (id) => `lic:${id}#${monthKey(Date.now())}`;
 /// Where a licence that is NOT Pro accumulates: a lifetime row, like a device.
 const trialRow = (id) => `lic:${id}#trial`;
+const devRow = (id) => `dev:${id}#${monthKey(Date.now())}`;
 
 // ── Tests ──
 
@@ -309,18 +310,18 @@ test("?task=transcribe asks Groq for the words as spoken, and is metered the sam
   assert.equal(r.status, 200);
   assert.ok(upstream.some((u) => u.includes("/audio/transcriptions")), "should reach the transcriptions upstream");
   assert.ok(!upstream.some((u) => u.includes("/audio/translations")), "and not the translation one");
-  assert.equal(rows.get("dev:zh").audioSeconds, 20);
+  assert.equal(rows.get(devRow("zh")).audioSeconds, 20);
 });
 
 test("seconds land on the device's lifetime row, and on today's global row", async () => {
   await post("dev_abc", 25);
-  assert.equal(rows.get("dev:abc").audioSeconds, 25);
+  assert.equal(rows.get(devRow("abc")).audioSeconds, 25);
   const global = [...rows.keys()].find((k) => k.startsWith("global#"));
   assert.equal(rows.get(global).audioSeconds, 25);
 });
 
-test("the free trial runs out, and the refusal is 402 with the upstream untouched", async () => {
-  seed("dev:heavy", FREE_TRIAL_SECONDS - 20);   // 20 seconds of trial left
+test("the free hours run out, and the refusal is 402 with the upstream untouched", async () => {
+  seed(devRow("heavy"), FREE_MONTHLY_SECONDS - 20);   // 20 seconds of trial left
   const ok = await post("dev_heavy", 15);
   assert.equal(ok.status, 200, "still inside the trial");
 
@@ -335,14 +336,14 @@ test("the free trial runs out, and the refusal is 402 with the upstream untouche
 
 test("/v1/quota reports what is left without spending any of it", async () => {
   await post("dev_abc", 25);
-  const before = rows.get("dev:abc").audioSeconds;
+  const before = rows.get(devRow("abc")).audioSeconds;
 
   const r = await handle({ method: "GET", path: "/v1/quota", token: "dev_abc" });
   const q = JSON.parse(r.body);
   assert.equal(q.tier, "free");
   assert.equal(q.usedSeconds, 25);
-  assert.equal(q.remainingSeconds, FREE_TRIAL_SECONDS - 25);
-  assert.equal(rows.get("dev:abc").audioSeconds, before, "asking must not consume");
+  assert.equal(q.remainingSeconds, FREE_MONTHLY_SECONDS - 25);
+  assert.equal(rows.get(devRow("abc")).audioSeconds, before, "asking must not consume");
 });
 
 test("/v1/quota answers before a session has ever run — the key confirmation", async () => {
@@ -358,15 +359,15 @@ test("/v1/quota still needs a token, and still honours revocation", async () => 
   assert.equal((await handle({ method: "GET", path: "/v1/transcribe", token: "dev_a" })).status, 405);
 });
 
-test("a second install is not charged for the first one's trial", async () => {
-  seed("dev:one", FREE_TRIAL_SECONDS + 60);
+test("a second install is not charged for the first one's free hours", async () => {
+  seed(devRow("one"), FREE_MONTHLY_SECONDS + 60);
   assert.equal((await post("dev_one", 10)).status, 402);
   const other = await post("dev_two", 10);
   assert.equal(other.status, 200, "quota is per subject, not global-by-accident");
 });
 
 test("a valid licence is Pro, and carries on well past the free cap", async () => {
-  seed(monthRow(REAL), FREE_TRIAL_SECONDS + 15 * 60);  // 45 min in
+  seed(monthRow(REAL), FREE_MONTHLY_SECONDS + 15 * 60);  // 45 min in
   const r = await post(`lic_${REAL}`, 20);
   assert.equal(r.status, 200, "45 minutes is over free's 30 and well under Pro's ten hours");
   assert.ok(upstream.some((u) => u.includes("polar")), "should have validated");
@@ -382,7 +383,7 @@ test("the Polar verdict is cached — dozens of chunks, one validation", async (
 
 test("an invalid licence is metered as free, and its verdict is cached too", async () => {
   licenseValid = false;
-  seed(trialRow(GARBAGE), FREE_TRIAL_SECONDS + 60);
+  seed(trialRow(GARBAGE), FREE_MONTHLY_SECONDS + 60);
   const refused = await post(`lic_${GARBAGE}`, 10);
   assert.equal(refused.status, 402, "a bad key must not buy Pro's allowance");
   await post(`lic_${GARBAGE}`, 10);
@@ -392,7 +393,7 @@ test("an invalid licence is metered as free, and its verdict is cached too", asy
   );
 });
 
-test("a forged licence key gets no allowance at all, not a fresh trial", async () => {
+test("a forged licence key gets no allowance at all, not a fresh free allowance", async () => {
   // A `lic_` subject with a junk key must not get a fresh trial. The trial
   // belongs to the machine (that is what the derived device token is for), so a
   // licence the store does not recognise is worth nothing; otherwise anybody
@@ -421,14 +422,14 @@ test("a second forged key is worth no more than the first", async () => {
     "and none of them reached the day's ceiling either");
 });
 
-test("the device keeps its own trial while a bad key is pasted over it", async () => {
+test("the device keeps its own free hours while a bad key is pasted over it", async () => {
   // The bar must not refill when a bad key is pasted: the bearer changes, not any
   // counter. Removing the key returns the user to their own trial with whatever
   // was left of it.
-  seed("dev:mine", 600);
+  seed(devRow("mine"), 600);
   licenseValid = false;
   await post("lic_junk", 20);
-  assert.equal(rows.get("dev:mine").audioSeconds, 600, "the machine's trial is untouched");
+  assert.equal(rows.get(devRow("mine")).audioSeconds, 600, "the machine's trial is untouched");
   const back = await handle({ method: "GET", path: "/v1/quota", token: "dev_mine" });
   assert.equal(JSON.parse(back.body).usedSeconds, 600, "and is still there when the key comes out");
 });
@@ -437,7 +438,7 @@ test("a legacy unprefixed token still works, as a free device", async () => {
   const uuid = "7C6C4E1A-58F9-4E2E-9E1B-2F0A3B4C5D6E";
   const r = await post(uuid, 10);
   assert.equal(r.status, 200);
-  assert.equal(rows.get(`dev:${uuid}`).audioSeconds, 10);
+  assert.equal(rows.get(devRow(uuid)).audioSeconds, 10);
 });
 
 const summarize = (token, body, { ip } = {}) => handle({
@@ -446,13 +447,13 @@ const summarize = (token, body, { ip } = {}) => handle({
   body: Buffer.from(JSON.stringify(body ?? { narration: "isko class one se class two mein convert karna hai", mode: "hinglish" })),
 });
 
-test("a used-up trial still gets its reading, and is not charged for it", async () => {
-  seed("dev:spent", FREE_TRIAL_SECONDS + 60);
-  const before = rows.get("dev:spent").audioSeconds;
+test("used-up free hours still get their reading, and is not charged for it", async () => {
+  seed(devRow("spent"), FREE_MONTHLY_SECONDS + 60);
+  const before = rows.get(devRow("spent")).audioSeconds;
   const r = await summarize("dev_spent");
   assert.equal(r.status, 200, "the sentence that says what Deiko heard is not the paid part");
   assert.equal(
-    rows.get("dev:spent").audioSeconds, before,
+    rows.get(devRow("spent")).audioSeconds, before,
     "a text summary must not spend an audio allowance",
   );
 });
@@ -1015,19 +1016,19 @@ test("when the usage table is unreachable the relay fails CLOSED", async () => {
 // ── Refunds: a refusal or an outage must not spend anybody's seconds ──
 
 test("a refused request gives its seconds back — refusals cannot drain the day", async () => {
-  seed("dev:spent", FREE_TRIAL_SECONDS);        // trial exactly used up
+  seed(devRow("spent"), FREE_MONTHLY_SECONDS);        // trial exactly used up
   const first = await post("dev_spent", 25);
   const second = await post("dev_spent", 25);
   assert.equal(first.status, 402);
   assert.equal(second.status, 402);
   // The counter is incremented before it is judged, so without the refund these
   // two refusals would leave 50 phantom seconds on both rows.
-  assert.equal(rows.get("dev:spent").audioSeconds, FREE_TRIAL_SECONDS);
+  assert.equal(rows.get(devRow("spent")).audioSeconds, FREE_MONTHLY_SECONDS);
   const global = [...rows.keys()].find((k) => k.startsWith("global#"));
   assert.equal(rows.get(global)?.audioSeconds ?? 0, 0);
 });
 
-test("a transcription outage does not eat the lifetime trial", async () => {
+test("a transcription outage does not eat the free hours", async () => {
   globalThis.fetch = async (url) => {
     upstream.push(String(url));
     if (String(url).includes("/audio/translations")) return new Response("upstream down", { status: 503 });
@@ -1036,7 +1037,7 @@ test("a transcription outage does not eat the lifetime trial", async () => {
   const r = await post("dev_unlucky", 20);
   // Every provider failure is one fixed 502, which the app reads as "unavailable".
   assert.equal(r.status, 502, "the provider's failure is ours to report, not theirs");
-  assert.equal(rows.get("dev:unlucky")?.audioSeconds ?? 0, 0,
+  assert.equal(rows.get(devRow("unlucky"))?.audioSeconds ?? 0, 0,
     "audio that was never transcribed must not stay billed — the trial is once, ever");
 });
 
@@ -1121,7 +1122,7 @@ test("a partial write banks nothing — the global row is taken back when the su
   // The failure an over-long id produces at DynamoDB: the subject write rejects
   // while the global write beside it lands. Without compensation those seconds
   // would sit on the day's row with no refund path able to reach them.
-  failWritesTo.add("dev:half");
+  failWritesTo.add(devRow("half"));
   const r = await post("dev_half", 20);
   assert.equal(r.status, 503, "fail closed, as before");
   assert.equal(rows.get(globalKey(Date.now()))?.audioSeconds ?? 0, 0,
@@ -1141,7 +1142,7 @@ test("an upstream that throws is a 502 that refunds, and says nothing about why"
   const r = await post("dev_dns", 20);
   assert.equal(r.status, 502);
   assert.doesNotMatch(r.body, /ENOTFOUND|getaddrinfo/, "the reason is for CloudWatch, not the caller");
-  assert.equal(rows.get("dev:dns").audioSeconds, 0, "refunded — nothing was bought");
+  assert.equal(rows.get(devRow("dns")).audioSeconds, 0, "refunded — nothing was bought");
   assert.equal(rows.get(globalKey(Date.now())).audioSeconds, 0, "on the day's row too");
 });
 
@@ -1153,7 +1154,7 @@ test("a tiny body still costs the floor — compressed audio cannot buy thirty s
   // trade can be made.
   const r = await post("dev_tiny", 0.5);
   assert.equal(r.status, 200);
-  assert.equal(rows.get("dev:tiny").audioSeconds, MIN_SECONDS_PER_REQUEST);
+  assert.equal(rows.get(devRow("tiny")).audioSeconds, MIN_SECONDS_PER_REQUEST);
   assert.equal(rows.get(globalKey(Date.now())).audioSeconds, MIN_SECONDS_PER_REQUEST);
 });
 
@@ -1215,7 +1216,7 @@ test("a valid upload reaches Groq as exactly the fields the app sent, rebuilt", 
   assert.equal(got[0][0], "file");
   assert.ok(Buffer.from(got[0][1], "latin1").equals(audio), "the audio arrives byte for byte");
   assert.doesNotMatch(upstreamTypes.at(-1), /deiko-test-boundary/, "under the relay's own boundary");
-  assert.equal(rows.get("dev:ok").audioSeconds, MIN_SECONDS_PER_REQUEST, "and metered as before");
+  assert.equal(rows.get(devRow("ok")).audioSeconds, MIN_SECONDS_PER_REQUEST, "and metered as before");
 });
 
 // ── A provider's failure is ours to report ──
@@ -1230,7 +1231,7 @@ test("a provider 401 is a fixed 502 that refunds — never the app's 'fix your S
   const r = await post("dev_rotated", 20);
   assert.equal(r.status, 502);
   assert.doesNotMatch(r.body, /Invalid API Key|invalid_api_key/);
-  assert.equal(rows.get("dev:rotated").audioSeconds, 0, "our key's failure is not the caller's spend");
+  assert.equal(rows.get(devRow("rotated")).audioSeconds, 0, "our key's failure is not the caller's spend");
   assert.equal(rows.get(globalKey(Date.now())).audioSeconds, 0);
 });
 
@@ -1241,10 +1242,10 @@ test("a provider 429 refunds the chunk; a provider 400 about the audio stays bil
     return new Response("{}", { status });
   };
   assert.equal((await post("dev_burst", 20)).status, 502);
-  assert.equal(rows.get("dev:burst").audioSeconds, 0, "Groq rate-limiting us is our bill");
+  assert.equal(rows.get(devRow("burst")).audioSeconds, 0, "Groq rate-limiting us is our bill");
   status = 400;
   assert.equal((await post("dev_badaudio", 20)).status, 502);
-  assert.equal(rows.get("dev:badaudio").audioSeconds, 20, "a complaint about the caller's audio is the caller's");
+  assert.equal(rows.get(devRow("badaudio")).audioSeconds, 20, "a complaint about the caller's audio is the caller's");
 });
 
 test("summary and classifier failures are masked and refunded too", async () => {
@@ -1277,7 +1278,7 @@ test("a response that dies halfway is a 502 that refunds, not a crash", async ()
   const r = await post("dev_reset", 20);
   assert.equal(r.status, 502);
   assert.doesNotMatch(r.body, /hang up/);
-  assert.equal(rows.get("dev:reset").audioSeconds, 0);
+  assert.equal(rows.get(devRow("reset")).audioSeconds, 0);
 });
 
 // ── A refund lands on the day it was charged to ──
@@ -1478,7 +1479,7 @@ test("the upload the app's own FormData encodes is accepted, in both modes", asy
       contentType: encoded.headers.get("content-type"), body: Buffer.from(await encoded.arrayBuffer()),
     });
     assert.equal(r.status, 200, `native=${native}: ${r.body}`);
-    assert.equal(rows.get(`dev:fd${native}`).audioSeconds, MIN_SECONDS_PER_REQUEST);
+    assert.equal(rows.get(devRow(`fd${native}`)).audioSeconds, MIN_SECONDS_PER_REQUEST);
   }
 });
 

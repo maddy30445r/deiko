@@ -564,7 +564,7 @@ function revoked(token) {
 // A browser cannot hold a secret, so the page gets a short-lived signed ticket
 // instead of a token it chose itself. The app's `dev:` tokens are self-minted
 // strings that `subjectFrom` accepts, which on a public page would hand a fresh
-// lifetime free trial to anybody who refreshed. A ticket is issued here,
+// free allowance to anybody who refreshed. A ticket is issued here,
 // expires, carries its own spend row, and can never reach the app's counters.
 const playgroundSecret = () => process.env.DEIKO_PLAYGROUND_SECRET ?? "";
 
@@ -1207,7 +1207,7 @@ export async function handle({ method, path, query = "", token, contentType, bod
       authorization: `Bearer ${groqKey}`,
       "content-type": form.contentType,
     }, form.body);
-    // A provider failure is not the caller's spend. A trial is lifetime, so an
+    // A provider failure is not the caller's spend. Free hours are limited, so an
     // hour of Groq 5xx, or a Groq 429 (our rate limit, not theirs), would
     // otherwise eat it for nothing. A 400-class answer about the audio stays
     // billed: refunding it would let junk bodies probe Groq off the meter.
@@ -1413,7 +1413,7 @@ const UPSTREAM_TIMEOUT_MS = 20_000;
 
 /// A throw is a 502, not an exception. The timeout above rejects, and so do DNS
 /// failures and dropped connections; an uncaught rejection would leave `handle()`
-/// before the callers' refunds run, permanently eating a lifetime trial for a
+/// before the callers' refunds run, eating a caller's free hours for a
 /// provider stall. The body is read inside the same guard: a response that dies
 /// halfway is a provider failure like any other.
 ///

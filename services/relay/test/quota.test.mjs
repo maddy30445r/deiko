@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 
 import {
   BYTES_PER_SECOND,
-  FREE_TRIAL_SECONDS,
+  FREE_MONTHLY_SECONDS,
   GLOBAL_DAILY_SECONDS,
   PRO_MONTHLY_SECONDS,
   MAX_SECONDS_PER_REQUEST,
@@ -56,10 +56,10 @@ test("nothing, an empty string, or a bare prefix is not a subject", () => {
 const AUG = Date.UTC(2026, 7, 10, 12, 0, 0);
 const SEP = Date.UTC(2026, 8, 1, 0, 0, 0);
 
-test("a device's trial key carries no month — the trial is once, not monthly", () => {
+test("a device's free hours are counted per calendar month", () => {
   const device = subjectFrom("dev_abc");
-  assert.equal(usageKey(device, AUG), "dev:abc");
-  assert.equal(usageKey(device, SEP), "dev:abc", "a new month must not reset a lifetime trial");
+  assert.equal(usageKey(device, AUG), "dev:abc#2026-08");
+  assert.equal(usageKey(device, SEP), "dev:abc#2026-09", "a new month starts a fresh allowance");
 });
 
 test("a PRO licence meters per calendar month, so the key rolls over on its own", () => {
@@ -68,7 +68,7 @@ test("a PRO licence meters per calendar month, so the key rolls over on its own"
   assert.equal(usageKey(licence, SEP, "pro"), "lic:xyz#2026-09");
 });
 
-test("a licence that is NOT Pro gets a lifetime row, like any other trial", () => {
+test("a licence that is NOT Pro gets a zero-allowance row, never monthly hours", () => {
   // A junk licence string must not buy the monthly row, or the once-ever trial
   // would renew every calendar month.
   const licence = subjectFrom("lic_junk");
@@ -136,25 +136,25 @@ test("a fresh free install is allowed, and is told what is left", () => {
   const v = decide(under);
   assert.equal(v.allowed, true);
   assert.equal(v.status, 200);
-  assert.equal(v.remainingSeconds, FREE_TRIAL_SECONDS - 60);
+  assert.equal(v.remainingSeconds, FREE_MONTHLY_SECONDS - 60);
 });
 
-test("free past the trial is 402, not 429 — it is a state, not a hiccup", () => {
-  const v = decide({ ...under, usedSeconds: FREE_TRIAL_SECONDS + 1 });
+test("free past the monthly hours is 402, not 429 — it is a state, not a hiccup", () => {
+  const v = decide({ ...under, usedSeconds: FREE_MONTHLY_SECONDS + 1 });
   assert.equal(v.allowed, false);
   assert.equal(v.status, 402);
   assert.match(v.error, /on your Mac/, "the message must say the app keeps working");
 });
 
 test("exactly at the cap is still allowed; past it is not", () => {
-  assert.equal(decide({ ...under, usedSeconds: FREE_TRIAL_SECONDS }).allowed, true);
-  assert.equal(decide({ ...under, usedSeconds: FREE_TRIAL_SECONDS + 0.1 }).allowed, false);
+  assert.equal(decide({ ...under, usedSeconds: FREE_MONTHLY_SECONDS }).allowed, true);
+  assert.equal(decide({ ...under, usedSeconds: FREE_MONTHLY_SECONDS + 0.1 }).allowed, false);
 });
 
 test("pro gets twenty times the free allowance, per month", () => {
   assert.equal(capFor("pro"), PRO_MONTHLY_SECONDS);
-  assert.equal(capFor("free"), FREE_TRIAL_SECONDS);
-  assert.equal(capFor(undefined), FREE_TRIAL_SECONDS, "an unknown tier must not be generous");
+  assert.equal(capFor("free"), FREE_MONTHLY_SECONDS);
+  assert.equal(capFor(undefined), FREE_MONTHLY_SECONDS, "an unknown tier must not be generous");
 });
 
 test("pro past fair use is 429 — there is nothing to buy, so it is not 402", () => {

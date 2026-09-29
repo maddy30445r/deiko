@@ -5,10 +5,10 @@
 
 import { isIPv6 } from "node:net";
 
-/// A free install gets thirty minutes of relay audio once, not per month. After
-/// the trial the app falls back to Apple's on-device recogniser, which costs the
+/// A free install gets two hours of relay audio each calendar month (UTC). Past
+/// that the app falls back to Apple's on-device recogniser, which costs the
 /// service nothing.
-export const FREE_TRIAL_SECONDS = 30 * 60;
+export const FREE_MONTHLY_SECONDS = 2 * 60 * 60;
 
 /// Pro's fair use: a ceiling for the pathological case, not a budget. Real
 /// sessions are seconds long, so reaching it means a stuck client, which the
@@ -159,19 +159,16 @@ export function subjectFrom(token) {
 
 /// The row a subject's usage accumulates in.
 ///
-/// A trial is lifetime and a subscription renews; the tier decides which, not
-/// the shape of the token. A lifetime row carries no month and never expires (an
-/// expiring trial would be a monthly free tier). A monthly row carries the month
-/// and expires on its own, so there is no reset job.
+/// Devices and Pro licences both count per UTC month; a monthly row carries the
+/// month and expires on its own, so there is no reset job.
 ///
-/// The tier argument matters: keying on `subject.kind` alone would give a
-/// licence Polar has never heard of the monthly row with the free trial's cap,
-/// a free trial that resets every month. The `#trial` suffix is also
+/// The tier argument matters: a licence Polar has never heard of gets the
+/// `#trial` row with a zero cap, never a monthly allowance. The suffix is also
 /// load-bearing: `licenseKey` returns a bare `lic:<id>` for the cached Polar
 /// verdict and `tierFor` writes it with PutItem, which replaces the whole item,
-/// so a trial counter sharing that key would be wiped on every revalidation.
+/// so a counter sharing that key would be wiped on every revalidation.
 export function usageKey(subject, now, tier) {
-  if (subject.kind === "device") return `dev:${subject.id}`;
+  if (subject.kind === "device") return `dev:${subject.id}#${monthKey(now)}`;
   if (tier !== "pro") return `lic:${subject.id}#trial`;
   return `lic:${subject.id}#${monthKey(now)}`;
 }
@@ -336,7 +333,7 @@ export const DAILY_TTL_SECONDS = 7 * 24 * 60 * 60;
 /// generous-to-the-honest direction and what an unprefixed legacy token means.
 export function capFor(tier, kind) {
   if (tier === "pro") return PRO_MONTHLY_SECONDS;
-  return kind === "license" ? 0 : FREE_TRIAL_SECONDS;
+  return kind === "license" ? 0 : FREE_MONTHLY_SECONDS;
 }
 
 /// The decision. Both totals are the values after this request's audio has been

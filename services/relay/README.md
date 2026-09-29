@@ -97,7 +97,7 @@ to meter against.
 ## Spend limits
 
 In order: a per-container burst limit (30 requests a minute per token);
-per-install quotas in DynamoDB (30 minutes of audio once for free installs,
+per-install quotas in DynamoDB (2 hours of audio a month for free installs,
 10 hours a month for Pro; nothing under 5 seconds is metered); a global daily
 ceiling that holds however many installs exist; separate daily budgets for the
 text routes, with per-install and per-address shares; reserved concurrency;
