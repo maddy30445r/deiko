@@ -1,17 +1,15 @@
 #!/usr/bin/env bash
-# ─────────────────────────────────────────────────────────────────────────────
-# PUBLISH THE MEANING MODEL — the files the app downloads once after install
+# Publish the meaning model: the files the app downloads once after install.
 #
 #   make models-publish            # the default model (packages/core/src/lib/meaning.mjs)
 #
 # Uploads each file of the model from this Mac's copy
 # (~/Library/Application Support/Deiko/models/<key>/, fetched and
-# checksum-verified by `node packages/core/src/meaning.mjs download --from-hf`) to R2 at
-# download/models/<key>/<path>, where the site's /download function serves it.
-# Every file's SHA-256 is checked against MODELS before it goes, and every URL
-# is fetched back afterwards, so a release's preflight can't pass on a
-# half-upload. Same R2_* credentials as publish-release.sh.
-# ─────────────────────────────────────────────────────────────────────────────
+# checksum-verified by `node packages/core/src/meaning.mjs download --from-hf`)
+# to R2 at download/models/<key>/<path>, where the site's /download function
+# serves it. Every file's SHA-256 is checked against MODELS before upload, and
+# every URL is fetched back afterwards. Uses the same R2_* credentials as
+# publish-release.sh.
 set -euo pipefail
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
@@ -22,8 +20,8 @@ BUCKET="${DEIKO_R2_BUCKET:-deiko-downloads}"
 ENDPOINT="https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com"
 export AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
 export AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
-# R2 accepts only its own region, and rejects the CRC32 trailer CLI v2 adds
-# (see publish-release.sh for the long version of both).
+# R2 accepts only its own region and rejects the CRC32 trailer AWS CLI v2 adds
+# (see publish-release.sh).
 export AWS_REGION=auto AWS_DEFAULT_REGION=auto AWS_REQUEST_CHECKSUM_CALCULATION=when_required
 unset AWS_SESSION_TOKEN AWS_PROFILE
 

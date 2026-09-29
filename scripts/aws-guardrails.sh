@@ -1,44 +1,28 @@
 #!/usr/bin/env bash
-# ─────────────────────────────────────────────────────────────────────────────
 # Spend and error guardrails for the Deiko AWS account.
 #
 #   ./scripts/aws-guardrails.sh you@example.com
 #
-# Two things, because right now there are zero: an AWS Budget that emails at
-# 80% of a monthly cap, and a CloudWatch alarm when the relay starts erroring.
-# Without these, "watch the dashboard" is the entire spend control on an
-# account whose keys fund the whole team — a runaway client or a leaked token
-# would be discovered on the invoice.
+# Creates an AWS Budget that emails at 80% of a monthly cap and a CloudWatch
+# alarm for relay errors. Idempotent: re-running changes nothing already in
+# place.
 #
-# Idempotent, like deploy.sh: run it again and it changes nothing that is
-# already in place.
-#
-# The email arrives with a confirmation link (SNS requires it) — the alarm is
-# not actually wired to your inbox until you click it.
-# ─────────────────────────────────────────────────────────────────────────────
+# SNS sends a confirmation link; the alarm does not reach your inbox until you
+# click it.
 set -euo pipefail
 
 EMAIL="${1:?usage: aws-guardrails.sh <alert-email>}"
-# The address is pasted into the budget's JSON unescaped below. A `"` in it —
-# a display-name paste like `"Ops" <ops@x>` — would break that JSON and leave
-# the account with NO spend guardrail, which is the failure this script exists
-# to prevent. A plain address only.
+# The address is pasted into the budget's JSON unescaped below, so a `"` in it
+# (a display-name paste like `"Ops" <ops@x>`) would break the JSON and leave the
+# account with no spend guardrail. Accept a plain address only.
 case "$EMAIL" in
   *[!A-Za-z0-9._+@-]*|*@*@*) echo "✗ '$EMAIL' — a plain email address only"; exit 1 ;;
   *?@?*) ;;
   *) echo "✗ '$EMAIL' — a plain email address only"; exit 1 ;;
 esac
 REGION="${AWS_REGION:-ap-south-1}"           # where deiko-relay lives
-# The `deiko-*` names replaced `fovea-*` at the rename — see the note in
-# services/relay/deploy.sh. `deiko-alerts` is therefore a NEW SNS topic
-# whose email subscription starts UNCONFIRMED: click the link or the alarms
-# fire into nothing. The old `fovea-alerts` topic and budget can be deleted.
 FUNCTION="${DEIKO_LAMBDA_NAME:-deiko-relay}"
-# ₹500/month is the cap the owner chose. The budget is denominated in USD
-# anyway because THIS ACCOUNT BILLS IN USD (checked via Cost Explorer) — an
-# INR budget on a USD-billed account would compare rupees against dollars
-# and alert at 88× the intended spend. $6 ≈ ₹500; adjust here if the rate
-# drifts far enough to matter.
+# Monthly budget cap for the alarm, in USD because the account bills in USD.
 BUDGET_USD="${DEIKO_BUDGET_USD:-6}"
 say() { printf '  %s\n' "$*"; }
 
@@ -49,12 +33,9 @@ if ! ACCOUNT=$(aws sts get-caller-identity --query Account --output text 2>/dev/
 fi
 say "account $ACCOUNT · alerts to $EMAIL"
 
-# ── The budget ──────────────────────────────────────────────────────────────
-#
-# Account-wide, not per-service: the point is bounding the AWS bill, and a
-# per-service budget would miss the surprise coming from a service nobody
-# thought to budget. 80% actual = act now; 100% forecasted = act this week.
-# Budgets carry their own email subscribers, so no SNS is needed here.
+# Budget: account-wide rather than per-service, so a surprise from an
+# unbudgeted service is still caught. Budgets carry their own email
+# subscribers, so no SNS is needed here.
 
 if aws budgets describe-budget --account-id "$ACCOUNT" --budget-name deiko \
      >/dev/null 2>&1; then
@@ -82,12 +63,9 @@ else
     ]"
 fi
 
-# ── The error alarm ─────────────────────────────────────────────────────────
-#
-# Errors ≥ 5 in 5 minutes on the relay. Not latency, not invocation count:
-# a burst of errors is the one signal that is never routine — a bad deploy,
-# an expired provider key, or someone probing. SNS topic + email because
-# CloudWatch alarms cannot email directly.
+# Error alarm: 5 or more errors in 5 minutes on the relay. A burst of errors is
+# never routine (bad deploy, expired provider key, probing). CloudWatch alarms
+# cannot email directly, so this goes through an SNS topic.
 
 TOPIC_ARN=$(aws sns create-topic --name deiko-alerts --region "$REGION" \
   --query TopicArn --output text)   # returns the existing ARN if already there

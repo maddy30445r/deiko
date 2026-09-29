@@ -2,37 +2,21 @@
 #
 # Create the local code-signing certificate Deiko.app is signed with.
 #
-# WHY THIS EXISTS
+# TCC stores a permission grant against the app's designated requirement. For an
+# ad-hoc signature that is the binary's cdhash, so every rebuild invalidates the
+# grants (Accessibility stays ticked while behaving as denied). Signing with a
+# stable certificate makes the requirement the bundle identifier plus the
+# certificate, which survives rebuilds.
 #
-# TCC stores a permission grant against the app's code-signing "designated
-# requirement". For an AD-HOC signature that requirement is:
+# This is a script because Keychain Access (and its certificate assistant) is
+# gone on current macOS; it uses `openssl` and `security` instead.
 #
-#     designated => cdhash H"ae4816a8025f5297ddf8b33080ad0454dfd8f55a"
+# The certificate is deliberately not trusted: `codesign` signs with an
+# untrusted local certificate, and trusting it would add a prompt and a root
+# certificate for no gain. As a result `security find-identity -v` does not list
+# it, so the Makefile matches on `find-identity` without `-v`.
 #
-# — the hash of that exact binary. Rebuild, and the grant no longer matches
-# anything, so all four permissions silently die. The Accessibility entry stays
-# visibly ticked while behaving as denied, which is worse than an obvious break.
-#
-# Signed with a stable certificate the requirement becomes:
-#
-#     designated => identifier "com.deiko.capture" and certificate leaf = H"c5d9…"
-#
-# — which does NOT change when the binary does. Verified by signing two
-# different binaries and diffing the requirement.
-#
-# WHY A SCRIPT RATHER THAN "open Keychain Access"
-#
-# Keychain Access.app was removed in macOS 26. The certificate assistant it
-# hosted went with it, so the documented GUI route no longer exists on a current
-# Mac. This does the same thing with `openssl` and `security`.
-#
-# The certificate is NOT trusted, and does not need to be: `codesign` signs with
-# an untrusted local certificate quite happily, and trusting it would mean an
-# authorisation prompt and a root certificate in your trust store for no gain.
-# The consequence is that `security find-identity -v` will not list it — hence
-# the Makefile matching on `find-identity` without `-v`.
-#
-# To undo everything this does:
+# To remove it:
 #     security delete-identity -c "Deiko Local" ~/Library/Keychains/login.keychain-db
 
 set -euo pipefail
@@ -69,14 +53,10 @@ openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
     -keyout "$work/key.pem" -out "$work/cert.pem" \
     -config "$work/cert.cnf" 2>/dev/null
 
-# -legacy matters, WHERE IT EXISTS. OpenSSL 3 defaults to AES-256-CBC with a
-# SHA-256 MAC, which macOS's `security import` cannot read — it fails with the
-# thoroughly misleading "MAC verification failed during PKCS12 import (wrong
-# password?)", and -legacy selects the older ciphers `security` accepts.
-# macOS's stock /usr/bin/openssl, however, is LibreSSL: it has no -legacy flag
-# (the invocation dies, and dies silently under 2>/dev/null) — but it also
-# never switched defaults, so its plain output is already the legacy format.
-# Probe for the flag instead of assuming either implementation.
+# OpenSSL 3 defaults to a PKCS12 format that `security import` cannot read (it
+# fails with a misleading "MAC verification failed ... wrong password?"), so it
+# needs -legacy. macOS's stock LibreSSL has no -legacy flag but already emits
+# the legacy format. Probe for the flag rather than assuming either.
 LEGACY=""
 if openssl pkcs12 -help 2>&1 | grep -q -- -legacy; then
     LEGACY="-legacy"
@@ -86,9 +66,8 @@ openssl pkcs12 -export $LEGACY \
     -out "$work/bundle.p12" -passout pass:deiko -name "$NAME"
 
 # -A lets any app use the key without a per-use authorisation dialog. The
-# alternative (-T /usr/bin/codesign) needs `set-key-partition-list`, which wants
-# your login password — friction, for a key whose only power is signing a local
-# debug build of this app.
+# alternative (-T /usr/bin/codesign) needs `set-key-partition-list` and your
+# login password, which is not worth it for a key that only signs local builds.
 echo "  importing into the login keychain…"
 security import "$work/bundle.p12" -k "$KEYCHAIN" -P deiko -A >/dev/null
 

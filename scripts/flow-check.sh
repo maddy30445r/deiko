@@ -1,26 +1,23 @@
 #!/usr/bin/env bash
-# ─────────────────────────────────────────────────────────────────────────────
-# FLOW CHECK — the whole brief pipeline, end to end, on a throwaway board
+# Flow check: the whole brief pipeline, end to end, on a throwaway board.
 #
 #   make flow-check
 #
 # Copies a handful of real sessions into a temp dir, starts this checkout's
 # relay on a local port (keys from .env, never printed), and runs each brief
-# oldest first through render → classify → render, exactly as the app and
+# oldest first through render, classify, render, as the app and
 # `make reclassify` do. Then it checks every finished brief has a prompt and a
 # filing, prints how each was filed, and deletes the temp dir.
 #
-# The real board is only ever read. FLOW_BOARD, FLOW_STAMPS, FLOW_ENV and
-# FLOW_PORT override the defaults.
-# ─────────────────────────────────────────────────────────────────────────────
+# The real board is only read. FLOW_BOARD, FLOW_STAMPS, FLOW_ENV and FLOW_PORT
+# override the defaults.
 set -euo pipefail
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 SRC=${FLOW_BOARD:-"$HOME/Library/Application Support/Deiko"}
 ENV_FILE=${FLOW_ENV:-$REPO/.env}
 PORT=${FLOW_PORT:-8791}
-# The pricing thread, the three briefs 0.5.0 mis-joined to it, and one
-# recording that never rendered.
+# Sessions to replay: a related thread plus one recording that never rendered.
 STAMPS=${FLOW_STAMPS:-"20260915-234710 20260915-234940 20260916-013910 20260916-212724 20260918-155836 20260918-161814 20260918-162251 20260918-162340 20260918-163139"}
 
 TMP=$(mktemp -d)
@@ -83,9 +80,8 @@ for (const [s, t, c, by, conf] of rows) console.log(`${s}  ${t.padEnd(19)}  ${c.
 process.exit(bad);
 EOF
 
-# An upstream 5xx that classify's own retry recovered from is noise, not a
-# broken flow — the filings above already say whether it recovered. Crashes
-# inside the relay are not.
+# An upstream 5xx that classify's own retry recovered from is noise; the
+# filings above show whether it recovered. Crashes inside the relay are not.
 grep -E "^unhandled" "$TMP/relay.log" | head -5 && fail=1 || true
 grep -cE " 5[0-9][0-9] " "$TMP/relay.log" | awk '$1 > 0 { print "· the relay answered " $1 " request(s) with a 5xx (retried)" }' || true
 # What the upstream said when it failed — status and host only, never a body.

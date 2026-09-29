@@ -68,9 +68,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Content-Length", str(end - start + 1))
             self.end_headers()
 
-            # Write the slice here and return None: the caller only copies a
-            # body when send_head hands back a file object, and it would copy
-            # to EOF, which is the whole bug we are fixing.
+            # Write the slice here and return None: the caller copies to EOF
+            # whenever send_head returns a file object.
             f.seek(start)
             remaining = end - start + 1
             while remaining > 0:
