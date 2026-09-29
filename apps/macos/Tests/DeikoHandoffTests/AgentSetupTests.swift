@@ -193,3 +193,15 @@ func olderSetupNeedsTheHook() throws {
     #expect(AgentSetup.connect(targets, command: node, arguments: [script]).done == ["Claude Code"])
     #expect(AgentSetup.isRegistered(targets[0], command: node, arguments: [script]))
 }
+
+@Test("a Claude Code settings file that won't parse is left untouched and doesn't block setup")
+func unreadableClaudeSettings() throws {
+    let home = try Home()
+    try home.write(".claude.json", #"{"mcpServers":{}}"#)
+    try home.write(".claude/settings.json", "{ // a comment\n}")
+    let targets = home.targets()
+    let outcome = AgentSetup.connect(targets, command: node, arguments: [script])
+    #expect(outcome.failed.map(\.agent) == ["Claude Code"])
+    #expect(home.read(".claude/settings.json") == "{ // a comment\n}")
+    #expect(AgentSetup.isRegistered(targets[0], command: node, arguments: [script]))
+}

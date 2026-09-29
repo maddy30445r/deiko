@@ -86,6 +86,9 @@ public enum AgentSetup {
         guard serverRegistered(target, command: command, arguments: arguments) else { return false }
         guard let settings = target.stopHookSettings, let hook = stopHookCommand(command: command, arguments: arguments)
         else { return true }
+        // A settings file that won't parse is left alone, so it can't hold the hook; don't let it
+        // keep the agent looking unconnected forever.
+        if case .unreadable = readJSON(settings) { return true }
         return ClaudeStopHook.isInstalled(at: settings, command: hook)
     }
 
