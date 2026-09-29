@@ -4,8 +4,8 @@ import Foundation
 // THE MEANING MODEL, FETCHED ONCE
 //
 // Filing blends word matching with an on-device embedding model (see
-// scripts/lib/meaning.mjs). The model is ~226 MB, so the installer does not
-// carry it: the app asks `scripts/meaning.mjs` to download it once, from
+// packages/core/src/lib/meaning.mjs). The model is ~226 MB, so the installer does not
+// carry it: the app asks `packages/core/src/meaning.mjs` to download it once, from
 // Deiko's own storage, every file checked against a pinned SHA-256. Until it
 // is ready, or if it never is, filing uses words alone — nothing waits on it.
 // After the first download, old briefs get their vectors once (`backfill`).
@@ -85,7 +85,7 @@ final class MeaningModel: ObservableObject {
         }
     }
 
-    /// Run `node scripts/meaning.mjs <args>` and collect its stdout lines,
+    /// Run `node packages/core/src/meaning.mjs <args>` and collect its stdout lines,
     /// handing each to `each` as it arrives. Never throws: no Node, no script
     /// or a crash is an empty list, which reads as "failed".
     ///
@@ -119,7 +119,7 @@ final class MeaningModel: ObservableObject {
 
     nonisolated private static func scriptURL() -> URL? {
         switch Layout.resolve() {
-        case .development(let repo): return repo.appendingPathComponent("scripts/meaning.mjs")
+        case .development(let repo): return repo.appendingPathComponent("packages/core/src/meaning.mjs")
         case .bundled(let resources): return resources.appendingPathComponent("scripts/meaning.mjs")
         case nil: return nil
         }
@@ -129,7 +129,7 @@ final class MeaningModel: ObservableObject {
     static func licencesFolder() -> URL? {
         let url: URL
         switch Layout.resolve() {
-        case .development(let repo): url = repo.appendingPathComponent("apps/capture/licenses")
+        case .development(let repo): url = repo.appendingPathComponent("apps/macos/licenses")
         case .bundled(let resources): url = resources.appendingPathComponent("licenses")
         case nil: return nil
         }

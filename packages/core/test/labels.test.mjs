@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { EMPTY_KEYS, KINDS, briefKeys, browserTitle, normaliseLabel, repoHints, splitTitle } from "../lib/labels.mjs";
+import { EMPTY_KEYS, KINDS, briefKeys, browserTitle, normaliseLabel, repoHints, splitTitle } from "../src/lib/labels.mjs";
 
 test("a title loses its count and splits on any separator", () => {
   assert.deepEqual(splitTitle("(3) Signups — build"), ["Signups", "build"]);

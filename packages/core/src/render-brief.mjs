@@ -2,7 +2,7 @@
 /**
  * Render a recorded session into the message the developer hands over.
  *
- *   node scripts/render-brief.mjs ~/Library/Application\ Support/Deiko/<id>
+ *   node packages/core/src/render-brief.mjs ~/Library/Application\ Support/Deiko/<id>
  *
  * Two outputs. `prompt.txt` is what gets pasted into a chat — the developer's
  * own words, the screenshots they drew, and the exact strings under what they
@@ -22,9 +22,9 @@
 import { readFileSync, existsSync, rmSync } from "node:fs";
 import { resolve, join, basename, dirname } from "node:path";
 
-import { align, joinWords } from "../packages/alignment/dist/src/align.js";
-import { loadSession } from "../packages/alignment/dist/src/referents/session.js";
-import { toCandidates } from "../packages/alignment/dist/src/referents/candidates.js";
+import { align, joinWords } from "@deiko/alignment";
+import { loadSession } from "@deiko/alignment/session";
+import { toCandidates } from "@deiko/alignment/candidates";
 import { loadEvents, writeAtomic } from "./lib/session-io.mjs";
 import { carriesSecret, assertNoSecrets, redact, redactBlock } from "./lib/redact.mjs";
 import { briefKeys, repoHints } from "./lib/labels.mjs";
@@ -59,7 +59,7 @@ function utteranceText(words, gapMs = 700) {
 
 const sessionArg = process.argv[2];
 if (!sessionArg) {
-  console.error("usage: node scripts/render-brief.mjs <sessionDir> [--out <path>]");
+  console.error("usage: node packages/core/src/render-brief.mjs <sessionDir> [--out <path>]");
   process.exit(2);
 }
 
@@ -76,7 +76,7 @@ if (!existsSync(eventsPath)) {
 }
 if (!existsSync(transcriptPath)) {
   console.error(`✗ no transcript.json in ${dir}`);
-  console.error(`  transcribe first:  node scripts/transcribe.mjs ${sessionArg}`);
+  console.error(`  transcribe first:  node packages/core/src/transcribe.mjs ${sessionArg}`);
   process.exit(1);
 }
 
@@ -448,7 +448,7 @@ const manifest = {
       words.length ? Math.max(...words.map((w) => w.end)) - Math.min(...words.map((w) => w.start)) : 0,
     degraded,
     // Which degradation, so the window can name it instead of hedging. Null on
-    // a clean session; see scripts/lib/cloud.mjs for the five it can be.
+    // a clean session; see packages/core/src/lib/cloud.mjs for the five it can be.
     degradedReason,
     // Who produced the words, and whether any of the audio actually reached
     // them — the line that says what left this Mac needs both, because a relay

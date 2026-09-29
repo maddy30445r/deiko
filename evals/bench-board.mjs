@@ -3,7 +3,7 @@
 // change. Builds a made-up board of N briefs (default 10000) in a temp folder
 // and times what one new brief costs today:
 //
-//   node scripts/bench-board.mjs [N] [--keep]
+//   node evals/bench-board.mjs [N] [--keep]
 //
 // Nothing here touches the real board. `--keep` leaves the folder for a
 // look afterwards. It also checks the board index against reading every brief.
@@ -16,10 +16,10 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
-import { olderBoard, prepare, readCollections, sessionInputs } from "./lib/filing.mjs";
-import { MODELS, currentModel, readVector } from "./lib/meaning.mjs";
-import { STAMP, readBriefLine } from "./lib/context.mjs";
-import { groupTasks, readBoard, readBriefLines, readTasks, writeTaskNotes } from "./lib/tasks.mjs";
+import { olderBoard, prepare, readCollections, sessionInputs } from "@deiko/core/lib/filing.mjs";
+import { MODELS, currentModel, readVector } from "@deiko/core/lib/meaning.mjs";
+import { STAMP, readBriefLine } from "@deiko/core/lib/context.mjs";
+import { groupTasks, readBoard, readBriefLines, readTasks, writeTaskNotes } from "@deiko/core/lib/tasks.mjs";
 
 const N = Number(process.argv.find((a) => /^\d+$/.test(a)) ?? 10000);
 const keep = process.argv.includes("--keep");
@@ -82,7 +82,7 @@ const time = async (label, fn) => {
 };
 
 async function memorySearch(root, query) {
-  const script = fileURLToPath(new URL("./memory-mcp.mjs", import.meta.url));
+  const script = fileURLToPath(new URL("../packages/core/src/memory-mcp.mjs", import.meta.url));
   const child = spawn(process.execPath, [script], { env: { ...process.env, DEIKO_ROOT: root }, stdio: ["pipe", "pipe", "ignore"] });
   const lines = createInterface({ input: child.stdout });
   const waiting = new Map();

@@ -9,9 +9,9 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
-import { DEFAULT_MODEL, isReady } from "../lib/meaning.mjs";
+import { DEFAULT_MODEL, isReady } from "../src/lib/meaning.mjs";
 
-const script = fileURLToPath(new URL("../memory-mcp.mjs", import.meta.url));
+const script = fileURLToPath(new URL("../src/memory-mcp.mjs", import.meta.url));
 const FAKE_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
 // Chosen with no word or 3-gram in common with anything else on this fixture
 // board, so a match can only come from the removed crop's own text, never
@@ -205,14 +205,14 @@ test("outcome is redacted as a block, catching a secret on the line after its la
     "",
     "## Files",
     "- src/components/PricingTable.tsx",
-    "- apps/capture/Sources/DeikoCapture/MemoryHelper.swift",
+    "- apps/macos/Sources/DeikoCapture/MemoryHelper.swift",
   ].join("\n"));
   const s = await session(root);
   try {
     const brief = await s.tool("get_brief", { id: "20260918-100000" });
     assert.equal(brief.value.outcome.includes("Xk9mQ2vLp8Rt4Zq"), false, "a secret on the line after its label must still be caught");
     assert.match(brief.value.outcome, /- src\/components\/PricingTable\.tsx/, "a plain file path must stay readable");
-    assert.match(brief.value.outcome, /- apps\/capture\/Sources\/DeikoCapture\/MemoryHelper\.swift/);
+    assert.match(brief.value.outcome, /- apps\/macos\/Sources\/DeikoCapture\/MemoryHelper\.swift/);
   } finally {
     s.close();
   }
@@ -345,7 +345,7 @@ test("a line forgotten in the app is gone from get_task, get_brief and search", 
 
 test("the board's search ranks like the helper, prints one line, and exits (it never starts the helper's server)", async () => {
   const root = board();
-  const search = fileURLToPath(new URL("../search-briefs.mjs", import.meta.url));
+  const search = fileURLToPath(new URL("../src/search-briefs.mjs", import.meta.url));
   const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("DEIKO_"))), DEIKO_MEANING_MODEL: "off" };
   const out = await new Promise((resolve, reject) => {
     // stdin left open, as the app's Process leaves it: a server would never exit.

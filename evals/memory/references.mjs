@@ -5,7 +5,7 @@
 // summarised and filed exactly as classify.mjs would (same summary, same
 // prepare, same relay call, same decide), and checked against what it should do.
 //
-//   node scripts/eval-memory/references.mjs --relay http://127.0.0.1:8793
+//   node evals/memory/references.mjs --relay http://127.0.0.1:8793
 //
 // Uses the relay's classify and summary; with the local relay (`make
 // relay-dev`) that is the owner's own keys. Token: DEIKO_CLASSIFY_TOKEN or a
@@ -14,9 +14,9 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { place, prepare, requestClassify, sessionInputs } from "../lib/filing.mjs";
-import { briefText, currentModel, loadModel } from "../lib/meaning.mjs";
-import { groupTasks, readBoard, readTasks } from "../lib/tasks.mjs";
+import { place, prepare, requestClassify, sessionInputs } from "@deiko/core/lib/filing.mjs";
+import { briefText, currentModel, loadModel } from "@deiko/core/lib/meaning.mjs";
+import { groupTasks, readBoard, readTasks } from "@deiko/core/lib/tasks.mjs";
 import { buildBoard } from "./board.mjs";
 import { projects } from "./board-spec.mjs";
 

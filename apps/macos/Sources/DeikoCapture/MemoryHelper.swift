@@ -32,7 +32,7 @@ enum MemoryHelper {
         guard let node = NodeRuntime.resolve() else { return nil }
         let script: URL
         switch Layout.resolve() {
-        case .development(let repo): script = repo.appendingPathComponent("scripts/memory-mcp.mjs")
+        case .development(let repo): script = repo.appendingPathComponent("packages/core/src/memory-mcp.mjs")
         case .bundled(let resources): script = resources.appendingPathComponent("scripts/memory-mcp.mjs")
         case nil: return nil
         }

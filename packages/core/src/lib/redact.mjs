@@ -226,7 +226,7 @@ export function assertNoSecrets(markdown) {
   const fail = (why, sample) => {
     throw new Error(
       `redaction failed — ${why}:\n  ${String(sample).slice(0, 50)}…\n` +
-        `  Refusing to write. Fix looksOpaque / SECRET_MARKER in scripts/render-brief.mjs.`,
+        `  Refusing to write. Fix looksOpaque / SECRET_MARKER in packages/core/src/lib/redact.mjs.`,
     );
   };
 

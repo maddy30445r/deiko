@@ -10,7 +10,7 @@ are live infrastructure and yours to run.
 ## Run it locally
 
 ```sh
-GROQ_API_KEY=… node services/relay/server.mjs
+GROQ_API_KEY=… node services/relay/src/server.mjs
 # → deiko relay on :8787
 ```
 
@@ -51,7 +51,7 @@ production, which is the point: a bug found locally is a bug fixed everywhere.
 GROQ_API_KEY=… TYPESAFE_API_KEY=… DEIKO_PLAYGROUND_SECRET=… make relay-deploy
 ```
 
-`deploy-aws.sh` creates or updates the function, its role, its URL and its
+`deploy.sh` creates or updates the function, its role, its URL and its
 concurrency cap using only the AWS CLI — no SAM, CDK or Terraform. It is
 idempotent, so the same command ships a code change.
 
@@ -224,7 +224,7 @@ builds, beside the pinned model, under a filename and type the relay picks from 
 bytes (WebM, Ogg, MP4 or WAV — anything else is a 400). Nothing the page sends can name a `url`.
 
 `/v1/summarize` takes `{ narration, mode: "hinglish" | "native" }` and holds the two system prompts
-itself (mirrored from `scripts/summarize.mjs`, and a test keeps them word for word). A body in the
+itself (mirrored from `packages/core/src/summarize.mjs`, and a test keeps them word for word). A body in the
 old `{ messages }` shape still gets a summary — its transcript is taken, its system turn is not.
 
 The two halves are still version-coupled: a relay that expects different fields refuses every app

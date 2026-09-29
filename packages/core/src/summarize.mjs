@@ -2,7 +2,7 @@
 /**
  * Three lines saying what a session was about — FOR THE DEVELOPER'S SCREEN ONLY.
  *
- *   node scripts/summarize.mjs ~/Library/Application\ Support/Deiko/<id>
+ *   node packages/core/src/summarize.mjs ~/Library/Application\ Support/Deiko/<id>
  *
  * The review window shows this above the narration so you can tell at a glance
  * whether the thing you are about to send is the thing you meant to record. It
@@ -34,7 +34,7 @@ const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 // `llama-3.3-70b-versatile` was the pick until Groq retired it (discovered
 // live on 2026-08-30: every relay summary was 404ing on model_not_found).
 // gpt-oss-20b was verified against a Hinglish narration before being pinned —
-// verbs survive — and MIRRORS `SUMMARY_MODEL` in services/relay/relay.mjs;
+// verbs survive — and MIRRORS `SUMMARY_MODEL` in services/relay/src/relay.mjs;
 // change both or the relay path and the BYO-key path drift apart.
 const MODEL = "openai/gpt-oss-20b";
 
@@ -44,7 +44,7 @@ const MODE = process.env.DEIKO_NARRATION === "native" ? "native" : "hinglish";
 
 // Sent only with the developer's own key. Deiko's relay holds a copy of each
 // variant and picks one by `mode` — `summarySystem` in
-// services/relay/relay.mjs MIRRORS this, so change both.
+// services/relay/src/relay.mjs MIRRORS this, so change both.
 const SYSTEM = [
   "You summarise a developer's spoken description of a coding task.",
   "",
@@ -69,7 +69,7 @@ const SYSTEM = [
 async function main() {
   const sessionArg = process.argv[2];
   if (!sessionArg) {
-    console.error("usage: node scripts/summarize.mjs <session-dir>");
+    console.error("usage: node packages/core/src/summarize.mjs <session-dir>");
     process.exit(2);
   }
 

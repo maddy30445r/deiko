@@ -1,6 +1,6 @@
 /**
  * FILING — the steps from a brief to where it goes, shared by `classify.mjs`,
- * which writes the answer, and `eval-filing.mjs`, which only scores it. Pure,
+ * which writes the answer, and `evals/filing.mjs`, which only scores it. Pure,
  * except `readCollections` and `sessionInputs`, which read.
  */
 
@@ -181,7 +181,7 @@ export function prepare({ id, me, summary, windowTitles, board, taskTitles, coll
     })),
     tasks: shortlist.map(({ score, seat, ...t }) => t),
     // NEVER screenTerms — they scored the shortlist above and stay here.
-    // ROUTES THE RELAY TO THE V3 PATH — see services/relay/relay.mjs. A body
+    // ROUTES THE RELAY TO THE V3 PATH — see services/relay/src/relay.mjs. A body
     // with no version (or below 3) reads as an unupdated 0.5.0 app.
     version: 3,
   };

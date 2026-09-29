@@ -2,7 +2,7 @@
 /**
  * Where a brief belongs, and what it remembers.
  *
- *   node scripts/classify.mjs ~/Library/Application\ Support/Deiko/<id>
+ *   node packages/core/src/classify.mjs ~/Library/Application\ Support/Deiko/<id>
  *
  * Scores every earlier task on this machine and sends the best twenty to the
  * classifier — Jev, through Deiko's relay — which answers, per task, whether
@@ -89,7 +89,7 @@ const unreadable = (file) => console.error(`classify: ${file} is unreadable; lef
 async function main() {
   const sessionArg = process.argv[2];
   if (!sessionArg) {
-    console.error("usage: node scripts/classify.mjs <session-dir>");
+    console.error("usage: node packages/core/src/classify.mjs <session-dir>");
     process.exit(2);
   }
   // "0" from the app; "NO" or "false" as `defaults read` prints one written

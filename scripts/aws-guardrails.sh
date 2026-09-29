@@ -10,7 +10,7 @@
 # account whose keys fund the whole team — a runaway client or a leaked token
 # would be discovered on the invoice.
 #
-# Idempotent, like deploy-aws.sh: run it again and it changes nothing that is
+# Idempotent, like deploy.sh: run it again and it changes nothing that is
 # already in place.
 #
 # The email arrives with a confirmation link (SNS requires it) — the alarm is
@@ -30,7 +30,7 @@ case "$EMAIL" in
 esac
 REGION="${AWS_REGION:-ap-south-1}"           # where deiko-relay lives
 # The `deiko-*` names replaced `fovea-*` at the rename — see the note in
-# services/relay/deploy-aws.sh. `deiko-alerts` is therefore a NEW SNS topic
+# services/relay/deploy.sh. `deiko-alerts` is therefore a NEW SNS topic
 # whose email subscription starts UNCONFIRMED: click the link or the alarms
 # fire into nothing. The old `fovea-alerts` topic and budget can be deleted.
 FUNCTION="${DEIKO_LAMBDA_NAME:-deiko-relay}"

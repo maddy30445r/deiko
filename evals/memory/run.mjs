@@ -12,7 +12,7 @@
 //   brief    Claude Code given that brief's prompt, with Read and the helper
 //
 // Opt-in and slow (it spends the Claude plan it runs under; never in npm test):
-//   node scripts/eval-memory/run.mjs [--only Q01,Q02] [--cond browser] [--out results.json]
+//   node evals/memory/run.mjs [--only Q01,Q02] [--cond browser] [--out results.json]
 // Baseline 28 Sep 2026: fresh 22/22 (21/22 before list_tasks — "what's open in
 // shopfront" missed a Hinglish task search didn't surface), heavy 8/8, brief
 // 10/10, browser 9/10 (5/10 before brief-by-brief history).
@@ -22,13 +22,13 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { buildPrompt } from "../lib/prompt.mjs";
-import { groupTasks, readBoard, readTasks, taskMemory, titleFor } from "../lib/tasks.mjs";
+import { buildPrompt } from "@deiko/core/lib/prompt.mjs";
+import { groupTasks, readBoard, readTasks, taskMemory, titleFor } from "@deiko/core/lib/tasks.mjs";
 import { buildBoard } from "./board.mjs";
 import { projects } from "./board-spec.mjs";
 import { questions } from "./questions.mjs";
 
-const SCRIPTS = fileURLToPath(new URL("..", import.meta.url));
+const SCRIPTS = fileURLToPath(new URL("../../packages/core/src", import.meta.url));
 const arg = (name) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : null; };
 const only = arg("--only")?.split(",");
 const cond = arg("--cond");
@@ -65,7 +65,7 @@ const HELPER = ["search_briefs", "list_tasks", "get_task", "get_brief"].map((t) 
 const WITH_HELPER = ["--strict-mcp-config", "--mcp-config", MCP, "--allowedTools", HELPER];
 
 let heavy = "Earlier in this session we went through these Swift files of my Mac app together and cleaned them up. Here they are again for reference:\n\n";
-const swift = join(SCRIPTS, "../apps/capture/Sources/DeikoCapture");
+const swift = join(SCRIPTS, "../../../apps/macos/Sources/DeikoCapture");
 for (const f of readdirSync(swift).filter((f) => f.endsWith(".swift")).sort()) {
   if (heavy.length > 160_000) break;
   heavy += `--- ${f} ---\n${readFileSync(join(swift, f), "utf8")}\n\n`;

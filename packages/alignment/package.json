@@ -9,6 +9,18 @@
     ".": {
       "types": "./dist/src/align.d.ts",
       "default": "./dist/src/align.js"
+    },
+    "./deictic": {
+      "types": "./dist/src/deictic.d.ts",
+      "default": "./dist/src/deictic.js"
+    },
+    "./session": {
+      "types": "./dist/src/referents/session.d.ts",
+      "default": "./dist/src/referents/session.js"
+    },
+    "./candidates": {
+      "types": "./dist/src/referents/candidates.d.ts",
+      "default": "./dist/src/referents/candidates.js"
     }
   },
   "scripts": {

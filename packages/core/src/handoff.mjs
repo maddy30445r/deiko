@@ -5,7 +5,7 @@
 // screenshots that were kept — oldest first. Redacted like everything else,
 // with the task's own corrections ("Forget", "Edit") applied.
 //
-//   node scripts/handoff.mjs <board root> <task id> <out dir> [--no-images]
+//   node packages/core/src/handoff.mjs <board root> <task id> <out dir> [--no-images]
 //
 // Writes <out dir>/handoff.md, and with images the kept screenshots beside it
 // in <out dir>/screenshots/, linked relatively so the folder travels whole.

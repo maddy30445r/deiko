@@ -7,9 +7,9 @@ import { tmpdir } from "node:os";
 import {
   ASK, CLASSIFIER, COULD_NOT_TELL, FLOORS, GATE, JOIN, REFERENCE, RELATIONS, TIERS, briefDate, decide, level,
   projectFromKeys, readBriefLine, relativeAge, saysNothing, slug, unplaceable, wantsQuickHint, yes,
-} from "../lib/context.mjs";
-import { EMPTY_KEYS } from "../lib/labels.mjs";
-import { stampTime } from "../lib/tasks.mjs";
+} from "../src/lib/context.mjs";
+import { EMPTY_KEYS } from "../src/lib/labels.mjs";
+import { stampTime } from "../src/lib/tasks.mjs";
 
 // ── Names and dates ─────────────────────────────────────────────────────────
 
@@ -357,7 +357,7 @@ test("filler says nothing; a short real follow-up does", () => {
 });
 
 test("decide takes other numbers only when handed them (the eval's --sweep)", async () => {
-  const { RULES } = await import("../lib/context.mjs");
+  const { RULES } = await import("../src/lib/context.mjs");
   const input = {
     answers: { is_work_brief: { noul: 0.9 }, "same_t-20260918-100000": { noul: 0.55 } },
     second: { "t-20260918-100000": { same_task: { noul: 0.45 }, relation: { score: 2 } } },

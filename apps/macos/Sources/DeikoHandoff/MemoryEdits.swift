@@ -3,7 +3,7 @@ import Foundation
 /// A task's "What Deiko remembers" as the person corrected it, the shape of
 /// `tasks/<id>.overrides.json`: lines to forget, and lines reworded, both
 /// keyed by the line as the agent wrote it in outcome.md. The scripts apply
-/// the same file (`readOverrides` in scripts/lib/tasks.mjs).
+/// the same file (`readOverrides` in packages/core/src/lib/tasks.mjs).
 public struct MemoryEdits: Codable, Equatable, Sendable {
     public var forget: [String] = []
     public var edit: [String: String] = [:]

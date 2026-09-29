@@ -2,7 +2,7 @@
 /**
  * Transcribe a recorded session's narration into words on the SESSION CLOCK.
  *
- *   node scripts/transcribe.mjs sessions/<id>
+ *   node packages/core/src/transcribe.mjs sessions/<id>
  *
  * The important step is the last one. An ASR returns word times as offsets into
  * an audio file; the aligner needs them on the same monotonic clock as the
@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 // The \p{M}-preserving normaliser from the aligner — imported, not copied,
 // because the whole point of normalising here is to match what the aligner
 // will match on.
-import { normalizeWord } from "../packages/alignment/dist/src/deictic.js";
+import { normalizeWord } from "@deiko/alignment/deictic";
 import { awaitPrecomputed, loadEvents, writeAtomic } from "./lib/session-io.mjs";
 import { refusalReason, REFUSAL_IS_FINAL, withOneRetry } from "./lib/cloud.mjs";
 
@@ -88,7 +88,7 @@ const BYTES_PER_SAMPLE = 2;
 /// How many chunks may be in flight at once.
 ///
 /// Four, because the relay's Lambda reserves five concurrent executions
-/// (`services/relay/deploy-aws.sh`). A long session split into two dozen
+/// (`services/relay/deploy.sh`). A long session split into two dozen
 /// chunks and fired all at once throttles against that reservation, and one
 /// throttled chunk used to lose the whole session's cloud text. Staying under
 /// the reservation is what makes the fallback rare rather than routine.
@@ -309,7 +309,7 @@ function relayTranscriber(endpoint, token) {
   // failure: the session is degraded, not broken.
   //
   // A rate limit or a 503 is NOT such a fact. The relay's in-memory limiter
-  // allows 30 requests a minute per token (services/relay/relay.mjs:104) and a
+  // allows 30 requests a minute per token (services/relay/src/relay.mjs:104) and a
   // twelve-minute session is ~29 chunks plus quota calls, so a burst 429 on
   // chunk 7 of a long recording is both plausible and temporary. It throws
   // like any other chunk failure — costing its own stretch of sentence and
@@ -795,7 +795,7 @@ async function main() {
   const startedAt = performance.now();
   const sessionDir = process.argv[2];
   if (!sessionDir) {
-    console.error("usage: node scripts/transcribe.mjs sessions/<id> [--language hi-IN]");
+    console.error("usage: node packages/core/src/transcribe.mjs sessions/<id> [--language hi-IN]");
     process.exit(2);
   }
 
@@ -1206,7 +1206,7 @@ async function main() {
           transcriber: transcriber.name,
           // WHY the transcript is what it is, for the one screen that has to
           // explain it. `refused` is the relay's own answer mapped to something
-          // a user can act on (scripts/lib/cloud.mjs); `failedChunks` says the
+          // a user can act on (packages/core/src/lib/cloud.mjs); `failedChunks` says the
           // words read short. The renderer turns this into one sentence — see
           // `degradedReason` — and without it a spent trial and a dead relay
           // were indistinguishable from bad recognition.

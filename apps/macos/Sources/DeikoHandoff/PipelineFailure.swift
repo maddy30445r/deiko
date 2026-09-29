@@ -5,11 +5,11 @@ import Foundation
 /// The orb used to show raw stdout+stderr in a monospace box. What that
 /// actually put in front of people: shell instructions for a `.env` they do not
 /// have, four hundred characters of the provider's JSON, or a Node stack trace ending
-/// in "Fix looksOpaque / SECRET_MARKER in scripts/render-brief.mjs" — an
+/// in "Fix looksOpaque / SECRET_MARKER in packages/core/src/lib/redact.mjs" — an
 /// instruction to edit source code, naming a file that is inside the app bundle.
 ///
 /// Every case here was read off the strings the scripts actually print
-/// (`scripts/transcribe.mjs`, `scripts/render-brief.mjs`, `scripts/lib/redact.mjs`),
+/// (`packages/core/src/transcribe.mjs`, `packages/core/src/render-brief.mjs`, `packages/core/src/lib/redact.mjs`),
 /// not imagined. The raw text is always kept: it is the only thing worth having
 /// in a bug report, and the orb shows it behind a disclosure.
 ///
@@ -81,8 +81,8 @@ public struct PipelineFailure: Equatable, Sendable {
         // relationship with it, and naming a vendor they have never heard of is
         // rate-limiting explains nothing they can act on.
         //
-        // Strings from services/relay/quota.mjs and relay.mjs; the mapping they
-        // belong to lives in scripts/lib/cloud.mjs and is tested there.
+        // Strings from services/relay/src/quota.mjs and relay.mjs; the mapping they
+        // belong to lives in packages/core/src/lib/cloud.mjs and is tested there.
         if text.contains("fair-use limit") {
             return make(
                 .quotaExhausted,

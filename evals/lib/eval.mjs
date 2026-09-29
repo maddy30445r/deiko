@@ -6,7 +6,7 @@
  */
 import { readFileSync } from "node:fs";
 
-import { STAMP, slug } from "./context.mjs";
+import { STAMP, slug } from "@deiko/core/lib/context.mjs";
 
 export function readLabels(path) {
   let labels;

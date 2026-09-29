@@ -2,7 +2,7 @@ import Testing
 @testable import DeikoHandoff
 
 // Each fixture below is the text a script ACTUALLY prints, copied from
-// scripts/transcribe.mjs, scripts/render-brief.mjs and scripts/lib/redact.mjs.
+// packages/core/src/transcribe.mjs, packages/core/src/render-brief.mjs and packages/core/src/lib/redact.mjs.
 // A taxonomy tested against invented strings would pass while classifying
 // nothing a user will ever see.
 
@@ -18,7 +18,7 @@ import Testing
 
 @Test("this month's Pro hours are not a bug report")
 func monthlyCapSpent() {
-    // services/relay/quota.mjs:200, wrapped by transcribe.mjs's relay error.
+    // services/relay/src/quota.mjs:200, wrapped by transcribe.mjs's relay error.
     let failure = PipelineFailure.classify(
         stage: "Transcribing",
         output: #"Deiko relay 429: {"error":"this month's fair-use limit is used up"}"#
@@ -129,7 +129,7 @@ func noAudioBuffers() {
 @Test("a redaction refusal reassures rather than instructing a code edit")
 func redaction() {
     let real = """
-        Error: Refusing to write. Fix looksOpaque / SECRET_MARKER in scripts/render-brief.mjs.
+        Error: Refusing to write. Fix looksOpaque / SECRET_MARKER in packages/core/src/lib/redact.mjs.
             at renderBrief (/Applications/Deiko.app/Contents/Resources/scripts/render-brief.mjs:467:11)
         """
     let failure = PipelineFailure.classify(stage: "Rendering the brief", output: real)

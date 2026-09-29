@@ -43,7 +43,7 @@ struct BriefSummary: Codable {
     /// WHICH degradation: "trial", "monthly", "ceiling", "unavailable" or
     /// "timing". `degraded` on its own could only ever produce a hedge — the
     /// five have five different answers and only two are about the user's plan
-    /// at all. Written by `scripts/lib/cloud.mjs`, rendered by
+    /// at all. Written by `packages/core/src/lib/cloud.mjs`, rendered by
     /// `ReviewView.degradedSentence`.
     var degradedReason: String?
     /// Who produced the words — "sarvam", "deiko", or "on-device". Feeds the
@@ -426,7 +426,7 @@ enum BriefPipeline {
     }
 
     /// Written beside the WAVs when `precomputeTimings` is finished. The same
-    /// name as `TIMINGS_DONE` in `scripts/lib/session-io.mjs`.
+    /// name as `TIMINGS_DONE` in `packages/core/src/lib/session-io.mjs`.
     private static let doneMarker = "timings.done"
 
     private static func recordings(sessionDir: String) -> [URL] {
@@ -475,7 +475,7 @@ enum BriefPipeline {
 
     /// The board's search by meaning as well as words: brief ids, best
     /// first, ranked the way the memory helper ranks for agents
-    /// (`scripts/search-briefs.mjs`). Empty on any failure — the word
+    /// (`packages/core/src/search-briefs.mjs`). Empty on any failure — the word
     /// filter on the board still works on its own.
     @MainActor private static var searching: Task<String?, Never>?
 
@@ -494,7 +494,7 @@ enum BriefPipeline {
         return ids
     }
 
-    /// A piece of work as Markdown for a person (`scripts/handoff.mjs`):
+    /// A piece of work as Markdown for a person (`packages/core/src/handoff.mjs`):
     /// `<dir>/handoff.md`, and the kept screenshots beside it unless
     /// `images` is off. The file's text, or nil when it could not be made.
     static func handoff(task: String, into dir: URL, images: Bool) async -> String? {
@@ -511,7 +511,7 @@ enum BriefPipeline {
         guard let layout = Layout.resolve() else { return nil }
         switch layout {
         case .development(let repo):
-            return try? await shell((["node", "scripts/\(name)"] + args.map(quoted)).joined(separator: " "), in: repo, stage: label)
+            return try? await shell((["node", "packages/core/src/\(name)"] + args.map(quoted)).joined(separator: " "), in: repo, stage: label)
         case .bundled(let resources):
             guard let node = NodeRuntime.resolve() else { return nil }
             return try? await exec(node, arguments: [resources.appendingPathComponent("scripts/\(name)").path] + args, stage: label)

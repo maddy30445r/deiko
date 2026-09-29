@@ -142,7 +142,7 @@ const cleanEnv = (extra = {}) => ({
   DEIKO_MEANING_MODEL: "off",
   ...extra,
 });
-const evalFiling = (args, env) => run(process.execPath, [join(scripts, "eval-filing.mjs"), ...args], { timeout: 20_000, env: cleanEnv(env) });
+const evalFiling = (args, env) => run(process.execPath, [join(scripts, "filing.mjs"), ...args], { timeout: 20_000, env: cleanEnv(env) });
 
 test("shortlist-only needs no network and writes nothing under the board", async () => {
   const { board, labels } = fixtureBoard();

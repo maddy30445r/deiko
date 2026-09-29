@@ -110,7 +110,7 @@ export const MAX_SUMMARY_BYTES = 64 * 1024;
 
 // ── What a summary is allowed to be ─────────────────────────────────────────
 //
-// These MIRROR `scripts/summarize.mjs` — the same model, the same temperature,
+// These MIRROR `packages/core/src/summarize.mjs` — the same model, the same temperature,
 // the same 200-token answer, the same system prompt. They are pinned HERE
 // because the client choosing them is the client choosing our bill: this
 // route forwards to Groq with Deiko's key, so an arbitrary caller with any
@@ -124,7 +124,7 @@ export const MAX_SUMMARY_BYTES = 64 * 1024;
 // reaches the model.
 // `llama-3.3-70b-versatile` until Groq retired it — a pinned model can
 // disappear out from under a deployed relay, and the failure is a 404 the
-// client silently degrades over. Mirrors MODEL in scripts/summarize.mjs.
+// client silently degrades over. Mirrors MODEL in packages/core/src/summarize.mjs.
 const SUMMARY_MODEL = "openai/gpt-oss-20b";
 const SUMMARY_TEMPERATURE = 0.2;
 /// A REASONING MODEL SPENDS THIS BEFORE IT WRITES A WORD. At 200 it thought
@@ -137,7 +137,7 @@ const SUMMARY_MAX_COMPLETION_TOKENS = 600;
 /// this is already past the point where three lines help.
 const SUMMARY_MAX_CONTENT_CHARS = 8_000;
 
-/// MIRRORS `SYSTEM` in scripts/summarize.mjs, which still sends it itself when
+/// MIRRORS `SYSTEM` in packages/core/src/summarize.mjs, which still sends it itself when
 /// the developer brings their own Groq key. `native` is the client's
 /// "Same as I speak" setting (DEIKO_NARRATION=native). Change both.
 const summarySystem = (native) => [
@@ -205,7 +205,7 @@ const summarySystem = (native) => [
 // A third-party write-up spells these `Choice`/`Score`/`Noul`; the vendor's own
 // reference does not, and the vendor is the one answering the request.
 const JEV_URL = "https://api.typesafe.ai/v1/systemone";
-/// Pinned: the floors in `scripts/lib/context.mjs` are tuned to this version.
+/// Pinned: the floors in `packages/core/src/lib/context.mjs` are tuned to this version.
 const JEV_MODEL = "jev-1.13.0";
 
 /// WHO CAN ANSWER, in the order they are tried. The first with a key wins;
@@ -256,7 +256,7 @@ function jevSpeaker() {
 }
 /// A task Deiko minted: `t-` and the stamp of the brief that started it.
 const TASK_ID = /^t-\d{8}-\d{6}$/;
-/// The Score levels, in order. MIRRORS `TIERS` in `scripts/lib/context.mjs`,
+/// The Score levels, in order. MIRRORS `TIERS` in `packages/core/src/lib/context.mjs`,
 /// which names them back to the app by index. Change both.
 const TIER_RUBRIC = [
   "quick: one small answer or edit, no investigation",
@@ -390,23 +390,23 @@ const CLASSIFY_LIMITS = {
   narration: 2000, summary: 600, apps: 10, repoHints: 5, titles: 30, title: 200,
   collections: 20, name: 200, tasks: 20, now: 400, decided: 300, outcome: 300, label: 120,
 };
-/// Labels that may travel — `components` never does (see scripts/lib/labels.mjs).
+/// Labels that may travel — `components` never does (see packages/core/src/lib/labels.mjs).
 /// `errors` never does either: an error line is screen text, not a name.
 const BRIEF_KEYS = ["pages", "sites", "urls", "files", "repo", "docs", "tickets"];
 const TASK_KEYS = ["pages", "sites", "files", "tickets"];
 
-/// ponytail: starting values, tuned on the filing eval (scripts/eval-filing.mjs).
-/// MIRRORED by `GATE` and `ASK` in scripts/lib/context.mjs — change both.
+/// ponytail: starting values, tuned on the filing eval (evals/filing.mjs).
+/// MIRRORED by `GATE` and `ASK` in packages/core/src/lib/context.mjs — change both.
 export const GATE = 0.5;
 export const SECOND_LOOK = { min: 0.35, max: 2 };
 
 /// ponytail: fixed at 12s rather than reading the client's own deadline off
-/// the request — the client (`scripts/lib/filing.mjs`) aborts at 15s, and
+/// the request — the client (`packages/core/src/lib/filing.mjs`) aborts at 15s, and
 /// this leaves 3s of slack for the two hops home. Revisit both together if
 /// either timeout changes.
 const V3_BUDGET_MS = 12_000;
 
-/// The relation levels, in order. MIRRORS `RELATIONS` in scripts/lib/context.mjs.
+/// The relation levels, in order. MIRRORS `RELATIONS` in packages/core/src/lib/context.mjs.
 export const RELATION_RUBRIC = [
   "different: unrelated work, or only the same app, product or topic",
   "related-separate: connected to the task (same page, feature or area) but a separate goal",
@@ -417,7 +417,7 @@ const GATE_QUESTION = "The current brief is a real request: the speaker asks for
 const REFERS_BACK = "The brief says, in whatever language or mix of languages the developer speaks, that it carries on or adds to specific earlier work they already did, and then asks for something on it. For example: \"in that task\", \"circling back to the login fix from yesterday…\", \"picking up where we left off on the invoice export…\", \"the report page we built for Rahul, he now wants…\", \"same screen as before, also…\", \"lo del checkout de ayer, ahora…\", \"bei dem Export von gestern noch…\", \"jo humne kal kiya tha, usi mein…\". Only asking about the past (\"what did we decide?\"), or a brand-new request with no pointer to earlier work, is not this.";
 /// Local search's top few, asked which one a back-reference points at: five, so
 /// two look-alikes (two apps' "price bug") both get compared. MIRRORED
-/// by `REFERENCE.candidates` in scripts/lib/context.mjs.
+/// by `REFERENCE.candidates` in packages/core/src/lib/context.mjs.
 export const REFERENCE_CANDIDATES = 5;
 const SAME_JOB = "the same goal on the same page, feature or bug, picked up again, corrected or extended. Working in the same app, product or project is not enough, and topical similarity alone is insufficient.";
 
@@ -830,7 +830,7 @@ function parseMultipart(contentType, body) {
 }
 
 /// WHAT THE APP SENDS TO /v1/transcribe, AND NOTHING ELSE. `sttForm` in
-/// scripts/transcribe.mjs: the file, the model, `verbose_json`, and — for
+/// packages/core/src/transcribe.mjs: the file, the model, `verbose_json`, and — for
 /// "Same as I speak" — word/segment timestamps and a language hint.
 ///
 /// Everything else is refused, and two in particular. `url` has Groq fetch
@@ -1423,7 +1423,7 @@ export async function handle({ method, path, query = "", token, contentType, bod
     }
 
     // THE WHOLE V3 CALL HAS A BUDGET, NOT JUST EACH REQUEST. The client
-    // aborts at 15s (`scripts/lib/filing.mjs`); round 1 is held to the
+    // aborts at 15s (`packages/core/src/lib/filing.mjs`); round 1 is held to the
     // budget below, and round 2 gets only what is left of
     // `V3_BUDGET_MS` — and is skipped outright once under a second remains,
     // rather than starting a request that cannot finish before the client

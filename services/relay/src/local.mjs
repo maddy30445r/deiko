@@ -2,7 +2,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // THE RELAY ON THIS MAC, METERING INTO MEMORY
 //
-//   node services/relay/local.mjs          # what `make relay-dev` and
+//   node services/relay/src/local.mjs          # what `make relay-dev` and
 //                                          # `scripts/flow-check.sh` run
 //
 // `server.mjs` alone meters into the real `deiko-usage` table whenever this
@@ -12,7 +12,7 @@
 // `AWS_ENDPOINT_URL_DYNAMODB` (the same seam `test/metering.test.mjs` uses),
 // then loads the relay unchanged. Nothing it counts outlives the process.
 //
-// Never deployed: `deploy-aws.sh` packages its files by name.
+// Never deployed: `deploy.sh` packages its files by name.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { createServer } from "node:http";

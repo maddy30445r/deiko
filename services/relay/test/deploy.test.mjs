@@ -1,6 +1,6 @@
 // THE DEPLOY SCRIPT, RUN AGAINST A FAKE AWS.
 //
-// `deploy-aws.sh` decides who may invoke the function, what the function's
+// `deploy.sh` decides who may invoke the function, what the function's
 // environment becomes and whether a deploy counts as healthy — and until now
 // nothing checked any of it short of a real deploy. Here `aws`, `curl`, `npm`
 // and `sleep` are stubs on PATH that log what they were asked and answer from
@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const script = join(dirname(fileURLToPath(import.meta.url)), "..", "deploy-aws.sh");
+const script = join(dirname(fileURLToPath(import.meta.url)), "..", "deploy.sh");
 
 const HEALTHY = JSON.stringify({
   ok: true, transcription: true, summary: true, classify: true, playground: true, metering: true,

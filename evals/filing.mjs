@@ -2,14 +2,14 @@
 /**
  * How well Deiko files a board, against a hand-made answer key.
  *
- *   node scripts/eval-filing.mjs [--board ~/Library/Application\ Support/Deiko]
+ *   node evals/filing.mjs [--board ~/Library/Application\ Support/Deiko]
  *     [--labels ~/Documents/Deiko-eval/filing-labels.json]
  *     [--shortlist-only] [--relay <url>] [--pace <ms>] [--all] [--draft]
  *     [--model <key>|off] [--replay key|guessed]
  *     [--record <answers.json>] [--answers <answers.json> [--sweep]]
  *     [--aggregate pile|best|average] [--lookalike <cosine>] [--rows <rows.json>]
  *     [--judge-from <stamp>] [--max-calls <n>]
- *   node scripts/eval-filing.mjs --from-corrections [--write]
+ *   node evals/filing.mjs --from-corrections [--write]
  *     every brief placed by hand since, proposed as new answer-key entries
  *
  * READ-ONLY. Nothing under --board is written, ever. Briefs are replayed oldest
@@ -46,12 +46,12 @@ import { copyFileSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
-import { RULES, STAMP, readBriefLine, unplaceable } from "./lib/context.mjs";
-import { decideLocally, place, prepare, rankLocally, requestClassify, sessionInputs } from "./lib/filing.mjs";
+import { RULES, STAMP, readBriefLine, unplaceable } from "@deiko/core/lib/context.mjs";
+import { decideLocally, place, prepare, rankLocally, requestClassify, sessionInputs } from "@deiko/core/lib/filing.mjs";
 import { correctionLabels, draftLabels, expectations, formatReport, outcomeOf, rankOf, readLabels, tally } from "./lib/eval.mjs";
-import { DEIKO_HOME, briefText, currentModel, loadModel } from "./lib/meaning.mjs";
-import { readTasks, titleFor } from "./lib/tasks.mjs";
-import { writeAtomic } from "./lib/session-io.mjs";
+import { DEIKO_HOME, briefText, currentModel, loadModel } from "@deiko/core/lib/meaning.mjs";
+import { readTasks, titleFor } from "@deiko/core/lib/tasks.mjs";
+import { writeAtomic } from "@deiko/core/lib/session-io.mjs";
 
 const args = process.argv.slice(2);
 const flag = (name) => args.includes(name);

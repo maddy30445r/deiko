@@ -36,7 +36,7 @@
  * @returns {"trial"|"monthly"|"ceiling"|"unavailable"|null}
  */
 export function refusalReason(status, body = "") {
-  // services/relay/quota.mjs:206 — "the free trial is used up"
+  // services/relay/src/quota.mjs:206 — "the free trial is used up"
   if (status === 402) return "trial";
 
   const text = String(body).toLowerCase();
@@ -49,7 +49,7 @@ export function refusalReason(status, body = "") {
     return "unavailable";
   }
   // A BEARER THE RELAY WILL NOT ACCEPT CANNOT HEAL BY BEING SENT AGAIN.
-  // 401 is a malformed token, 403 a revoked one (services/relay/relay.mjs:190
+  // 401 is a malformed token, 403 a revoked one (services/relay/src/relay.mjs:190
   // and :191). Retrying uploads every remaining chunk of the session to be
   // rejected one at a time — minutes of somebody's audio, sent to be refused —
   // so this is final, and it is the one refusal whose fix is in Settings.
@@ -68,7 +68,7 @@ export function refusalReason(status, body = "") {
  * bandwidth to be told what is already known.
  *
  * `unavailable` is NOT in this set, deliberately. The relay's in-memory limiter
- * allows 30 requests a minute per token (services/relay/relay.mjs:104), and a
+ * allows 30 requests a minute per token (services/relay/src/relay.mjs:104), and a
  * twelve-minute session is roughly 29 chunks plus its quota calls — so a burst
  * 429 partway through a long recording is both plausible and transient. Treating
  * it as final would silently drop every word after it.

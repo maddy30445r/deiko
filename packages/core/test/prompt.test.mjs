@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { buildPrompt, quoteSurvives } from "../lib/prompt.mjs";
-import { assertNoSecrets, carriesSecret, redact, redactNote } from "../lib/redact.mjs";
+import { buildPrompt, quoteSurvives } from "../src/lib/prompt.mjs";
+import { assertNoSecrets, carriesSecret, redact, redactNote } from "../src/lib/redact.mjs";
 
 /** A referent nobody was talking through: no screenshot, no bound speech. */
 const bare = { cropPath: null, cropWithheld: null, said: null, text: { ax: [], ocr: [] } };
@@ -888,12 +888,12 @@ test("candidates sit where the task would, ahead of persona, hint and write-back
 test("an agent's note keeps plain file paths and scrubs a token, even one shaped like a path", () => {
   const jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4ifQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
   const out = redactNote([
-    "- apps/capture/Sources/DeikoCapture/MemoryHelper.swift",
+    "- apps/macos/Sources/DeikoCapture/MemoryHelper.swift",
     "- src/components/PricingTable.tsx",
     jwt,
     "- reset/Zx9Qm2Lk8Pw3Rt6Yv1Nb4Hc7Df0Gs5Aj/done.html",
   ]);
-  assert.equal(out[0], "- apps/capture/Sources/DeikoCapture/MemoryHelper.swift");
+  assert.equal(out[0], "- apps/macos/Sources/DeikoCapture/MemoryHelper.swift");
   assert.equal(out[1], "- src/components/PricingTable.tsx");
   assert.equal(out[2].includes("eyJ"), false, "a JWT is not a path");
   assert.equal(out[3].includes("Zx9Qm2Lk8Pw3Rt6Yv1Nb4Hc7Df0Gs5Aj"), false, "a token segment is caught");

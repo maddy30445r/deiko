@@ -53,7 +53,7 @@ const ROOT = (process.env.DEIKO_ROOT ?? DEIKO_HOME).replace(/^~/, homedir());
 // to ROOT unresolved if it doesn't exist yet — nothing lives under it either way.
 let ROOT_REAL;
 try { ROOT_REAL = realpathSync(ROOT); } catch { ROOT_REAL = ROOT; }
-/// Labels that may leave (see scripts/lib/labels.mjs): all but `components`.
+/// Labels that may leave (see packages/core/src/lib/labels.mjs): all but `components`.
 /// What a brief's labels may say to an agent — the same as travels for
 /// sorting: never `components`, never `errors` (an error label is a line of
 /// screen text from any app, a chat included).

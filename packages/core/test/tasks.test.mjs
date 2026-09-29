@@ -7,7 +7,7 @@ import { join } from "node:path";
 import {
   COMMON_LABEL, SEAT_KINDS, SHORTLIST, TASK_ID, TIME_SEATS, bm25, cosine, firm, groupTasks,
   parseOutcome, renderTaskNote, shortlist, stampTime, taskIdFor, taskLabels, taskState, terms,
-  timeWindow, titleFor, tokens, readBoard, readTasks, writeTaskNotes, sameDecision } from "../lib/tasks.mjs";
+  timeWindow, titleFor, tokens, readBoard, readTasks, writeTaskNotes, sameDecision } from "../src/lib/tasks.mjs";
 
 const brief = (id, line, extra = {}) => ({
   id, dir: `/Users/dev/Documents/Deiko/${id}`, line, summaryLine: line, narration: line,
@@ -401,9 +401,9 @@ test("notes are written for tasks with two briefs or more, titled from tasks.jso
 });
 
 test("the board index gives exactly what reading every brief gives, and re-reads what changed", async () => {
-  const { buildBoard } = await import("../bench-board.mjs");
-  const { readBriefLines } = await import("../lib/tasks.mjs");
-  const { readBriefLine, STAMP } = await import("../lib/context.mjs");
+  const { buildBoard } = await import("../../../evals/bench-board.mjs");
+  const { readBriefLines } = await import("../src/lib/tasks.mjs");
+  const { readBriefLine, STAMP } = await import("../src/lib/context.mjs");
   const { readdirSync, renameSync, rmSync, statSync } = await import("node:fs");
   const root = buildBoard(300);
   const direct = () => readdirSync(root).filter((n) => STAMP.test(n)).map((n) => readBriefLine(join(root, n)));
@@ -448,7 +448,7 @@ test("the board index gives exactly what reading every brief gives, and re-reads
 });
 
 test("Forget and Edit on a task's notes reach every reader, and outcome.md is never touched", async () => {
-  const { readBoard, overrideText, renderTaskNote: note } = await import("../lib/tasks.mjs");
+  const { readBoard, overrideText, renderTaskNote: note } = await import("../src/lib/tasks.mjs");
   const root = mkdtempSync(join(tmpdir(), "deiko-overrides-"));
   const mk = (id, extra, outcome) => {
     mkdirSync(join(root, id));
@@ -476,7 +476,7 @@ test("Forget and Edit on a task's notes reach every reader, and outcome.md is ne
 });
 
 test("a hand-off is clean Markdown for a person: redacted, corrected, screenshots beside it", async () => {
-  const { handoff } = await import("../handoff.mjs");
+  const { handoff } = await import("../src/handoff.mjs");
   const root = mkdtempSync(join(tmpdir(), "deiko-handoff-"));
   const a = join(root, "20260915-100000");
   mkdirSync(join(a, "crops"), { recursive: true });
@@ -505,7 +505,7 @@ test("a hand-off is clean Markdown for a person: redacted, corrected, screenshot
 });
 
 test("overrideText takes whole lines only, however a prompt quoted them", async () => {
-  const { overrideText } = await import("../lib/tasks.mjs");
+  const { overrideText } = await import("../src/lib/tasks.mjs");
   const o = { forget: new Set(["Done", "Keep  the toast."]), edit: new Map([["tests", "Tests pass on CI"]]) };
   const text = [
     "Done", "- Done.", "Still open from Sep 18: Done", "- Sep 18 (20260918-100000): Keep the toast.",
@@ -521,7 +521,7 @@ test("an outcome.md with Windows line endings reads like any other", () => {
 });
 
 test("a one-brief task that was corrected gets a note, and prompts point at it rather than the raw outcome", async () => {
-  const { historyPath, writeTaskNotes: write } = await import("../lib/tasks.mjs");
+  const { historyPath, writeTaskNotes: write } = await import("../src/lib/tasks.mjs");
   const root = mkdtempSync(join(tmpdir(), "deiko-onebrief-"));
   const a = join(root, "20260915-100000");
   mkdirSync(a);
@@ -539,7 +539,7 @@ test("a one-brief task that was corrected gets a note, and prompts point at it r
 });
 
 test("a hand-off never copies a screenshot that is a link to somewhere else", async () => {
-  const { handoff } = await import("../handoff.mjs");
+  const { handoff } = await import("../src/handoff.mjs");
   const { symlinkSync } = await import("node:fs");
   const root = mkdtempSync(join(tmpdir(), "deiko-handoff-link-"));
   const a = join(root, "20260915-100000");
@@ -555,7 +555,7 @@ test("a hand-off never copies a screenshot that is a link to somewhere else", as
 });
 
 test("search blends scores, so one weak word hit can't beat a strong meaning match", async () => {
-  const { blendScores } = await import("../lib/tasks.mjs");
+  const { blendScores } = await import("../src/lib/tasks.mjs");
   // Brief 0: a stray word on its screen, meaning far off. Brief 1: no word,
   // meaning close. Rank fusion put brief 0 first (a 1st place in words).
   const words = [0.4, 0, 0];

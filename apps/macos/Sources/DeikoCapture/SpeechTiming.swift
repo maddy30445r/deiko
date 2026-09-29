@@ -35,7 +35,7 @@ import Speech
 struct TimedWord: Codable {
     let text: String
     /// Milliseconds from the start of the audio, NOT the session clock. The
-    /// caller adds `audioT0` — see `scripts/transcribe.mjs`.
+    /// caller adds `audioT0` — see `packages/core/src/transcribe.mjs`.
     let start: Double
     let end: Double
 }

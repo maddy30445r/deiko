@@ -2,7 +2,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Deploy the relay to AWS Lambda behind a Function URL.
 #
-#   GROQ_API_KEY=… ./services/relay/deploy-aws.sh
+#   GROQ_API_KEY=… ./services/relay/deploy.sh
 #
 # Plain AWS CLI, no SAM/CDK/Terraform — the CLI is already installed, and a
 # deploy step that first needs another toolchain is a deploy step that fails on
@@ -76,7 +76,7 @@ esac
 #
 # One table holds every stateful thing the relay knows: per-subject audio
 # seconds, the cached Polar verdict, and the global daily total. See
-# services/relay/usage.mjs for the row shapes.
+# services/relay/src/usage.mjs for the row shapes.
 #
 # PROVISIONED AT 25/25, WHICH IS EXACTLY THE ALWAYS-FREE TIER — 25 write units,
 # 25 read units and 25GB, every month, permanently. On-demand is the obvious
@@ -142,7 +142,7 @@ BUILD="$(mktemp -d)"
 ZIP="$BUILD/relay.zip"
 PKG="$BUILD/pkg"
 mkdir -p "$PKG"
-cp "$here"/relay.mjs "$here"/lambda.mjs "$here"/quota.mjs "$here"/usage.mjs \
+cp "$here"/src/relay.mjs "$here"/src/lambda.mjs "$here"/src/quota.mjs "$here"/src/usage.mjs \
   "$here"/package.json "$here"/package-lock.json "$PKG/"
 
 say "installing @aws-sdk/client-dynamodb (locked)"

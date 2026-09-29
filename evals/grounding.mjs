@@ -2,7 +2,7 @@
 /**
  * Score how well a session GROUNDED — and check M1's done-when.
  *
- *   node scripts/ground-report.mjs ~/Library/Application\ Support/Deiko/<id>
+ *   node evals/grounding.mjs ~/Library/Application\ Support/Deiko/<id>
  *
  * `align-session.mjs` scores the other half: which utterance bound to which
  * referent. This scores the half underneath it — whether the referent knows
@@ -16,13 +16,13 @@
  */
 
 import { resolve, basename } from "node:path";
-import { loadEvents } from "./lib/session-io.mjs";
+import { loadEvents } from "@deiko/core/lib/session-io.mjs";
 
 // ── The grade ───────────────────────────────────────────────────────────────
 
 /**
  * Mirrors `groundsContent` in
- * apps/capture/Sources/DeikoGrounding/Grounding.swift — deliberately, and it is
+ * apps/macos/Sources/DeikoGrounding/Grounding.swift — deliberately, and it is
  * the one duplicated rule in this repo. Keeping it here means the report can
  * grade sessions recorded BEFORE the Swift fix, which is the whole point of
  * having a before-and-after number. If you change the Swift, change this.
@@ -71,7 +71,7 @@ function grade(probe) {
 
 const arg = process.argv[2];
 if (!arg) {
-  console.error("usage: node scripts/ground-report.mjs <session-dir>");
+  console.error("usage: node evals/grounding.mjs <session-dir>");
   process.exit(2);
 }
 const dir = resolve(arg.replace(/^~/, process.env.HOME ?? "~"));

@@ -179,7 +179,7 @@ export function taskText(title, briefs) {
   ].join(" ");
 }
 
-/// ponytail: starting values, tuned on the filing eval (scripts/eval-filing.mjs).
+/// ponytail: starting values, tuned on the filing eval (evals/filing.mjs).
 export const TIME_SEATS = 5;
 /// A label on more than this many tasks ("App.tsx", "index.tsx") seats nobody.
 export const COMMON_LABEL = 5;
@@ -219,7 +219,7 @@ export function bm25(query, docs) {
 
 /// How much meaning counts against words in search (see `blendScores`).
 /// Measured 27 Sep 2026 on 100 realistic queries against the owner's board
-/// (search-queries.json beside the filing labels, `scripts/eval-search.mjs`):
+/// (search-queries.json beside the filing labels, `evals/search.mjs`):
 /// every weight from 0.78 to 0.9 scored 88–89 right at #1, rank fusion at
 /// best 84, today's RRF 80. Below ~0.76 paraphrases fall away.
 export const SEARCH_MEANING_WEIGHT = 0.8;
@@ -439,7 +439,7 @@ export function taskMemory({ root, id, title, mates }) {
     recent: firmMates.slice(0, 3).reverse().map((b) => ({ date: briefDate(b.id), line: b.line })),
     // Shown so the agent can retire one word for word (`sameDecision`).
     decided: currentDecisions(face).decisions.slice(0, 5).map((d) => d.text),
-    // Measured 28 Sep on a 10-task test board (scripts/eval-memory): a browser
+    // Measured 28 Sep on a 10-task test board (evals/memory/): a browser
     // chat answered 5 of 10 history questions without it, 9 of 10 with it.
     history: face.slice(0, 12).reverse()
       .map((b) => ({ date: briefDate(b.id), line: b.line, did: redactNote((b.outcome?.did ?? []).slice(0, 2)) })),

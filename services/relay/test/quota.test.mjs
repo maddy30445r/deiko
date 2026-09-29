@@ -24,7 +24,7 @@ import {
   subjectFrom,
   usageKey,
   isPolarKey,
-} from "../quota.mjs";
+} from "../src/quota.mjs";
 
 // ── Who is calling ──────────────────────────────────────────────────────────
 

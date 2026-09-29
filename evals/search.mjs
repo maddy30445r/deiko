@@ -3,7 +3,7 @@
  * How well the board's search (and agents' search_briefs) finds past work,
  * against a hand-made set of queries. READ-ONLY.
  *
- *   node scripts/eval-search.mjs [--board ~/Library/Application\ Support/Deiko]
+ *   node evals/search.mjs [--board ~/Library/Application\ Support/Deiko]
  *     [--queries ~/Documents/Deiko-eval/search-queries.json] [--model <key>|off] [--all]
  *
  * Each query is `{ kind, q, want: [task ids] }`; a hit is any brief of a
@@ -24,7 +24,7 @@ const model = value("--model");
 if (model) process.env.DEIKO_MEANING_MODEL = model;
 const queries = JSON.parse(readFileSync(home(value("--queries", join(homedir(), "Documents", "Deiko-eval", "search-queries.json"))), "utf8"));
 
-const { searchBriefs } = await import("./memory-mcp.mjs");
+const { searchBriefs } = await import("@deiko/core/memory-mcp.mjs");
 const rows = [];
 for (const { kind, q, want } of queries) {
   const found = await searchBriefs({ query: q, limit: 20 });

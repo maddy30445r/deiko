@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { refusalReason, REFUSAL_IS_FINAL, degradedReason, withOneRetry } from "../lib/cloud.mjs";
+import { refusalReason, REFUSAL_IS_FINAL, degradedReason, withOneRetry } from "../src/lib/cloud.mjs";
 
-// The bodies below are the relay's own, copied from services/relay/quota.mjs
+// The bodies below are the relay's own, copied from services/relay/src/quota.mjs
 // and relay.mjs. If somebody rewords them there, these fixtures are what fails
 // — which is the point: the mapping is a string contract between two
 // deployables that never import each other.

@@ -15,12 +15,12 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
-import { readBriefLine } from "../lib/context.mjs";
-import { readListToRewrite, withBoardLock, writeAtomic } from "../lib/session-io.mjs";
-import { DEFAULT_MODEL, briefText, isReady, vectorIsCurrent } from "../lib/meaning.mjs";
+import { readBriefLine } from "../src/lib/context.mjs";
+import { readListToRewrite, withBoardLock, writeAtomic } from "../src/lib/session-io.mjs";
+import { DEFAULT_MODEL, briefText, isReady, vectorIsCurrent } from "../src/lib/meaning.mjs";
 
 const run = promisify(execFile);
-const scripts = fileURLToPath(new URL("..", import.meta.url));
+const scripts = fileURLToPath(new URL("../src", import.meta.url));
 
 /** A session `render-brief.mjs` can read: one probe per window title, and the words said. */
 function session(root, id, { said, windows = [], summary, context, outcome } = {}) {

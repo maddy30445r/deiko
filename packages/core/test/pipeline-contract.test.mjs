@@ -22,20 +22,20 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { TIMINGS_DONE, awaitPrecomputed } from "../lib/session-io.mjs";
+import { TIMINGS_DONE, awaitPrecomputed } from "../src/lib/session-io.mjs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const root = join(fileURLToPath(new URL(".", import.meta.url)), "..", "..");
+const root = join(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..");
 const read = (p) => readFileSync(join(root, p), "utf8");
 
-const swift = read("apps/capture/Sources/DeikoHandoff/PipelineFailure.swift");
+const swift = read("apps/macos/Sources/DeikoHandoff/PipelineFailure.swift");
 const scripts = [
-  "scripts/transcribe.mjs",
-  "scripts/render-brief.mjs",
-  "scripts/summarize.mjs",
-  "scripts/lib/redact.mjs",
-  "scripts/lib/prompt.mjs",
+  "packages/core/src/transcribe.mjs",
+  "packages/core/src/render-brief.mjs",
+  "packages/core/src/summarize.mjs",
+  "packages/core/src/lib/redact.mjs",
+  "packages/core/src/lib/prompt.mjs",
 ].map(read).join("\n");
 
 /// Every literal the Swift taxonomy matches on, and where it comes from.
@@ -79,7 +79,7 @@ test("the Swift failure taxonomy matches on strings that still exist", () => {
     //    `Deiko relay ${status}: ${body}`, and the body is written by
     //    services/relay/{quota,relay}.mjs — a different deployable, which is
     //    why nothing under scripts/ contains them. The status-and-body →
-    //    reason mapping lives in scripts/lib/cloud.mjs and is tested in
+    //    reason mapping lives in packages/core/src/lib/cloud.mjs and is tested in
     //    cloud.test.mjs; these are what the Swift taxonomy matches on when one
     //    of them fails a stage outright rather than merely degrading it.
     "fair-use limit",            // quota.mjs:200 — a Pro month is spent
@@ -114,7 +114,7 @@ test("the provider status prefix the taxonomy relies on is still constructed", (
   // pin is the template, because rewording THAT is what would break them all
   // at once, silently.
   assert.match(
-    read("scripts/transcribe.mjs"),
+    read("packages/core/src/transcribe.mjs"),
     /`Groq \$\{response\.status\}/,
     "the taxonomy matches `groq <status>` — this template is where that shape comes from",
   );
@@ -123,7 +123,7 @@ test("the provider status prefix the taxonomy relies on is still constructed", (
 test("the watchdog's timeout marker is what the Swift side looks for", () => {
   // Both halves are Swift, but they live in different targets and only meet
   // through this string: BriefPipeline writes it, DeikoHandoff classifies it.
-  const pipeline = read("apps/capture/Sources/DeikoCapture/BriefPipeline.swift");
+  const pipeline = read("apps/macos/Sources/DeikoCapture/BriefPipeline.swift");
   assert.ok(
     pipeline.includes("timed out after"),
     "BriefPipeline must write the marker PipelineFailure matches on",
@@ -135,8 +135,8 @@ test("the two withhold reasons are the ones the review window branches on", () =
   // `ReviewWindow.withheldSentence` picks between "a credential was visible"
   // and "couldn't read them to check" by looking for these words. Reword the
   // renderer and a first-run user gets told a credential was on their screen.
-  const renderer = read("scripts/render-brief.mjs");
-  const review = read("apps/capture/Sources/DeikoCapture/ReviewWindow.swift");
+  const renderer = read("packages/core/src/render-brief.mjs");
+  const review = read("apps/macos/Sources/DeikoCapture/ReviewWindow.swift");
 
   assert.match(renderer, /credential visible in this capture/);
   assert.match(renderer, /never OCR'd/);
@@ -152,8 +152,8 @@ test("the two withhold reasons are the ones the review window branches on", () =
 });
 
 test("the degraded flag the review window reads is the one the renderer writes", () => {
-  const renderer = read("scripts/render-brief.mjs");
-  const pipeline = read("apps/capture/Sources/DeikoCapture/BriefPipeline.swift");
+  const renderer = read("packages/core/src/render-brief.mjs");
+  const pipeline = read("apps/macos/Sources/DeikoCapture/BriefPipeline.swift");
 
   assert.match(renderer, /^\s*degraded,$/m, "render-brief must put `degraded` in the summary");
   assert.match(pipeline, /var degraded: Bool\?/, "BriefSummary must decode it, and optionally");
@@ -164,8 +164,8 @@ test("every summary key the review window reads is one the renderer writes", () 
   // learned to explain itself. Each pair is a JSON key crossing from a Node
   // script into a Swift `Codable` with no shared type between them, so the
   // only thing holding them together is this test.
-  const renderer = read("scripts/render-brief.mjs");
-  const pipeline = read("apps/capture/Sources/DeikoCapture/BriefPipeline.swift");
+  const renderer = read("packages/core/src/render-brief.mjs");
+  const pipeline = read("apps/macos/Sources/DeikoCapture/BriefPipeline.swift");
 
   for (const [key, decl] of [
     ["degradedReason", /var degradedReason: String\?/],
@@ -189,8 +189,8 @@ test("the renderer reads the exclusion file the app writes", () => {
   // The × on a thumbnail writes this; the renderer is the only reader. A
   // rename on either side silently un-removes every screenshot somebody chose
   // to hold back, which is the one failure this feature cannot have.
-  const renderer = read("scripts/render-brief.mjs");
-  const pipeline = read("apps/capture/Sources/DeikoCapture/BriefPipeline.swift");
+  const renderer = read("packages/core/src/render-brief.mjs");
+  const pipeline = read("apps/macos/Sources/DeikoCapture/BriefPipeline.swift");
 
   assert.match(renderer, /crops\.excluded\.json/);
   assert.match(pipeline, /crops\.excluded\.json/);
@@ -201,7 +201,7 @@ test("an excluded screenshot's referent is dropped, not just its path", () => {
   // crop and speech was bound to it. So nulling `cropPath` the way a withheld
   // crop does would send the TEXT of the image the developer removed. The
   // filter has to run before `released` is built.
-  const renderer = read("scripts/render-brief.mjs");
+  const renderer = read("packages/core/src/render-brief.mjs");
   assert.match(
     renderer,
     /const kept = referents\.filter\(/,
@@ -221,7 +221,7 @@ test("the transcript's `cloud` block is written from the transcriber's own state
   // `relayTranscriber` records a reason, `chunkedTranscriber` carries the
   // state object out, and `main` writes it. Break any one and the review
   // window silently goes back to explaining nothing.
-  const transcribe = read("scripts/transcribe.mjs");
+  const transcribe = read("packages/core/src/transcribe.mjs");
 
   assert.match(
     transcribe,
@@ -248,7 +248,7 @@ test("only account-level refusals end the session's uploads", () => {
   // transient 429 must fall through to the throw, so the next chunk retries.
   // Short-circuiting it would drop every word after the first blip on a long
   // recording, which is the failure this shape exists to avoid.
-  const transcribe = read("scripts/transcribe.mjs");
+  const transcribe = read("packages/core/src/transcribe.mjs");
   assert.match(
     transcribe,
     /if \(state\.refused && REFUSAL_IS_FINAL\.has\(state\.refused\)\)/,
@@ -260,9 +260,9 @@ test("the trust line's upload count survives from transcriber to Swift", () => {
   // `uploaded` is what stops the review panel claiming an upload that never
   // happened — a relay that was never reached, or an old session reopened
   // entirely from the transcript cache. Three files, no shared type.
-  const transcribe = read("scripts/transcribe.mjs");
-  const renderer = read("scripts/render-brief.mjs");
-  const pipeline = read("apps/capture/Sources/DeikoCapture/BriefPipeline.swift");
+  const transcribe = read("packages/core/src/transcribe.mjs");
+  const renderer = read("packages/core/src/render-brief.mjs");
+  const pipeline = read("apps/macos/Sources/DeikoCapture/BriefPipeline.swift");
 
   assert.match(transcribe, /state\.uploaded \+= 1;/, "requests that reach the network must be counted");
   assert.match(renderer, /uploadedChunks: cloud\?\.uploaded \?\? null/);
@@ -274,7 +274,7 @@ test("a re-render over a cached session cannot restamp what happened to it", () 
   // from the cache. Rewriting `cloud` from the CURRENT environment would make
   // the panel announce an upload for a session recorded on a build that had no
   // relay at all.
-  const transcribe = read("scripts/transcribe.mjs");
+  const transcribe = read("packages/core/src/transcribe.mjs");
   assert.match(
     transcribe,
     /if \(uploaded === 0 && priorCloud\) return priorCloud;/,
@@ -289,7 +289,7 @@ test("an edited narration still suppresses screen text from crop-less referents"
   // ("this one", "here"), which survive a correction by coincidence. Per-quote
   // survival alone would therefore ship the contents of a window the developer
   // had just edited themselves out of.
-  const renderer = read("scripts/render-brief.mjs");
+  const renderer = read("packages/core/src/render-brief.mjs");
   assert.match(
     renderer,
     /const keepQuote = path != null \? survives : \(narrationOverride == null/,
@@ -305,8 +305,8 @@ test("each reason degradedReason returns has a sentence in SessionClaims", () =>
   // `degradedSentence` is the only thing that renders them, so a reason added
   // on the Node side with no Swift case is a session that degrades silently —
   // which is the exact bug this whole change exists to fix, in miniature.
-  const cloud = read("scripts/lib/cloud.mjs");
-  const claims = read("apps/capture/Sources/DeikoHandoff/SessionClaims.swift");
+  const cloud = read("packages/core/src/lib/cloud.mjs");
+  const claims = read("apps/macos/Sources/DeikoHandoff/SessionClaims.swift");
 
   const body = cloud.slice(cloud.indexOf("export function degradedReason"));
   const returned = [...body.matchAll(/return "([a-z-]+)"/g)].map((m) => m[1]);
@@ -326,7 +326,7 @@ test("each reason degradedReason returns has a sentence in SessionClaims", () =>
 test("the transcriber's name reaches the cloud block degradedReason reads", () => {
   // `degradedReason` now classifies on `cloud.transcriber`. If cloudBlock stops
   // writing it, every relay-less session goes back to claiming it is fine.
-  const transcribe = read("scripts/transcribe.mjs");
+  const transcribe = read("packages/core/src/transcribe.mjs");
   const block = transcribe.slice(transcribe.indexOf("function cloudBlock"));
   assert.match(block.slice(0, 900), /transcriber:/, "cloudBlock must carry the transcriber's name");
 });
@@ -365,10 +365,10 @@ test("a release refuses to inherit a URL from somebody's .env", () => {
 // ── On-device timings, recognised while the upload runs ─────────────────────
 
 test("the app's done marker is the one the script waits on, and the script is told to wait", () => {
-  const pipeline = read("apps/capture/Sources/DeikoCapture/BriefPipeline.swift");
+  const pipeline = read("apps/macos/Sources/DeikoCapture/BriefPipeline.swift");
   assert.match(pipeline, new RegExp(`doneMarker = "${TIMINGS_DONE.replace(".", "\\.")}"`));
   assert.match(pipeline, /"DEIKO_TIMINGS_PENDING": "1"/);
-  assert.match(read("scripts/transcribe.mjs"), /process\.env\.DEIKO_TIMINGS_PENDING === "1"/);
+  assert.match(read("packages/core/src/transcribe.mjs"), /process\.env\.DEIKO_TIMINGS_PENDING === "1"/);
 });
 
 test("a pending timing file is waited for, and given up on once the app says it is done", async () => {

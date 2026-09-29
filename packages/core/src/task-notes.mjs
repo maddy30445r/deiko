@@ -3,7 +3,7 @@
 // the app runs this after "Forget" or "Edit" on a task's notes, so the note
 // an agent may already be reading stops quoting what was taken back.
 //
-//   node scripts/task-notes.mjs <board root>
+//   node packages/core/src/task-notes.mjs <board root>
 import { resolve } from "node:path";
 import { writeTaskNotes } from "./lib/tasks.mjs";
 

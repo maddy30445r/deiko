@@ -4,7 +4,7 @@
  *
  * Everything here is arithmetic over what the classifier answered. The
  * classifier is Jev (TypeSafe AI's "System One" model), reached through the
- * relay by `scripts/classify.mjs`; it returns calibrated probabilities, and
+ * relay by `packages/core/src/classify.mjs`; it returns calibrated probabilities, and
  * these floors are the only place they become decisions. The thresholds are
  * tuned against `jev-1.13.0`, which the relay pins — see `JEV_MODEL` there.
  *
@@ -34,7 +34,7 @@ export const FLOORS = {
 const MAX_CANDIDATES = 3;
 
 /// The Score levels, in order. Index = level. MIRRORS the rubric in
-/// `services/relay/relay.mjs` (`TIER_RUBRIC`): the relay names the levels to
+/// `services/relay/src/relay.mjs` (`TIER_RUBRIC`): the relay names the levels to
 /// the model, this names them to the app. Change both.
 export const TIERS = ["quick", "medium", "complex", "reasoning"];
 
@@ -117,9 +117,9 @@ export function unplaceable(b) {
 /// Filing, v3. Stamped on every context.json this writes, so a re-sort after
 /// the rules change shows exactly which briefs moved and why.
 export const CLASSIFIER = "v3.0";
-/// ponytail: starting values, tuned on the filing eval (scripts/eval-filing.mjs)
+/// ponytail: starting values, tuned on the filing eval (evals/filing.mjs)
 /// and later on real corrections. GATE and ASK are MIRRORED by `GATE` and
-/// `SECOND_LOOK.min` in services/relay/relay.mjs — change both.
+/// `SECOND_LOOK.min` in services/relay/src/relay.mjs — change both.
 export const GATE = 0.5;
 /// THE JOIN RULE, CALIBRATED ON THE OWNER'S BOARD (2026-09-25, 33 labelled
 /// briefs against live Jev). The first guess — a second look ≥ 0.9 — joined
@@ -140,7 +140,7 @@ export const ASK = 0.35;
 /// which of local search's top `candidates` it points at; one clear answer
 /// (`join`, ahead of the next by `gap`) joins, a close call asks.
 /// ponytail: starting values, measured on the filing eval and the
-/// back-reference set (scripts/eval-memory/references.mjs).
+/// back-reference set (evals/memory/references.mjs).
 export const REFERENCE = { back: 0.6, join: 0.6, gap: 0.25, candidates: 5 };
 /// WHEN LOCAL SEARCH IS SURE (its #1 leads the next by `lead` on the blended
 /// score) and Jev gave it at least `floor`, a brief that would start a new

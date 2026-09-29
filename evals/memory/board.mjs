@@ -7,11 +7,11 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { DEIKO_HOME } from "../lib/meaning.mjs";
-import { writeTaskNotes } from "../lib/tasks.mjs";
+import { DEIKO_HOME } from "@deiko/core/lib/meaning.mjs";
+import { writeTaskNotes } from "@deiko/core/lib/tasks.mjs";
 import { overrides, projects, tasks } from "./board-spec.mjs";
 
-const SCRIPTS = fileURLToPath(new URL("..", import.meta.url));
+const SCRIPTS = fileURLToPath(new URL("../../packages/core/src", import.meta.url));
 
 /** Builds the board in `board` (created); returns task ids by spec key. */
 export function buildBoard(board) {

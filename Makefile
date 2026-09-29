@@ -1,195 +1,74 @@
-.PHONY: dev build test probe watch region clean setup bundle install icon dmg release guard-clean relay-deploy relay-dev site-deploy resources dist record transcribe align ground brief summarize signing-setup reset-permissions reclassify meaning-backfill flow-check eval models-publish
+.DEFAULT_GOAL := help
+.PHONY: help setup build test bundle bundle-unsigned sign install dmg dist release guard-clean \
+	resources icon signing-setup reset-permissions clean relay-deploy relay-dev site-deploy \
+	models-publish record transcribe brief summarize classify task-notes reclassify \
+	meaning-backfill eval ground flow-check
 
-# Code-signing identity for the bundle.
-#
-# This matters far more than it looks. TCC stores a permission grant against the
-# app's code-signing requirement, and for an AD-HOC signature that requirement
-# pins the binary's cdhash — which changes on every single rebuild. The result
-# is that all four permissions silently die every time you run `make bundle`,
-# and the Accessibility entry stays visibly ticked while being dead.
-#
-# Signing with a stable self-signed certificate instead keys the grant to the
-# certificate, so the permissions survive rebuilds. See `make signing-setup`.
-#
-# Deliberately NOT `find-identity -v`. The -v flag lists only certificates macOS
-# considers valid, which for a self-signed one means added to your trust store —
-# an authorisation prompt and a root certificate, bought for nothing, since
-# codesign signs perfectly well with an untrusted local identity.
+MACOS       := apps/macos
+CORE        := packages/core
+DEBUG_BIN   := $(MACOS)/.build/debug/deiko-capture
+RELEASE_BIN := $(MACOS)/.build/release/deiko-capture
+APP         := build/Deiko.app
+RES         := $(APP)/Contents/Resources
+VERSION     := $(shell cat VERSION 2>/dev/null || echo 0.0.0)
+BUILD       := $(shell git rev-list --count HEAD 2>/dev/null || echo 1)
+DMG         := build/Deiko-$(VERSION).dmg
+
+# Sign with a stable certificate when one exists. An ad-hoc signature pins the
+# binary's hash, so macOS drops every permission grant on each rebuild.
+# `find-identity` without -v: a self-signed identity signs fine untrusted.
 SIGN_NAME  ?= Deiko Local
 SIGN_FOUND := $(shell security find-identity -p codesigning 2>/dev/null | grep -c '"$(SIGN_NAME)"')
-# The identity actually used to sign: "-" (ad-hoc) when SIGN_NAME isn't in the
-# keychain, SIGN_NAME otherwise — the local self-signed cert from
-# `make signing-setup`, or, later, a real "Developer ID Application: …" one.
 SIGN_ID    := $(if $(filter 0,$(SIGN_FOUND)),-,$(SIGN_NAME))
-# A Developer ID identity's signature needs a secure timestamp and the
-# hardened runtime or notarytool rejects it — see `sign` below. Ad-hoc and the
-# local self-signed cert get neither: there's no Apple timestamp server to
-# reach for either one, and asking would just fail.
+# Notarization requires a secure timestamp and the hardened runtime.
 SIGN_EXTRA := $(if $(findstring Developer ID,$(SIGN_ID)),--timestamp --options runtime,)
 
-CAPTURE_DIR := apps/capture
-DEBUG_BIN   := $(CAPTURE_DIR)/.build/debug/deiko-capture
-RELEASE_BIN := $(CAPTURE_DIR)/.build/release/deiko-capture
-
-## dev — build the capture binary and verify the Swift→Node stdio contract
-dev: $(DEBUG_BIN)
-	@node scripts/hello.mjs
-
-# Every Sources subtree, not just DeikoCapture — the pure targets (DeikoGesture,
-# DeikoVoice, DeikoGrounding) are where the testable logic lives, and a rule that
-# does not watch them silently runs the old binary against the new tests.
-$(DEBUG_BIN): $(wildcard $(CAPTURE_DIR)/Sources/*/*.swift) $(CAPTURE_DIR)/Package.swift
-	@swift build --package-path $(CAPTURE_DIR)
-
-## build — release binary
-build:
-	@swift build --package-path $(CAPTURE_DIR) -c release
-	@echo "built $(RELEASE_BIN)"
-
-## test — Swift gesture tests + TypeScript workspace tests + scripts/ tests
-test:
-	@swift test --package-path $(CAPTURE_DIR)
-	@npm test
-
-## setup — install node deps
-setup:
-	@npm install
-
-## probe — single AX probe at the cursor, 3s after you hit enter
-probe: $(DEBUG_BIN)
-	@$(DEBUG_BIN) ax-probe --delay 3 --verbose
-
-## watch — probe on every cursor settle. The tool for the T0.1 app matrix.
-watch: $(DEBUG_BIN)
-	@$(DEBUG_BIN) ax-probe --watch --verbose
-
-## region — same, but probes a circular lasso around the cursor
-region: $(DEBUG_BIN)
-	@$(DEBUG_BIN) ax-probe --watch --region 90 --verbose
-
-## bundle — assemble Deiko.app around the binary
-##
-## Needed because TCC will not honour usage descriptions from a bare SwiftPM
-## executable: requesting Speech Recognition from one is killed with SIGABRT,
-## and `tccutil` does not even recognise its identifier. Linking the plist in as
-## a __TEXT,__info_plist section satisfies codesign but not TCC.
-##
-## It is also where the product is going regardless — a menu-bar app (PRD §7) —
-## and it fixes the permission model: permissions attach to Deiko.app instead of
-## to whichever terminal happened to launch the binary.
-APP := build/Deiko.app
-RES := $(APP)/Contents/Resources
-
-# ONE version in the product. `VERSION` is the source; it is stamped into the
-# bundle below, and `DeikoVersion` reads it back out at runtime. There used to
-# be two hardcoded literals with nothing keeping them in sync.
-VERSION := $(shell cat VERSION 2>/dev/null || echo 0.0.0)
-# The build number distinguishes two shipped copies of one version. A commit
-# count is monotonic, requires nothing to be maintained by hand, and is 1 in a
-# tarball with no git — which is honest rather than wrong.
-BUILD := $(shell git rev-list --count HEAD 2>/dev/null || echo 1)
-
-# Where the landing site's built static files are. Overridable because the
-# generator has not been chosen yet.
-SITE_DIR ?= site
-
-# THE FOUR STAMPED VALUES DEFAULT FROM `.env`, and the reason is a shipped bug.
-#
-# `make install RELAY_URL=https://…` produced a correct app. The next plain
-# `make install` re-stamped all four to EMPTY — `RELAY_URL` was never even
-# declared here, so it expanded to nothing — and the app then reported "relay
-# configured: none" while the brief it produced said `degraded: false`. A day of
-# sessions came out of the on-device recogniser ("using Daku" for "using Deiko")
-# and read as the alignment being broken. A default that is empty is a default
-# that is wrong every time somebody forgets an argument.
-#
-# THE SHELL PARSES `.env`, NOT MAKE. Same read `scripts/deploy-site.sh` and
-# `BriefPipeline.shell` already do, so a value containing `=`, quotes or spaces
-# means what it means everywhere else and there is one parser rather than a
-# second one written in sed. `[ -f .env ]` because a tarball has none.
-#
-# `?=`, NOT `:=` — this is what keeps the invariant below true. A variable given
-# on the command line has origin `command line`, for which `?=` is a no-op, so
-# `make install RELAY_URL=` still builds a relay-less app deliberately.
-#
-# ponytail: sourcing .env executes whatever is in it at parse time; the same
-# exposure already exists in the two other paths that source the same file.
+# Stamped values default from .env (parsed by the shell, as everywhere else).
+# `?=` keeps an explicit `make install RELAY_URL=` meaning "none".
 env-default = $(shell set -a; [ -f .env ] && . ./.env; set +a; printf %s "$$$(1)")
-
 RELAY_URL     ?= $(call env-default,RELAY_URL)
-
-# WHERE THE SITE IS SERVED FROM, once it has a domain.
-#
-# ONE download location, and it is the site — the same place the landing page,
-# the pricing and the docs live. The app fetches `$(SITE_URL)/download/version.json`
-# to find out whether it is out of date, and `install.sh` fetches the DMG from
-# beside it.
-#
-# Empty is still a supported state: an app with no site URL simply never checks
-# for updates, exactly as an app with no RELAY_URL transcribes on-device. Better
-# than pointing at a host that does not answer. It is now something you ASK for
-# — `make install SITE_URL=` — rather than something you get by forgetting.
-#
-# This deliberately does NOT use GitHub Releases. It would be free bandwidth,
-# but it is a second place to publish and to keep in step, and its unauthenticated
-# API allows 60 requests/hour PER IP — a team behind one NAT shares that budget
-# for a check that should never be able to fail noisily. A static JSON on
-# CloudFront has no such limit.
-SITE_URL ?= $(call env-default,SITE_URL)
-
-# WHERE SOMEBODY BUYS PRO, and where a bug report goes.
-#
-# Separate from SITE_URL on purpose, and the reason is not tidiness: as this is
-# written the published site answers 404 on every path, including the
-# `download/version.json` the update check reads. A checkout link derived from
-# the site would therefore appear in builds where it cannot work — and a Get Pro
-# button that 404s fails at the exact moment somebody decided to pay, which is
-# the worst moment a product can look unfinished.
-#
-# Empty is a supported state for both: the app hides every buy affordance
-# without a BUY_URL, and hides "Send feedback…" without a SUPPORT_EMAIL. Same
-# discipline as RELAY_URL — a stamped constant beats a source literal that is
-# wrong in somebody's local build, and absent beats broken. Both default from
-# `.env` now; an explicit `BUY_URL=` still stamps empty.
-BUY_URL ?= $(call env-default,BUY_URL)
+SITE_URL      ?= $(call env-default,SITE_URL)
+BUY_URL       ?= $(call env-default,BUY_URL)
 SUPPORT_EMAIL ?= $(call env-default,SUPPORT_EMAIL)
 
-## bundle — the dev loop's app: assemble, then sign.
-##
-## SIGNING IS ITS OWN TARGET AND IT RUNS LAST. It used to be the tail of this
-## one, which was fine until `dist` started copying a 110MB Node runtime into
-## Contents/Resources AFTER the seal had been computed over a bundle that did
-## not contain it. Every DMG ever handed to anybody — 0.3.0, 0.4.0, 0.4.1 —
-## failed `codesign --verify` with "a sealed resource is missing or invalid",
-## and Gatekeeper rejected all three. Nothing caught it because nothing ever
-## verified. Now assembling and sealing are separate steps, `dist` puts every
-## byte in place before calling `sign`, and `sign` verifies or fails the build.
-bundle: bundle-unsigned sign
+# The app's "Sort briefs into tasks" switch, as passed by the app or as saved.
+SORT_BRIEFS = DEIKO_SORT_BRIEFS="$${DEIKO_SORT_BRIEFS-$$(defaults read com.deiko.capture DEIKO_SORT_BRIEFS 2>/dev/null)}"
+ROOT ?= $(HOME)/Library/Application Support/Deiko
+NODE_BIN := $(shell zsh -lc 'command -v node' 2>/dev/null)
+
+help: ## List the targets
+	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | sed 's/:.*## /\t/' | expand -t22
+
+# ── Build ──────────────────────────────────────────────────────────────────
+
+setup: ## Install Node dependencies
+	@npm install
+
+$(DEBUG_BIN): $(wildcard $(MACOS)/Sources/*/*.swift) $(MACOS)/Package.swift
+	@swift build --package-path $(MACOS)
+
+build: ## Build the release binary
+	@swift build --package-path $(MACOS) -c release
+	@echo "built $(RELEASE_BIN)"
+
+test: ## Run the Swift and Node test suites
+	@swift test --package-path $(MACOS)
+	@npm test
+
+bundle: bundle-unsigned sign ## Assemble and sign build/Deiko.app (dev loop)
 
 bundle-unsigned: $(DEBUG_BIN) resources
-	@cp $(CAPTURE_DIR)/Sources/DeikoCapture/Info.plist $(APP)/Contents/Info.plist
+	@cp $(MACOS)/Sources/DeikoCapture/Info.plist $(APP)/Contents/Info.plist
 	@cp $(DEBUG_BIN) $(APP)/Contents/MacOS/deiko-capture
-	@cp $(CAPTURE_DIR)/Sources/DeikoCapture/Deiko.icns $(RES)/Deiko.icns
-	@# The title face. Registered per-process at launch (see Style.swift), so
-	@# it is never installed on anybody's Mac; missing it only drops the app
-	@# back to the system face.
-	@cp $(CAPTURE_DIR)/Sources/DeikoCapture/Bricolage.ttf $(RES)/Bricolage.ttf
-	@cp $(CAPTURE_DIR)/Sources/DeikoCapture/Bricolage-OFL.txt $(RES)/Bricolage-OFL.txt
+	@cp $(MACOS)/Sources/DeikoCapture/Deiko.icns $(RES)/Deiko.icns
+	@cp $(MACOS)/Sources/DeikoCapture/Bricolage.ttf $(MACOS)/Sources/DeikoCapture/Bricolage-OFL.txt $(RES)/
 	@/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $(VERSION)" $(APP)/Contents/Info.plist
 	@/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(BUILD)" $(APP)/Contents/Info.plist
 	@/usr/libexec/PlistBuddy -c "Set :DeikoRelayURL $(RELAY_URL)" $(APP)/Contents/Info.plist
 	@/usr/libexec/PlistBuddy -c "Set :DeikoSiteURL $(SITE_URL)" $(APP)/Contents/Info.plist
 	@/usr/libexec/PlistBuddy -c "Set :DeikoBuyURL $(BUY_URL)" $(APP)/Contents/Info.plist
 	@/usr/libexec/PlistBuddy -c "Set :DeikoSupportEmail $(SUPPORT_EMAIL)" $(APP)/Contents/Info.plist
-ifneq ($(RELAY_URL),)
-	@echo "  relay: $(RELAY_URL)"
-else
-	@echo "  relay: none — sessions fall back to on-device words"
-endif
-	@# ALL FOUR, because the one that was wrong was the one nobody printed. Each
-	@# decides whether a whole affordance exists — updates, the buy button,
-	@# "Send feedback…" — and a blank here is the only warning before a build
-	@# that silently lacks it.
+	@echo "  relay: $(if $(RELAY_URL),$(RELAY_URL),none — sessions fall back to on-device words)"
 	@echo "  site: $(if $(SITE_URL),$(SITE_URL),none — no update check)"
 	@echo "  buy: $(if $(BUY_URL),$(BUY_URL),none — Pro is not purchasable in this build)"
 	@echo "  support: $(if $(SUPPORT_EMAIL),$(SUPPORT_EMAIL),none — no feedback affordance)"
@@ -198,55 +77,46 @@ endif
 	@/usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" $(APP)/Contents/Info.plist >/dev/null 2>&1 || true
 	@echo "assembled $(APP)  (unsigned)"
 
-## sign — seal the bundle, then prove the seal.
-##
-## NO `--deep` ON THE SIGNATURE. `--deep` re-signs everything nested inside,
-## which for us means Contents/Resources/node — a binary that already carries
-## Node Foundation's own Developer ID signature and hardened runtime. Replacing
-## that with ours strips both and buys nothing; Apple deprecated `--deep` for
-## signing for exactly this reason. Nested code that arrives already signed
-## stays that way, and the outer seal simply records it.
-##
-## `--deep` on VERIFY is the opposite and is correct: it walks the nested code
-## and checks it, which is what catches a resource added after sealing.
-sign:
+# The bundle keeps the pipeline at Resources/scripts: agents' MCP configs hold
+# that absolute path, so it must not move between releases.
+resources:
+	@rm -rf $(RES)
+	@mkdir -p $(RES)/scripts $(RES)/node_modules/@deiko/alignment $(RES)/node_modules/@huggingface $(APP)/Contents/MacOS
+	@npm run build --workspaces --if-present --silent >/dev/null
+	@rsync -a --delete $(CORE)/src/ $(RES)/scripts/
+	@rsync -a --exclude 'test/' packages/alignment/package.json packages/alignment/dist $(RES)/node_modules/@deiko/alignment/
+	@test -f node_modules/onnxruntime-node/bin/napi-v6/darwin/arm64/onnxruntime_binding.node \
+	  || (echo "✗ onnxruntime-node's macOS binary is missing — run npm ci"; exit 1)
+	@rsync -a --delete node_modules/onnxruntime-node node_modules/onnxruntime-common $(RES)/node_modules/
+	@rsync -a --delete node_modules/@huggingface/tokenizers $(RES)/node_modules/@huggingface/
+	@# Keep only the macOS arm64 runtime, and drop the unused versioned dylib copy.
+	@find $(RES)/node_modules/onnxruntime-node/bin -mindepth 2 -maxdepth 2 -type d ! -name darwin -exec rm -rf {} +
+	@find $(RES)/node_modules/onnxruntime-node/bin -mindepth 3 -maxdepth 3 -type d ! -name arm64 -exec rm -rf {} +
+	@rm -f $(RES)/node_modules/onnxruntime-node/bin/napi-v6/darwin/arm64/libonnxruntime.1.30.0.dylib
+	@rsync -a --delete $(MACOS)/licenses $(RES)/
+	@echo "  resources: pipeline, alignment, onnxruntime (darwin arm64), tokenizers, licences"
+
+# Signing runs last so the seal covers every byte. Nested code that is already
+# signed (the bundled Node) keeps its own signature: no --deep when signing,
+# but --deep when verifying.
+sign: ## Sign the bundle and verify the seal
 	@find $(RES)/node_modules \( -name '*.node' -o -name '*.dylib' \) -type f 2>/dev/null \
 	  | while read -r f; do codesign --force --sign "$(SIGN_ID)" $(SIGN_EXTRA) "$$f" 2>/dev/null \
 	  || { echo "✗ could not sign $$f"; exit 1; }; done
 ifeq ($(SIGN_FOUND),0)
 	@codesign --force --sign - $(APP) 2>/dev/null
-	@echo "signed $(APP)  ⚠ AD-HOC"
-	@echo "   macOS will drop all four permissions on the next rebuild."
-	@echo "   Fix it once:  make signing-setup"
+	@echo "signed $(APP)  ⚠ ad-hoc: macOS drops permissions on every rebuild — run make signing-setup"
 else
 	@codesign --force --sign "$(SIGN_NAME)" $(APP) 2>/dev/null
-	@echo "signed $(APP)  ($(SIGN_NAME) — permissions survive rebuilds)"
+	@echo "signed $(APP)  ($(SIGN_NAME))"
 endif
 	@codesign --verify --strict --deep $(APP) \
 	  || (echo "✗ the seal does not match the bundle — something was added after signing"; exit 1)
 	@echo "  seal verified"
-	@echo "launch it:  open $(APP)      (menu-bar app; permissions attach to Deiko)"
-	@echo "subcommand: $(APP)/Contents/MacOS/deiko-capture <cmd>"
 
-## install — put this build in /Applications and restart it
-##
-## `cp -R build/Deiko.app /Applications/` is the obvious command and it is
-## wrong twice over. It MERGES into the existing bundle rather than replacing
-## it, so files the old build had and the new one does not simply survive; and
-## it rewrites the app underneath Finder, which caches the icon it sees
-## mid-copy. That produced a prohibited-sign icon once and a blank placeholder
-## once, in the same evening, on an app that was working perfectly both times —
-## an hour lost to a cosmetic artifact with a valid signature behind it.
-##
-## So: quit first, replace wholesale, then make the icon caches let go.
-##
-## THE CACHE PURGE AND THE RESTARTS ARE THE LOAD-BEARING PART, and `lsregister`
-## alone is NOT enough — this target shipped without them and reproduced the
-## blank icon on its very first run. Finder and Dock each hold their own
-## rendered copy, keyed by path, and neither re-reads the bundle just because
-## LaunchServices was told to. Restarting them is what actually clears it.
-## They both relaunch immediately; the cost is a Finder window blinking.
-install: bundle
+# Replaces the app wholesale (cp -R would merge into the old bundle), then
+# restarts Finder and the Dock, which otherwise keep a stale icon.
+install: bundle ## Install the build into /Applications and relaunch it
 	@osascript -e 'quit app "Deiko"' 2>/dev/null || true
 	@sleep 1
 	@rm -rf /Applications/Deiko.app
@@ -259,267 +129,11 @@ install: bundle
 	@killall Finder 2>/dev/null || true
 	@sleep 2
 	@open /Applications/Deiko.app
-	@echo "installed and running: /Applications/Deiko.app  (Dock + Finder restarted)"
-	@echo "verify: /Applications/Deiko.app/Contents/MacOS/deiko-capture diagnostics | grep relay"
+	@echo "installed and running: /Applications/Deiko.app"
 
-## dmg — the thing you actually hand to somebody
-##
-## `hdiutil` rather than `create-dmg`, because it ships with macOS: a release
-## step that first needs a Homebrew install is a release step that fails on the
-## one machine you did not set up.
-##
-## Built from `dist`, not `bundle` — the Node runtime is what makes this work on
-## a Mac that has never had Node, which is most Macs.
-##
-## THE README IN THE WINDOW IS NOT DECORATION. The app is signed with a
-## self-signed certificate, so the first thing that happens after the drag is
-## macOS refusing to open it. Somebody who does not find the bypass concludes
-## the app is broken, and they are not wrong to.
-DMG := build/Deiko-$(VERSION).dmg
-
-dmg: dist
-	@rm -rf build/dmg $(DMG)
-	@mkdir -p build/dmg
-	@cp -R $(APP) build/dmg/
-	@ln -s /Applications build/dmg/Applications
-	@cp README.md build/dmg/
-	@# THE ONE-LINER ONLY APPEARS WHEN THERE IS A HOST TO FETCH IT FROM. Built
-	@# with an empty SITE_URL it rendered as `curl -fsSL /install.sh | sh` —
-	@# which is exactly what the 0.4.1 DMG on disk still offers, and it cannot
-	@# work. `make release` requires SITE_URL, so a real release always carries
-	@# the offer; a hand-built DMG gets the by-hand steps and no broken promise.
-	@printf '%s\n' 'Deiko $(VERSION)' '' > 'build/dmg/Read me first.txt'
-ifneq ($(SITE_URL),)
-	@printf '%s\n' \
-		'EASIEST: skip this disk image entirely. Paste this into Terminal and' \
-		'it does all of the below for you:' \
-		'' \
-		'     curl -fsSL $(SITE_URL)/install.sh | sh' \
-		'' \
-		'' \
-		>> 'build/dmg/Read me first.txt'
-endif
-	@printf '%s\n' \
-		'BY HAND:' \
-		'' \
-		'1. Drag Deiko onto the Applications folder.' \
-		'' \
-		'2. BEFORE LAUNCHING, run this once in Terminal:' \
-		'' \
-		'     xattr -dr com.apple.quarantine /Applications/Deiko.app' \
-		'' \
-		'   Deiko is signed with a self-signed certificate rather than an' \
-		'   Apple Developer ID, so macOS quarantines everything you just' \
-		'   downloaded. This clears the whole bundle -- including the Node' \
-		'   runtime inside it that Deiko spawns to transcribe your sessions.' \
-		'' \
-		'   The GUI route (System Settings -> Privacy & Security -> "Open' \
-		'   Anyway") lets the app start, but may leave that nested runtime' \
-		'   quarantined -- which turns up later as a session stuck at' \
-		'   "Transcribing...". The command above avoids that.' \
-		'' \
-		'   Right-click -> Open is NOT enough on current macOS.' \
-		'' \
-		'3. Launch it. Deiko lives in the menu bar, and a first-run window' \
-		'   explains the four permissions it needs and why.' \
-		'' \
-		'4. Double-tap Right Option, point at something and talk, tap Right' \
-		'   Option to stop — then drag the resulting coin onto your Claude' \
-		'   Code window.' \
-		'' \
-		'Requires macOS 14 or later.' \
-		'' \
-		'Full documentation: README.md, beside this file.' \
-		>> 'build/dmg/Read me first.txt'
-	@hdiutil create -volname "Deiko $(VERSION)" -srcfolder build/dmg \
-		-ov -format UDZO -quiet $(DMG)
-	@echo "built $(DMG)  ($$(du -h $(DMG) | cut -f1))"
-	@echo "  the app inside is SELF-SIGNED — the receiver must bypass Gatekeeper."
-	@echo "  'Read me first.txt' in the window tells them how."
-
-## release — publish the DMG on the site and tag the commit it came from
-##
-##   make release RELAY_URL=https://… SITE_URL=https://…
-##
-## ONE download location, and it is the site. This used to cut a GitHub Release
-## on the private source repo, which made repo access the access list: an asset
-## returned a bare 404 to anyone who was not a collaborator, which reads like a
-## broken link rather than a permission problem. Correct for a team of three,
-## wrong for a stranger who wants to try the app.
-##
-## The TAG STILL LANDS HERE, on the source, because that is what a version has
-## to be checkable against — the site holds the binary, this repo holds the
-## commit that produced it.
-##
-## Refuses on a dirty tree or an existing tag. A release whose contents do not
-## correspond to a commit is worse than no release: the first bug report cites
-## a version that cannot be checked out.
-release: guard-clean
-	@# ORIGIN, NOT EMPTINESS. These four now default from `.env`, so `-n` stopped
-	@# proving anybody meant it: a release would silently inherit whichever relay
-	@# happened to be in the developer's dotfile. A release is the one build whose
-	@# URLs are baked into a shipped plist and can never be corrected remotely, so
-	@# it must say them out loud on the command line.
-	@test '$(origin SITE_URL)' = 'command line' \
-		|| (echo "✗ pass SITE_URL= explicitly — a release must not inherit .env"; exit 1)
-	@# The same guard for the relay, because this failure is SILENT: PlistBuddy
-	@# happily stamps an empty DeikoRelayURL, every install of that release
-	@# falls back to on-device words forever, and a shipped plist can never be
-	@# corrected remotely. `make dmg RELAY_URL=` stays possible on purpose —
-	@# hand-delivered relay-less builds are a thing — but a RELEASE is not one.
-	@test '$(origin RELAY_URL)' = 'command line' \
-		|| (echo "✗ pass RELAY_URL= explicitly — a release must not inherit .env"; exit 1)
-	@# BOTH SPELLINGS. Releases up to 0.3.0 were tagged `vX.Y.Z`, but `0.4.1`
-	@# was cut by hand without the prefix — and a guard that only knew about
-	@# `v0.4.1` waved that through and would have put a second tag on the same
-	@# commit. Whatever shape a version was tagged in, it counts as released.
-	@test -z "$$(git tag -l 'v$(VERSION)' -l '$(VERSION)')" \
-		|| (echo "✗ $(VERSION) is already tagged — bump VERSION first"; exit 1)
-	@# WARNED, not refused, unlike RELAY_URL and SITE_URL above. A release with
-	@# no relay meters nothing and a release nobody can download is not a
-	@# release; a release with no checkout link is merely one where the buy
-	@# buttons stay hidden, which is the correct behaviour when there is nothing
-	@# behind them. Same for feedback. Worth saying out loud all the same,
-	@# because both are easy to forget once they DO exist.
-	@test -n "$(BUY_URL)" \
-		|| echo "  ! BUY_URL is empty — this build shows no way to buy Pro"
-	@test -n "$(SUPPORT_EMAIL)" \
-		|| echo "  ! SUPPORT_EMAIL is empty — this build shows no way to send feedback"
-	@# THE MODEL MIRROR, CHECKED BEFORE THE DMG IS BUILT. Every install of this
-	@# release runs `scripts/lib/meaning.mjs`'s downloader against the mirror
-	@# as soon as it launches; if the upload there was forgotten, every one of
-	@# them fails the same way forever, on every launch. The file list comes
-	@# from `MODELS` itself, so this can never drift from what the app asks for.
-	@# VERIFY_ORIGIN checks the same Pages project through another of its hosts
-	@# (deiko-site.pages.dev) when a network intercepts deiko.app's TLS; what
-	@# ships still points at MODEL_BASE_URL.
-	@for url in $$(node -e "import('./scripts/lib/meaning.mjs').then(({ MODELS, DEFAULT_MODEL, MODEL_BASE_URL }) => { const base = process.env.VERIFY_ORIGIN ? process.env.VERIFY_ORIGIN.replace(/\/+$$/, '') + '/download/models' : MODEL_BASE_URL; for (const f of MODELS[DEFAULT_MODEL].files) console.log(base.replace(/\/+$$/, '') + '/' + DEFAULT_MODEL + '/' + f.path); } )"); do \
-		curl -fsI "$$url" >/dev/null || { echo "✗ model mirror is missing $$url — upload it before releasing"; exit 1; }; \
-	done
-	@echo "  model mirror: all files present"
-	@$(MAKE) --no-print-directory dmg RELAY_URL='$(RELAY_URL)' SITE_URL='$(SITE_URL)' BUY_URL='$(BUY_URL)' SUPPORT_EMAIL='$(SUPPORT_EMAIL)'
-	@# SITE_URL travels in the environment: publish-release.sh stamps it into
-	@# version.json, and without it that falls back to a hostname nobody types.
-	@# install.sh is NOT stamped here any more — it ships with the site, from
-	@# scripts/deploy-site.sh, because the only thing substituted into it is the
-	@# origin and that is now a constant. Publishing it from both places would
-	@# race, and the loser wins at whichever path was written last.
-	@SITE_URL=$(SITE_URL) ./scripts/publish-release.sh $(DMG) $(VERSION)
-	@git tag v$(VERSION)
-	@git push origin v$(VERSION)
-	@echo "✓ v$(VERSION) tagged and published"
-	@echo "  the release notes live with the site, not here — this repo ships the binary."
-
-## Refuse to build a release out of uncommitted work.
-guard-clean:
-	@test -z "$$(git status --porcelain)" \
-		|| (echo "✗ working tree is dirty — commit before releasing"; \
-		    git status --short; exit 1)
-
-## relay-deploy — the transcription relay onto AWS Lambda
-##
-##   make relay-deploy                              # keys from .env
-##   SARVAM_API_KEY=… GROQ_API_KEY=… make relay-deploy
-##
-## Lambda because the service is idle most of the day by design — nobody is
-## recording — and it is the only option that costs nothing while idle. See
-## services/relay/deploy-aws.sh; it is idempotent, so this is also how you ship
-## a code change.
-## The keys come from .env, which .env.example tells you to create and which
-## nothing else loads. Running the script directly still takes them from the
-## environment only, so that stays the way to deploy with a different key.
-relay-deploy:
-	@set -a; [ -f .env ] && . ./.env; set +a; ./services/relay/deploy-aws.sh
-
-## relay-dev — run the relay locally, for testing the app against it
-##
-## Meters into memory (services/relay/local.mjs), never the real usage table.
-##   make relay-dev
-##   DEIKO_RELAY_URL=http://localhost:8787 open build/Deiko.app
-relay-dev:
-	@set -a; [ -f .env ] && . ./.env; set +a; node services/relay/local.mjs
-
-## site-deploy — the landing site onto S3 + CloudFront
-##
-##   make site-deploy SITE_DIR=site
-site-deploy:
-	@./scripts/deploy-site.sh $(SITE_DIR)
-
-## icon — regenerate Deiko.icns from the Deiko mark
-##
-## The .icns is COMMITTED, so `make bundle` needs nothing but a copy. Run this
-## only after changing the geometry in Sources/DeikoCapture/Iconset.swift.
-##
-## Drawn by the binary rather than by a script: the coin, the menu bar and the
-## icon are one shape, and keeping the third renderer in the same target as the
-## other two is what stops it drifting.
-icon: $(DEBUG_BIN)
-	@$(DEBUG_BIN) icon --out build/Deiko.iconset
-	@iconutil -c icns build/Deiko.iconset -o $(CAPTURE_DIR)/Sources/DeikoCapture/Deiko.icns
-	@echo "✓ $(CAPTURE_DIR)/Sources/DeikoCapture/Deiko.icns"
-
-## resources — the pipeline, inside the bundle
-##
-## MIRRORS THE REPO LAYOUT, and that is the whole trick. The scripts import
-## their packages by relative path (`../packages/alignment/dist/src/align.js`).
-## Reproduce the shape and every one of those resolves unchanged — no
-## rewriting imports, no bundler, nothing to keep in sync.
-##
-## `make bundle` runs this every time: it is a few hundred KB of scripts and
-## built packages, and a bundle whose Resources lag its binary is a bug you
-## find in the DMG.
-##
-## `node_modules` in the bundle is back for exactly one thing: the meaning
-## model's runtime (see scripts/lib/meaning.mjs). Every other script still
-## imports node builtins, `packages/*/dist`, or its own sibling in
-## `scripts/lib` — no dependency closure needed for those.
-resources:
-	@rm -rf $(RES)
-	@mkdir -p $(RES) $(APP)/Contents/MacOS
-	@npm run build --workspaces --if-present --silent >/dev/null
-	@rsync -a --delete scripts $(RES)/
-	@rsync -a --delete --prune-empty-dirs \
-		--include='*/' --include='dist/***' --include='package.json' --exclude='*' \
-		packages $(RES)/
-	@echo "  resources: scripts + packages/dist"
-	@# THE MEANING MODEL'S RUNTIME — the one dependency the scripts have (see
-	@# scripts/lib/meaning.mjs). macOS arm64 binaries only: the npm package
-	@# carries Linux and Windows builds too, ~100 MB nobody here can run. The
-	@# model itself is downloaded after install, never bundled.
-	@test -f node_modules/onnxruntime-node/bin/napi-v6/darwin/arm64/onnxruntime_binding.node \
-	  || (echo "✗ onnxruntime-node's macOS binary is missing — run npm ci"; exit 1)
-	@mkdir -p $(RES)/node_modules/@huggingface
-	@rsync -a --delete node_modules/onnxruntime-node node_modules/onnxruntime-common $(RES)/node_modules/
-	@rsync -a --delete node_modules/@huggingface/tokenizers $(RES)/node_modules/@huggingface/
-	@find $(RES)/node_modules/onnxruntime-node/bin -mindepth 2 -maxdepth 2 -type d ! -name darwin -exec rm -rf {} +
-	@find $(RES)/node_modules/onnxruntime-node/bin -mindepth 3 -maxdepth 3 -type d ! -name arm64 -exec rm -rf {} +
-	@# The binding links @rpath/libonnxruntime.1.dylib; the package ships a
-	@# byte-identical 44 MB copy under the full version name that nothing loads.
-	@rm -f $(RES)/node_modules/onnxruntime-node/bin/napi-v6/darwin/arm64/libonnxruntime.1.30.0.dylib
-	@rsync -a --delete apps/capture/licenses $(RES)/
-	@echo "  resources: + onnxruntime-node (darwin arm64), tokenizers, licences"
-
-## dist — the shippable bundle: everything in `bundle`, plus the Node runtime
-##
-## Node is NOT in `make bundle` on purpose. It is 106MB, and a developer's app
-## resolves the pipeline from the checkout beside it anyway (see `Layout`), so
-## copying it on every rebuild would cost the fast local loop and buy nothing.
-## Here it is the point: `NodeRuntime` prefers a bundled runtime over anything
-## on PATH, so this is what makes the app work on a Mac with no Node at all.
-NODE_BIN := $(shell zsh -lc 'command -v node' 2>/dev/null)
-
-## The runtime that ships is whichever one the maintainer's shell happens to
-## resolve — an nvm default, usually. That is a wide door for shipping a
-## runtime nobody chose, so the three checks below refuse the obvious mistakes:
-## too old for the scripts, or the wrong architecture entirely. Pinning a
-## toolchain would be the thorough fix; refusing to ship a surprise is the
-## cheap one, and it catches what actually goes wrong.
-##
-## `dist` builds the RELEASE binary. `bundle-unsigned` stages the debug one for
-## the dev loop, and this overwrites it — before `sign` runs, which is the
-## whole point of the ordering. Until this line existed `make build` produced a
-## release binary that nothing ever consumed and every DMG shipped debug.
-dist: build bundle-unsigned
+# The shippable bundle: release binary plus a Node runtime, so the app works on
+# a Mac without Node. The runtime is the maintainer's; refuse obvious mistakes.
+dist: build bundle-unsigned ## Build the shippable bundle with its Node runtime
 	@test -n "$(NODE_BIN)" || (echo "✗ no node found to bundle"; exit 1)
 	@test "$$($(NODE_BIN) -p 'process.versions.node.split(".")[0]')" -ge 22 \
 	  || (echo "✗ bundled node is $$($(NODE_BIN) -v), the scripts need >= 22"; exit 1)
@@ -527,168 +141,121 @@ dist: build bundle-unsigned
 	  || (echo "✗ bundled node is not arm64: $$(file '$(NODE_BIN)')"; exit 1)
 	@cp $(RELEASE_BIN) $(APP)/Contents/MacOS/deiko-capture
 	@cp "$(NODE_BIN)" $(RES)/node
-	@echo "  binary: release"
-	@echo "  node: $(NODE_BIN) ($$($(NODE_BIN) -v), arm64) → $(RES)/node  ($$(du -h "$(NODE_BIN)" | cut -f1))"
+	@echo "  node: $(NODE_BIN) ($$($(NODE_BIN) -v), arm64)"
 	@$(MAKE) --no-print-directory sign
-	@echo "⚠ signing is still the LOCAL cert — see Phase 5 for Developer ID + notarisation"
 	@echo "built $(APP) with a bundled runtime  ($$(du -sh $(APP) | cut -f1))"
 
-## signing-setup — create the local signing certificate (idempotent)
-##
-## Creates it rather than telling you to open Keychain Access, because that app
-## was removed in macOS 26 and the certificate assistant went with it.
-signing-setup:
+dmg: dist ## Build build/Deiko-<version>.dmg
+	@rm -rf build/dmg $(DMG)
+	@mkdir -p build/dmg
+	@cp -R $(APP) build/dmg/
+	@ln -s /Applications build/dmg/Applications
+	@cp docs/install.md 'build/dmg/Read me first.md'
+	@hdiutil create -volname "Deiko $(VERSION)" -srcfolder build/dmg -ov -format UDZO -quiet $(DMG)
+	@echo "built $(DMG)  ($$(du -h $(DMG) | cut -f1))"
+
+# ── Release ────────────────────────────────────────────────────────────────
+
+# A release must name its URLs on the command line: they are baked into a
+# shipped plist and can never be corrected remotely, so .env is not enough.
+release: guard-clean ## Publish a DMG to the site and tag the commit
+	@test '$(origin SITE_URL)' = 'command line' \
+		|| (echo "✗ pass SITE_URL= explicitly — a release must not inherit .env"; exit 1)
+	@test '$(origin RELAY_URL)' = 'command line' \
+		|| (echo "✗ pass RELAY_URL= explicitly — a release must not inherit .env"; exit 1)
+	@test -z "$$(git tag -l 'v$(VERSION)' -l '$(VERSION)')" \
+		|| (echo "✗ $(VERSION) is already tagged — bump VERSION first"; exit 1)
+	@test -n "$(BUY_URL)" || echo "  ! BUY_URL is empty — this build shows no way to buy Pro"
+	@test -n "$(SUPPORT_EMAIL)" || echo "  ! SUPPORT_EMAIL is empty — this build shows no way to send feedback"
+	@# Every install downloads the meaning model on launch, so the mirror must be
+	@# complete first. VERIFY_ORIGIN checks it through another host of the same
+	@# Pages project when a network intercepts the main domain.
+	@for url in $$(node -e "import('./$(CORE)/src/lib/meaning.mjs').then(({ MODELS, DEFAULT_MODEL, MODEL_BASE_URL }) => { const base = process.env.VERIFY_ORIGIN ? process.env.VERIFY_ORIGIN.replace(/\/+$$/, '') + '/download/models' : MODEL_BASE_URL; for (const f of MODELS[DEFAULT_MODEL].files) console.log(base.replace(/\/+$$/, '') + '/' + DEFAULT_MODEL + '/' + f.path); } )"); do \
+		curl -fsI "$$url" >/dev/null || { echo "✗ model mirror is missing $$url — upload it before releasing"; exit 1; }; \
+	done
+	@echo "  model mirror: all files present"
+	@$(MAKE) --no-print-directory dmg RELAY_URL='$(RELAY_URL)' SITE_URL='$(SITE_URL)' BUY_URL='$(BUY_URL)' SUPPORT_EMAIL='$(SUPPORT_EMAIL)'
+	@SITE_URL=$(SITE_URL) ./scripts/publish-release.sh $(DMG) $(VERSION)
+	@git tag v$(VERSION)
+	@git push origin v$(VERSION)
+	@echo "✓ v$(VERSION) tagged and published"
+
+guard-clean:
+	@test -z "$$(git status --porcelain)" \
+		|| (echo "✗ working tree is dirty — commit before releasing"; git status --short; exit 1)
+
+models-publish: ## Upload the meaning model to the download mirror
+	@set -a; [ -f .env ] && . ./.env; set +a; ./scripts/publish-models.sh
+
+site-deploy: ## Deploy apps/web to Cloudflare Pages
+	@./scripts/deploy-site.sh
+
+relay-deploy: ## Deploy the relay to AWS Lambda (keys from .env)
+	@set -a; [ -f .env ] && . ./.env; set +a; ./services/relay/deploy.sh
+
+relay-dev: ## Run the relay locally (meters in memory)
+	@set -a; [ -f .env ] && . ./.env; set +a; node services/relay/src/local.mjs
+
+# ── Maintenance ────────────────────────────────────────────────────────────
+
+icon: $(DEBUG_BIN) ## Regenerate Deiko.icns from the drawn mark
+	@$(DEBUG_BIN) icon --out build/Deiko.iconset
+	@iconutil -c icns build/Deiko.iconset -o $(MACOS)/Sources/DeikoCapture/Deiko.icns
+	@echo "✓ $(MACOS)/Sources/DeikoCapture/Deiko.icns"
+
+signing-setup: ## Create the local signing certificate (once)
 	@bash scripts/create-signing-cert.sh "$(SIGN_NAME)"
 	@echo "  next:  make reset-permissions && make bundle"
 
-## reset-permissions — clear Deiko's TCC grants
-##
-## Needed ONCE when moving off ad-hoc signing: the old grants are pinned to a
-## cdhash that no longer exists, so they linger as entries that look granted and
-## behave as denied. Also the way out if the permission state ever gets stuck.
-reset-permissions:
+reset-permissions: ## Clear Deiko's macOS permission grants
 	@for svc in Accessibility ScreenCapture Microphone SpeechRecognition; do \
 		tccutil reset $$svc com.deiko.capture >/dev/null 2>&1 \
 			&& echo "  reset $$svc" || echo "  reset $$svc (nothing to reset)"; \
 	done
-	@echo "now: open $(APP)  →  Grant permissions…"
 
-clean:
-	@rm -rf $(CAPTURE_DIR)/.build node_modules packages/*/dist build
+clean: ## Remove build output and dependencies
+	@rm -rf $(MACOS)/.build node_modules packages/*/dist build
 
-## record — session recorder (double-tap Right Option to start, tap to stop)
-##
-## The binary mints and names the session directory itself now (sessions/<stamp>),
-## on the FIRST hold — so a run where you never record leaves nothing behind.
-## It writes events.jsonl into that directory, hence no shell redirect here.
-record: $(DEBUG_BIN)
+# ── Pipeline (the app runs these in a development checkout) ────────────────
+
+record: $(DEBUG_BIN) ## Record a session from the command line
 	@$(DEBUG_BIN) record --out sessions
 
-## transcribe — narration → words on the session clock (needs SARVAM_API_KEY)
-## Builds alignment first: the script imports the deictic normaliser from its
-## dist/, and a fresh clone (or a `make clean`) has no dist at all.
-transcribe:
+transcribe: ## Transcribe SESSION
 	@npm run build -w @deiko/alignment --silent
-	@node scripts/transcribe.mjs $(SESSION)
+	@node $(CORE)/src/transcribe.mjs $(SESSION)
 
-## brief — render a transcribed session into the brief a coding agent consumes
-##
-## Credentials are stripped and the renderer refuses to write if any survive —
-## Deiko reads the screen, and screens have secrets on them.
-brief:
+brief: ## Render SESSION into a brief
 	@npm run build -w @deiko/alignment --silent
-	@node scripts/render-brief.mjs $(SESSION)
+	@node $(CORE)/src/render-brief.mjs $(SESSION)
 
-## summarize — three lines about the session, FOR YOUR SCREEN ONLY
-##
-## Written to review-summary.txt, which the pasted prompt does not copy: the
-## coding agent receives evidence and states its own reading back, and an
-## interpretation shipped alongside would undo that. Never fatal — no key, no
-## summary, no fuss.
-summarize:
-	@node scripts/summarize.mjs $(SESSION)
+summarize: ## Write SESSION's review summary
+	@node $(CORE)/src/summarize.mjs $(SESSION)
 
-## classify — which collection and which task a brief belongs to, decided by
-## Jev through the relay and written to context.json
-##
-## Never fatal, like summarize: no relay, a short narration, or a brief the
-## developer already placed by hand, and nothing is written. `brief` reads the
-## file if it is there.
-##
-## Follows the app's "Sort briefs into tasks" switch: DEIKO_SORT_BRIEFS as the
-## app passes it, else as its preferences hold it (`defaults read` prints 0
-## when off, nothing when never set, which is on).
-SORT_BRIEFS = DEIKO_SORT_BRIEFS="$${DEIKO_SORT_BRIEFS-$$(defaults read com.deiko.capture DEIKO_SORT_BRIEFS 2>/dev/null)}"
-classify:
-	@$(SORT_BRIEFS) node scripts/classify.mjs $(SESSION)
+classify: ## File SESSION into a project and task
+	@$(SORT_BRIEFS) node $(CORE)/src/classify.mjs $(SESSION)
 
-## task-notes — rebuild every task note under a board (SESSION is the board
-## root here); the app runs it after Forget or Edit on a task's notes
-task-notes:
-	@node scripts/task-notes.mjs $(SESSION)
+task-notes: ## Rebuild every task note under the board SESSION
+	@node $(CORE)/src/task-notes.mjs $(SESSION)
 
-## reclassify — group an existing board into tasks, oldest brief first
-##
-## Renders, classifies, renders again, so each brief's brief.json carries the
-## new matching fields before it is placed and its prompt carries its task
-## after. Needs DEIKO_RELAY_URL (and DEIKO_RELAY_TOKEN if you use one) in the
-## environment — source .env first. Hand-placed briefs are left alone, and
-## with the app's sorting switch off nothing is sent (see classify).
-ROOT ?= $(HOME)/Library/Application Support/Deiko
-reclassify:
+reclassify: ## Re-render and re-file every brief under ROOT, oldest first
 	@npm run build -w @deiko/alignment --silent
 	@for d in "$(ROOT)"/2*-*; do \
-		node scripts/render-brief.mjs "$$d" >/dev/null 2>&1 || echo "· $$d did not render"; \
-		$(SORT_BRIEFS) node scripts/classify.mjs "$$d"; \
-		node scripts/render-brief.mjs "$$d" >/dev/null 2>&1 || true; \
+		node $(CORE)/src/render-brief.mjs "$$d" >/dev/null 2>&1 || echo "· $$d did not render"; \
+		$(SORT_BRIEFS) node $(CORE)/src/classify.mjs "$$d"; \
+		node $(CORE)/src/render-brief.mjs "$$d" >/dev/null 2>&1 || true; \
 	done
 
-## meaning-backfill — write each brief's meaning vector where it is missing or stale
-##
-## WRITES INTO THE BOARD (<session>/meaning.f32 + meaning.json). Run it only
-## when you mean to; `make reclassify` also fills gaps, as each render writes
-## its own brief's vector.
-meaning-backfill:
-	@node scripts/meaning.mjs backfill "$(ROOT)"
+meaning-backfill: ## Write missing meaning vectors under ROOT
+	@node $(CORE)/src/meaning.mjs backfill "$(ROOT)"
 
-## eval — score filing against the hand-made answer key (read-only)
-##
-##   make eval ARGS="--shortlist-only"
-##   make eval                       # full: one classify per brief, via the relay in .env
-##
-## The key lives outside the repo: ~/Documents/Deiko-eval/filing-labels.json.
-## `node scripts/eval-filing.mjs --draft > …` prints a starting one.
-eval:
-	@set -a; [ -f .env ] && . ./.env; set +a; $(SORT_BRIEFS) node scripts/eval-filing.mjs $(ARGS)
+# ── Quality ────────────────────────────────────────────────────────────────
 
-## models-publish — upload the meaning model's files to R2 for the app to download
-##
-## Checks every file against MODELS' SHA-256 first, uploads to
-## download/models/<key>/, then fetches each URL back. Needs the R2_* credentials
-## publish-release.sh uses, and the model on this Mac
-## (`node scripts/meaning.mjs download --from-hf`). Run before `make release`,
-## whose preflight refuses to ship while the mirror is incomplete.
-models-publish:
-	@set -a; [ -f .env ] && . ./.env; set +a; ./scripts/publish-models.sh
+eval: ## Score filing against an answer key (ARGS=…)
+	@set -a; [ -f .env ] && . ./.env; set +a; $(SORT_BRIEFS) node evals/filing.mjs $(ARGS)
 
-## flow-check — render → classify → render on a throwaway copy of real briefs
-##
-## Starts this checkout's relay on a local port with .env's keys, files a
-## handful of real sessions from scratch in a temp dir, checks each has a
-## prompt and a filing, and prints how it was filed. The board is only read.
-flow-check:
+ground: ## Score how well SESSION resolved what was pointed at
+	@node evals/grounding.mjs $(SESSION)
+
+flow-check: ## Render and file real briefs end to end against a local relay
 	@./scripts/flow-check.sh
-
-## ground — score how well a session resolved its referents, and check M1
-##
-## The companion to `align`: that one scores which utterance bound to which
-## referent, this one scores whether the referent knows what it is. Needs no
-## transcript — grounding is decided at capture time.
-ground:
-	@node scripts/ground-report.mjs $(SESSION)
-
-## bakeoff — run every recogniser over one session's audio and compare
-##
-##   DEIKO_KEEP_AUDIO=1 open /Applications/Deiko.app   # …record…
-##   make bakeoff SESSION=~/Library/Application\ Support/Deiko/<id> LANGUAGE=hi-IN
-##
-## Apple on-device at two locales and with the session's own screen vocabulary,
-## Sarvam, and both Whisper sizes — over the SAME audio, through the same
-## chunker, so the comparison is of the models. Needs the WAVs, which the app
-## deletes the moment a brief renders: record with DEIKO_KEEP_AUDIO=1.
-##
-## Optional `reference.txt` (what was actually said) and `terms.txt` (the
-## identifiers in it, one per line) in the session dir turn the transcripts into
-## scores. Without them it prints transcripts, which for code-mixed speech is
-## the evidence anyway. Keys come from .env.
-bakeoff:
-	@npm run build -w @deiko/alignment --silent
-	@set -a; [ -f .env ] && . ./.env; set +a; \
-		node scripts/bakeoff.mjs $(SESSION) --language $(or $(LANGUAGE),hi-IN)
-
-## align — run the T0.2 gate harness over a transcribed session
-## Needs @deiko/alignment built: the script imports both the aligner and the
-## session loader from its dist/.
-align:
-	@npm run build -w @deiko/alignment --silent
-	@node scripts/align-session.mjs $(SESSION)

@@ -7,7 +7,7 @@ import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
 function docs() {
   const found = ["README.md", "services/relay/README.md"].filter((f) => existsSync(join(repo, f)));

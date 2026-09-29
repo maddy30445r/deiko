@@ -86,7 +86,7 @@ public enum SessionClaims {
         // `relayTranscriber` short-circuits only once it has ALREADY been
         // refused, so the first chunk of a spent trial is uploaded in full and
         // the relay receives the entire body before metering it — it counts
-        // `body.length` and only then decides (`services/relay/relay.mjs`).
+        // `body.length` and only then decides (`services/relay/src/relay.mjs`).
         // What is true is that the rest was never sent and none of it was
         // transcribed, so that is what this says. Claiming a clean session
         // here, or quoting a duration that never left, are both lies in the one

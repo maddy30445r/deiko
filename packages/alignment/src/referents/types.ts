@@ -88,7 +88,7 @@ export interface Referent {
    * browser's web-area title ("Signups — build"), its address (host and path
    * only — the recorder never keeps a query), the window's open document, and
    * headings and element ids under the pointer. Labels for filing, read by
-   * `scripts/lib/labels.mjs`. Absent when none of it was captured.
+   * `packages/core/src/lib/labels.mjs`. Absent when none of it was captured.
    */
   page?: ReferentPage;
 

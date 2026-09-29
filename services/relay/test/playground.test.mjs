@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 process.env.DEIKO_PLAYGROUND_SECRET = "test-secret";
 process.env.GROQ_API_KEY = "test-key";
 
-const { handle } = await import("../relay.mjs");
+const { handle } = await import("../src/relay.mjs");
 
 const call = (path, o = {}) => handle({
   origin: o.origin ?? "",
@@ -94,7 +94,7 @@ test("a clip has a hard byte ceiling, because browser audio cannot be metered by
 // just burn the caller's remaining tickets against a wall.
 test("only a used-up ticket is marked spent, never a daily ceiling", async () => {
   const src = await (await import("node:fs")).promises.readFile(
-    new URL("../relay.mjs", import.meta.url), "utf8");
+    new URL("../src/relay.mjs", import.meta.url), "utf8");
   for (const [what, needle] of [
     ["the per-ticket clip limit", "this playground session is done"],
     ["the per-ticket query limit", "that is both of this session's goes"],
@@ -242,7 +242,7 @@ test("the app's routes still demand a real bearer", async () => {
 
   // A playground ticket is not an app subject: `subjectFrom` would otherwise
   // happily read it as a device token and hand it a lifetime free trial.
-  const { subjectFrom } = await import("../quota.mjs");
+  const { subjectFrom } = await import("../src/quota.mjs");
   assert.equal(subjectFrom(ticket), null, "a ticket must not parse as an app subject");
 });
 
@@ -257,7 +257,7 @@ test("the app's routes still demand a real bearer", async () => {
 // that is a one-pixel font.
 const cleanPatch = await (async () => {
   const { readFileSync } = await import("node:fs");
-  const src = readFileSync(new URL("../relay.mjs", import.meta.url), "utf8");
+  const src = readFileSync(new URL("../src/relay.mjs", import.meta.url), "utf8");
   const body = src.slice(src.indexOf("function cleanPatch"), src.indexOf("// ── The one entry point"));
   return new Function("PG_ELEMENTS", "PG_OPS", "PG_HEX", body + "; return cleanPatch;")(
     new Set(["card", "nameField", "change", "del", "tog1", "seats"]),

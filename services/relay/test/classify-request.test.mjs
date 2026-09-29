@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { REFERENCE_CANDIDATES, classifyRequest } from "../relay.mjs";
-import { REFERENCE } from "../../../scripts/lib/context.mjs";
+import { REFERENCE_CANDIDATES, classifyRequest } from "../src/relay.mjs";
+import { REFERENCE } from "@deiko/core/lib/context.mjs";
 
 const task = (n) => ({ id: `t-20260918-10000${n}`, title: `Task ${n}`, recent: ["x".repeat(390)] });
 

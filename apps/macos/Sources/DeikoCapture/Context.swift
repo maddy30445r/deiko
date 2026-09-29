@@ -18,7 +18,7 @@ import Foundation
 //   <session>/classify.sent              stamped by `classify.mjs` itself,
 //                                        before its POST — see `ClassifyRequest`
 //
-// `scripts/classify.mjs` writes `context.json` from the classifier's answers;
+// `packages/core/src/classify.mjs` writes `context.json` from the classifier's answers;
 // the review card and the board rewrite it when the developer corrects a
 // guess, and mark it `decidedBy: "you"` so the classifier never overwrites a
 // decision a person made. `render-brief.mjs` reads it. Nothing here talks to
@@ -46,7 +46,7 @@ struct SessionContext: Codable, Equatable {
     /// project answers a different question and leaves them.
     var candidates: [String]?
     /// `quick` / `medium` / `complex` / `reasoning` — see `TIERS` in
-    /// `scripts/lib/context.mjs`.
+    /// `packages/core/src/lib/context.mjs`.
     var tier: String?
     var confidence = Confidence()
     /// `"jev"`, `"local"` (decided on this Mac, nothing sent — odds and ends
@@ -155,7 +155,7 @@ struct SessionContext: Codable, Equatable {
     /// reads as invited.
     /// Above this the answer is stated; below it, hedged. The floors that
     /// decide whether an answer is taken at all live in
-    /// `scripts/lib/context.mjs`; this one is only ever about wording, so it
+    /// `packages/core/src/lib/context.mjs`; this one is only ever about wording, so it
     /// lives where the wording does.
     static let sureEnough = 0.85
 
@@ -249,7 +249,7 @@ struct Collection: Codable, Identifiable, Equatable {
     /// mobile app, not the website". The cheapest accuracy there is.
     var hint: String = ""
     /// Standing rules every brief in this project carries ("we use pnpm"),
-    /// one per line, at most five (see `buildPrompt` in scripts/lib/prompt.mjs).
+    /// one per line, at most five (see `buildPrompt` in packages/core/src/lib/prompt.mjs).
     var rules: [String]? = nil
 }
 
@@ -293,7 +293,7 @@ enum Collections {
         return list
     }
 
-    /// A collection id from its name. MIRRORS `slug` in `scripts/lib/context.mjs`:
+    /// A collection id from its name. MIRRORS `slug` in `packages/core/src/lib/context.mjs`:
     /// the classifier creates collections too, and the two must agree on what
     /// "Deiko" is called.
     static func slug(_ name: String) -> String {
@@ -458,7 +458,7 @@ struct BriefTask: Decodable, Identifiable, Equatable {
 }
 
 /// ONE WRITER AT A TIME for `tasks.json` and `collections.json`, shared with
-/// the scripts (`withBoardLock` in `scripts/lib/session-io.mjs`): a lock folder
+/// the scripts (`withBoardLock` in `packages/core/src/lib/session-io.mjs`): a lock folder
 /// beside them. Waits up to three seconds, then goes ahead anyway; a lock older
 /// than fifteen was left by a crash and is broken.
 enum BoardLock {
@@ -550,7 +550,7 @@ enum Tasks {
 /// WHAT DEIKO REMEMBERS, AS YOU CORRECTED IT. "Forget" and "Edit" on a task's
 /// notes write `tasks/<id>.overrides.json` — `{ forget: [line], edit: {line:
 /// replacement} }`, keyed by the line as the agent wrote it — and every
-/// script applies it (`readOverrides` in scripts/lib/tasks.mjs): the note,
+/// script applies it (`readOverrides` in packages/core/src/lib/tasks.mjs): the note,
 /// the next prompt, filing, the memory helper. outcome.md is never touched,
 /// so the history stays and every change can be taken back.
 enum TaskMemoryEdits {

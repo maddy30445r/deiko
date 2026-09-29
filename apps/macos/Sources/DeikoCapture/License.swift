@@ -216,7 +216,7 @@ enum License {
         /// "resets 1 October (UTC)".
         ///
         /// Computed here rather than asked of the relay: a Pro month's row key
-        /// is the UTC month (`monthKey` in `services/relay/quota.mjs`), so the
+        /// is the UTC month (`monthKey` in `services/relay/src/quota.mjs`), so the
         /// client can say the same thing without a round trip and can say it
         /// while offline. UTC is named out loud because that reset lands
         /// mid-afternoon for most of the world, and a limit that comes back at

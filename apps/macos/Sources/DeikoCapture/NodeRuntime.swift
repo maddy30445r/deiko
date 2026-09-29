@@ -101,7 +101,7 @@ enum Layout {
         let beside = build.deletingLastPathComponent()
         if build.lastPathComponent == "build",
            fm.fileExists(atPath: beside.appendingPathComponent("Makefile").path),
-           fm.fileExists(atPath: beside.appendingPathComponent("apps/capture/Package.swift").path) {
+           fm.fileExists(atPath: beside.appendingPathComponent("apps/macos/Package.swift").path) {
             return .development(repo: beside)
         }
 

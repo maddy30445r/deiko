@@ -6,7 +6,7 @@ import Testing
 // owner's real configs: every path below lives under a fresh temp directory.
 
 private let node = "/opt/deiko/node"
-private let script = "/Users/dev/personal /Deiko/scripts/memory-mcp.mjs"
+private let script = "/Users/dev/personal /Deiko/packages/core/src/memory-mcp.mjs"
 
 private struct Home {
     let root: URL
@@ -154,7 +154,7 @@ func disconnectRestoresEveryAgent() throws {
 @Test("Copy setup carries a pasteable command line and valid JSON")
 func copySetupText() throws {
     let text = AgentSetup.setupText(command: node, arguments: [script])
-    #expect(text.contains("/opt/deiko/node '/Users/dev/personal /Deiko/scripts/memory-mcp.mjs'"))
+    #expect(text.contains("/opt/deiko/node '/Users/dev/personal /Deiko/packages/core/src/memory-mcp.mjs'"))
     let json = try #require(text.range(of: "{").map { String(text[$0.lowerBound...]) })
     let doc = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
     let entry = (doc["mcpServers"] as? [String: Any])?["deiko-memory"] as? [String: Any]

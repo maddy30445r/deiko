@@ -17,7 +17,7 @@ import { createServer } from "node:http";
 
 import { createHmac } from "node:crypto";
 
-import { GATE as CLIENT_GATE, ASK as CLIENT_ASK, RELATIONS as CLIENT_RELATIONS } from "../../../scripts/lib/context.mjs";
+import { GATE as CLIENT_GATE, ASK as CLIENT_ASK, RELATIONS as CLIENT_RELATIONS } from "@deiko/core/lib/context.mjs";
 
 import {
   CLASSIFIES_PER_CALLER_PER_DAY,
@@ -33,7 +33,7 @@ import {
   monthKey,
   playgroundClipKey,
   summaryKey,
-} from "../quota.mjs";
+} from "../src/quota.mjs";
 
 // ── A DynamoDB that lives in a Map ──────────────────────────────────────────
 
@@ -201,7 +201,7 @@ before(async () => {
   process.env.GROQ_API_KEY = "test-groq";
   process.env.TYPESAFE_API_KEY = "test-typesafe";
 
-  ({ handle, logLine, fullRows, GATE, SECOND_LOOK, RELATION_RUBRIC } = await import("../relay.mjs"));
+  ({ handle, logLine, fullRows, GATE, SECOND_LOOK, RELATION_RUBRIC } = await import("../src/relay.mjs"));
 });
 
 after(() => server?.close());
@@ -747,11 +747,11 @@ test("a present but unreadable gate does not stop the second look", async () => 
 });
 
 // GATE, SECOND_LOOK.min and RELATION_RUBRIC are hand-tuned thresholds
-// MIRRORED in scripts/lib/context.mjs as GATE, ASK and RELATIONS (comments on
+// MIRRORED in packages/core/src/lib/context.mjs as GATE, ASK and RELATIONS (comments on
 // both sides say "change both"). Nothing enforced that beyond the comment, so
 // one side could be retuned on the eval and the other left behind with no
 // test failing. This gives the mirror a job.
-test("the relay's thresholds stay in step with scripts/lib/context.mjs's mirrors", () => {
+test("the relay's thresholds stay in step with packages/core/src/lib/context.mjs's mirrors", () => {
   assert.equal(GATE, CLIENT_GATE, "relay.mjs GATE and context.mjs GATE must be the same cutoff");
   assert.ok(SECOND_LOOK.min <= CLIENT_ASK,
     "a second look must not floor higher than the client's own ASK line, or the client asks about tasks the relay never looked at again");
@@ -1484,7 +1484,7 @@ test("a playground clip whose answer dies halfway keeps its CORS headers and its
   }));
 
 test("the upload the app's own FormData encodes is accepted, in both modes", async () => {
-  // `sttForm` in scripts/transcribe.mjs, field for field, through the same
+  // `sttForm` in packages/core/src/transcribe.mjs, field for field, through the same
   // encoder Node's fetch uses — so a relay that refuses what the app actually
   // sends fails here, not on somebody's first session.
   for (const native of [false, true]) {
@@ -1617,7 +1617,7 @@ test("a licence key the shape gate refuses is logged by fingerprint, never by va
   } finally {
     console.warn = realWarn;
   }
-  const { tokenFingerprint } = await import("../relay.mjs");
+  const { tokenFingerprint } = await import("../src/relay.mjs");
   assert.equal(warned.length, 1);
   assert.match(warned[0], new RegExp(`tok:${tokenFingerprint("lic_not-a-polar-key")}`));
   assert.doesNotMatch(warned[0], /not-a-polar-key/);

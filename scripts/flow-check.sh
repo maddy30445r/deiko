@@ -38,7 +38,7 @@ for s in $STAMPS; do
 done
 [ -d "$SRC/personas" ] && cp -R "$SRC/personas" "$BOARD/"
 
-(set -a; [ -f "$ENV_FILE" ] && . "$ENV_FILE"; set +a; PORT=$PORT exec node "$REPO/services/relay/local.mjs") >"$TMP/relay.log" 2>&1 &
+(set -a; [ -f "$ENV_FILE" ] && . "$ENV_FILE"; set +a; PORT=$PORT exec node "$REPO/services/relay/src/local.mjs") >"$TMP/relay.log" 2>&1 &
 RELAY=$!
 for _ in $(seq 1 50); do
   curl -s -o /dev/null "http://127.0.0.1:$PORT/health" && break
@@ -50,14 +50,14 @@ for s in $STAMPS; do
   d="$BOARD/$s"
   if [ ! -f "$d/brief.json" ]; then
     # An unfinished recording: the pipeline must leave it alone without crashing.
-    DEIKO_SORT_BRIEFS=1 DEIKO_CLASSIFY_URL="http://127.0.0.1:$PORT" DEIKO_CLASSIFY_TOKEN="dev_flowcheck0000000000000000" node "$REPO/scripts/classify.mjs" "$d" >/dev/null 2>"$TMP/$s.err" \
+    DEIKO_SORT_BRIEFS=1 DEIKO_CLASSIFY_URL="http://127.0.0.1:$PORT" DEIKO_CLASSIFY_TOKEN="dev_flowcheck0000000000000000" node "$REPO/packages/core/src/classify.mjs" "$d" >/dev/null 2>"$TMP/$s.err" \
       || { echo "✗ $s (unfinished) crashed classify:"; tail -3 "$TMP/$s.err"; fail=1; }
     continue
   fi
-  node "$REPO/scripts/render-brief.mjs" "$d" >/dev/null 2>"$TMP/$s.err" || { echo "✗ $s render failed:"; tail -3 "$TMP/$s.err"; fail=1; continue; }
-  DEIKO_SORT_BRIEFS=1 DEIKO_CLASSIFY_URL="http://127.0.0.1:$PORT" DEIKO_CLASSIFY_TOKEN="dev_flowcheck0000000000000000" node "$REPO/scripts/classify.mjs" "$d" >/dev/null 2>"$TMP/$s.err" \
+  node "$REPO/packages/core/src/render-brief.mjs" "$d" >/dev/null 2>"$TMP/$s.err" || { echo "✗ $s render failed:"; tail -3 "$TMP/$s.err"; fail=1; continue; }
+  DEIKO_SORT_BRIEFS=1 DEIKO_CLASSIFY_URL="http://127.0.0.1:$PORT" DEIKO_CLASSIFY_TOKEN="dev_flowcheck0000000000000000" node "$REPO/packages/core/src/classify.mjs" "$d" >/dev/null 2>"$TMP/$s.err" \
     || { echo "✗ $s classify failed:"; tail -3 "$TMP/$s.err"; fail=1; continue; }
-  node "$REPO/scripts/render-brief.mjs" "$d" >/dev/null 2>"$TMP/$s.err" || { echo "✗ $s re-render failed:"; tail -3 "$TMP/$s.err"; fail=1; continue; }
+  node "$REPO/packages/core/src/render-brief.mjs" "$d" >/dev/null 2>"$TMP/$s.err" || { echo "✗ $s re-render failed:"; tail -3 "$TMP/$s.err"; fail=1; continue; }
 done
 
 node --input-type=module - "$BOARD" $STAMPS <<'EOF' || fail=1

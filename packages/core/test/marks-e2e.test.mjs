@@ -20,8 +20,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { loadSession } from "../../packages/alignment/dist/src/referents/session.js";
-import { buildPrompt } from "../lib/prompt.mjs";
+import { loadSession } from "@deiko/alignment/session";
+import { buildPrompt } from "../src/lib/prompt.mjs";
 
 /** Every probe needs a crop that was actually OCR'd — `ocrElapsedMs` present
  *  is what render-brief.mjs's release rule reads as "we looked at this" (see

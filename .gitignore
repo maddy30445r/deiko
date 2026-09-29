@@ -1,77 +1,38 @@
-# secrets
+# Secrets
 .env
 
-# node
+# Build output
 node_modules/
 dist/
+build/
 *.tsbuildinfo
-
-# swift
 .build/
 .swiftpm/
 *.o
 
-# The assembled app bundle. Rebuilt by `make bundle` from sources that ARE
-# tracked, so committing it only churns a 1MB binary on every build — and a
-# stale committed copy is worse than none, since it is what `open build/Deiko.app`
-# would launch.
-build/
-
-# Captured content — never commit crops, audio, transcripts or probe logs.
-# These carry whatever was on screen: DB ids, tokens, customer data, scrollback.
-#
-# Matched by PATTERN, not just by directory: a probe log written to the wrong
-# folder is still a leak, and that is exactly how ax-poked.jsonl reached a
-# commit. Anything ignored here is ignored wherever it lands.
+# Captured content: screenshots, audio and transcripts can hold anything that
+# was on screen, so they are ignored by pattern wherever they land.
 sessions/
-*.jsonl
 crops/
+*.jsonl
 *.wav
-# Crops are screenshots of whatever was on screen, and both crop destinations
-# are user-settable (`capture --out`, `ax-probe --crop-dir`) — so the pattern,
-# not just the folders.
 *.png
-# The landing site IS source imagery, and it is the one thing the pattern above
-# swallows silently: the icon and the OG image would deploy fine from the machine
-# that built them and 404 for everyone who clones. Narrow exception on purpose —
-# a stray crop landing anywhere else in the repo is still ignored.
-!site/assets/*.png
+!apps/web/public/**/*.png
+!docs/assets/*.png
 
-# The design hand-off from Claude Design: the zip and the folder it unpacks to.
-# Neither is source. The site in `site/` is what was built from it and that is
-# what ships; this is the working copy of the artboards, kept locally as
-# reference for the ad and shot-list work. 13MB of screen recordings, a music
-# bed and a dozen mood-board JPEGs do not belong in every clone forever, and
-# the canvas is the real home of the originals.
-*.zip
-
-# macOS
-.DS_Store
-
-# stamped at deploy time by scripts/deploy-site.sh
-site/install.sh
-
-# wrangler pages dev scratch — also what made `make release` see a dirty tree
+# Deploy artifacts
+apps/web/public/install.sh
 .wrangler/
-graphify-out/
 
-# editor / tooling droppings
+# Local tooling
 .DS_Store
-.playwright-mcp/
-
-# The design tool's working folder (impeccable), never part of the product
+.vscode/
+.claude/
 .impeccable/
-
-# Build ledgers and review packages from subagent-driven work, never part of the product
 .superpowers/
-
-# research scratch (deep-research skill)
+.playwright-mcp/
+graphify-out/
 research_notes/
 reports/
-
-
-# Internal notes, kept in their own private repository
 private/
-
-# Editor settings
-.vscode/
+*.zip

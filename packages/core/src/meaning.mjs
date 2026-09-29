@@ -2,10 +2,10 @@
 /**
  * The meaning model, from the command line and from the app.
  *
- *   node scripts/meaning.mjs status            → "ready <model>" | "missing <model>" | "off"
- *   node scripts/meaning.mjs download [--hf]   → "progress <done> <total>" lines, then "ready <model>";
+ *   node packages/core/src/meaning.mjs status            → "ready <model>" | "missing <model>" | "off"
+ *   node packages/core/src/meaning.mjs download [--hf]   → "progress <done> <total>" lines, then "ready <model>";
  *                                                "failed <why>" and exit 1 on any failure
- *   node scripts/meaning.mjs backfill [<root>] → "backfilled <n>"; "failed <why>" and exit 1 with no model
+ *   node packages/core/src/meaning.mjs backfill [<root>] → "backfilled <n>"; "failed <why>" and exit 1 with no model
  *
  * The model is DEIKO_MEANING_MODEL (default harrier-oss-v1-270m; "off" turns
  * meaning off), kept under DEIKO_MODEL_DIR (default
@@ -74,6 +74,6 @@ if (command === "status") {
   }
   console.log(`backfilled ${n}`);
 } else {
-  console.error("usage: node scripts/meaning.mjs status | download [--hf] | backfill [<root>]");
+  console.error("usage: node packages/core/src/meaning.mjs status | download [--hf] | backfill [<root>]");
   process.exit(2);
 }

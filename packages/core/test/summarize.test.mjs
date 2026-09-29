@@ -1,5 +1,5 @@
 // What `summarize.mjs` sends to Deiko's relay: the narration and which prompt,
-// never a prompt. The relay pins its own (services/relay/relay.mjs), because a
+// never a prompt. The relay pins its own (services/relay/src/relay.mjs), because a
 // relay that took one from its caller was a free chat endpoint on Deiko's key.
 
 import { test } from "node:test";
@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const run = promisify(execFile);
-const script = fileURLToPath(new URL("../summarize.mjs", import.meta.url));
+const script = fileURLToPath(new URL("../src/summarize.mjs", import.meta.url));
 const NARRATION = "isko humko class one se class two mein convert karna hai, drag wala bug";
 
 /// Summarise one session against a fake relay, and return what it received.
@@ -73,7 +73,7 @@ test("the relay's two prompts are word for word the ones this script sends with 
     const block = src.slice(src.indexOf(from), src.indexOf('].join("\\n")', src.indexOf(from)));
     return [...block.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1]).filter((s) => s !== "native");
   };
-  const mine = literals("../summarize.mjs", "const SYSTEM = [");
+  const mine = literals("../src/summarize.mjs", "const SYSTEM = [");
   assert.ok(mine.length > 10, "found the prompt");
-  assert.deepEqual(literals("../../services/relay/relay.mjs", "const summarySystem = "), mine);
+  assert.deepEqual(literals("../../../services/relay/src/relay.mjs", "const summarySystem = "), mine);
 });

@@ -56,7 +56,7 @@ export const MODELS = {
 /// EmbeddingGemma since 0.5.4: on 100 realistic search queries against the
 /// owner's board it found the right work first 88 times to harrier's 75 (with
 /// the score blend in `blendScores`), at the same size and twice the speed;
-/// filing's shortlist was 10/10 with either. `scripts/eval-search.mjs` reruns it.
+/// filing's shortlist was 10/10 with either. `evals/search.mjs` reruns it.
 export const DEFAULT_MODEL = "embeddinggemma-300m";
 /// Our own storage: the controller mirrors each model's files here, same paths.
 export const MODEL_BASE_URL = "https://deiko.app/download/models";

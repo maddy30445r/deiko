@@ -6,7 +6,7 @@
 // runs a container. Production is `lambda.mjs`; every decision lives in
 // `relay.mjs`, so what you test here is what runs there.
 //
-//   SARVAM_API_KEY=… GROQ_API_KEY=… node services/relay/server.mjs
+//   SARVAM_API_KEY=… GROQ_API_KEY=… node services/relay/src/server.mjs
 //   DEIKO_RELAY_URL=http://localhost:8787 open build/Deiko.app
 // ─────────────────────────────────────────────────────────────────────────────
 

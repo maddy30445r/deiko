@@ -2,11 +2,11 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # PUBLISH THE MEANING MODEL — the files the app downloads once after install
 #
-#   make models-publish            # the default model (scripts/lib/meaning.mjs)
+#   make models-publish            # the default model (packages/core/src/lib/meaning.mjs)
 #
 # Uploads each file of the model from this Mac's copy
 # (~/Library/Application Support/Deiko/models/<key>/, fetched and
-# checksum-verified by `node scripts/meaning.mjs download --from-hf`) to R2 at
+# checksum-verified by `node packages/core/src/meaning.mjs download --from-hf`) to R2 at
 # download/models/<key>/<path>, where the site's /download function serves it.
 # Every file's SHA-256 is checked against MODELS before it goes, and every URL
 # is fetched back afterwards, so a release's preflight can't pass on a
@@ -29,7 +29,7 @@ unset AWS_SESSION_TOKEN AWS_PROFILE
 
 # key, local dir, base URL and "path sha256" lines, all from MODELS.
 LIST=$(cd "$REPO" && node --input-type=module -e '
-  const { MODELS, DEFAULT_MODEL, MODEL_BASE_URL, modelDir } = await import("./scripts/lib/meaning.mjs");
+  const { MODELS, DEFAULT_MODEL, MODEL_BASE_URL, modelDir } = await import("./packages/core/src/lib/meaning.mjs");
   const key = process.env.MODEL || DEFAULT_MODEL;
   if (!MODELS[key]) { console.error(`unknown model ${key}`); process.exit(1); }
   console.log(key); console.log(modelDir(key)); console.log(MODEL_BASE_URL.replace(/\/+$/, ""));
@@ -39,7 +39,7 @@ KEY=$(sed -n 1p <<<"$LIST"); DIR=$(sed -n 2p <<<"$LIST"); BASE=$(sed -n 3p <<<"$
 
 echo "· model $KEY from $DIR → r2://$BUCKET/download/models/$KEY/"
 while read -r path sha; do
-  [ -f "$DIR/$path" ] || { echo "✗ $DIR/$path missing — run: node scripts/meaning.mjs download --from-hf"; exit 1; }
+  [ -f "$DIR/$path" ] || { echo "✗ $DIR/$path missing — run: node packages/core/src/meaning.mjs download --from-hf"; exit 1; }
   got=$(shasum -a 256 "$DIR/$path" | cut -d' ' -f1)
   [ "$got" = "$sha" ] || { echo "✗ $path checksum differs from MODELS — not uploading"; exit 1; }
 done < <(tail -n +4 <<<"$LIST")

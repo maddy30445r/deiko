@@ -12,8 +12,8 @@ import { promisify } from "node:util";
 import {
   DEFAULT_MODEL, MODELS, briefText, currentModel, download, finish, isReady, loadModel,
   readVector, vectorIsCurrent, writeVector,
-} from "../lib/meaning.mjs";
-import { cosine } from "../lib/tasks.mjs";
+} from "../src/lib/meaning.mjs";
+import { cosine } from "../src/lib/tasks.mjs";
 
 const close = (a, b) => a.length === b.length && [...a].every((x, i) => Math.abs(x - b[i]) < 1e-6);
 
@@ -128,7 +128,7 @@ test("a write that fails is reported, and leaves no partial file", async () => {
 });
 
 test("a backfill before the first recording has nothing to do", { skip: !isReady(DEFAULT_MODEL) && "model not downloaded on this Mac" }, async () => {
-  const script = fileURLToPath(new URL("../meaning.mjs", import.meta.url));
+  const script = fileURLToPath(new URL("../src/meaning.mjs", import.meta.url));
   const { stdout } = await promisify(execFile)(process.execPath, [script, "backfill", join(tmpdir(), "deiko-no-board-yet")]);
   assert.equal(stdout.trim(), "backfilled 0");
 });

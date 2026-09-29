@@ -2,7 +2,7 @@
 // The board's search box, by meaning as well as words: the same ranking the
 // memory helper gives agents (search_briefs in memory-mcp.mjs), read only.
 //
-//   node scripts/search-briefs.mjs <board root> <query>
+//   node packages/core/src/search-briefs.mjs <board root> <query>
 //
 // Prints one line, `BRIEFS ["20260918-155836", …]`, best first. The marker
 // line is what the app reads; anything else on stdout or stderr is logging.

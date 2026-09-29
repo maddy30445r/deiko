@@ -266,7 +266,7 @@ public enum BoardTimeline {
     // ── A work's notes ──────────────────────────────────────────────────────
 
     /// An agent's `outcome.md`, by the four headings the brief asks for —
-    /// the Swift twin of `parseOutcome` in `scripts/lib/tasks.mjs`. Text
+    /// the Swift twin of `parseOutcome` in `packages/core/src/lib/tasks.mjs`. Text
     /// before any heading is what it did; a `##` heading that is none of
     /// the four drops what follows; code fences are skipped whole. One line
     /// more than the script reads: "Agent: Codex" (or "Written by: …") names
