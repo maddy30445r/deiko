@@ -158,6 +158,15 @@ func workNames() {
     }
 }
 
+@Test("an open tab the ask never mentions does not name the work")
+func workNamesStrayFile() {
+    // "analytics.html" was the editor's open tab while the pricing page was asked about.
+    #expect(name("Add a dark gradient background to the pricing section", files: ["analytics.html"]) != "Analytics")
+    // Mentioned in the ask, or open for several briefs: it names the work.
+    #expect(name("Fix the sitemap lastmod dates", files: ["sitemap.xml"]) == "Sitemap")
+    #expect(name("Make the chart legend smaller", files: ["Orb.swift", "Orb.swift"]) == "Orb")
+}
+
 @Test("two tasks on one page are told apart by their titles")
 func workNamesShared() {
     let names = BoardTimeline.workNames([

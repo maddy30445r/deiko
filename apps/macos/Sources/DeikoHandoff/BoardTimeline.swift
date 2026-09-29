@@ -165,6 +165,14 @@ public enum BoardTimeline {
         guard let file = mostSaid(w.files) else { return nil }
         let base = (file as NSString).lastPathComponent
         let stem = (base as NSString).deletingPathExtension
+        // A FILE ONLY NAMES THE WORK WHEN WHAT WAS ASKED MENTIONS IT, or several
+        // briefs were on it. An editor's open tab is often not the file being
+        // talked about: "analytics.html" was open while the pricing page's
+        // background was asked for, and the work was tagged "Analytics".
+        let words = stem.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+        let asked = (w.title ?? "").lowercased()
+        guard w.files.filter({ $0 == file }).count >= 2 || words.contains(where: { $0.count >= 3 && asked.contains($0) })
+        else { return nil }
         let name = fit(stem.isEmpty ? base : stem, ellipsis: true)
         return name.isEmpty ? nil : capitalized(name)
     }
