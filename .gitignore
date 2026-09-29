@@ -44,7 +44,6 @@ crops/
 # bed and a dozen mood-board JPEGs do not belong in every clone forever, and
 # the canvas is the real home of the originals.
 *.zip
-mddocs/design/
 
 # macOS
 .DS_Store
@@ -70,3 +69,9 @@ graphify-out/
 research_notes/
 reports/
 
+
+# Internal notes, kept in their own private repository
+private/
+
+# Editor settings
+.vscode/

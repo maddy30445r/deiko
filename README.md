@@ -33,9 +33,7 @@ short, and piping a stranger's script into `sh` deserves a look.
 
 **This is the route that avoids the Gatekeeper dialog entirely**, and not by
 defeating anything: `com.apple.quarantine` is set by the app that downloads a
-file, and `curl` does not set it. Nothing to dismiss, nothing to clear. See
-[the distribution spike](mddocs/spikes/distribution.md) for what that does and
-does not buy.
+file, and `curl` does not set it. Nothing to dismiss, nothing to clear.
 
 Prefer the disk image? It is at the URL `version.json` names, and installs by
 hand:
