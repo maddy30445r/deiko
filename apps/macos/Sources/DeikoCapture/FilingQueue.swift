@@ -1,36 +1,19 @@
 import Foundation
 import Network
 
-// ─────────────────────────────────────────────────────────────────────────────
-// BRIEFS WAITING TO BE FILED
-//
-// Filing a brief into its task asks the filing service, which needs the
-// network. When it can't be reached (offline, the service busy or refusing)
-// `classify.mjs` leaves a `filing.pending` marker in the session folder instead
-// of guessing the brief into a task of its own. The brief itself has already
-// gone to the agent; only its place on the board waits.
-//
-// This files them later through the SAME flow a new brief takes (classify,
-// then re-render so the prompt carries its memory), oldest first, one at a
-// time: when the network comes back, a few seconds after launch, after any
-// brief that files, and from "Try now" on the board. It stops at the first
-// brief that still can't get through the NETWORK, so a dead network is asked
-// once, not once per waiting brief; a brief the service refuses is passed
-// over so the ones behind it still file. The brief open on the review card is
-// handed back to the card, which files it in its own lane.
-// ─────────────────────────────────────────────────────────────────────────────
-
+/// Files briefs that could not be filed when captured (offline, or the filing service busy or
+/// refusing). `classify.mjs` leaves a `filing.pending` marker in the session folder; this retries
+/// them oldest first through the normal classify-then-rerender flow. It stops at the first brief
+/// that fails on the network, but passes over one the service refuses so the rest still file.
 @MainActor
 final class FilingQueue: ObservableObject {
     static let shared = FilingQueue()
 
-    /// How many briefs wait, for the board's row.
     @Published private(set) var waiting = 0
     @Published private(set) var working = false
 
-    /// After this many failed tries in a row a brief waits for "Try now":
-    /// by then something other than the network is wrong, and asking again
-    /// on every reconnect would only spend requests.
+    /// After this many failed tries in a row a brief waits for "Try now"; asking again on
+    /// every reconnect would only spend requests.
     nonisolated static let autoTries = 8
 
     private var monitor: NWPathMonitor?
@@ -39,14 +22,11 @@ final class FilingQueue: ObservableObject {
 
     private struct Marker: Decodable { let tries: Int?; let reason: String? }
 
-    /// The brief the review card is showing, and how to hand it back to the
-    /// card: its filing and re-render run in the card's own lane (narration
-    /// edits, "Point at more"), and the card shows the result. Filing it from
-    /// here instead could race that lane and leave the old words on disk.
+    /// The brief the review card is showing. Its filing runs in the card's own lane (narration
+    /// edits, "Point at more"); filing it from here could race that lane and leave stale words on disk.
     var card: (dir: String, refile: @MainActor () -> Void)?
 
-    /// Why a brief still waits. Only the network pauses the whole queue; a
-    /// brief the service refuses is passed over so newer ones still file.
+    /// Only the network pauses the whole queue; a brief the service refuses is passed over.
     private nonisolated static func waitsOnNetwork(_ dir: String) -> Bool {
         guard let data = try? Data(contentsOf: marker(dir)),
               let reason = (try? JSONDecoder().decode(Marker.self, from: data))?.reason else { return true }
@@ -61,7 +41,7 @@ final class FilingQueue: ObservableObject {
         FileManager.default.fileExists(atPath: marker(sessionDir).path)
     }
 
-    /// Placed by hand: it no longer waits for anything.
+    /// Called once a brief is placed by hand, so it stops waiting.
     nonisolated static func settle(_ sessionDir: String) {
         try? FileManager.default.removeItem(at: marker(sessionDir))
     }
@@ -96,8 +76,7 @@ final class FilingQueue: ObservableObject {
         monitor.start(queue: .global(qos: .utility))
         self.monitor = monitor
         refresh()
-        // Not at launch itself: the menu bar, the model download and the
-        // first window all want the first seconds more than this does.
+        // Not at launch itself: the menu bar, the model download and the first window want those seconds more.
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(8))
             self?.fileAll()

@@ -2,40 +2,18 @@ import AppKit
 import ImageIO
 import SwiftUI
 
-// ─────────────────────────────────────────────────────────────────────────────
-// CROP THUMBNAILS, DECODED ONCE AND SMALL
-//
-// A crop is a full-resolution Retina screenshot of whatever was circled — a
-// multi-megabyte PNG. The board drew them with `NSImage(contentsOfFile:)`
-// inside a view's `body`, which means the main thread decoded every visible
-// card's PNG at full size, again on every scroll pass that rebuilt a cell, and
-// again for every state change anywhere in the window. At five sessions that
-// is invisible. At three hundred it is the whole grid stuttering.
-//
-// `ReviewWindow` already learned this lesson for the review card and says so
-// at length; this is the same fix for the board, with two additions it needs
-// and the review card does not: a DOWNSAMPLE (a 96pt tile does not need 3000
-// pixels) and a CACHE (the same crop is drawn by the dashboard, the board, and
-// again after every reload).
-//
-// ImageIO rather than NSImage: `kCGImageSourceThumbnailMaxPixelSize` decodes
-// straight to the size asked for, so a 12MB PNG never exists in memory at full
-// size. Decoding with NSImage and then scaling in the view does the expensive
-// half of the work anyway.
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// NOT OBSERVABLE. It used to be, and every decode that landed told every
-/// thumbnail on the board to redraw; with a 240-image cap and more cards than
-/// that, redrawing re-requested evicted images, which landed, which redrew
-/// everything again. Each `CropThumbnail` now waits for its own image.
+/// Decodes crop thumbnails once, downsampled, and caches them.
+///
+/// `kCGImageSourceThumbnailMaxPixelSize` makes ImageIO decode straight to the requested size, so a large
+/// Retina PNG never exists in memory at full size. Deliberately not observable: each `CropThumbnail`
+/// awaits its own image, which avoids redraw loops when the cache evicts on a large board.
 @MainActor
 final class Thumbnails {
 
     static let shared = Thumbnails()
 
-    /// Keyed by path AND size: the dashboard's 96pt tiles and the board's
-    /// 210pt cards are different images of the same file. `NSCache` evicts
-    /// the least recently used first, and gives memory back under pressure.
+    /// Keyed by path and size: the dashboard's 96pt tiles and the board's 210pt cards are different
+    /// images of the same file.
     private let cache: NSCache<NSString, NSImage> = {
         let cache = NSCache<NSString, NSImage>()
         cache.countLimit = 600
@@ -48,7 +26,7 @@ final class Thumbnails {
         "\(path)#\(Int(maxPoints * (NSScreen.main?.backingScaleFactor ?? 2)))"
     }
 
-    /// Already decoded — the first frame of a card that has been drawn before.
+    /// The cached image, so a card drawn before shows it on its first frame.
     func cached(_ key: String) -> NSImage? { cache.object(forKey: key as NSString) }
 
     /// The thumbnail, decoded off the main thread if it is not cached.
@@ -65,7 +43,7 @@ final class Thumbnails {
         return image
     }
 
-    /// `nonisolated` so the decode runs off the main actor — the whole point.
+    /// `nonisolated` so the decode runs off the main actor.
     private nonisolated static func decode(path: String, pixels: CGFloat) async -> NSImage? {
         await Task.detached(priority: .userInitiated) { () -> NSImage? in
             let url = URL(fileURLWithPath: path) as CFURL
@@ -82,11 +60,8 @@ final class Thumbnails {
     }
 }
 
-/// One crop, at the size it is actually drawn.
-///
-/// The placeholder is the wall rather than a spinner: a grid of spinners is
-/// noisier than the images it is standing in for, and the decode is fast
-/// enough that a spinner would mostly be a flash.
+/// One crop, at the size it is actually drawn. The placeholder is the wall rather than a spinner,
+/// which would mostly be a flash.
 struct CropThumbnail: View {
     let path: String
     var width: CGFloat?
@@ -113,10 +88,8 @@ struct CropThumbnail: View {
         .frame(maxWidth: width == nil ? .infinity : nil)
         .clipped()
         .clipShape(RoundedRectangle(cornerRadius: radius))
-        // THE CLIP IS ONLY VISUAL. `.fill` makes the image larger than its
-        // frame, and SwiftUI hit-tests the whole image, not the clipped part:
-        // a tall screenshot reached a hundred points above its card and took
-        // the hover and the clicks meant for the card above it.
+        // The clip is visual only: `.fill` makes the image larger than its frame and SwiftUI
+        // hit-tests the whole image, so the content shape must match the frame.
         .contentShape(RoundedRectangle(cornerRadius: radius))
         .overlay(
             RoundedRectangle(cornerRadius: radius)

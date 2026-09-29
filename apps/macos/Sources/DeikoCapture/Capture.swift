@@ -5,20 +5,15 @@ import ImageIO
 import ScreenCaptureKit
 import UniformTypeIdentifiers
 
-// ─────────────────────────────────────────────────────────────────────────────
-// CROP CAPTURE — the Tier 1 base
-//
-// Taken for every referent, always. AX gives exact strings where it resolves;
-// the crop gives everything else — layout, colour, spacing, custom-rendered
-// content, and the thumbnail the review UI needs. Neither replaces the other.
-//
-// Coordinates in, as everywhere: top-left-origin global screen space.
-// ─────────────────────────────────────────────────────────────────────────────
+// Crop capture, taken for every referent. AX gives exact strings where it
+// resolves; the crop gives layout, colour, custom-rendered content and the
+// review thumbnail. Neither replaces the other. Coordinates are top-left-origin
+// global screen space.
 
 enum Capture {
 
-    /// Default box around a point referent when AX gave us no usable rectangle.
-    /// Wider than tall on purpose — the things developers point at (code lines,
+    /// Default box around a point referent when AX gave no usable rectangle.
+    /// Wider than tall on purpose: the things developers point at (code lines,
     /// field rows, log lines, response keys) are horizontal.
     static let defaultPointSize = CGSize(width: 460, height: 220)
 
@@ -31,18 +26,11 @@ enum Capture {
     /// default box rather than screenshotting half the screen.
     static let maxAXRectScreenFraction: Double = 0.35
 
-    /// How much bigger than the default box a TEXTLESS element's rect may be
-    /// before we stop believing it describes what was pointed at.
-    ///
-    /// A text-bearing element is self-evidently the thing under the cursor, so
-    /// its rect is trusted at any sane size. A textless container is not: it is
-    /// just the nearest node the app was willing to answer with. Compass's
-    /// `AXRow` (~1000x30) and a Chrome breadcrumb bar (932x80, 5% of screen)
-    /// are worth keeping; a VS Code `AXGroup` measured 601x646 — 26% of the
-    /// screen, 52 OCR lines — and that is a page, not a referent.
+    /// How much bigger than the default box a textless element's rect may be
+    /// before it stops being trusted as what was pointed at. A text-bearing
+    /// element is self-evidently the thing under the cursor; a textless container
+    /// is just the nearest node the app answered with.
     static let maxTextlessRectMultiple: Double = 2.5
-
-    // ── Choosing what to capture ────────────────────────────────────────────
 
     /// Region referents crop their own bounds. Point referents prefer the AX
     /// element's rectangle when it looks like a real element, and fall back to
@@ -64,12 +52,10 @@ enum Capture {
            axFrame.width * axFrame.height < screenArea * maxAXRectScreenFraction,
            axFrame.contains(shape.origin) {
 
-            // A text-bearing element IS the thing under the cursor, so trust
-            // its rect at any sane size. A textless container is merely the
-            // nearest node the app chose to answer with, so trust it only while
-            // it stays near the default box: one VS Code `AXGroup` measured
-            // 601x646 — 26% of the screen, 52 OCR lines — which is a page, not
-            // a referent.
+            // A text-bearing element is the thing under the cursor, so its rect
+            // is trusted at any sane size. A textless container is merely the
+            // nearest node the app answered with, so it is trusted only while it
+            // stays near the default box.
             let hasText = [
                 element.value, element.title, element.elementDescription, element.selectedText
             ].contains { ($0?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false) }
@@ -95,13 +81,10 @@ enum Capture {
         Frame(x: f.x - p, y: f.y - p, width: f.width + p * 2, height: f.height + p * 2)
     }
 
-    /// A mark's crop extent. The raw stroke bbox is not enough — a sweep from
-    /// the edge of box A to the edge of box B bounds only the line between
-    /// them, clipping the very things being connected. So: the stroke's own
-    /// bounds, unioned with the guarded AX frame at each anchor locus
-    /// (`Capture.rect` supplies the guards and the default-box floor, so a
-    /// container can never blow the crop up to half a screen, and a canvas
-    /// with no AX still gets a neighbourhood instead of a pixel-thin ribbon).
+    /// A mark's crop extent: the stroke's bounds unioned with the guarded AX
+    /// frame at each anchor locus. The raw stroke bbox is not enough, since a
+    /// sweep from box A to box B bounds only the line between them.
+    /// `Capture.rect` supplies the guards and the default-box floor.
     static func markRect(
         strokeBounds: Frame,
         loci: [(point: Point, snapshot: AXSnapshot)],
@@ -119,12 +102,10 @@ enum Capture {
         return rect
     }
 
-    // ── Capturing ───────────────────────────────────────────────────────────
-
     /// Screenshot `rect`, optionally OCR'd, optionally written to disk.
     ///
-    /// `runOCR` is passed in rather than decided here: OCR costs 50-200ms and is
-    /// only worth paying when AX came back empty.
+    /// `runOCR` is passed in rather than decided here: OCR costs 50-200ms and
+    /// only pays off when AX came back empty.
     static func crop(
         snapshot: AXSnapshot,
         outputPath: String?,
@@ -151,9 +132,8 @@ enum Capture {
         do {
             image = try await screenshot(of: clamped, on: display, scale: scale)
         } catch {
-            // Screen Recording is the likeliest cause and the message is worth
-            // being specific about — it is a different permission from AX, and
-            // it is granted to the launching process just the same.
+            // Screen Recording is the likeliest cause; it is a separate
+            // permission from AX.
             return failed(rect: clamped, fromAX: rectFromAX, started: started,
                           error: "capture failed: \(error.localizedDescription)")
         }
@@ -174,10 +154,8 @@ enum Capture {
             if writePNG(image, to: outputPath) {
                 writtenPath = outputPath
             } else {
-                // Say so. `path: nil, error: nil` is the contract for "capture
-                // ran in memory only" — a full disk or missing directory used
-                // to masquerade as exactly that, and a session whose every
-                // crop failed read as a legitimately crop-less recording.
+                // Say so: `path: nil, error: nil` means the capture ran in
+                // memory only, and a full disk must not masquerade as that.
                 writeError = "could not write \(outputPath)"
             }
         }
@@ -203,38 +181,27 @@ enum Capture {
         )
     }
 
-    // ── ScreenCaptureKit ────────────────────────────────────────────────────
-
-    /// Cached display list. `SCShareableContent` is a system query that costs
-    /// well over 100ms, and it was being paid on every single crop — measurable
-    /// as a flat ~208ms whether the region was 10×10 or 460×220, which is the
-    /// signature of fixed overhead rather than work. The display layout only
-    /// changes when a monitor is plugged in, so cache it and invalidate on the
-    /// system's own reconfiguration signal.
+    /// Cached display list: `SCShareableContent` is a system query costing
+    /// 100ms or more, and the layout only changes when a monitor is plugged in.
+    /// Invalidated on the system's reconfiguration signal.
     ///
-    /// Locked because crops resolve on concurrent detached tasks — two early
-    /// referents both missing the cache used to assign this array from two
-    /// threads at once. The lock is never held across an await.
+    /// Locked because crops resolve on concurrent detached tasks. The lock is
+    /// never held across an await.
     nonisolated(unsafe) private static var cachedDisplays: [SCDisplay] = []
 
-    /// Deiko itself, so the capture can leave our own drawing out of it.
+    /// Deiko itself, so the capture can leave its own drawing (cursor ring,
+    /// capture pulse) out of the image. `showsCursor = false` does not cover
+    /// these: they are real windows.
     ///
-    /// Every crop was photographing the overlay: the accent cursor ring sits on
-    /// the pointer, and a region's teal capture pulse fires at the moment the
-    /// lasso closes — which is exactly the moment the screenshot is taken. Both
-    /// landed in the middle of the delivered image. `showsCursor = false` never
-    /// covered it, because these are a real window, not the system pointer.
-    ///
-    /// Cached beside the displays and cleared by the same hook: it comes from
-    /// the same `SCShareableContent` query, so fetching it costs nothing extra.
+    /// Cached beside the displays and cleared by the same hook; it comes from the
+    /// same `SCShareableContent` query.
     nonisolated(unsafe) private static var cachedSelf: SCRunningApplication?
     private static let displayLock = NSLock()
 
-    /// CGDisplayRegisterReconfigurationCallback fires on ANY arrangement
-    /// change. Coordinate-coverage checks alone could not see a swap: two
-    /// monitors trading places keeps every point covered while every cached
-    /// `frameInScreenSpace` becomes wrong — and `sourceRect` computed from a
-    /// stale origin crops unrelated screen content with `error: nil`.
+    /// `CGDisplayRegisterReconfigurationCallback` fires on any arrangement
+    /// change. Coordinate checks alone cannot see two monitors swapping places,
+    /// which leaves every cached `frameInScreenSpace` wrong and `sourceRect`
+    /// cropping unrelated screen content.
     private static let reconfigurationHook: Void = {
         CGDisplayRegisterReconfigurationCallback({ _, _, _ in
             displayLock.lock()
@@ -249,15 +216,11 @@ enum Capture {
     private static func cachedDisplay(containing center: Point) -> SCDisplay? {
         displayLock.lock()
         defer { displayLock.unlock() }
-        // A warm display cache is not enough on its own: `cachedSelf` is filled
-        // by the same query, and if the first one did not find us the display
-        // cache would short-circuit every later attempt and we would never look
-        // again. So the first miss on `cachedSelf` refuses the hit and pays for
-        // one more query.
-        //
-        // ONCE, though — `selfLookupTried` is what stops this becoming a
-        // ~200ms `SCShareableContent` call on every single crop, which is the
-        // exact cost this cache was introduced to remove.
+        // A warm display cache is not enough on its own: `cachedSelf` comes
+        // from the same query, and if the first one missed Deiko the cache would
+        // short-circuit every later attempt. So the first miss on `cachedSelf`
+        // refuses the hit and pays for one more query. Once (`selfLookupTried`),
+        // not on every crop.
         guard cachedSelf != nil || selfLookupTried else { return nil }
         return cachedDisplays.first { $0.frameInScreenSpace.contains(center) }
     }
@@ -270,9 +233,8 @@ enum Capture {
         defer { displayLock.unlock() }
         cachedDisplays = displays
         selfLookupTried = true
-        // Never overwrite a good answer with nil: one query that failed to find
-        // us in `applications` would otherwise pin `cachedSelf` to nil, putting
-        // the cursor ring and the capture pulse back into every crop.
+        // Never overwrite a good answer with nil: one query that misses us
+        // would pin `cachedSelf` to nil and put the overlay back in every crop.
         if let selfApp { cachedSelf = selfApp }
     }
 
@@ -288,7 +250,7 @@ enum Capture {
 
         if let cached = cachedDisplay(containing: center) { return cached }
 
-        // Cache miss: either first call, or the layout changed under us.
+        // Cache miss: either first call, or the layout changed since.
         let content = try await SCShareableContent.excludingDesktopWindows(
             false, onScreenWindowsOnly: true
         )
@@ -309,16 +271,14 @@ enum Capture {
     private static func screenshot(
         of rect: Frame, on display: SCDisplay, scale: Double
     ) async throws -> CGImage {
-        // Capture ONLY the region, via sourceRect, rather than grabbing the
-        // whole display and cropping. sourceRect is in points relative to the
-        // display's top-left, which is the same space `rect` is already in.
+        // Capture only the region via sourceRect (points relative to the
+        // display's top-left, the space `rect` is already in) rather than the
+        // whole display.
         //
-        // Deiko excluded from its own screenshots — by APPLICATION rather than
-        // by window, which covers the overlay canvas, the capturing pill and
-        // the orb together and keeps covering whatever is added next. The
-        // fallback is deliberate: a crop with our ring in it is worth far more
-        // than no crop, so an unresolved self reverts to the old filter rather
-        // than throwing.
+        // Deiko is excluded by application rather than by window, which covers
+        // the overlay canvas, capturing pill and orb together. If self is
+        // unresolved, fall back to the plain filter: a crop with the ring in it
+        // beats no crop.
         let filter = ownApplication().map {
             SCContentFilter(display: display, excludingApplications: [$0], exceptingWindows: [])
         } ?? SCContentFilter(display: display, excludingWindows: [])
@@ -360,8 +320,6 @@ enum Capture {
         return Frame(x: x, y: y, width: max(0, maxX - x), height: max(0, maxY - y))
     }
 
-    // ── Writing ─────────────────────────────────────────────────────────────
-
     @discardableResult
     static func writePNG(_ image: CGImage, to path: String) -> Bool {
         let url = URL(fileURLWithPath: path)
@@ -377,8 +335,6 @@ enum Capture {
 
     enum CaptureError: Error { case noDisplay }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
 
 extension Frame {
     func contains(_ p: Point) -> Bool {

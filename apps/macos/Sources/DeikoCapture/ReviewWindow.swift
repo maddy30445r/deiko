@@ -3,37 +3,23 @@ import DeikoHandoff
 import SwiftUI
 import DeikoGesture
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THE REVIEW — the brief in short, before it goes anywhere
+// The review: the brief in short, before it goes anywhere.
 //
-// What is on screen is deliberately small: the counts, the repo it targets, how
-// many screenshots are going and how many were withheld, and the narration.
-// The brief itself runs to a thousand lines of evidence; none of that is here,
-// because none of it is a decision.
+// What is on screen is deliberately small: the counts, the repo it targets, how many screenshots are going
+// and how many were withheld, and the narration. The brief itself runs to a thousand lines of evidence;
+// none of that is a decision.
 //
-// Presented by the orb (`Orb.swift`): `ReviewView` is the orb's expanded form,
-// and `ReviewModel` is the one model both forms share — which is why collapsing
-// the panel loses nothing.
+// Presented by the orb (`Orb.swift`): `ReviewView` is the orb's expanded form and `ReviewModel` is the one
+// model both forms share, so collapsing the panel loses nothing.
 //
-// THE NARRATION IS THE SUMMARY. Nothing writes a description of the session,
-// and nothing should — the developer already said what the task was, out loud,
-// while pointing at it. What they said is the context. `BUILD_PLAN.md` T3.1
-// specified a screen of plan steps with confidence flags; there are no plan
-// steps, because Deiko deliberately stopped generating them, so that spec
-// describes a screen for data that does not exist.
+// The narration is the summary: nothing writes a description of the session, since the developer already
+// said what the task was while pointing at it. It is the one editable thing, because it comes from speech
+// recognition, it is the first thing the agent reads, and a mis-heard identifier there does the most damage.
 //
-// The one thing that IS editable is that narration, and it earns its place: the
-// text comes from speech recognition, it is the first thing the coding agent
-// reads, and a mis-heard identifier there does more damage than anywhere else in
-// the document. Correcting it by hand is `T2.4` done properly.
-//
-// Nothing leaves the machine until the developer flings the orb or presses
-// Good to go. That property is the reason the tool is trustworthy and it is not
-// negotiable — a brief that injected itself into your editor the moment you
-// stopped talking is a brief you would stop trusting.
-// ─────────────────────────────────────────────────────────────────────────────
+// Nothing leaves the machine until the developer flings the orb or presses Good to go. That is what makes
+// the tool trustworthy and it is not negotiable.
 
-// ── State ───────────────────────────────────────────────────────────────────
+// MARK: - State
 
 @MainActor
 final class ReviewModel: ObservableObject {
@@ -42,10 +28,7 @@ final class ReviewModel: ObservableObject {
         case working(String)
         case ready
         case sent
-        /// A sentence naming the fix, plus the raw output behind it. The raw
-        /// text used to BE the message — four hundred characters of provider
-        /// JSON, or a stack trace telling the user to edit a file inside the
-        /// app bundle.
+        /// A sentence naming the fix, plus the raw output behind it.
         case failed(PipelineFailure)
     }
 
@@ -53,9 +36,8 @@ final class ReviewModel: ObservableObject {
     @Published var digest: BriefDigest?
     @Published var narration: String = ""
 
-    /// Write this brief up as a different persona, and re-render it now.
-    /// The pointer beside the session is what the renderer reads, so this is
-    /// the whole change — and it lasts for this brief only.
+    /// Write this brief up as a different persona, and re-render it now. The pointer beside the session is
+    /// what the renderer reads, so this is the whole change, and it lasts for this brief only.
     func setPersona(_ persona: Persona) {
         guard let sessionDir else { return }
         Personas.point(session: sessionDir, to: persona)
@@ -64,9 +46,8 @@ final class ReviewModel: ObservableObject {
             await exclusively { [self] in
                 guard let rerendered = try? await BriefPipeline.rerender(sessionDir: sessionDir) else {
                     guard stillCurrent(sessionDir) else { return }
-                    // The brief on disk is still the last good one; say so
-                    // rather than leaving the window claiming a persona it
-                    // did not apply.
+                    // The brief on disk is still the last good one; say so rather than leaving the window
+                    // claiming a persona it did not apply.
                     personaName = Personas.name(forSession: sessionDir)
                     rerenderPending = true
                     return
@@ -77,22 +58,19 @@ final class ReviewModel: ObservableObject {
         }
     }
 
-    /// WHERE THIS BRIEF SITS in what Deiko remembers: its collection, its
-    /// task, and how much work it looks like. Nil until the classifier has answered — which happens
-    /// after the card is already on screen, so the row appears a moment
-    /// later rather than holding the brief back.
+    /// Where this brief sits in what Deiko remembers: its collection, its task, and how much work it looks
+    /// like. Nil until the classifier has answered, which happens after the card is on screen, so the row
+    /// appears a moment later rather than holding the brief back.
     @Published var context: SessionContext?
-    /// The collections to choose from, read when the context lands rather
-    /// than in a view body: it is a file read, and the card re-renders on
-    /// every keystroke of a correction.
+    /// The collections to choose from, read when the context lands rather than in a view body: it is a file
+    /// read, and the card re-renders on every keystroke of a correction.
     @Published var collections: [Collection] = []
 
-    /// Place this brief somewhere else, and re-render so the prompt says so.
-    /// Marked as the developer's decision, which the classifier never
-    /// overwrites — a correction that got re-guessed would be no correction.
+    /// Place this brief somewhere else, and re-render so the prompt says so. Marked as the developer's
+    /// decision, which the classifier never overwrites.
     ///
-    /// ONE QUESTION AT A TIME. The candidates ask which task this carries on,
-    /// and a project answers something else, so they stay.
+    /// One question at a time: the candidates ask which task this carries on, and a project answers
+    /// something else, so they stay.
     func setCollection(_ id: String?) {
         var next = context ?? SessionContext()
         next.placeCollection(id)
@@ -123,14 +101,12 @@ final class ReviewModel: ObservableObject {
         return store.title(ofTask: id)
     }
 
-    /// Deiko joined it on its own and nobody has said yes or no yet. The card
-    /// asks once ("Same work?"), the coin says "Looks like", and either
-    /// answer is a hand placement, which also joins the filing eval's key.
+    /// Deiko joined it on its own and nobody has said yes or no yet. The card asks once ("Same work?"), the
+    /// coin says "Looks like", and either answer is a hand placement.
     var joinUnconfirmed: Bool { joinedTask != nil && context?.taskBy != "you" }
 
-    /// "from 3 weeks ago" when the joined task's newest OTHER brief — before
-    /// this one — is more than a day old; nil otherwise. A stale join is then
-    /// easy to spot, and one click undoes it.
+    /// "from 3 weeks ago" when the joined task's newest other brief before this one is more than a day old;
+    /// nil otherwise, so a stale join is easy to spot.
     var joinedAge: String? {
         let store = SessionsStore.shared
         guard let id = context?.task, id != ownTask, let sessionID,
@@ -170,26 +146,22 @@ final class ReviewModel: ObservableObject {
     /// can wait a moment for them without waiting on them — and so the
     /// collapsed card can say "Filing…".
     @Published private(set) var placing = false
-    /// Whether the classifier's request went out for this session. Published
-    /// when it returns, answer or not, so the trust line never has to read
-    /// the marker inside a view body — where a failure changed nothing that
-    /// would re-draw it.
+    /// Whether the classifier's request went out for this session. Published when it returns, answer or
+    /// not, so the trust line never has to read the marker inside a view body.
     @Published private(set) var filed = false
-    /// Whether that request carried the summary — which the card may have
-    /// now even though the request left without it.
+    /// Whether that request carried the summary, which the card may have now even though the request left
+    /// without it.
     @Published private(set) var filedSummary = false
     /// The request went out and no placement came back.
     @Published private(set) var notFiled = false
     /// Not filed YET: queued, and filed by `FilingQueue` when it can be.
     @Published private(set) var filingQueued = false
-    /// The throw went before the filing finished, so the brief it pasted
-    /// carries no task. Said on the sent pill. Settable so `UIShot` can pose
-    /// that pill.
+    /// The throw went before the filing finished, so the brief it pasted carries no task. Said on the sent
+    /// pill. Settable so `UIShot` can pose that pill.
     @Published var sentUnfiled = false
-    /// Tells somebody on their own key, once, that filing sends what they
-    /// said to the relay. On the collapsed card, which every brief passes
-    /// through, of the first brief to reach Ready — see `Sorting.noticeDue`.
-    /// Settable so `UIShot` can pose it.
+    /// Tells somebody on their own key, once, that filing sends what they said to the relay. Shown on the
+    /// collapsed card of the first brief to reach Ready (see `Sorting.noticeDue`). Settable so `UIShot` can
+    /// pose it.
     @Published var sortingNotice = false
 
     private func apply(_ next: SessionContext) {
@@ -200,11 +172,8 @@ final class ReviewModel: ObservableObject {
             await exclusively { [self] in
                 guard let rerendered = try? await BriefPipeline.rerender(sessionDir: sessionDir) else {
                     guard stillCurrent(sessionDir) else { return }
-                    // The placement is on disk but the brief does not carry it
-                    // yet. Left silent, the card showed the link while the
-                    // next fling — which only re-renders for a correction —
-                    // shipped a brief without it. This makes the next send
-                    // rebuild, the way an excluded screenshot does.
+                    // The placement is on disk but the brief does not carry it yet. Marking the next send to
+                    // rebuild, as an excluded screenshot does, stops a fling shipping a brief without it.
                     rerenderPending = true
                     return
                 }
@@ -218,76 +187,38 @@ final class ReviewModel: ObservableObject {
         }
     }
 
-    /// The persona this brief was written for, for the one line on the card
-    /// that says so. Read when the digest lands, not in a view body: it is a
-    /// file read, and the card re-renders on every keystroke of a correction.
-    /// Not `private(set)`: `UIShot` poses this card to check that the chip
-    /// still fits beside the title at 400pt, and every other display value on
-    /// this model is settable for the same reason.
+    /// The persona this brief was written for, for the one line on the card that says so. Read when the
+    /// digest lands, not in a view body: it is a file read, and the card re-renders on every keystroke of a
+    /// correction. Not `private(set)` so `UIShot` can pose it.
     @Published var personaName: String?
 
-    /// Crop thumbnails, keyed by the path in `digest.cropPaths`, loaded once
-    /// here rather than in the view body.
+    /// Crop thumbnails, keyed by the path in `digest.cropPaths`, loaded once here rather than in the view body.
     ///
-    /// `narration` is `@Published` and bound to the TextEditor below, so every
-    /// keystroke while correcting the transcript republishes this object and
-    /// re-evaluates `ReviewView.body` — including `cropRow`. If the thumbnail
-    /// read `NSImage(contentsOfFile:)` itself, that synchronous disk read and
-    /// PNG decode would run again on every keystroke, for every crop on
-    /// screen. Loading once when the digest arrives — and only then — keeps
-    /// typing free of disk I/O it has no reason to pay for.
-    ///
-    /// That fixed the FREQUENCY, not the cost of any one decode. These are
-    /// full-resolution Retina screenshots of whatever the lasso enclosed, so
-    /// a large region is a multi-megabyte PNG, and the first version still
-    /// ran `NSImage(contentsOfFile:)` for every path right here on the main
-    /// actor — once instead of once-per-keystroke, but still synchronously,
-    /// still capable of hitching the review card at the exact moment `phase`
-    /// flips to `.ready` and it first appears. `loadCropThumbnails` below is
-    /// `async`, and the actual read-and-decode (`decodeThumbnails`) is
-    /// `nonisolated`: awaiting a `nonisolated` function from this
-    /// `@MainActor` class hops execution off the main actor for its body and
-    /// back only when it returns, so the disk read and PNG decode happen off
-    /// the main thread and only the finished `NSImage` values ever cross back
-    /// to be published here.
+    /// `narration` is bound to the TextEditor, so every keystroke republishes this object and re-evaluates
+    /// `ReviewView.body`; a thumbnail decoded in the body would repeat a synchronous disk read and PNG decode
+    /// per keystroke per crop. These are full-resolution Retina screenshots, so the decode also runs off the
+    /// main actor: `loadCropThumbnails` is `async` and `decodeThumbnails` is `nonisolated`, so only finished
+    /// `NSImage` values cross back to be published.
     @Published private(set) var cropThumbnails: [String: NSImage] = [:]
 
-    /// Reads and decodes every crop, off the main actor — see the comment on
-    /// `cropThumbnails` for why this is `async`/`nonisolated` rather than a
-    /// plain synchronous call.
+    /// Reads and decodes every crop, off the main actor (see `cropThumbnails`).
     ///
-    /// `stillCurrent` is checked again after the `await`, exactly as it is
-    /// after every other suspension point in this file: the decode is now a
-    /// real await, so a session switch (or a second edit re-rendering the
-    /// same session) can land while it is in flight, and a slow decode for a
-    /// session nobody is looking at anymore must not overwrite a newer one's
-    /// thumbnails once it finally finishes. This is the same guard used
-    /// everywhere else here — not a second mechanism.
+    /// `stillCurrent` is checked again after the `await`, as after every suspension point in this file: a
+    /// session switch can land during a slow decode, and it must not overwrite a newer session's thumbnails.
     private func loadCropThumbnails(_ digest: BriefDigest, sessionDir: String) async {
         let thumbnails = await decodeThumbnails(digest.cropPaths)
         guard stillCurrent(sessionDir) else { return }
         cropThumbnails = thumbnails
     }
 
-    /// `nonisolated` so it carries no actor of its own: called with `await`
-    /// from the `@MainActor` `loadCropThumbnails`, it runs the disk read and
-    /// PNG decode on the cooperative thread pool rather than the main thread,
-    /// and control returns to the main actor the moment it completes. No
-    /// `Task.detached` and nothing to cancel separately — the enclosing
-    /// `Task` in `load`/`approve`/`reload(afterExtending:)` already owns
-    /// that, via `stillCurrent`.
+    /// `nonisolated` so the disk read and PNG decode run on the cooperative thread pool rather than the main
+    /// thread, and control returns to the main actor when it completes. The enclosing `Task` already owns
+    /// cancellation, via `stillCurrent`.
     ///
-    /// This off-main-thread hop is SE-0338's behaviour, not `nonisolated`'s
-    /// universal meaning, and it only holds because `Package.swift` still
-    /// declares `swift-tools-version:6.0`. SE-0461 (Swift 6.2) flips the
-    /// default: under a 6.2-or-later tools-version, a `nonisolated async`
-    /// function runs on the *caller's* actor instead of hopping off, so this
-    /// exact code would silently decode back on the main actor — no compiler
-    /// error, no test failure, just a hitch the first time a multi-megabyte
-    /// Retina PNG decodes. Established empirically, by building a probe
-    /// package at each tools-version, not from documentation. Do not raise
-    /// the tools-version without re-proving this decode still leaves the main
-    /// thread.
+    /// This off-main-thread hop is SE-0338's behaviour and holds only while `Package.swift` declares
+    /// `swift-tools-version:6.0`. Under SE-0461 (a Swift 6.2 tools-version) a `nonisolated async` function
+    /// runs on the caller's actor, so this would silently decode on the main actor. Do not raise the
+    /// tools-version without re-proving that the decode leaves the main thread.
     nonisolated private func decodeThumbnails(_ cropPaths: [String]) async -> [String: NSImage] {
         Dictionary(uniqueKeysWithValues: cropPaths.compactMap { path in
             NSImage(contentsOfFile: path).map { (path, $0) }
@@ -298,10 +229,8 @@ final class ReviewModel: ObservableObject {
     /// ("Handed to Claude Code") rather than claiming a vague success.
     @Published var handedTo: String?
 
-    /// Deiko's reading of the session, for this screen only — never sent.
-    /// Nil while it is still arriving AND when it never arrives; `summaryPending`
-    /// tells those apart, because a spinner that never resolves is worse than no
-    /// spinner at all.
+    /// Deiko's reading of the session, for this screen only; never sent. Nil while it is still arriving and
+    /// when it never arrives; `summaryPending` tells those apart.
     @Published var summary: String?
     @Published var summaryPending = false
 
@@ -332,13 +261,8 @@ final class ReviewModel: ObservableObject {
     /// "add your key" should be one click from the key, not an instruction.
     var onOpenSettings: (() -> Void)?
 
-    /// Leave one screenshot out of the brief.
-    ///
-    /// Writes the exclusion and re-renders, which is what makes it real: the
-    /// renderer drops the whole referent, so neither the image nor the text
-    /// read off it reaches `prompt.txt`. The thumbnails are shown to catch a
-    /// bad crop and until now there was nothing to DO about one — the only
-    /// remedy was abandoning the session.
+    /// Leave one screenshot out of the brief. Writes the exclusion and re-renders: the renderer drops the
+    /// whole referent, so neither the image nor the text read off it reaches `prompt.txt`.
     func excludeCrop(_ path: String) {
         guard let sessionDir, digest != nil else { return }
         let name = (path as NSString).lastPathComponent
@@ -350,9 +274,8 @@ final class ReviewModel: ObservableObject {
         approve()
     }
 
-    /// Something other than the narration changed and the brief has to be built
-    /// again. `approve()` re-rendered only for an edited narration, so without
-    /// this an excluded crop was written to disk and never acted on.
+    /// Something other than the narration changed and the brief has to be built again. `approve()`
+    /// re-renders on its own only for an edited narration.
     private var rerenderPending = false
 
     /// The recorder refused to reopen the session — the events file is gone, or
@@ -364,10 +287,9 @@ final class ReviewModel: ObservableObject {
             opensSettings: false,
             raw: ""
         ))
-        // `prepareToExtend` stood a filing down for a `reload` that is not
-        // coming, so file the brief as it stands — only then. A brief already
-        // filed keeps its place: filing it again is another request, and a
-        // second sort that could move it.
+        // `prepareToExtend` stood a filing down for a `reload` that is not coming, so file the brief as it
+        // stands, and only then: a brief already filed keeps its place, since filing again is another request
+        // that could move it.
         if stoodDownFiling, let sessionDir { fetchContext(sessionDir: sessionDir) }
     }
     /// The narration as recognised, so "did the developer change it" is a
@@ -381,15 +303,10 @@ final class ReviewModel: ObservableObject {
 
     /// Whether a result that has just come back still belongs on screen.
     ///
-    /// `Task.isCancelled` alone is not enough. It reports only the task's OWN
-    /// cancellation, and every entry point here used to overwrite `task` without
-    /// cancelling what was there — so a session that finished transcribing after
-    /// a NEWER one had already loaded would happily publish its digest,
-    /// narration and summary into a model now pointing somewhere else. The orb
-    /// would show one session while the fling sent another, and `narrationEdited`
-    /// would compare the new text against the old original, writing an edit
-    /// nobody made. Cancelling on entry fixes the common case; this check is what
-    /// makes it true even for a task already past its last suspension point.
+    /// `Task.isCancelled` alone is not enough: it reports only the task's own cancellation, so a session that
+    /// finishes transcribing after a newer one has loaded would publish its digest, narration and summary
+    /// into a model now pointing elsewhere. Entry points cancel the previous task; this check covers a task
+    /// already past its last suspension point.
     private func stillCurrent(_ dir: String) -> Bool {
         !Task.isCancelled && sessionDir == dir
     }
@@ -411,9 +328,8 @@ final class ReviewModel: ObservableObject {
                 raw: ""
             )
         }
-        // Remembered here because this is the only place a failure is ever
-        // named. Settings' "Copy diagnostics" is usually pressed minutes
-        // later, from a window that knows nothing about this session.
+        // Remembered here because this is the only place a failure is ever named; "Copy diagnostics" is
+        // usually pressed minutes later, from a window that knows nothing about this session.
         Diagnostics.lastFailure = failure
         return failure
     }
@@ -421,10 +337,8 @@ final class ReviewModel: ObservableObject {
     func load(sessionDir: String) {
         cancelPendingWork()
         if sessionDir != self.sessionDir {
-            // A DIFFERENT BRIEF: nothing of the last one may stand in for it.
-            // A digest left over from the previous session read as "this one
-            // is rendered" — the coin refused a throw during "Transcribing…",
-            // and Delete no longer waited for the pipeline to finish.
+            // A different brief: nothing of the last one may stand in for it. A leftover digest would read
+            // as "this one is rendered", letting the coin throw during "Transcribing…".
             digest = nil
             narration = ""
             originalNarration = ""
@@ -434,9 +348,8 @@ final class ReviewModel: ObservableObject {
         }
         self.sessionDir = sessionDir
         FilingQueue.shared.card = (sessionDir, { [weak self] in self?.fetchContext(sessionDir: sessionDir) })
-        // A brief opened again after it was filed keeps its row on screen and
-        // its place: sorting it a second time could move it, and blanked the
-        // row for the second or two that took.
+        // A brief opened again after it was filed keeps its row on screen and its place: sorting it a
+        // second time could move it.
         let settled = Self.settledContext(sessionDir: sessionDir)
         context = settled
         collections = settled == nil ? [] : Collections.all()
@@ -461,8 +374,7 @@ final class ReviewModel: ObservableObject {
                 self.narration = digest.summary.narration
                 self.originalNarration = digest.summary.narration
                 self.phase = .ready
-                // Not on a card a waiting throw is about to turn into the
-                // sent pill — nobody would read it there. The next card has it.
+                // Not on a card a waiting throw is about to turn into the sent pill; the next card has it.
                 if self.queuedHandoff == nil {
                     self.sortingNotice = Sorting.noticeDue(
                         ownKey: Credentials.willUse("GROQ_API_KEY"), files: Credentials.filesBriefs
@@ -479,31 +391,21 @@ final class ReviewModel: ObservableObject {
             } catch {
                 guard stillCurrent(sessionDir) else { return }
                 self.phase = .failed(describe(error))
-                // The throw was waiting on this render, and it is not coming.
-                // Leaving the queue armed would hand the developer an error
-                // while they believed their fling was still in flight.
+                // The throw was waiting on this render, and it is not coming. Leaving the queue armed would
+                // show an error while the developer believed their fling was still in flight.
                 self.queuedHandoff = nil
             }
         }
     }
 
-    /// A fling thrown before the brief existed.
-    ///
-    /// The orb appears the moment a session closes, but the pipeline needs a
-    /// few seconds more — so whether reaching for the coin worked came down to
-    /// how fast you reached. The gesture armed only on `.ready`, and an unarmed
-    /// press produced no detached coin, no aim label, no highlight and no
-    /// message: it simply died, differently on different days. That is the
-    /// whole of "sometimes nothing happens".
-    ///
-    /// Throwing it IS the decision. Holding the throw until there is something
-    /// to send honours it, rather than discarding it for being early.
+    /// A fling thrown before the brief existed. The orb appears the moment a session closes but the pipeline
+    /// needs a few seconds more; an early throw is held until there is something to send rather than
+    /// discarded, because throwing it is the decision.
     private var queuedHandoff: (appName: String?, deliver: @MainActor (BriefPipeline.Prompt) async throws -> Void)?
 
-    /// The placement a re-opened brief already has, when there is nothing to
-    /// sort again: a person placed it (`classify.mjs` never re-sorts that), or
-    /// Deiko answered — through Jev or on this Mac — and nobody has corrected
-    /// the narration since.
+    /// The placement a re-opened brief already has, when there is nothing to sort again: a person placed it
+    /// (`classify.mjs` never re-sorts that), or Deiko answered (through Jev or on this Mac) and the narration
+    /// has not been corrected since.
     private static func settledContext(sessionDir: String) -> SessionContext? {
         guard let context = SessionContext.read(sessionDir: sessionDir) else { return nil }
         if context.decidedBy == "you" { return context }
@@ -525,36 +427,23 @@ final class ReviewModel: ObservableObject {
         approve(handingTo: queued.appName, then: queued.deliver)
     }
 
-    /// Save the edit, re-render, then — only on the fling path — send.
+    /// Save the edit, re-render, then, only on the fling path, send.
     ///
-    /// ONE SEND GESTURE IN THE WHOLE PRODUCT. Called with no handoff closure
-    /// (the panel's "Good to go"), this applies the correction and returns to
-    /// `.ready`: nothing leaves the machine until the coin is thrown. The
-    /// panel never sends, so there is exactly one gesture that does, and the
-    /// developer can always answer "has anything been sent?" by whether they
-    /// have thrown.
+    /// There is one send gesture in the whole product. Called with no handoff closure (the panel's "Good to
+    /// go"), this applies the correction and returns to `.ready`: nothing leaves the machine until the coin
+    /// is thrown.
     ///
-    /// On the fling path the order is edit → read `prompt.txt` → keystroke, and
-    /// **the phase does not read `.sent` until the keystroke returns.** The
-    /// first version set `.sent` before running it — so the orb said "Handed
-    /// over" while nothing had reached the editor, and the checkmark was
-    /// evidence only of a file being on disk. A success state must not outrun
-    /// the work it claims.
+    /// On the fling path the order is edit → read `prompt.txt` → keystroke, and the phase does not read
+    /// `.sent` until the keystroke returns: a success state must not outrun the work it claims.
     ///
-    /// `prompt.txt` is read fresh here rather than passed down from `load`,
-    /// deliberately: if the paste or keystroke fails, the file is still there
-    /// and the orb points at it — pasting it by hand still works.
+    /// `prompt.txt` is read fresh rather than passed down from `load`: if the paste or keystroke fails, the
+    /// file is still there and the orb points at it.
     func approve(handingTo appName: String? = nil, then after: (@MainActor (BriefPipeline.Prompt) async throws -> Void)? = nil) {
         guard let sessionDir else { return }
 
-        // THROWN BEFORE THERE WAS ANYTHING TO SEND — hold it, do not cancel.
-        //
-        // `digest == nil` is the test for "the pipeline is still producing the
-        // brief", and it has to be checked before the `task?.cancel()` below:
-        // that line exists to stop a stale send racing a newer one, but the
-        // task in flight right now IS the render this fling is waiting for.
-        // Cancelling it would answer an early throw by destroying the thing
-        // that would have satisfied it.
+        // Thrown before there was anything to send: hold it, do not cancel. `digest == nil` means the
+        // pipeline is still producing the brief, and it must be checked before the `task?.cancel()` below,
+        // because the task in flight is the render this fling is waiting for.
         if digest == nil, let after {
             queuedHandoff = (appName: appName, deliver: after)
             phase = .working("Sending to \(appName ?? "your editor") when it's ready…")
@@ -562,11 +451,10 @@ final class ReviewModel: ObservableObject {
             return
         }
 
-        // ONE PASTE PER BRIEF. The coin arms at the press, so a throw pressed
-        // while the brief was still transcribing can be released after it
-        // landed and another send began. One still waiting is called off
-        // below and this one goes instead; one already pasting cannot be
-        // called back, so this one is dropped rather than paste it twice.
+        // One paste per brief. The coin arms at the press, so a throw pressed while the brief was
+        // transcribing can be released after it landed and another send began. One still waiting is called
+        // off below and this one goes instead; one already pasting cannot be called back, so this one is
+        // dropped rather than paste twice.
         if after != nil, delivering || phase == .sent {
             Handoff.trace?("fling: the brief is already being handed over — this throw is dropped")
             return
@@ -576,18 +464,15 @@ final class ReviewModel: ObservableObject {
         sendTicket += 1
         let ticket = sendTicket
         if after != nil {
-            // Now, not after the wait below: `.working` is what disarms the
-            // coin, and while this read `.ready` a second throw armed, cancelled
-            // nothing it could reach, and pasted the brief again.
+            // Now, not after the wait below: `.working` is what disarms the coin, and while this read
+            // `.ready` a second throw could arm, cancel nothing it could reach, and paste the brief again.
             phase = .working("Handing to \(appName ?? "your editor")…")
         }
         task = Task {
             do {
-                // A brief thrown the instant the card appears should still
-                // carry where it belongs. The filing waits on the summary and
-                // then the classifier — measured 1.2–2.3s together — so three
-                // seconds catches it, and caps a wait on one that is not
-                // coming. Only a send waits: the panel's path sends nothing.
+                // A brief thrown the instant the card appears should still carry where it belongs. The
+                // filing waits on the summary and then the classifier, so three seconds catches it and caps
+                // a wait on one that is not coming. Only a send waits: the panel's path sends nothing.
                 if after != nil {
                     await waitForPlacing()
                     guard !Task.isCancelled else { return }
@@ -595,9 +480,8 @@ final class ReviewModel: ObservableObject {
                 var failure: Error?
                 await exclusively { [self] in
                 do {
-                // AN EARLIER BRIEF OF THIS TASK WROTE BACK SINCE THIS ONE
-                // RENDERED — its agent finished while this one waited — so
-                // what this says about where the task stands is behind.
+                // An earlier brief of this task may have written back since this one rendered (its agent
+                // finished while this one waited), so what this says about where the task stands is behind.
                 // Checked here, in the lane, the moment before the read.
                 let stale = after != nil && SessionsStore.shared.memoryIsStale(sessionDir: sessionDir)
                 if narrationEdited || rerenderPending || stale {
@@ -609,19 +493,10 @@ final class ReviewModel: ObservableObject {
                     }
                     let rerendered = try await BriefPipeline.rerender(sessionDir: sessionDir)
                     guard stillCurrent(sessionDir) else { return }
-                    // CLEARED ONLY ONCE THE RE-RENDER HAS ACTUALLY LANDED.
-                    //
-                    // Clearing it before the `await` looked equivalent and was
-                    // not: `approve` cancels the task in flight, so a coin
-                    // thrown while this was still rendering started a second
-                    // pass that saw `rerenderPending == false` and
-                    // `narrationEdited == false`, skipped the re-render, and
-                    // handed over the PRE-EXCLUSION `prompt.txt` — the removed
-                    // screenshot's path, its caption, its screen text and its
-                    // image bytes, all delivered after the user had taken it
-                    // out. `narrationEdited` never had this bug because it is
-                    // derived state rather than a flag; clearing here makes
-                    // this one self-healing in the same way.
+                    // Cleared only once the re-render has landed: `approve` cancels the task in flight, so
+                    // clearing before the `await` would let a second pass see `rerenderPending == false`,
+                    // skip the re-render, and hand over the pre-exclusion `prompt.txt` with the removed
+                    // screenshot's path, caption, text and image.
                     rerenderPending = false
                     self.digest = rerendered
                     self.personaName = Personas.name(forSession: sessionDir)
@@ -662,58 +537,46 @@ final class ReviewModel: ObservableObject {
 
     /// Where this brief belongs, and what it remembers.
     ///
-    /// Its own task beside the summary's, for the same reason: a network round
-    /// trip must not stand in front of a finished brief. The re-render is what
-    /// makes it real — `prompt.txt` is written before the classifier answers,
-    /// so the task section only exists after this second pass.
+    /// Its own task beside the summary's, since a network round trip must not stand in front of a finished
+    /// brief. The re-render makes it real: `prompt.txt` is written before the classifier answers, so the
+    /// task section only exists after this second pass. A brief thrown while this is in flight does not
+    /// miss it: `approve` waits on it for up to three seconds before reading the prompt.
     ///
-    /// A brief thrown while this is in flight does not miss it: `approve`
-    /// waits on it for up to three seconds before reading the prompt.
-    ///
-    /// FILED WHETHER OR NOT ANYBODY IS STILL LOOKING. Nothing cancels this:
-    /// closing the orb used to kill it while it waited on the summary, and a
-    /// brief whose card closed was never filed at all. Only what it shows is
-    /// held back when the card has moved on.
+    /// Filed whether or not anybody is still looking: nothing cancels this, and only what it shows is held
+    /// back when the card has moved on.
     private func fetchContext(sessionDir: String) {
         let run = startFiling(sessionDir)
         let summary = summaryTask
         let root = (sessionDir as NSString).deletingLastPathComponent
-        // NO RELAY, OR SORTING OFF, STILL PLACES WHAT NEEDS NO RELAY — odds
-        // and ends, a short follow-up on its task's window — but nothing is
-        // filed, so nothing says "Filing…" or "Not filed" and nothing waits.
+        // With no relay, or sorting off, what needs no relay (odds and ends, a short follow-up on its
+        // task's window) is still placed, but nothing is filed, so nothing says "Filing…" or "Not filed"
+        // and nothing waits.
         let files = Credentials.filesBriefs
         placing = files
         Task { [self] in
-            // THE SUMMARY IS THE BRIEF'S BEST LINE — it names the task and
-            // matches it — and it is written by a call that starts at the
-            // same moment. Wait for it; it has its own fifteen-second cap.
+            // The summary is the brief's best line (it names the task and matches it) and is written by
+            // a call that started at the same moment. Wait for it; it has its own fifteen-second cap.
             await summary?.value
-            // THE BOARD IS WHAT "carries on from" CHOOSES FROM, and until now
-            // only the main window ever loaded it. Record a session without
-            // opening that window — which is the ordinary way to use Deiko —
-            // and the menu held nothing but "it stands on its own", while a
-            // link the classifier had already made showed as a raw stamp
-            // because no title could be found for it. Loaded once per launch;
-            // `load` is already a detached read.
+            // The board is what "carries on from" chooses from. Load it once per launch here, since
+            // recording without opening the main window is the ordinary way to use Deiko, and without
+            // titles a link the classifier already made would show as a raw stamp. `load` is already a
+            // detached read.
             if !SessionsStore.shared.loaded {
                 await SessionsStore.shared.load(root: root)
             }
             let placed = await BriefPipeline.classify(sessionDir: sessionDir)
-            // WHAT LEFT, whichever run is still wanted. Read before the guard
-            // below: a filing that was taken over still sent its request, and
-            // if the one that took over never gets this far the trust line
-            // would go on saying less than went. The marker only ever tells
-            // the truth, so reading it here cannot overstate.
+            // What left, whichever run is still wanted. Read before the guard below: a filing that was
+            // taken over still sent its request, and if the one that took over never gets this far the
+            // trust line would say less than went. The marker only tells the truth, so reading it cannot
+            // overstate.
             if stillCurrent(sessionDir) {
                 let sent = ClassifyRequest.sentSummary(sessionDir: sessionDir)
                 filed = sent != nil
                 filedSummary = sent == true
             }
-            // A NEWER FILING OF THIS BRIEF TOOK OVER — "Point at more" added
-            // words, or the card opened on it again. That one re-renders and
-            // shows; this one must do neither after it. `context.json` is
-            // already safe: `classify.mjs` leaves it to whichever request for
-            // the brief went out last.
+            // A newer filing of this brief took over ("Point at more" added words, or the card opened on
+            // it again). That one re-renders and shows; this one must do neither. `context.json` is
+            // already safe: `classify.mjs` leaves it to whichever request went out last.
             guard !superseded(run, sessionDir) else { return }
             if placed != nil {
                 await exclusively { [self] in
@@ -731,10 +594,9 @@ final class ReviewModel: ObservableObject {
                 // or started. After the render lane, not inside it.
                 await SessionsStore.shared.load(root: root)
             }
-            // Filed: anything that waited behind the network can go too. And
-            // either way the board's "waiting" count is current.
-            // FILED BY THIS RUN — not merely "has a context": "Point at more" on
-            // a filed brief keeps its old context when the refile fails.
+            // Filed: anything that waited behind the network can go too. Either way the board's "waiting"
+            // count is current. Filed by this run, not merely "has a context": "Point at more" on a filed
+            // brief keeps its old context when the refile fails.
             let waiting = FilingQueue.isPending(sessionDir)
             if placed != nil && !waiting { FilingQueue.shared.fileAll() } else { FilingQueue.shared.refresh() }
             guard run == placingRun, stillCurrent(sessionDir) else { return }
@@ -776,41 +638,23 @@ final class ReviewModel: ObservableObject {
 
     /// Give the placing a moment, and only a moment.
     ///
-    /// THE OBVIOUS VERSION OF THIS DOES NOT TIME OUT. It was a task group
-    /// racing `await work.value` against a sleeper, which reads like a
-    /// deadline and is not one: `value` on a `Task<Void, Never>` cannot be
-    /// cancelled, and a task group awaits every child before it returns. So
-    /// the sleeper won the race and the group waited for the loser anyway —
-    /// measured at 5.33s for a one-second limit. Every fling thrown while the
-    /// classifier was running sat there until a node spawn, a network call
-    /// with a fifteen-second deadline and a whole re-render had finished,
-    /// with the orb still reading "Ready to hand over".
-    ///
-    /// Polling a flag is the shape `Handoff` already uses to wait for an app
-    /// to activate, and unlike the group it is honest about being a deadline.
-    /// `Task.sleep` is cancellable, so a session switch still ends it.
+    /// Polls a flag rather than racing `await work.value` against a sleeper in a task group: `value` on a
+    /// `Task<Void, Never>` cannot be cancelled and a task group awaits every child before returning, so that
+    /// version waited far past its limit. `Task.sleep` is cancellable, so a session switch still ends the poll.
     private func waitForPlacing(upTo ticks: Int = 120) async {
         for _ in 0..<ticks where placing {
             try? await Task.sleep(for: .milliseconds(25))
         }
     }
 
-    /// ONE RENDERER PER SESSION, AND THE ONE WHO SENDS HOLDS THE LANE.
+    /// One renderer per session, and the one that sends holds the lane.
     ///
-    /// Four paths rewrite a session's files — a correction, a screenshot
-    /// taken out, a persona, a placement — and the classifier is a fifth.
-    /// They used to share one `task` variable and cancel each other, which
-    /// bought nothing: `BriefPipeline` shells out to `make brief`, and
-    /// cancelling a Swift task neither kills that process nor stops it
-    /// writing. Two renders of one session could overlap, and the one that
-    /// finished last won — so excluding a second screenshot while the first
-    /// exclusion was still rendering could put the first screenshot's path,
-    /// caption and image bytes back, after the user had removed them.
-    ///
-    /// Everything that writes now queues behind whatever is already writing.
-    /// `approve` holds the lane across its read of `prompt.txt` and the paste
-    /// as well, so nothing can rewrite the brief between deciding what to
-    /// send and sending it.
+    /// Several paths rewrite a session's files (a correction, a screenshot taken out, a persona, a placement,
+    /// the classifier). `BriefPipeline` shells out to `make brief`, and cancelling a Swift task neither kills
+    /// that process nor stops it writing, so two renders of one session could overlap and the last to finish
+    /// would win. Everything that writes queues behind whatever is already writing. `approve` holds the lane
+    /// across its read of `prompt.txt` and the paste, so nothing can rewrite the brief between deciding what
+    /// to send and sending it.
     private var renderChain: Task<Void, Never>?
 
     private func exclusively(_ body: @escaping @MainActor () async -> Void) async {
@@ -837,27 +681,22 @@ final class ReviewModel: ObservableObject {
     /// and `prompt.txt` from a partial session.
     func prepareToExtend() {
         guard let sessionDir else { return }
-        // Only an ACTUAL edit is carried. Carrying the untouched transcript would
-        // write it back as an override, and the brief would then tell the agent
-        // "corrected by the developer after capture" about text they never
-        // touched — a claim that reads as authority the words have not earned.
+        // Only an actual edit is carried: carrying the untouched transcript would write it back as an
+        // override, and the brief would claim "corrected by the developer after capture" about text they
+        // never touched.
         carriedNarration = narrationEdited ? narration : nil
         holdsBeforeExtending = Set(BriefPipeline.holdTexts(sessionDir: sessionDir).keys)
-        // The filing in flight stands down here, as the note above says: it
-        // would re-render from a half-written session. `reload` files again.
+        // The filing in flight stands down here: it would re-render from a half-written session. `reload`
+        // files again.
         stoodDownFiling = placing
         _ = startFiling(sessionDir)
         placing = false
         phase = .working("Recording — tap \(SessionKey.selected.name) to stop")
     }
 
-    /// Re-run the pipeline over a session that just gained a hold, keeping
-    /// whatever the developer had already written.
-    ///
-    /// Their text wins and the new speech is appended to it. Re-transcribing
-    /// would be simpler and would silently destroy a correction they made
-    /// deliberately — the worst kind of surprise, and the reason this bookkeeping
-    /// exists at all.
+    /// Re-run the pipeline over a session that just gained a hold, keeping whatever the developer had
+    /// already written. Their text wins and the new speech is appended: re-transcribing would silently
+    /// destroy a deliberate correction.
     func reload(afterExtending sessionDir: String) {
         let carried = carriedNarration
         let priorHolds = holdsBeforeExtending
@@ -870,9 +709,8 @@ final class ReviewModel: ObservableObject {
         summary = nil
         notFiled = false
         filingQueued = false
-        // The classifier reads this file, and it describes the shorter
-        // session. Left in place, a summary that failed now filed the longer
-        // brief on the old one. Only here: reopening a brief keeps its summary
+        // The classifier reads this file, and it describes the shorter session; left in place, a failed new
+        // summary would file the longer brief on the old one. Only here: reopening a brief keeps its summary
         // when a fresh one cannot be had.
         try? FileManager.default.removeItem(
             at: URL(fileURLWithPath: sessionDir).appendingPathComponent("review-summary.txt")
@@ -908,10 +746,8 @@ final class ReviewModel: ObservableObject {
                 self.originalNarration = digest.summary.narration
                 self.phase = .ready
                 self.fetchSummary(sessionDir: sessionDir)
-                // The words changed, so where this belongs may have changed
-                // with them. `load` places a brief and this path never did,
-                // leaving the placement computed from the narration as it
-                // stood before the addition.
+                // The words changed, so where this belongs may have changed with them; `load` places a
+                // brief but this path never did.
                 self.fetchContext(sessionDir: sessionDir)
             } catch {
                 guard stillCurrent(sessionDir) else { return }
@@ -933,26 +769,21 @@ final class ReviewModel: ObservableObject {
         sendTicket += 1
         summaryTask?.cancel()
         summaryTask = nil
-        // NOT the filing — see `fetchContext`. Nobody is waiting on it now,
-        // so a throw must not either.
+        // Not the filing (see `fetchContext`): nobody is waiting on it now, so a throw must not either.
         placing = false
-        // A held throw belongs to the session it was thrown at, and nothing
-        // else. `load` calls this on entry, so without it a fling queued
-        // against one session would fire the moment the NEXT session finished
-        // rendering — pasting a brief the developer never aimed at, into a
-        // window they aimed at minutes ago. The same class of bug `stillCurrent`
-        // exists to prevent, arriving by a route that predates it.
+        // A held throw belongs to the session it was thrown at. `load` calls this on entry, so without it
+        // a fling queued against one session would fire when the next finished rendering, pasting a brief
+        // the developer never aimed at.
         queuedHandoff = nil
     }
 }
 
-// ── View ────────────────────────────────────────────────────────────────────
+// MARK: - View
 
 struct ReviewView: View {
     @ObservedObject var model: ReviewModel
-    /// Observed because the rows below name tasks by their titles, and a
-    /// title — one just typed into "Start a new task and name it…" — lands
-    /// when the board reloads, after the model has already published.
+    /// Observed because the rows below name tasks by their titles, and a title just typed into "Start a new
+    /// task and name it…" lands when the board reloads, after the model has already published.
     @ObservedObject private var store = SessionsStore.shared
     /// Which thumbnail the cursor is over, so only that one shows its ×.
     @State private var hoveredCrop: String?
@@ -982,13 +813,12 @@ struct ReviewView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(DeikoStyle.paper)
-        // The controls Deiko did not draw take the SYSTEM accent — whatever
-        // colour the person set in System Settings. One line puts them on
-        // the palette instead; see `MainWindowView` for the long version.
+        // The controls Deiko did not draw take the system accent; this puts them on the palette instead
+        // (see `MainWindowView`).
         .tint(DeikoStyle.accent)
     }
 
-    // ── States ──────────────────────────────────────────────────────────────
+    // MARK: - States
 
     private func progress(_ what: String) -> some View {
         VStack(spacing: 12) {
@@ -1003,10 +833,7 @@ struct ReviewView: View {
             Label("Could not prepare the brief", systemImage: "exclamationmark.triangle")
                 .font(.headline)
 
-            // The sentence first, in prose, at readable size. This used to be
-            // the raw shell output in monospace — which for the commonest
-            // failure told the user to edit a `.env` they do not have, from a
-            // shell they are not in.
+            // The sentence first, in prose, at readable size, not the raw shell output.
             Text(failure.message)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1017,18 +844,14 @@ struct ReviewView: View {
                         .keyboardShortcut(.defaultAction)
                 }
                 Button("Try again") { model.retry() }
-                // Here, because here is where somebody is when they decide to
-                // ask for help. It used to live only in Settings, two windows
-                // away, and the block it copied did not name the failure they
-                // were looking at — `Diagnostics.lastFailure` fixes the second
-                // half of that.
+                // Here, because here is where somebody is when they decide to ask for help.
+                // `Diagnostics.lastFailure` makes the copied block name the failure.
                 Button("Copy diagnostics") { Diagnostics.copyToPasteboard() }
                 Spacer()
             }
 
-            // Kept, not discarded — it is the only thing worth having in a bug
-            // report — but folded away, because it is not what the person in
-            // front of it needs to read.
+            // Kept, since it is the only thing worth having in a bug report, but folded away: it is not
+            // what the person in front of it needs to read.
             if !failure.raw.isEmpty {
                 DisclosureGroup("Details") {
                     ScrollView {
@@ -1045,13 +868,8 @@ struct ReviewView: View {
         .padding(20)
     }
 
-    /// Scrollable evidence, pinned decision.
-    ///
-    /// The footer sits OUTSIDE the scroll deliberately: this panel used to grow
-    /// with its content and push "Point at more" and "Good to go" off the
-    /// bottom of the display — two buttons that existed and could not be
-    /// clicked. Whatever the narration's length, the two things you can do
-    /// about it stay on screen.
+    /// Scrollable evidence, pinned decision. The footer sits outside the scroll deliberately, so however
+    /// long the narration, "Point at more" and "Good to go" stay on screen.
     private var brief: some View {
         VStack(alignment: .leading, spacing: 0) {
             ScrollView {
@@ -1067,18 +885,12 @@ struct ReviewView: View {
         }
     }
 
-    /// Deiko's reading of the session — the only interpreted text anywhere in
-    /// the product, and it stops at this window.
+    /// Deiko's reading of the session: the only interpreted text in the product, and it stops at this window.
     ///
-    /// Read-only on purpose: it is never sent, so an editable box would invite
-    /// corrections that go nowhere. The narration below is the field that
-    /// travels, and the one worth correcting. The "for you, not sent" pill is
-    /// outlined at full label contrast — a privacy claim must not read like a
-    /// watermark.
-    ///
-    /// Absent entirely when there is no summary. A card reading "no summary
-    /// available" would take up the same room as the summary while telling the
-    /// developer less than silence does.
+    /// Read-only on purpose: it is never sent, so an editable box would invite corrections that go nowhere.
+    /// The "for you, not sent" pill is outlined at full label contrast, since a privacy claim must not read
+    /// like a watermark. Absent entirely when there is no summary, because a "no summary available" card
+    /// would take the same room while telling the developer less than silence does.
     @ViewBuilder private var summaryCard: some View {
         if model.summaryPending || model.summary != nil {
             VStack(alignment: .leading, spacing: 7) {
@@ -1122,7 +934,7 @@ struct ReviewView: View {
         }
     }
 
-    // ── Pieces ──────────────────────────────────────────────────────────────
+    // MARK: - Pieces
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -1145,9 +957,8 @@ struct ReviewView: View {
         .padding(.top, 16)
     }
 
-    /// How this brief will be written up, and the one place to change it for
-    /// this brief alone. A menu rather than a segmented control: there are
-    /// four personas today and no ceiling on how many somebody makes.
+    /// How this brief will be written up, and the one place to change it for this brief alone. A menu
+    /// rather than a segmented control: there is no ceiling on how many personas somebody makes.
     @ViewBuilder private var personaRow: some View {
         if let current = model.personaName {
             HStack(spacing: 6) {
@@ -1178,18 +989,15 @@ struct ReviewView: View {
         }
     }
 
-    /// WHERE THIS BRIEF SITS, and the one place to move it before it goes.
+    /// Where this brief sits, and the one place to move it before it goes.
     ///
-    /// Appears when the classifier answers, which is a moment after the card
-    /// — deliberately, because the brief is what somebody is waiting for.
-    /// Two menus and a word on the work, in the same 11pt register as the
-    /// persona line above: a correction here is an ordinary thing to do, not
-    /// an error being fixed.
+    /// Appears when the classifier answers, a moment after the card, because the brief is what somebody is
+    /// waiting for. Two menus and a word on the work, in the same 11pt register as the persona line: a
+    /// correction here is an ordinary thing to do, not an error being fixed.
     @ViewBuilder private var contextRow: some View {
         if let context = model.context, context.isOdds {
-            // No project and no task to name: where it is, and the way out.
-            // "In" as text, like "Filed in", so the row lines up with the
-            // ones above; the menu's own inset is the space after it.
+            // No project and no task to name: where it is, and the way out. "In" as text, like "Filed in",
+            // so the row lines up with the ones above; the menu's own inset is the space after it.
             HStack(spacing: 0) {
                 Text("In")
                     .font(.system(size: 11))
@@ -1199,13 +1007,9 @@ struct ReviewView: View {
             .padding(.top, 1)
         } else if let context = model.context {
             HStack(spacing: 6) {
-                // THE UNCERTAINTY IS IN THE WORD, not in a mark beside it.
-                //
-                // A 4pt dot meaning "Deiko guessed" is a decoration that has
-                // to be explained, which the Charm Pays Rent rule cuts. The
-                // sentence can carry it for nothing: a confident answer reads
-                // "Filed in Deiko", a hesitant one "Looks like Deiko" — and
-                // the second invites the correction the first does not need.
+                // The uncertainty is in the word, not in a mark beside it: a confident answer reads "Filed
+                // in Deiko", a hesitant one "Looks like Deiko", and the second invites the correction the
+                // first does not need.
                 Text(context.isGuess ? "Looks like" : "Filed in")
                     .font(.system(size: 11))
                     .foregroundStyle(DeikoStyle.ink2)
@@ -1223,10 +1027,8 @@ struct ReviewView: View {
                     Divider()
                     Button("New project…") { newCollection() }
                 } label: {
-                    // FROM THE MODEL, NOT THE DISK. `Collections.name(for:)`
-                    // reads and decodes the file; this body re-runs on every
-                    // keystroke of a narration correction, which is the exact
-                    // trap the persona line above documents.
+                    // From the model, not the disk: `Collections.name(for:)` reads and decodes the file, and
+                    // this body re-runs on every keystroke of a narration correction (see `personaName`).
                     Text(model.collections.first { $0.id == context.collection }?.name ?? "Unsorted")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(DeikoStyle.mark)
@@ -1237,12 +1039,9 @@ struct ReviewView: View {
 
                 Text("·").font(.system(size: 11)).foregroundStyle(DeikoStyle.ink2)
 
-                // A BRIEF THAT CARRIES ON NOTHING STILL SAYS SO, quietly.
-                //
-                // Hiding this menu until there is a link would leave no way
-                // to make one. So the unlinked state is a few words in the
-                // second voice — present, clickable, and naming the task once
-                // somebody has — and linking it promotes the phrase to indigo.
+                // A brief that carries on nothing still says so, quietly: hiding this menu until there is a
+                // link would leave no way to make one. The unlinked state is a few words in the second
+                // voice, and linking it promotes the phrase to indigo.
                 if let earlier = model.joinedTask {
                     if let age = model.joinedAge {
                         Text("picks up")
@@ -1293,10 +1092,9 @@ struct ReviewView: View {
     ) -> some View {
         Menu {
             if let own = model.ownTask {
-                // Already its own task: there is nothing new to start —
-                // unless it is in odds and ends, which this takes it out of.
-                // Its own id taken by briefs moved into it since: "new"
-                // would join them, so that is chosen from the list instead.
+                // Already its own task: there is nothing new to start, unless it is in odds and ends, which
+                // this takes it out of. If its own id was taken by briefs moved into it since, "new" would
+                // join them, so that is chosen from the list instead.
                 let taken = (context.isOdds || (context.task ?? own) != own)
                     && store.hasOthers(inTask: own, besides: model.sessionID ?? "")
                 Button("Start a new task") { model.setTask(own) }
@@ -1343,18 +1141,15 @@ struct ReviewView: View {
         title.count > 28 ? title.prefix(28).trimmingCharacters(in: .whitespaces) + "…" : title
     }
 
-    /// WHEN DEIKO COULDN'T TELL which earlier task this carries on, it asks
-    /// instead of guessing: `classify.mjs` left the likely ones in
-    /// `candidates`, and one tap here settles it before the throw. Left
+    /// When Deiko couldn't tell which earlier task this carries on, it asks instead of guessing:
+    /// `classify.mjs` left the likely ones in `candidates`, and one tap settles it before the throw. Left
     /// untapped, the prompt lists them and tells the agent to ask.
     ///
-    /// Only while the brief is still a new task. Picking a project leaves it
-    /// up — that answers a different question; any chip here is a hand
-    /// placement of the task, which drops the candidates, and so this row.
+    /// Only while the brief is still a new task. Picking a project leaves it up (a different question); any
+    /// chip here is a hand placement of the task, which drops the candidates and so this row.
     ///
-    /// The label on its own line and the chips under it, in a row when they
-    /// fit and a column when they do not: three near-identical titles
-    /// squeezed into one line used to clip to the same few words.
+    /// The label sits on its own line with the chips under it, in a row when they fit and a column when they
+    /// do not, so near-identical titles are not clipped to the same few words.
     @ViewBuilder private var whichOneRow: some View {
         let known = model.openCandidates
         if !known.isEmpty {
@@ -1371,9 +1166,8 @@ struct ReviewView: View {
         }
     }
 
-    /// A JOIN DEIKO MADE ON ITS OWN, settled in one tap. Optional: left
-    /// alone, the brief stays where it is and the send is never blocked.
-    /// "It's new" is left out when its own task id is taken by briefs moved
+    /// A join Deiko made on its own, settled in one tap. Optional: left alone, the brief stays where it is
+    /// and the send is never blocked. "It's new" is left out when its own task id is taken by briefs moved
     /// into it since (the task menu explains that case).
     @ViewBuilder private var sameRow: some View {
         if model.joinUnconfirmed, let id = model.context?.task {
@@ -1407,9 +1201,8 @@ struct ReviewView: View {
         }
     }
 
-    /// RELATED, NOT MERGED: the classifier linked this brief to earlier work
-    /// it judged connected but separate. One quiet line; the menu is the way
-    /// to say "no, it is the same work".
+    /// Related, not merged: the classifier linked this brief to earlier work it judged connected but
+    /// separate. One quiet line; the menu is the way to say it is the same work.
     @ViewBuilder private var relatedRow: some View {
         if let title = model.relatedTitle, let id = model.context?.related {
             HStack(spacing: 0) {
@@ -1496,28 +1289,10 @@ struct ReviewView: View {
         return line.font(.system(size: 13))
     }
 
-    /// The withheld line NEVER collapses into the stats — its own orange row,
-    /// even mid-flow. Watching Deiko refuse to share a credential is the
-    /// privacy model, visible.
+    /// The sentence for one degradation reason. The wording lives in `SessionClaims` (DeikoHandoff) so it
+    /// can be tested; the reset date is supplied from here, where the calendar is.
     ///
-    /// The released ones are SHOWN, not counted. A miscropped screenshot used
-    /// to surface ten minutes later as an agent reasoning about the wrong
-    /// window; here it is visible in the second before Good to go.
-    /// One quiet line when the words came from this Mac rather than the cloud.
-    ///
-    /// The fallback itself is correct and deliberate — a spent trial or an
-    /// unreachable relay keeps the session working instead of failing it. But
-    /// it was entirely silent, so the only thing the developer saw was a
-    /// transcript that read worse than usual, and the only thing that reached
-    /// the inbox was "the transcription is bad". Secondary styling on purpose:
-    /// this is an explanation, not a problem to solve.
-    /// The sentence for one degradation reason. The wording lives in
-    /// `SessionClaims` (DeikoHandoff) so it can be tested; the reset date is
-    /// supplied from here, where the calendar is.
-    ///
-    /// `static` so the collapsed orb card shows the same sentence as the
-    /// expanded panel — two spellings would drift the first time one was
-    /// reworded.
+    /// `static` so the collapsed orb card shows the same sentence as the expanded panel.
     static func degradedSentence(_ reason: String?, degraded: Bool) -> String? {
         SessionClaims.degradedSentence(
             reason, degraded: degraded, resetSentence: License.Quota.proResetSentence
@@ -1526,13 +1301,9 @@ struct ReviewView: View {
 
     /// One quiet line when the transcript is not what a clean session produces.
     ///
-    /// The fallback itself is correct and deliberate — a spent trial or an
-    /// unreachable relay keeps the session working instead of failing it. But
-    /// it was entirely silent, so the only thing the developer saw was a
-    /// transcript that read worse than usual, and the only thing that reached
-    /// the inbox was "the transcription is bad". Secondary styling on purpose:
-    /// this is an explanation, not a problem to solve — except for `trial`,
-    /// which is the one with something to do about it.
+    /// The on-device fallback is deliberate (a spent trial or an unreachable relay keeps the session
+    /// working), but silent it reads as a transcript that is simply worse. Secondary styling on purpose:
+    /// this is an explanation, not a problem to solve, except for `trial`, which has something to do about it.
     @ViewBuilder private func degradedRow(_ d: BriefDigest) -> some View {
         if let sentence = Self.degradedSentence(
             d.summary.degradedReason, degraded: d.summary.degraded == true
@@ -1542,8 +1313,8 @@ struct ReviewView: View {
                     .font(.system(size: 12))
                     .foregroundStyle(DeikoStyle.ink2)
                     .fixedSize(horizontal: false, vertical: true)
-                // Only where there is somewhere to send them. A build with no
-                // checkout URL stamped must not grow a button that 404s.
+                // Only where there is somewhere to send them: a build without a checkout URL must not show
+                // a dead button.
                 if d.summary.degradedReason == "trial", let buy = Credentials.buyURL {
                     Button("Get Pro") { NSWorkspace.shared.open(buy) }
                         .font(.system(size: 12, weight: .semibold))
@@ -1594,18 +1365,13 @@ struct ReviewView: View {
         )
     }
 
-    /// WHY the screenshots were held back, in their own words.
+    /// Why the screenshots were held back, in their own words.
     ///
-    /// `render-brief.mjs` withholds for two different reasons and only one of
-    /// them is about a credential. The other — "never OCR'd, contents
-    /// unverified" — is what happens when Screen Recording has been granted
-    /// but Deiko has not been relaunched, which is to say on somebody's FIRST
-    /// SESSION. Saying "a credential was visible" there is a false alarm about
-    /// the user's own screen, raised in the one surface the entire privacy
-    /// promise rests on, at the worst possible moment to be wrong.
-    ///
-    /// So the unverified case says what actually happened and names the fix,
-    /// and the mixed case does not pretend to a single explanation.
+    /// `render-brief.mjs` withholds for two reasons and only one concerns a credential. The other, "never
+    /// OCR'd, contents unverified", is what happens when Screen Recording is granted but Deiko has not been
+    /// relaunched, on somebody's first session. Saying "a credential was visible" there would be a false
+    /// alarm on the surface the whole privacy promise rests on. So the unverified case says what happened
+    /// and names the fix, and the mixed case does not pretend to a single explanation.
     static func withheldSentence(_ d: BriefDigest) -> String {
         let n = d.cropsWithheld
         let noun = "\(n) screenshot\(n == 1 ? "" : "s")"
@@ -1622,6 +1388,9 @@ struct ReviewView: View {
         return "\(noun) withheld — some held a credential, some couldn't be read to check. "
     }
 
+    /// The withheld line never collapses into the stats: it is its own orange row, even mid-flow, so a
+    /// refusal to share a credential is visible. Released screenshots are shown, not counted, so a miscropped
+    /// one is caught before Good to go.
     @ViewBuilder private func cropRow(_ d: BriefDigest) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             if d.cropsWithheld > 0 {
@@ -1668,10 +1437,8 @@ struct ReviewView: View {
                 .frame(height: 78)
             }
 
-            // What the developer took out themselves. Counted rather than
-            // silent: a brief that ships fewer screenshots than the session
-            // captured should say so, even when the removal was deliberate —
-            // it is the same courtesy the withheld line pays.
+            // What the developer took out themselves is counted rather than silent: a brief that ships
+            // fewer screenshots than the session captured should say so, as the withheld line does.
             if let removed = d.summary.cropsRemoved, removed > 0 {
                 Text(removed == 1
                     ? "1 screenshot left out by you"
@@ -1680,10 +1447,9 @@ struct ReviewView: View {
                     .foregroundStyle(DeikoStyle.ink2)
             }
 
-            // Labels lost to a correction. Placed HERE, beside the screenshots
-            // it is about, rather than in the footer: the footer tracks live
-            // edit state and this number comes from the last render, so the two
-            // would contradict each other while somebody is still typing.
+            // Labels lost to a correction, placed beside the screenshots it is about rather than in the
+            // footer: the footer tracks live edit state and this number comes from the last render, so the
+            // two would contradict each other while somebody is typing.
             if let dropped = d.summary.labelsDropped, dropped > 0 {
                 Text(dropped == 1
                     ? "1 screenshot lost its caption — the sentence it quoted changed."
@@ -1696,13 +1462,9 @@ struct ReviewView: View {
         .padding(.top, 3)
     }
 
-    /// One crop, at a size you can recognise a window in without it dominating
-    /// the card. `contentMode: .fit` so a wide lasso and a tall one are both
-    /// shown whole — cropping the preview would hide exactly the mistake this
-    /// exists to catch.
-    ///
-    /// Read from `model.cropThumbnails`, not the disk — see that cache's own
-    /// comment for why.
+    /// One crop, at a size you can recognise a window in without it dominating the card. `contentMode:
+    /// .fit` so a wide lasso and a tall one are both shown whole: cropping the preview would hide exactly
+    /// the mistake this exists to catch. Read from `model.cropThumbnails`, not the disk.
     @ViewBuilder private func thumbnail(_ path: String) -> some View {
         if let image = model.cropThumbnails[path] {
             Image(nsImage: image)
@@ -1714,17 +1476,10 @@ struct ReviewView: View {
                     RoundedRectangle(cornerRadius: 6)
                         .strokeBorder(DeikoStyle.accent.opacity(0.25), lineWidth: 1)
                 )
-                // LEAVE THIS ONE OUT.
-                //
-                // These thumbnails exist to catch a crop that grabbed the wrong
-                // thing — and until now spotting one had no remedy short of
-                // abandoning the session. Redaction only knows credential
-                // SHAPES, so a customer's name, an open DM or an unrelated
-                // window all sail through it; this is the control for
-                // everything the automatic rule cannot be expected to judge.
-                //
-                // On hover rather than always: five permanent × badges over
-                // five thumbnails reads as a row of errors.
+                // Leave this one out. Redaction only knows credential shapes, so a person's name, an open
+                // DM or an unrelated window all sail through it; this is the control for what the automatic
+                // rule cannot judge. On hover rather than always, since five permanent × badges read as a
+                // row of errors.
                 .overlay(alignment: .topTrailing) {
                     if hoveredCrop == path {
                         Button { model.excludeCrop(path) } label: {
@@ -1742,12 +1497,10 @@ struct ReviewView: View {
                 .onHover { inside in hoveredCrop = inside ? path : nil }
                 .disabled(!isApprovable)
         } else {
-            // The session directory belongs to the user, not to Deiko — it can
-            // be moved or deleted between capture and reopening this card. A
-            // path `cropPaths` promised and can no longer deliver must not just
-            // vanish from the row: the header line still says how many are
-            // going, and a row one thumbnail short of that count reads as "the
-            // rest loaded fine" rather than "one is unaccounted for."
+            // The session directory belongs to the user and can be moved or deleted between capture and
+            // reopening this card. A path `cropPaths` promised and can no longer deliver must not vanish
+            // from the row: the header still says how many are going, and a shorter row would read as "the
+            // rest loaded fine".
             RoundedRectangle(cornerRadius: 6)
                 .fill(Color.primary.opacity(0.05))
                 .overlay(
@@ -1763,14 +1516,9 @@ struct ReviewView: View {
         }
     }
 
-    /// A crop is a screenshot of whatever the lasso enclosed, so its aspect
-    /// ratio is whatever the developer drew: one line of code is wide and
-    /// short, a sidebar is tall and narrow. `.fit` against a bare
-    /// `height: 68` follows that ratio all the way down — a narrow-enough
-    /// crop would render at a handful of points wide, a sliver with no
-    /// visible border. Flooring the width keeps every thumbnail a legible box
-    /// even when the image inside it is thin; wide crops are left uncapped,
-    /// since the row already scrolls horizontally for them.
+    /// A crop's aspect ratio is whatever the developer drew, and `.fit` against a bare `height: 68` would
+    /// render a narrow crop as a sliver with no visible border. Flooring the width keeps every thumbnail a
+    /// legible box; wide crops are uncapped, since the row scrolls horizontally.
     private func thumbnailWidth(_ size: NSSize) -> CGFloat {
         guard size.width > 0, size.height > 0 else { return 68 }
         return max(68 * size.width / size.height, 36)
@@ -1854,25 +1602,16 @@ struct ReviewView: View {
                     .foregroundStyle(DeikoStyle.needsYou)
                     .lineLimit(2)
             case .ready:
-                // The trust line, and now also the model: the panel corrects,
-                // the coin sends. There is no send button on this screen.
-                //
-                // It used to read "Everything else goes as captured." the
-                // moment the narration was touched — which was false: an edit
-                // dropped every screenshot caption. The captions now survive
-                // unless their own sentence changed, and how many did not is
-                // reported beside the thumbnails, so this line can go back to
-                // saying the one thing that is always true here.
+                // The panel corrects, the coin sends: there is no send button on this screen. This line
+                // says the one thing that is always true here.
                 Text("Not sent yet.")
                     .font(.system(size: 12))
                     .foregroundStyle(DeikoStyle.ink2)
             }
             Spacer()
-            // Furthest from the primary action, because it is the destructive
-            // one — and here at all because the review panel is where somebody
-            // discovers the session caught something it should not have. The
-            // `×` only hides the orb; this is the only way to remove the
-            // screenshots.
+            // Furthest from the primary action because it is destructive, and here at all because the
+            // review panel is where somebody discovers the session caught something it should not have.
+            // The `×` only hides the orb; this is the only way to remove the screenshots.
             Button("Delete session…", role: .destructive) { onDelete() }
                 .fixedSize()
                 .disabled(!isApprovable)

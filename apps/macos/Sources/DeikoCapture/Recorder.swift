@@ -2,42 +2,8 @@ import AppKit
 import Foundation
 import DeikoGesture
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THE RECORDER
-//
-// Holds a session together: hotkey → overlay → cursor sampling → candidates and
-// region referents → events on stdout.
-//
-// The governing decision is that it does NOT decide. Every settle is emitted as
-// a candidate with its features; which candidates are real referents is the
-// alignment engine's call, made against the narration. Over-capturing is cheap;
-// discarding a real referent at capture time is unrecoverable.
-//
-// A SESSION IS ONE CONTINUOUS RECORDING, toggled on and off.
-//
-//   tap Right Option        → start: audio, cursor sampling, overlay, all of it
-//   point and pause         → a candidate referent, IF you are talking
-//   hold Left Option + move → a stroke: lasso, arrow, scribble
-//   tap Right Option        → stop, finish the crops, write it out
-//
-// It was push-to-talk until session 20260728-152834 measured what that costs:
-// 23.2 of 58.7 seconds recorded nothing, because letting go of a key to switch
-// windows also stops the microphone and the sampler. The transcript caught the
-// user restarting a sentence verbatim across the gap.
-//
-// The gate that replaced the held key is SPEECH. With capture always on, every
-// settle would otherwise become a referent — transit, scrolling, reading. A
-// settle more than `silenceGateMs` from any narration is not recorded. This is
-// the same principle the aligner runs on ("narration is the filter"), applied
-// at capture time as well; the difference from the old rule about never
-// deciding at capture time is that this decision is made by the user's own
-// voice rather than by a heuristic about cursor movement.
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// What a closed session captured, as the recorder knew it at the moment of
-/// close. The orb's working readout shows this while the pipeline is still
-/// transcribing — "0:43 captured · 6 things pointed at" is answerable
-/// immediately; everything else has to wait.
+/// What a closed session captured, as the recorder knew it at close. The orb's working readout shows
+/// this while the pipeline is still transcribing.
 struct SessionStats {
     /// Wall time from session start to close. Nil for a reopened session,
     /// whose original start this launch may never have seen.
@@ -45,11 +11,23 @@ struct SessionStats {
     let referentCount: Int
 }
 
+/// Holds a session together: hotkey, overlay, cursor sampling, candidates and region referents, and the
+/// events written to stdout.
+///
+/// It does not decide what is a referent. Every settle is emitted as a candidate with its features and the
+/// alignment engine decides against the narration: over-capturing is cheap, and discarding a real referent
+/// at capture time is unrecoverable.
+///
+/// A session is one continuous recording, toggled by tapping Right Option. Pointing and pausing records a
+/// candidate referent if the user is talking; holding Left Option and moving draws a stroke (lasso, arrow,
+/// scribble).
+///
+/// The one capture-time gate is speech: a settle more than `silenceGateMs` from any narration is not
+/// recorded, so transit, scrolling and reading do not become referents.
 @MainActor
 final class Recorder {
 
-    // Settle detection. Deliberately the same numbers as `ax-probe --watch`,
-    // and deliberately tunable — T0.2 exists partly to tell us they're wrong.
+    // Settle detection. The same numbers as `ax-probe --watch`, and tunable.
     var settleRadius: Double = 8
     var dwellMs: Double = 300
 
@@ -61,8 +39,8 @@ final class Recorder {
     private let overlay = Overlay()
     private let audio = Audio()
 
-    /// Where session directories are minted. NOT a session directory itself —
-    /// nothing is written here until the first hold.
+    /// Where session directories are minted. Not a session directory itself: nothing is written here
+    /// until the first hold.
     let sessionRoot: String
     private let captureCrops: Bool
 
@@ -70,41 +48,33 @@ final class Recorder {
     private var pulses: [Pulse] = []
 
     private var lassoPath: [Point]?
-    /// When the current stroke began — the recorder sees `drawKeyDown`
-    /// directly, so the span it emits is measured, not reconstructed.
+    /// When the current stroke began. The recorder sees `drawKeyDown` directly, so the emitted span is
+    /// measured, not reconstructed.
     private var lassoStartT: Double?
 
-    /// A stroke: Left Option held, cursor moving. It is only a CANDIDATE until
-    /// the cursor is `minHoverStrokePt` away from where the key went down — Option is
-    /// also Option+Backspace, Option+arrow, and `@ [ ] { }` on most non-US
-    /// layouts, and none of those may flash ink or leave a mark. Once promoted
-    /// it is handed to `lassoPath` and is an ordinary stroke from there on.
+    /// A stroke: Left Option held, cursor moving. It is only a candidate until the cursor is
+    /// `minHoverStrokePt` from where the key went down, since Option is also Option+Backspace,
+    /// Option+arrow and `@ [ ] { }` on most non-US layouts, and none of those may flash ink. Once promoted
+    /// it is handed to `lassoPath` and is an ordinary stroke.
     private var hoverPath: [Point]?
     private var hoverStartT: Double?
     private var hoverPromoted = false
     /// Tunable on purpose, like `settleRadius`: hands and trackpads differ.
     var minHoverStrokePt: Double = 24
 
-    /// Referents in the CURRENT hold, reported in `holdEnd`; and across the
-    /// whole session, reported in `sessionEnd`.
+    /// Referents in the current hold, reported in `holdEnd`; and across the whole session, reported in
+    /// `sessionEnd`.
     private var holdReferentCount = 0
     private var sessionReferentCount = 0
 
-    /// Settles the speech gate threw away. Counted because throwing them away
-    /// is the only unrecoverable thing this app does, and until now it did it
-    /// in silence — a gate calibrated wrong for someone's microphone would have
-    /// looked exactly like a quiet session. Reported at the end so a run that
-    /// dropped half of what you pointed at cannot pass for a normal one.
+    /// Settles the speech gate threw away. Counted because discarding them is the one unrecoverable
+    /// thing this app does, and a gate miscalibrated for someone's microphone would otherwise look like a
+    /// quiet session. Reported at the end.
     private var gatedSettleCount = 0
 
-    /// Which hold we're on, and a counter that runs for the whole session. Crop
-    /// filenames are built from both.
-    ///
-    /// The referent counter is per SESSION rather than per hold because a
-    /// per-hold counter restarted at 1 each time and five holds all wrote
-    /// `referent-001.png` over each other: 30 referents produced 12 files and
-    /// 18 crops were destroyed. The hold number stays in the name because it is
-    /// also the natural grouping for the referent stack.
+    /// Which hold we are on, and a counter that runs for the whole session; crop filenames use both. The
+    /// referent counter is per session, not per hold, so holds cannot overwrite each other's
+    /// `referent-001.png`. The hold number stays in the name as the natural grouping for the referent stack.
     private var holdIndex = 0
     private var globalReferentIndex = 0
 
@@ -112,42 +82,28 @@ final class Recorder {
     /// Separate from `globalReferentIndex`, which also counts plain settles.
     private var markIndex = 0
 
-    /// How long after speech a settle still counts as pointing. See the gate in
-    /// `detectSettle`. Regions are exempt — nobody draws a loop by accident.
-    ///
-    /// Six seconds, not four, because of what the detector on the other side can
-    /// promise. Simulated over every WAV this project has recorded, `VoiceGate`'s
-    /// worst gap between voice buffers during real narration is 3924ms. Four
-    /// seconds left 76ms of margin, which is not margin — the previous fixed-RMS
-    /// detector opened gaps past four seconds in nine of twenty recordings and
-    /// silently lost referents to it. Six is still far shorter than the pauses
-    /// this is meant to reject: transit, scrolling, reading, walking away.
+    /// How long after speech a settle still counts as pointing; see the gate in `detectSettle`. Regions
+    /// are exempt: nobody draws a loop by accident. Six seconds leaves real margin over the longest gap
+    /// `VoiceGate` leaves between voice buffers in real narration (about 3.9s), and is still far shorter
+    /// than the pauses this rejects: transit, scrolling, reading, walking away.
     private let silenceGateMs: Double = 6000
 
-    /// Stop a forgotten session after this much unbroken silence.
-    ///
-    /// Push-to-talk could not be left running: letting go ended it. A toggle
-    /// can, and "I walked away with the microphone live" is the failure that
-    /// costs trust rather than data. Five minutes is far longer than any
-    /// natural pause while describing something, and the session is written out
-    /// properly rather than discarded.
+    /// Stop a forgotten session after this much unbroken silence. A microphone left live is the failure
+    /// that costs trust, and five minutes is far longer than any natural pause while describing something.
+    /// The session is written out properly, not discarded.
     private let autoStopSilenceMs: Double = 5 * 60 * 1000
 
-    /// Absolute ceiling on one session, independent of the microphone.
-    ///
-    /// The silence watchdog only fires if audio is flowing; this one fires
-    /// regardless, which is the point of having both. Wispr Flow caps desktop
-    /// dictation at the same 20 minutes.
+    /// Absolute ceiling on one session, independent of the microphone. The silence watchdog only fires
+    /// while audio is flowing; this one fires regardless.
     private let maximumSessionMs: Double = 20 * 60 * 1000
 
-    /// When the current recording began — the clock for the hard ceiling, and
-    /// the fallback for the silence watchdog when there is no audio at all (a
-    /// mic that failed to open would otherwise leave `msSinceVoice` nil
-    /// forever, and the session running with it).
+    /// When the current recording began: the clock for the hard ceiling, and the fallback for the silence
+    /// watchdog when there is no audio (a mic that failed to open would otherwise leave `msSinceVoice` nil
+    /// forever).
     private var recordingStartedAt: Double?
 
-    /// When the OPEN session was minted, for the stats handed to the orb at
-    /// close. Nil for reopened sessions — see `reopenSession`.
+    /// When the open session was minted, for the stats handed to the orb at close. Nil for reopened
+    /// sessions; see `reopenSession`.
     private var sessionStartedMs: Double?
 
     // Settle state
@@ -157,24 +113,14 @@ final class Recorder {
     private var firedForThisRest = false
     private var recentSpeeds: [(t: Double, speed: Double)] = []
 
-    /// How fast the cursor was moving when it came to rest here.
-    ///
-    /// Snapshotted at the moment motion stops, NOT read at commit time — and that
-    /// is the whole fix. `recentSpeeds` keeps a 200ms window, but a settle does
-    /// not fire until the cursor has been still for `dwellMs` (300ms), so by the
-    /// time the old code asked for a maximum, every sample of the approach had
-    /// aged out. Measured on session 20260730-004641: 18 of 25 candidates
-    /// reported exactly 0, and the 7 non-zero ones were jitter inside the 8px
-    /// settle radius rather than an approach at all. The aligner has been
-    /// multiplying confidence by 1.05 on `approachSpeed > 800`, a branch that
-    /// could never fire.
+    /// How fast the cursor was moving when it came to rest here. Snapshotted when motion stops, not read
+    /// at commit time: `recentSpeeds` keeps a 200ms window but a settle fires only after `dwellMs` (300ms)
+    /// of stillness, so by then every sample of the approach has aged out and the maximum would read 0.
     private var approachAtRest: Double = 0
 
-    /// The previous SAMPLE, distinct from `lastPosition` (the settle anchor).
-    /// Speed must come from per-tick displacement: the anchor only re-bases
-    /// after 8px of accumulated drift, so dividing distance-from-anchor by one
-    /// frame's duration reported a steady 150px/s glide as ~450px/s — worst
-    /// for exactly the slow deliberate approaches the feature exists to spot.
+    /// The previous sample, distinct from `lastPosition` (the settle anchor). Speed must come from
+    /// per-tick displacement: the anchor re-bases only after 8px of drift, so distance-from-anchor over one
+    /// frame's duration overstates slow, deliberate approaches.
     private var previousSample: Point?
 
     // Noise context
@@ -187,21 +133,20 @@ final class Recorder {
         self.captureCrops = captureCrops
     }
 
-    // ── Session state, as the menu bar needs to see it ──────────────────────
+    // MARK: - Session state (read by the menu bar)
 
-    /// The directory of the OPEN session, or nil when there is no session. This
-    /// is the single source of truth for "is a session in progress" — the menu
-    /// has no separate flag to drift out of sync with.
+    /// The directory of the open session, or nil when there is no session. The single source of truth for
+    /// "is a session in progress": the menu has no separate flag to drift out of sync.
     private(set) var sessionDir: String?
 
-    /// Folder name of the open session, e.g. `20260728-011253`. Also its id.
+    /// Folder name of the open session (`yyyyMMdd-HHmmss`). Also its id.
     private(set) var sessionId: String?
 
     /// True while capturing, held or locked.
     private(set) var isRecording = false
 
-    /// Always 1 now — a session is one continuous recording. Kept because the
-    /// wire contract and every recorded session so far carry it.
+    /// Always 1: a session is one continuous recording. Kept because the wire contract and every recorded
+    /// session carry it.
     var holdCount: Int { holdIndex }
 
     /// Milliseconds since speech was last heard, or nil if none yet. Drives
@@ -223,42 +168,31 @@ final class Recorder {
     /// reflect what is genuinely happening rather than what was last clicked.
     var onStateChange: (() -> Void)?
 
-    /// Fired once with the session directory when a session has fully closed —
-    /// crops written, WAV finalised, `sessionEnd` emitted. The review window
-    /// hangs off this: everything it reads has to exist before it opens.
-    ///
-    /// The stats ride along because the orb's working readout wants them the
-    /// moment it appears — long before the pipeline has produced a digest —
-    /// and by then this class has already reset its counters for the next
-    /// session.
+    /// Fired once with the session directory when a session has fully closed: crops written, WAV
+    /// finalised, `sessionEnd` emitted. The review window hangs off this. The stats ride along because the
+    /// orb's working readout wants them before the pipeline has produced a digest, by which time this
+    /// class has reset its counters.
     var onSessionClosed: ((String, SessionStats) -> Void)?
 
-    /// Consulted when the start gesture arrives with no session open. Return
-    /// true to claim the gesture — the orb does, while it is showing a
-    /// finished brief, routing the recording into THAT session as another
-    /// hold (the redesign cut the orb's "Add more" button; the start gesture
-    /// is its replacement). Returning false starts a fresh session as always.
+    /// Consulted when the start gesture arrives with no session open. Return true to claim it: the orb
+    /// does while it is showing a finished brief, routing the recording into that session as another
+    /// hold. Returning false starts a fresh session.
     var onStartGestureWhileIdle: (() -> Bool)?
 
-    /// Crop + AX resolution runs off the sampling path in detached tasks. Their
-    /// handles are kept so `stopSession` can wait for them: the stop button
-    /// reveals the folder in Finder, and a folder revealed while three crops are
-    /// still being written is a folder the user sees as incomplete.
+    /// Crop and AX resolution run off the sampling path in detached tasks. Their handles are kept so
+    /// `stopSession` can wait for them and the closed session is complete.
     private var pendingResolves: [Int: Task<Void, Never>] = [:]
 
-    /// Recognition running against the hold currently being spoken, and where to
-    /// write its result. Awaited at close alongside the crops, for the same
-    /// reason: the pipeline starts the moment the session closes, and a timing
-    /// file that lands afterwards would be read by nobody.
+    /// Recognition running against the hold currently being spoken, and where to write its result.
+    /// Awaited at close alongside the crops: the pipeline starts the moment the session closes, and a
+    /// timing file that lands afterwards would be read by nobody.
     private var liveTiming: LiveSpeechTiming?
     private var liveTimingAudioPath: String?
     private var timingWrites: [Task<Void, Never>] = []
 
-    /// The close-out in progress, if any. One task, shared: `stopSession` from
-    /// the menu, Quit, and a second Ctrl-C all await the SAME close rather than
-    /// racing it — a second caller used to pass the `sessionDir` guard, see an
-    /// already-drained task list, and finalise the session out from under the
-    /// first caller while its crops were still being written.
+    /// The close-out in progress, if any. One task, shared: `stopSession` from the menu, Quit and a second
+    /// Ctrl-C all await the same close rather than racing it, which could finalise the session while its
+    /// crops are still being written.
     private var stopTask: Task<String?, Never>?
 
     func start() -> Bool {
@@ -266,43 +200,25 @@ final class Recorder {
         return hotkey.start()
     }
 
-    /// Stop listening for the keys without ending a session.
-    ///
-    /// The pair to `start()`, for when a permission is revoked while Deiko is
-    /// running: the listener is dead either way, and holding a stale one means the
-    /// grant coming back can never rebuild it.
+    /// Stop listening for the keys without ending a session. The pair to `start()`, for a permission
+    /// revoked while Deiko runs: the listener is dead either way, and holding a stale one means the
+    /// returning grant can never rebuild it.
     func stopListening() {
         hotkey.stop()
     }
 
-    // ── Session lifetime ────────────────────────────────────────────────────
+    // MARK: - Session lifetime
 
-    /// Mints `<root>/<stamp>` on the FIRST hold and not before.
+    /// Reopen a session that has already been closed out, so the next recording becomes another hold of
+    /// it rather than a new session ("Forgot something?").
     ///
-    /// Creating it at launch instead meant every run of the app left a folder
-    /// behind with a 0-byte `events.jsonl`, whether or not anything was ever
-    /// recorded — three of them accumulated in a single evening.
+    /// The pipeline already supports this: `transcribe.mjs` pairs each hold's start and end to find its
+    /// audio and shifts each onto the session clock, and the referent stack attributes what was pointed at
+    /// to its hold.
     ///
-    /// Returns false when the directory cannot be created (a full or
-    /// read-only volume) — in which case NO session starts, rather than
-    /// a session that silently writes to nowhere.
-    /// Reopen a session that has already been closed out, so the next recording
-    /// becomes another HOLD of it rather than a new session.
-    ///
-    /// This is "Forgot something?" — you stop, read the brief, realise you never
-    /// showed the one file that explains the whole task, and add it to the same
-    /// account rather than starting a second one the agent would have to
-    /// reconcile.
-    ///
-    /// The pipeline never stopped supporting this. `transcribe.mjs` pairs each
-    /// hold's start and end to find its audio and shifts each onto the session
-    /// clock; the referent stack attributes what you pointed at to the hold it
-    /// happened in. Only the recorder had been simplified to always write hold 1.
-    ///
-    /// Counters are recovered from `events.jsonl`, not from whatever is still in
-    /// memory. In-memory state is right only if this is the same launch and no
-    /// other session happened in between — and a referent index that restarts
-    /// silently overwrites the first hold's crops.
+    /// Counters are recovered from `events.jsonl`, not from memory, which is right only for the same
+    /// launch with no other session in between; a referent index that restarts would overwrite the first
+    /// hold's crops.
     func reopenSession(dir: String) -> Bool {
         guard sessionDir == nil else { return false }
         let events = "\(dir)/events.jsonl"
@@ -320,11 +236,8 @@ final class Recorder {
             else { continue }
             // A session-level `sessionStart` carries no `hold`; only a hold does.
             if type == "holdStart", obj["hold"] != nil { holds += 1 }
-            // `probe`, not `candidate`. One probe is emitted per `resolve` —
-            // which is exactly what increments `globalReferentIndex` — and it
-            // covers lassos as well as settles. Verified against two recorded
-            // sessions: 16 probes / 16 referents, 35 / 35, where the candidate
-            // counts were 10 and 25.
+            // `probe`, not `candidate`: one probe is emitted per `resolve`, which is what increments
+            // `globalReferentIndex`, and it covers lassos as well as settles.
             if type == "probe" { referents += 1 }
             if type == "probe", obj["mark"] != nil { marks += 1 }
         }
@@ -332,9 +245,8 @@ final class Recorder {
 
         sessionDir = dir
         sessionId = (dir as NSString).lastPathComponent
-        // The original start happened in some earlier close-out, possibly an
-        // earlier launch. A duration measured from HERE would claim the
-        // session is seconds old when its first hold is minutes of material.
+        // The original start happened in some earlier close-out; a duration measured from here would
+        // understate the session.
         sessionStartedMs = nil
         holdIndex = holds
         globalReferentIndex = referents
@@ -350,12 +262,9 @@ final class Recorder {
         return true
     }
 
-    /// Reopen a finished session and start recording another hold immediately.
-    ///
-    /// The button does the starting, so the gesture machine has to be told —
-    /// otherwise the tap the user makes to stop reads as the first half of a
-    /// double-tap to start, and the microphone stays live on a session they
-    /// believe they just closed.
+    /// Reopen a finished session and start recording another hold immediately. The button does the
+    /// starting, so the gesture machine has to be told; otherwise the tap that stops reads as the first
+    /// half of a double-tap to start, and the microphone stays live.
     func resumeForExtraHold(dir: String) -> Bool {
         guard reopenSession(dir: dir) else { return false }
         hotkey.noteSessionStarted()
@@ -363,14 +272,16 @@ final class Recorder {
         return isRecording
     }
 
+    /// Mints `<root>/<stamp>` on the first hold and not before, so a run that records nothing leaves no
+    /// folder behind. Returns false when the directory cannot be created (a full or read-only volume): no
+    /// session starts, rather than one that silently writes to nowhere.
     private func startSessionIfNeeded() -> Bool {
         guard sessionDir == nil else { return true }
 
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyyMMdd-HHmmss"
-        // Fixed locale: under a Hindi or Arabic system locale a plain
-        // DateFormatter will happily render the year in a non-Gregorian
-        // calendar with non-ASCII digits, and the folder name has to sort.
+        // Fixed locale: a plain DateFormatter under a Hindi or Arabic system locale can render non-ASCII
+        // digits or a non-Gregorian year, and the folder name has to sort.
         formatter.locale = Locale(identifier: "en_US_POSIX")
         let stamp = formatter.string(from: Date())
 
@@ -383,10 +294,8 @@ final class Recorder {
                 atPath: "\(dir)/audio", withIntermediateDirectories: true
             )
         } catch {
-            // SHOWN, not just filed. Without a session directory `beginRecording`
-            // guards out and returns, so the user double-taps Right Option and
-            // nothing happens — again, and again, with a perfectly good
-            // explanation sitting in a log file they will never open.
+            // Shown, not just logged: without a session directory `beginRecording` returns quietly, and the
+            // user would double-tap Right Option and see nothing happen.
             Emit.problem(
                 "could not create session directory \(dir): \(error.localizedDescription)",
                 hint: "Deiko could not create its session folder in \(sessionRoot). Check that the disk has room and that Deiko can write there."
@@ -394,15 +303,11 @@ final class Recorder {
             return false
         }
 
-        // NOT FOR BACKUP. A session folder holds screen text, window titles and
-        // crops read off whatever the user pointed at — including, by design,
-        // captures the secret detector flagged and withheld from the agent —
-        // until somebody deletes them. Marking the root excluded keeps Time
-        // Machine from carrying that to an external disk. Best-effort and
-        // idempotent, so it runs on every session rather than trusting a
-        // one-time setup that a fresh install would never see. iCloud is not
-        // a question: the root is in Application Support, which it never
-        // syncs (see `Sessions.defaultRoot`).
+        // Excluded from backup: a session folder holds screen text, window titles and crops (including
+        // captures the secret detector flagged and withheld from the agent) until somebody deletes them, and
+        // Time Machine must not carry that to an external disk. Best-effort and idempotent, so it runs on
+        // every session rather than relying on one-time setup. iCloud is not a concern: the root is in
+        // Application Support, which it never syncs (see `Sessions.defaultRoot`).
         var rootURL = URL(fileURLWithPath: sessionRoot)
         var exclusion = URLResourceValues()
         exclusion.isExcludedFromBackup = true
@@ -425,12 +330,9 @@ final class Recorder {
         return true
     }
 
-    /// Close the session out. Returns its directory so the caller can reveal it.
-    ///
-    /// Safe to call with no session open (the menu's Quit path does), safe to
-    /// call mid-hold — the hold is ended first so its WAV is finalised and its
-    /// `audioT0` recorded — and safe to call twice: concurrent callers await
-    /// the same close.
+    /// Close the session out. Returns its directory so the caller can reveal it. Safe with no session
+    /// open (the menu's Quit path does), mid-hold (the hold is ended first so its WAV is finalised and its
+    /// `audioT0` recorded), and twice: concurrent callers await the same close.
     func stopSession() async -> String? {
         if let stopTask { return await stopTask.value }
         guard sessionDir != nil else { return nil }
@@ -446,37 +348,28 @@ final class Recorder {
     /// handing it to the orb.
     private var discardOnClose = false
 
-    /// Stop, and keep nothing.
-    ///
-    /// The only way out of a session used to be one that produced a brief —
-    /// so a session started by accident, or one where the wrong thing was said,
-    /// had to be carried all the way to an orb and then dismissed, leaving the
-    /// recording and its screenshots on disk anyway. This closes out through
-    /// exactly the same path (so a hold in flight is finalised and crops still
-    /// being written are awaited) and then deletes the folder.
+    /// Stop, and keep nothing. Closes out through the same path as `stopSession` (a hold in flight is
+    /// finalised and crops still being written are awaited) and then deletes the folder.
     func discardSession() async {
         guard sessionDir != nil else { return }
         discardOnClose = true
         _ = await stopSession()
-        // CLEARED WHATEVER HAPPENED. `stopSession` returns the in-flight close
-        // when one is already running, and that close may have passed the
-        // discard check before this flag was set — leaving it true, and the
-        // NEXT session silently deleted at its own close. `closeSession` clears
-        // it when it observes it; this clears it when it did not.
+        // Cleared whatever happened: `stopSession` returns the in-flight close when one is already running,
+        // and that close may have passed the discard check before this flag was set, which would delete
+        // the next session at its own close. `closeSession` clears it when it observes it; this clears it
+        // when it did not.
         discardOnClose = false
     }
 
     private func closeSession() async -> String? {
-        // A lasso still being drawn is a referent the user meant to capture.
-        // Commit it before teardown, or it dies on the `isRecording` guard in
-        // `commitLasso` and the drag is lost.
+        // A lasso still being drawn is a referent the user meant to capture: commit it before teardown, or
+        // it dies on the `isRecording` guard in `commitLasso`.
         if isRecording, lassoPath != nil { commitLasso() }
         if isRecording { endRecording() }
         guard let dir = sessionDir, let id = sessionId else { return nil }
 
-        // Wait for AX + crop + OCR still in flight. Awaiting releases the main
-        // actor, so the tasks' own completion hops back here are free to run.
-        // No NEW work can join the list meanwhile — `beginHold` refuses while
+        // Wait for AX + crop + OCR still in flight. Awaiting releases the main actor so their completion
+        // hops can run, and no new work can join the list meanwhile: `beginRecording` refuses while
         // `stopTask` is set.
         let outstanding = pendingResolves
         pendingResolves = [:]
@@ -485,10 +378,8 @@ final class Recorder {
         }
         for task in outstanding.values { await task.value }
 
-        // The last hold's recognition, which `endRecording` closed a moment ago.
-        // It resolves in well under a second — the audio is already in the
-        // recogniser — and it must land before `onSessionClosed` starts the
-        // pipeline, or the pipeline would recognise the file all over again.
+        // The last hold's recognition, closed by `endRecording` a moment ago. It resolves quickly and must
+        // land before `onSessionClosed` starts the pipeline, or the pipeline would recognise the file again.
         let timings = timingWrites
         timingWrites = []
         for task in timings { await task.value }
@@ -505,12 +396,10 @@ final class Recorder {
             )
         }
 
-        // Back to the launch log, so anything emitted between sessions is not
-        // silently appended to a session the user considers finished.
+        // Back to the launch log, so anything emitted between sessions is not appended to a finished session.
         Emit.redirectToFile(Paths.launchLog)
 
-        // Read out BEFORE the reset below — after it, this session's numbers
-        // are gone.
+        // Read before the reset below.
         let stats = SessionStats(
             durationMs: sessionStartedMs.map { Clock.nowMs() - $0 },
             referentCount: sessionReferentCount
@@ -519,19 +408,14 @@ final class Recorder {
         sessionDir = nil
         sessionId = nil
         sessionStartedMs = nil
-        // Tell the hotkey, whatever route brought us here. A watchdog stop or
-        // a Quit never passed through the gesture, and leaving it believing a
-        // session is live means Option-drags stay swallowed afterwards.
+        // Tell the hotkey, whatever route brought us here: a watchdog stop or a Quit never passed through
+        // the gesture, and a hotkey that thinks a session is live keeps swallowing Option-drags.
         hotkey.noteSessionEnded()
         onStateChange?()
 
-        // THROWN AWAY, and only here at the very end.
-        //
-        // Everything above has already run: the hold is finalised, crops still
-        // being written were awaited, the event file was redirected back to the
-        // launch log and its handle closed. Deleting earlier would race a write
-        // still in flight; deleting here removes a directory nothing is holding
-        // open. No orb, because there is nothing to hand over.
+        // Thrown away only here, at the very end: the hold is finalised, in-flight crops awaited, and the
+        // event file redirected and closed. Deleting earlier would race a write in flight. No orb, since
+        // there is nothing to hand over.
         if discardOnClose {
             discardOnClose = false
             do {
@@ -544,31 +428,26 @@ final class Recorder {
             return dir
         }
 
-        // Fired HERE rather than from the menu's stop action, because that is
-        // only one of four ways a session ends — the hotkey tap, the silence
-        // watchdog and Quit all arrive through `stopSession` and would each have
-        // needed their own call. One notification, every route.
+        // Fired here rather than from the menu's stop action: the hotkey tap, the silence watchdog and Quit
+        // all arrive through `stopSession`. One notification, every route.
         onSessionClosed?(dir, stats)
         return dir
     }
 
-    /// Stop listening entirely. The hotkey tap is torn down rather than left
-    /// running and ignored — an input peripheral that claims to be off should
-    /// not still be reading your keystrokes.
+    /// Stop listening entirely. The hotkey tap is torn down rather than left running and ignored.
     func stop() async {
         _ = await stopSession()
         hotkey.stop()
     }
 
-    // ── Gesture handling ────────────────────────────────────────────────────
+    // MARK: - Gesture handling
 
     private func handle(_ event: HotkeyEvent) {
         switch event {
         case .recordingStarted:
-            // No session open and the orb is showing a finished brief? Then
-            // this gesture ADDS to that session — the orb claims it via
-            // `resumeForExtraHold`, whose own `beginRecording` makes the one
-            // below a no-op behind the `isRecording` guard.
+            // No session open and the orb is showing a finished brief: this gesture adds to that session.
+            // The orb claims it via `resumeForExtraHold`, whose own `beginRecording` makes the call below a
+            // no-op behind the `isRecording` guard.
             if sessionDir == nil, onStartGestureWhileIdle?() == true { break }
             beginRecording()
         case .recordingStopped:
@@ -581,8 +460,7 @@ final class Recorder {
             if hoverPromoted, lassoPath != nil { commitLasso() }
             endHoverStroke()
         case .scrolled:
-            // Reported unconditionally by the tap now; only meaningful while
-            // a session is live.
+            // Reported unconditionally by the tap; only meaningful while a session is live.
             if isRecording { lastScrollT = Clock.nowMs() }
         }
     }
@@ -596,12 +474,9 @@ final class Recorder {
     private func beginRecording() {
         guard !isRecording else { return }
 
-        // A start that lands while the previous session is still closing WAITS
-        // for it rather than being dropped. `closeSession` is suspended on the
-        // crop drain at that moment and can take a second or two; silently
-        // ignoring the gesture would look like the hotkey had stopped working,
-        // and starting on top of the closing session would split its events
-        // across two files.
+        // A start that lands while the previous session is still closing waits for it rather than being
+        // dropped: `closeSession` can take a second or two on the crop drain, ignoring the gesture would
+        // look like a dead hotkey, and starting on top of it would split its events across two files.
         if let stopTask {
             Task { @MainActor in
                 _ = await stopTask.value
@@ -610,35 +485,27 @@ final class Recorder {
             return
         }
 
-        // The toggle is what brings a session into existence.
         guard startSessionIfNeeded(), let sessionDir, let sessionId else { return }
 
         isRecording = true
         recordingStartedAt = Clock.nowMs()
         holdReferentCount = 0
-        // Increment, not assign. A fresh session sets this to 0 and this makes
-        // it hold 1; a session reopened by "Forgot something?" carries its hold
-        // count in and this makes the next one hold 2.
+        // Increment, not assign: a fresh session becomes hold 1, and one reopened by "Forgot something?"
+        // carries its hold count in.
         holdIndex += 1
 
-        // ONE WAV for the whole session. It used to be one per hold, because a
-        // hold was an utterance; a session is now a single continuous recording,
-        // so there is one audio timeline and one `audioT0`. The wire still says
-        // `hold: 1` — downstream pairs holdStart/holdEnd to find the audio, and
-        // that pairing is worth keeping stable.
+        // One WAV for the whole session: a single continuous recording has one audio timeline and one
+        // `audioT0`. The wire still says `hold: 1`; downstream pairs holdStart/holdEnd to find the audio.
         var audioPath: String?
-        // Hold 1 keeps the name every recorded session already uses; later holds
-        // get their own file. Both must exist independently — each hold has its
-        // own `audioT0`, and `transcribe.mjs` shifts each onto the session clock
-        // separately. One shared filename would have the second hold silently
-        // overwrite the first, losing the original narration entirely.
+        // Hold 1 keeps the name recorded sessions already use; later holds get their own file. Each hold has
+        // its own `audioT0`, which `transcribe.mjs` shifts onto the session clock separately, so a shared
+        // filename would let the second hold overwrite the first.
         let path = holdIndex == 1
             ? "\(sessionDir)/audio/session.wav"
             : "\(sessionDir)/audio/hold-\(holdIndex).wav"
-        // The recogniser is attached BEFORE the tap can fire. `onBuffer` is read
-        // on the audio thread, so assigning it after `start()` would both lose
-        // the opening buffers and race a reader against a half-written closure —
-        // and the opening buffers are the first words of the sentence.
+        // The recogniser is attached before the tap can fire: `onBuffer` is read on the audio thread, so
+        // assigning it after `start()` would lose the opening buffers (the first words of the sentence) and
+        // race a reader against a half-written closure.
         prepareLiveTiming()
         do {
             try audio.start(path: path)
@@ -666,12 +533,11 @@ final class Recorder {
         previousSample = nil
         stationarySince = Clock.nowMs()
 
-        // Get Chromium's tree built before the first referent needs it, rather
-        // than making that referent wait ~300ms for it.
+        // Get Chromium's accessibility tree built before the first referent needs it (~300ms).
         lastFrontPid = AXProbe.prePokeFrontmost()
 
-        // The pill's promise is "click me and this stops" — same close-out as
-        // every other route, so a click can never truncate crops in flight.
+        // The pill's promise is "click me and this stops": the same close-out as every other route, so a
+        // click cannot truncate crops in flight.
         overlay.onStopRequested = { [weak self] in
             Task { @MainActor in _ = await self?.stopSession() }
         }
@@ -683,10 +549,8 @@ final class Recorder {
 
     private func endRecording() {
         guard isRecording else { return }
-        // Teardown FIRST, unconditionally. The sampler, overlay and microphone
-        // must stop no matter what state the session is in — a guard that
-        // returned before this once left the mic running, which is the one
-        // promise this product cannot break.
+        // Teardown first, unconditionally: the sampler, overlay and microphone must stop whatever state the
+        // session is in. A live microphone is the one promise this product cannot break.
         isRecording = false
         recordingStartedAt = nil
         sampler?.invalidate()
@@ -707,24 +571,16 @@ final class Recorder {
         onStateChange?()
     }
 
-    // ── Live word timings ───────────────────────────────────────────────────
-    //
-    // Recognition used to start when the session ended, which put the whole of
-    // it — including the several seconds a file-based recogniser spends working
-    // out that it has reached the end — between letting go and reading a brief.
-    // Here it runs while the words are being said, so by the time the hotkey is
-    // tapped the answer is a `endAudio()` away.
-    //
-    // BEST-EFFORT, deliberately, and shaped exactly like the crops: on any
-    // failure no file is written, and `BriefPipeline.precomputeTimings` does the
-    // work afterwards precisely as it does today. Nothing downstream knows or
-    // cares which path produced the file.
+    // MARK: - Live word timings
+
+    // Recognition runs while the words are said, so the answer is an `endAudio()` away when the hotkey is
+    // tapped. It is best-effort, shaped like the crops: on any failure no file is written and
+    // `BriefPipeline.precomputeTimings` does the work afterwards. Nothing downstream knows which path
+    // produced the file.
 
     private func prepareLiveTiming() {
-        // The same locale the file path uses (Settings → offline recogniser).
-        // Recognising live under a different one would change the words
-        // depending on which path happened to run — the worst kind of
-        // difference to debug.
+        // The same locale the file path uses (Settings → offline recogniser): a different one would change
+        // the words depending on which path ran.
         guard let live = LiveSpeechTiming(localeIdentifier: SpeechLocale.selected) else { return }
         liveTiming = live
         audio.onBuffer = { [weak live] buffer in live?.append(buffer) }
@@ -747,29 +603,25 @@ final class Recorder {
         let out = URL(fileURLWithPath: path + ".timing.json")
         timingWrites.append(Task.detached {
             let result = await live.finish()
-            // A result carrying an error is not written: an empty timing file
-            // would tell `precomputeTimings` this hold is done and stop the file
-            // path from ever running, turning a recoverable miss into a hold
-            // with no timings at all. Silence here means "fall back", which is
-            // the whole contract of this shortcut.
+            // A result carrying an error is not written: an empty timing file would tell
+            // `precomputeTimings` this hold is done and stop the file path from running. Silence here means
+            // "fall back".
             guard result.error == nil, !result.words.isEmpty,
                   let data = try? JSONEncoder().encode(result) else { return }
-            // Atomic because the reader polls for existence and parses
-            // immediately — a half-written file is a discarded hold.
+            // Atomic because the reader polls for existence and parses immediately.
             try? data.write(to: out, options: .atomic)
         })
     }
 
-    // ── Sampling ────────────────────────────────────────────────────────────
+    // MARK: - Sampling
 
     private func sample() {
         let now = Clock.nowMs()
         let position = AXProbe.cursorLocation()
         Emit.event(CursorEvent(position))
 
-        // App-switch detection rides on the sampler rather than a notification
-        // observer: it only needs to be accurate to a frame, and this keeps the
-        // whole session on one clock.
+        // App-switch detection rides on the sampler rather than a notification observer: it only needs frame
+        // accuracy, and this keeps the session on one clock.
         let frontPid = NSWorkspace.shared.frontmostApplication?.processIdentifier
         if frontPid != lastFrontPid {
             lastFrontPid = frontPid
@@ -787,33 +639,25 @@ final class Recorder {
 
         pulses.removeAll { now - $0.t > 450 }
 
-        // A BUTTON DOWN MEANS THE GESTURE IS THE APP'S, NOT OURS. Nothing is
-        // swallowed any more, so Option + press-and-drag reaches the app as
-        // what it has always been there — select text, duplicate a file — and
-        // drawing over it as well gave the user both at once. The stroke is
-        // dropped, not committed, and stays dropped until Option is pressed
-        // again. Polled here rather than tapped: the tap sees no mouse events,
-        // on purpose (see `Hotkey.swift`).
+        // A mouse button down means the gesture belongs to the app, not Deiko: Option + press-and-drag must
+        // reach the app as it always did (select text, duplicate a file), and drawing over it would do both
+        // at once. The stroke is dropped, not committed, and stays dropped until Option is pressed again.
+        // Polled here because the tap deliberately sees no mouse events (see `Hotkey.swift`).
         if hoverPath != nil, NSEvent.pressedMouseButtons & 1 != 0 {
             if hoverPromoted { lassoPath = nil; lassoStartT = nil }
             endHoverStroke()
         }
 
-        // The button-less stroke, fed from these samples rather than from the
-        // event tap — see `Hotkey.swift`. Stationary frames are skipped so a
-        // long-held Option cannot grow the path.
+        // The button-less stroke, fed from these samples rather than the event tap (see `Hotkey.swift`).
+        // Stationary frames are skipped so a long-held Option cannot grow the path.
         if hoverPath != nil, step > 0 {
             if hoverPromoted {
                 lassoPath?.append(position)
             } else {
-                // DISPLACEMENT from the key-down point, not path length: a
-                // resting hand jitters, and summed jitter reaches any
-                // threshold if Option is held long enough (deleting a few
-                // words with Option+Backspace is exactly that).
-                //
-                // The clock starts at the first movement, not the key press:
-                // the span binds narration to the stroke, and a key held for
-                // ten seconds before drawing would claim all ten.
+                // Displacement from the key-down point, not path length: a resting hand jitters, and summed
+                // jitter reaches any threshold if Option is held long enough (Option+Backspace over a few
+                // words). The clock starts at the first movement, not the key press, since the span binds
+                // narration to the stroke.
                 if hoverStartT == nil { hoverStartT = now }
                 hoverPath?.append(position)
                 let origin = hoverPath?.first ?? position
@@ -829,9 +673,8 @@ final class Recorder {
             detectSettle(position: position, moved: moved, now: now)
         }
 
-        // Silence watchdog. `msSinceVoice` is nil until the first buffer lands
-        // (and forever if the mic never opened), so fall back to the time since
-        // recording began rather than never firing.
+        // Silence watchdog. `msSinceVoice` is nil until the first buffer lands (and forever if the mic never
+        // opened), so fall back to the time since recording began.
         let runningFor = recordingStartedAt.map { now - $0 } ?? 0
         let quietFor = msSinceVoice ?? runningFor
         if quietFor > autoStopSilenceMs {
@@ -842,25 +685,11 @@ final class Recorder {
             Task { _ = await self.stopSession() }
         }
 
-        // NEVER HEARD ANYTHING, EVER — not "has gone quiet".
-        //
-        // The first version read `quietFor <= silenceGateMs`, which fires on
-        // any six-second pause: lasso a function, read it silently while you
-        // think, and the pill asserts a hardware fault and hides the stop hint.
-        // Six seconds of silence while reading code is not a broken microphone,
-        // it is reading code.
-        //
-        // `msSinceVoice == nil` is the honest signal, because it means no
-        // voiced buffer has arrived in the whole session. Once one has, the
-        // microphone has demonstrably worked and a later silence says nothing
-        // about the hardware. That is also exactly the 44-second session this
-        // was built for: a Bluetooth earbud at 27% input volume never delivered
-        // one, so the value stayed nil throughout.
-        //
-        // `detectSettle` reads the same nil and does the opposite — it keeps
-        // capturing, because a silent gate would turn a microphone problem into
-        // a session that records nothing and explains nothing. Capture stays
-        // permissive; the pill speaks up. Both are right about the same fact.
+        // The pill warns only if no voiced buffer has ever arrived, not when the user merely goes quiet: a
+        // six-second pause while reading code is not a broken microphone. Once one buffer has arrived the
+        // microphone has demonstrably worked, and later silence says nothing about the hardware.
+        // `detectSettle` reads the same nil and does the opposite: it keeps capturing, because a silent gate
+        // would turn a microphone problem into a session that records nothing and explains nothing.
         overlay.update(
             cursor: position, lasso: lassoPath,
             pulses: pulses,
@@ -872,9 +701,8 @@ final class Recorder {
         if moved > settleRadius {
             lastPosition = position
             stationarySince = now
-            // Refreshed on every moving frame, so when the cursor finally stops
-            // this holds the speed it was travelling at just beforehand. Reading
-            // it here is what makes the 200ms window the right window.
+            // Refreshed on every moving frame, so when the cursor stops this holds the speed it was
+            // travelling at just beforehand.
             approachAtRest = recentSpeeds.map(\.speed).max() ?? 0
             hasMoved = true
             firedForThisRest = false
@@ -884,22 +712,13 @@ final class Recorder {
         guard hasMoved, !firedForThisRest, now - stationarySince >= dwellMs else { return }
         firedForThisRest = true
 
-        // THE CAPTURE GATE. A settle with no narration anywhere near it is not
-        // a pointing act — it is transit, reading, scrolling, or a hand at
-        // rest. Under push-to-talk the held key said "I am describing
-        // something now"; with the session always on, recent speech says it
-        // instead. "Narration is the filter" was always the design; this
-        // applies it at capture time as well as at alignment time.
-        //
-        // The window is deliberately wide. The aligner allows a referent to
-        // sit up to 2s after the word that named it and 1.5s before, so
-        // anything tighter would drop referents the aligner could still have
-        // bound. Losing one is unrecoverable; an extra crop costs a few
-        // milliseconds and some disk.
-        //
-        // No audio at all (mic denied, or the first buffer not yet in) means
-        // capture EVERYTHING. A silent gate would turn one permission problem
-        // into a session that records nothing and says nothing about why.
+        // The capture gate. A settle with no narration anywhere near it is transit, reading, scrolling or a
+        // hand at rest, not a pointing act; with the session always on, recent speech is what says "I am
+        // describing something now". The window is wide on purpose: the aligner allows a referent up to 2s
+        // after the word that named it and 1.5s before, so anything tighter would drop referents it could
+        // still bind, and an extra crop costs a few milliseconds and some disk. With no audio at all (mic
+        // denied, or the first buffer not yet in) everything is captured, so one permission problem does
+        // not become a session that records nothing.
         if let quietFor = msSinceVoice, quietFor > silenceGateMs {
             gatedSettleCount += 1
             return
@@ -908,15 +727,13 @@ final class Recorder {
         commitPoint(at: position, dwell: now - stationarySince, now: now)
     }
 
-    // ── Committing referents ────────────────────────────────────────────────
+    // MARK: - Committing referents
 
     private func commitPoint(at position: Point, dwell: Double, now: Double) {
         let features = CandidateFeatures(
             dwellMs: dwell,
-            // Taken from the moment the cursor stopped, not recomputed now — see
-            // `approachAtRest`. Recomputing here is what made this field a lie:
-            // the window it reads has been full of stationary samples for the
-            // whole dwell.
+            // Taken from the moment the cursor stopped, not recomputed now (see `approachAtRest`): the window
+            // is full of stationary samples by the end of the dwell.
             approachSpeed: approachAtRest,
             msSinceAppSwitch: lastAppSwitchT.map { now - $0 },
             msSinceScroll: lastScrollT.map { now - $0 },
@@ -947,9 +764,8 @@ final class Recorder {
         }
         lassoPath = nil
 
-        // The stroke itself is the meaning. Classification picks the verb and
-        // the dressing; every kind captures the same way — stroke bounds plus
-        // what sits at the anchors, with the ink drawn on.
+        // The stroke itself is the meaning. Classification picks the verb and the dressing; every kind
+        // captures the same way: stroke bounds plus what sits at the anchors, with the ink drawn on.
         let kind = StrokeClassifier.classify(path.map { StrokePoint(x: $0.x, y: $0.y) })
         markIndex += 1
         let mark = MarkInfo(kind: kind.rawValue, number: markIndex)
@@ -967,19 +783,15 @@ final class Recorder {
         overlay.flourish(path: path, kind: kind)
         holdReferentCount += 1
         sessionReferentCount += 1
-        // The narration for a stroke happens while DRAWING it — every mark
-        // kind gets the measured span, not only lassos.
+        // The narration for a stroke happens while drawing it, so every mark kind gets the measured span.
         let span = startT.map { TimeSpan(start: $0, end: now) }
         resolve(shape: shape, span: span, mark: mark, strokePath: path)
     }
 
-    /// AX + crop, off the sampling path. Resolution can take a few hundred
-    /// milliseconds; blocking here would freeze the overlay and drop cursor
-    /// samples mid-gesture — the two things the user can actually see.
-    ///
-    /// The task handle is retained so `stopSession` can wait on it. The session
-    /// directory is read HERE and captured by value, not read inside the task —
-    /// by the time a slow OCR finishes, `sessionDir` may already be nil.
+    /// AX + crop, off the sampling path: resolution can take a few hundred milliseconds, and blocking
+    /// would freeze the overlay and drop cursor samples mid-gesture. The task handle is retained so
+    /// `stopSession` can wait on it. The session directory is read here and captured by value, since a
+    /// slow OCR may finish after `sessionDir` is nil.
     private func resolve(
         shape: Shape, span: TimeSpan?,
         mark: MarkInfo? = nil, strokePath: [Point]? = nil
@@ -1033,7 +845,7 @@ final class Recorder {
                 // own loop already declares its extent.
                 if kind == .emphasis { loci = [(shape.origin, probe.snapshot)] }
             case nil:
-                // A plain settle — exactly the old path.
+                // A plain settle.
                 event = shape.kind == .region
                     ? AXProbe.probeRegion(shape)
                     : AXProbe.probePoint(shape.origin)
@@ -1059,8 +871,8 @@ final class Recorder {
                     )
                 }
 
-                // A file for every MARK — everything under the modifier is
-                // deliberate. A settle still captures in memory only.
+                // A file for every mark: everything under the modifier is deliberate. A settle captures in
+                // memory only.
                 let path = mark != nil || shape.kind == .region
                     ? dir.map {
                         "\($0)/crops/h\(String(format: "%02d", hold))-r\(String(format: "%03d", index)).png"
@@ -1076,8 +888,8 @@ final class Recorder {
                 )
                 event = event.with(crop: crop)
 
-                // Ink AFTER capture and OCR: recognition reads clean pixels,
-                // the file the agent sees carries the stroke and its number.
+                // Ink after capture and OCR: recognition reads clean pixels, the file the agent sees carries
+                // the stroke and its number.
                 if let mark, let kind, let written = crop.path {
                     InkRenderer.ink(
                         file: written,
@@ -1091,9 +903,8 @@ final class Recorder {
 
             Emit.event(event)
 
-            // Retire the handle. `Task` exposes no "did it finish" flag, so a
-            // plain array would grow for the life of the session; letting each
-            // task remove itself keeps the set to what is genuinely in flight.
+            // Retire the handle: `Task` exposes no "did it finish" flag, so each task removes itself to keep
+            // the set to what is in flight.
             await MainActor.run { [weak self] in self?.pendingResolves[index] = nil }
         }
 
@@ -1103,10 +914,8 @@ final class Recorder {
 
 /// Fixed locations the app writes to outside a session.
 enum Paths {
-    /// Where events go when no session is open. An app launched from Finder has
-    /// no stdout, so without this a permission failure at startup would vanish
-    /// — and the alternative, opening a session file at launch, is precisely
-    /// the behaviour that littered `~/Documents/Deiko` with empty folders.
+    /// Where events go when no session is open. An app launched from Finder has no stdout, so a
+    /// permission failure at startup would otherwise vanish.
     static let launchLog =
         "\(NSHomeDirectory())/Library/Logs/Deiko/launch.jsonl"
 }

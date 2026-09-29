@@ -1,21 +1,17 @@
 import AppKit
 import DeikoHandoff
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THE HANDOFF — paste the developer's prompt into the window the orb landed on
-//
-// Everything decided lives in `DeikoHandoff`; this file is the plumbing that
-// cannot be tested: reading the window list, activating an app, synthesizing a
-// paste. It should hold no judgement calls beyond the ones documented inline.
+// The handoff: pastes the developer's prompt into the window the orb landed on.
+// Everything decided lives in `DeikoHandoff`; this file is the untestable
+// plumbing (reading the window list, activating an app, synthesizing a paste)
+// and holds no judgement calls beyond the ones documented inline.
 //
 // If the paste or the Return misses, `prompt.txt` is still on disk beside the
-// session and the orb says where. That is the fallback, and it is the reason
-// nothing here reports partial success.
+// session and the orb says where. That is the fallback, and the reason nothing
+// here reports partial success.
 //
-// This does not violate "nothing leaves until Good to go" — the fling IS the
-// approval, a deliberate gesture at a named target. What it must never become
-// is automatic on session end.
-// ─────────────────────────────────────────────────────────────────────────────
+// The fling is the approval: a deliberate gesture at a named target. It must
+// never become automatic on session end.
 
 /// A target plus where its window sits, so the orb can outline what the user
 /// is about to commit to. The bounds are CG-global (top-left origin).
@@ -27,31 +23,21 @@ struct ResolvedTarget {
 @MainActor
 enum Handoff {
 
-    /// Where a handoff narrates itself. `OrbController` points this at the
-    /// app's log on first use.
-    ///
-    /// Not optional decoration: the first live fling failed with nothing on
-    /// screen and nothing on disk, because the only trace hook lived in a test
-    /// subcommand and the field run was therefore undiagnosable. A field run
-    /// must never be quieter than a harness.
+    /// Where a handoff narrates itself. `OrbController` points this at the app's
+    /// log on first use, so a field run is never quieter than a test harness.
     static var trace: ((String) -> Void)?
 
     private static func note(_ message: String) { trace?(message) }
 
-    /// The record for the fling in flight, filled in as it goes.
-    ///
-    /// Same pattern as `Diagnostics.lastFailure`, and for the reason that file
-    /// gives: threading it through every early return and every `throw` would
-    /// mean each new exit had to remember to carry it, and the exits that
-    /// forget are exactly the ones nobody notices. Reset at the top of
-    /// `deliver`; read by `Orb` when the call comes back or throws.
+    /// The record for the fling in flight, filled in as it goes. Same pattern as
+    /// `Diagnostics.lastFailure`: threading it through every early return and
+    /// `throw` would mean each new exit had to remember to carry it. Reset at the
+    /// top of `deliver`; read by `Orb` when the call comes back or throws.
     @MainActor static var lastReport = FlingReport(outcome: .refused)
 
-    /// Nil until a fling has actually happened this launch.
-    ///
-    /// `lastReport` is seeded before every attempt so the fields can be filled
-    /// in as `deliver` runs, which means "has one happened" cannot be read off
-    /// its existence — `elapsedMs` being stamped by the `defer` is the signal.
+    /// Nil until a fling has actually happened this launch. `lastReport` is
+    /// seeded before every attempt, so its existence cannot signal that;
+    /// `elapsedMs` being stamped by the `defer` does.
     @MainActor static var lastFlingLine: String? {
         lastReport.elapsedMs > 0 ? lastReport.diagnosticLine : nil
     }
@@ -59,13 +45,12 @@ enum Handoff {
     /// The app owning the frontmost window under a point, for the orb to name
     /// while aiming.
     ///
-    /// The window list rather than an AX hit-test, deliberately: this runs on
-    /// every mouse-move of a fling, and `AXProbe`'s point probe can sleep 300ms
-    /// poking Electron apps. The question here is only "whose window is this" —
-    /// the window list answers it in microseconds with no accessibility calls.
+    /// Uses the window list rather than an AX hit-test: this runs on every
+    /// mouse-move of a fling, and `AXProbe`'s point probe can sleep 300ms poking
+    /// Electron apps.
     static func targetUnder(point: CGPoint, excluding orbWindow: NSWindow?) -> ResolvedTarget? {
-        // CGWindowList coordinates are CG global (top-left origin), same space
-        // as `CGEvent.location` — no flip needed.
+        // CGWindowList coordinates are CG global (top-left origin), the same
+        // space as `CGEvent.location`: no flip needed.
         guard let windows = CGWindowListCopyWindowInfo(
             [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
         ) as? [[String: Any]] else { return nil }
@@ -88,11 +73,10 @@ enum Handoff {
             let pid = (info[kCGWindowOwnerPID as String] as? Int32)
             let name = pid.flatMap { NSRunningApplication(processIdentifier: $0)?.localizedName }
                 ?? info[kCGWindowOwnerName as String] as? String
-            // The FIRST window containing the point decides — the list is
+            // The first window containing the point decides: the list is
             // front-to-back, so a covered window never becomes the target. If
-            // that front window refuses to resolve (it is Deiko's, or
-            // nameless), the fling is aiming at nothing, not at whatever shows
-            // through underneath.
+            // that window refuses to resolve (it is Deiko's, or nameless), the
+            // fling aims at nothing rather than whatever shows through.
             return HandoffTarget.resolve(
                 pid: pid, appName: name, ownPid: ProcessInfo.processInfo.processIdentifier
             ).map { ResolvedTarget(target: $0, windowBounds: rect) }
@@ -100,25 +84,13 @@ enum Handoff {
         return nil
     }
 
-    /// Activate the target and paste the developer's prompt into it.
-    ///
-    /// Throws rather than reporting partial success: every failure here has the
-    /// same remedy — the orb points at `prompt.txt` — and the same severity.
-
     /// Destinations that cannot open a local file path, so the crops have to
-    /// travel as bytes.
+    /// travel as bytes. A browser chat runs the model elsewhere: handing it
+    /// `/Users/…/h01-r008.png` is a string it cannot follow, and a model will
+    /// often carry on as if it had looked.
     ///
-    /// A browser chat runs the model somewhere else entirely. Handing it
-    /// `/Users/…/h01-r008.png` is handing it a string it cannot follow — and
-    /// the failure is the bad kind, because a model will often carry on as if
-    /// it had looked rather than say it could not.
-    ///
-    /// A LIST, with all the staleness a list implies — but the asymmetry is
-    /// what makes it safe here, and it is the opposite of the asymmetry that
-    /// made the old terminal list dangerous. A browser missing from this set
-    /// falls back to pasting paths, which is exactly what every destination got
-    /// before this existed: no worse than yesterday. Guessing the other way is
-    /// what would hurt, so nothing is added on a hunch.
+    /// A list, so liable to go stale, but a browser missing from it just falls
+    /// back to pasting paths. Nothing is added on a hunch.
     private static let browserBundleIDs: Set<String> = [
         "com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.canary",
         "com.apple.Safari", "com.apple.SafariTechnologyPreview",
@@ -133,44 +105,35 @@ enum Handoff {
     }
 
     /// Hosts whose chat panel gets the input-strip treatment when the drop's
-    /// click secured no usable focus. The same list discipline as
-    /// `browserBundleIDs`: this decides HOW focus is secured, never WHETHER
-    /// delivery happens, and a host missing from it just gets the generic
-    /// click path — no worse than yesterday.
+    /// click secured no usable focus. Same list discipline as
+    /// `browserBundleIDs`: this decides how focus is secured, never whether
+    /// delivery happens, and a host missing from it gets the generic click path.
     ///
-    /// It exists because the generic path measurably cannot reach a VS Code
-    /// chat: the webview exposes no text-input roles to Accessibility in its
-    /// resting state, a click on the transcript leaves DOM focus on a
-    /// non-editable group, and the extension's documented Cmd+Esc chord was
-    /// posted in the field and observably changed nothing. What HAS worked
-    /// since the first live fling is a click that lands on the input box
-    /// itself — which lives in the panel's bottom strip.
+    /// The generic path cannot reach a VS Code chat: the webview exposes no
+    /// text-input roles to Accessibility in its resting state, and a click on
+    /// the transcript leaves DOM focus on a non-editable group. A click on the
+    /// input box itself, which lives in the panel's bottom strip, does work.
     private static let chatPanelHosts: Set<String> = [
         "com.microsoft.VSCode",
         "com.microsoft.VSCodeInsiders",
         "com.todesktop.230313mzl4w4u92", // Cursor
     ]
 
-    /// The focus signatures a paste is known to reach. A concrete text role
-    /// is the composer itself; AXWebArea is Chromium reporting "the webview
-    /// has DOM focus" — the measured signature of every fling that worked
-    /// into a chat webview (the composer holds DOM focus behind it).
+    /// The focus signatures a paste is known to reach. A concrete text role is
+    /// the composer itself; AXWebArea is Chromium reporting that the webview has
+    /// DOM focus (the composer holds it behind).
     private static func focusReachesAPaste(_ role: String?) -> Bool {
         isTextEditable(role) || role == "AXWebArea"
     }
 
+    /// Activate the target and paste the developer's prompt into it.
+    ///
+    /// Throws rather than reporting partial success: every failure here has the
+    /// same remedy (the orb points at `prompt.txt`) and the same severity.
     static func deliver(
         to target: HandoffTarget, text: String, images: [String],
         persona: String? = nil, personaFile: String? = nil
     ) async throws {
-        // Read every crop BEFORE anything is activated, clicked or pasted.
-        //
-        // A session directory belongs to the developer and can be moved or
-        // deleted between the render and the fling. Discovering that halfway
-        // through the loop would leave images already sitting in the composer
-        // with no text under them and no Return — a partial send, which this
-        // file's header says it never reports. Failing here costs nothing: the
-        // target has not been touched yet.
         lastReport = FlingReport(
             outcome: .refused,
             appName: target.appName,
@@ -180,6 +143,11 @@ enum Handoff {
         let startedAt = Date()
         defer { lastReport.elapsedMs = Date().timeIntervalSince(startedAt) * 1000 }
 
+        // Read every crop before anything is activated, clicked or pasted. A
+        // session directory can be moved or deleted between the render and the
+        // fling, and discovering that halfway through would leave images in the
+        // composer with no text and no Return: a partial send. Failing here
+        // costs nothing.
         let payloads: [(name: String, data: Data)] = try images.map { path in
             guard let data = FileManager.default.contents(atPath: path) else {
                 throw HandoffError(
@@ -196,9 +164,9 @@ enum Handoff {
         app.activate()
 
         // Give the window server time to move focus. Polling `isActive` rather
-        // than sleeping a fixed amount: activation is usually ~50ms but can
-        // stall behind a space switch, and a paste into the old window is the
-        // worst outcome this function can produce.
+        // than sleeping a fixed time: activation is usually ~50ms but can stall
+        // behind a space switch, and a paste into the old window is the worst
+        // outcome here.
         var polls = 0
         for _ in 0..<40 where !app.isActive {
             polls += 1
@@ -209,47 +177,24 @@ enum Handoff {
             throw HandoffError("Could not bring \(target.appName) forward.", reason: "no-activate")
         }
 
-        // A moment more for the app to route key focus to its front window —
-        // `isActive` says the app owns the menu bar, not that its text field
-        // is first responder yet.
+        // A moment more for the app to route key focus to its front window:
+        // `isActive` says the app owns the menu bar, not that its text field is
+        // first responder.
         try await Task.sleep(for: .milliseconds(150))
 
-        // WAKE THE AX TREE BEFORE ANY FOCUS IS READ, for every host — not just
-        // the ones that take the composer hunt below.
+        // Wake the AX tree before any focus is read, for every host. Electron
+        // builds its accessibility tree lazily: until AXManualAccessibility is
+        // set, a system-wide focused-element read returns nothing for a VS Code
+        // window, so focus cannot be verified and a correct click looks like a
+        // miss.
         //
-        // Electron builds its accessibility tree lazily. Until
-        // AXManualAccessibility is set, a system-wide focused-element read
-        // returns NOTHING for a VS Code window, so `focusedElement()` answers
-        // "nothing focused" however many times we click, the input-strip
-        // fallback cannot verify the click it just made, and the refusal fires
-        // with the caret visibly blinking in the composer. The field report was
-        // exactly that: clicked into the chat, watched it highlight, still
-        // refused. Nothing was wrong with the click — the reading was blind.
-        //
-        // IT USED TO WORK BY ACCIDENT, which is why this looked intermittent.
-        // `Recorder.sample()` pokes the frontmost app on every app switch
-        // during a capture, so a session that passed through VS Code left its
-        // tree awake and the fling landed; a session spent pointing at a
-        // browser and Figma left it dormant and the same fling refused. Which
-        // apps you happened to touch while narrating is not a sane thing for
-        // delivery to depend on.
-        //
-        // A FIXED SLEEP IS A GUESS ABOUT SOMEBODY ELSE'S TREE-BUILD TIME, and
-        // the field disagreed with the guess. Same pid, both first-poke-after-a-
-        // restart: one fling read "nothing focused" through both clicks and both
-        // input-strip offsets and was refused, and the very next one read
-        // AXTextArea then AXWebArea and delivered. 300ms is sometimes short.
-        //
-        // So wait for the tree to ANSWER rather than waiting a number.
-        //
-        // The poll is UNCONDITIONAL, not gated on whether the poke was issued.
-        // An already-awake tree answers on the first iteration and costs
-        // nothing, and that is precisely what stops a stale poke record from
-        // bringing the original bug back in silence.
-        //
-        // It never throws. An app that genuinely has nothing focused waits out
-        // the deadline and proceeds exactly as it did before any of this
-        // existed; the chat-panel refusal further down is still the net.
+        // Then wait for the tree to answer rather than sleeping a fixed time,
+        // which is a guess about another app's tree-build time. The poll is
+        // unconditional: an already-awake tree answers on the first iteration
+        // and costs nothing, and that stops a stale poke record from
+        // reintroducing the bug. It never throws: an app that genuinely has
+        // nothing focused waits out the deadline and proceeds, and the
+        // chat-panel refusal below is still the net.
         let pokeIssued = AXProbe.enableManualAccessibility(pid: target.pid)
         lastReport.pokeIssued = pokeIssued
         let treeAnsweredMs = await awaitTree(pid: target.pid, deadlineMs: 2000)
@@ -261,22 +206,20 @@ enum Handoff {
                 + "(poke \(pokeIssued ? "issued" : "reused"))"
         )
 
-        // Click where the fling was RELEASED, so focus is the widget the user
-        // aimed at — not whatever had it last. Activation alone restores the
-        // app's previous focus, which during the first live fling was some
-        // widget other than the chat input: the paste went to VS Code and
-        // landed nowhere visible. The click is the half of drag-and-drop that
-        // a real drop performs and a fling otherwise skips.
+        // Click where the fling was released, so focus is the widget the user
+        // aimed at. Activation alone restores the app's previous focus, which
+        // may be a different widget than the chat input. This is the half of
+        // drag-and-drop that a real drop performs.
         if let drop = target.dropPoint {
             let point = CGPoint(x: drop.x, y: drop.y)
 
             // Re-resolve the pixel before clicking. Up to 2.15s passes between
-            // the release and this line, and the window under it can change:
-            // a dialog dismisses, a panel collapses, a Space reflows. Without
-            // this the click can land on a DIFFERENT app, which then takes
-            // focus and receives the paste and the Return — while the orb had
-            // named the original. `HandoffTarget` calls that name "the safety
-            // property"; this is what keeps it true all the way to the click.
+            // the release and this line, and the window under the point can
+            // change (a dialog dismisses, a panel collapses, a Space reflows).
+            // Without this the click can land on a different app, which then
+            // takes the paste and the Return while the orb named the original.
+            // `HandoffTarget` calls that name "the safety property"; this keeps
+            // it true through to the click.
             let now = targetUnder(point: point, excluding: nil)
             guard let now, now.target.pid == target.pid else {
                 throw HandoffError(
@@ -285,22 +228,16 @@ enum Handoff {
                         + "."
                 , reason: "moved")
             }
-            // THE CLICK CUTS BOTH WAYS, so focus is verified around it, not
-            // assumed. It exists because activation alone restores focus to
-            // whatever had it last — the first live fling pasted into a widget
-            // nobody was looking at. But the field also produced the OPPOSITE
-            // failure: the caret was already blinking in the chat input, the
-            // drop landed on the panel's transcript a few hundred points away,
-            // and the click BLURRED the input — focus ended on a non-editable
-            // AXGroup and the paste vanished. No CGEvent reports where a paste
-            // will land; Accessibility can say what holds focus. So: read
-            // focus BEFORE the one click, read it after, and repair what the
-            // readings show. ONE click — a review caught this block briefly
-            // coexisting with the older click above it, which fired two clicks
-            // ~150ms apart at the same pixel: inside the double-click window,
-            // so hosts read them as a word-select, and the paste then REPLACED
-            // the selected text. The `before` reading also has to precede the
-            // only click, or the blur it exists to catch has already happened.
+            // The click cuts both ways, so focus is verified around it rather
+            // than assumed. Activation alone restores focus to whatever had it
+            // last, but a click can also blur an input that already had the caret
+            // (a drop on the panel's transcript blurs the composer beside it). No
+            // CGEvent reports where a paste will land; Accessibility can say what
+            // holds focus. So: read focus before the one click, read it after,
+            // and repair what the readings show. Exactly one click, and the
+            // `before` reading must precede it: two clicks ~150ms apart at the
+            // same pixel fall inside the double-click window, so hosts read a
+            // word-select and the paste replaces the selection.
             let before = focusedElement()
             lastReport.focusBefore = before.map(describe) ?? "nothing focused"
             note("focus before click: \(before.map(describe) ?? "nothing focused")")
@@ -308,19 +245,17 @@ enum Handoff {
             guard click(at: point) else {
                 throw HandoffError("Could not synthesize the click at the drop point.")
             }
-            // Let the click settle — a web view (VS Code's chat) moves focus on
-            // the mouse-up, and pasting before that lands in the old widget.
+            // Let the click settle: a web view (VS Code's chat) moves focus on
+            // mouse-up, and pasting before that lands in the old widget.
             try await Task.sleep(for: .milliseconds(150))
             var after = focusedElement()
             note("focus after click: \(after.map(describe) ?? "nothing focused")")
 
-            // A click on a window that was not KEY can be spent making it key
-            // and never reach a widget — focus lands somewhere unrelated. One
-            // more click lands on a window that is key by then. Only when a
-            // REAL frame excludes the point (or nothing is focused at all): a
-            // zero-size frame is a Monaco caret textarea that may be exactly
-            // right, and an empty rect contains nothing, so judging it here
-            // would spend a pointless click on a focus that was already good.
+            // A click on a window that was not key can be spent making it key and
+            // never reach a widget; one more click lands on a window that is key
+            // by then. Only when a real frame excludes the point (or nothing is
+            // focused): a zero-size frame is a Monaco caret textarea that may be
+            // exactly right, and an empty rect contains nothing.
             let excludesPoint = after?.frame.map {
                 $0.width > 0 && $0.height > 0 && !$0.contains(point)
             } ?? (after == nil)
@@ -332,21 +267,18 @@ enum Handoff {
                 note("focus after second click: \(after.map(describe) ?? "nothing focused")")
             }
 
-            // The blur repair. The field produced a drop on the chat panel's
-            // TRANSCRIPT while the caret sat in its composer: the click
-            // blurred the input the user was aiming beside. When something
-            // text-editable was focused before the click, the click demoted
-            // focus to something that is not, and the two overlap (the input
-            // sits inside the panel that took the click), put focus back.
-            // AX-refocus first (no side effects); its own click second.
+            // The blur repair. When something text-editable was focused before
+            // the click, the click demoted focus to something that is not, and
+            // the two overlap (the input sits inside the panel that took the
+            // click), put focus back: AX-refocus first (no side effects), its own
+            // click second.
             var repairedFocus = false
             if let before, isTextEditable(before.role), let beforeFrame = before.frame,
                !isTextEditable(after?.role),
                let afterFrame = after?.frame,
-               // Midpoint containment, NOT intersects: a focused Monaco
-               // composer manifests as a ZERO-WIDTH caret textarea, and an
-               // empty rect intersects nothing — the repair would never fire
-               // for exactly the input it exists to restore.
+               // Midpoint containment, not intersects: a focused Monaco
+               // composer is a zero-width caret textarea, and an empty rect
+               // intersects nothing.
                afterFrame.contains(CGPoint(x: beforeFrame.midX, y: beforeFrame.midY)) {
                 note("the click blurred the text input it was aimed near — restoring focus")
                 AXUIElementSetAttributeValue(
@@ -363,21 +295,18 @@ enum Handoff {
                 note("focus after restore: \(after.map(describe) ?? "nothing focused")")
             }
 
-            // Two repair paths, chosen by what is KNOWN about the host.
+            // Two repair paths, chosen by what is known about the host.
             //
-            // Chat-panel hosts (VS Code family): the webview is measurably
-            // opaque — every field hunt found nothing, because the composer
-            // exists in AX only once focused. Hunting is 700ms of proven
-            // futility there, so these hosts go straight to the input-strip
-            // click, and refuse honestly if even that secures nothing.
+            // Chat-panel hosts (VS Code family): the webview is opaque to AX
+            // until the composer is focused, so hunting for it is futile. These
+            // go straight to the input-strip click and refuse honestly if even
+            // that secures nothing.
             //
-            // Everyone else: the composer hunt. A native host's input DOES
-            // live in its AX tree, and Chromium exposes one once poked — the
-            // same AXManualAccessibility poke capture relies on. The poked
-            // tree takes ~300ms to build (AXProbe's retry sleeps exactly
-            // that), so the search waits, and retries once. No refusal on
-            // the generic path: an unverifiable focus proceeds exactly as it
-            // did before any of this existed — no worse than yesterday.
+            // Everyone else: the composer hunt. A native host's input lives in
+            // its AX tree, and Chromium exposes one once poked; the poked tree
+            // takes ~300ms to build, so the search waits and retries once. No
+            // refusal on this path: unverifiable focus proceeds as it would
+            // without any of this.
             var container: (element: AXUIElement, frame: CGRect?)?
             if !focusReachesAPaste(after?.role) {
                 let bundleID = NSRunningApplication(
@@ -387,31 +316,17 @@ enum Handoff {
                 if let bundleID, chatPanelHosts.contains(bundleID) {
                     container = dropContainer(near: point)
                     // The input-strip click. A chat's input box lives in the
-                    // bottom strip of its panel — the one place a click has
-                    // ALWAYS reached the composer, back to the first live
-                    // fling. One click, ~55pt above the panel's bottom edge,
-                    // then read the signature. No second guesses: a miss
-                    // here could be sitting on a control row, and a blind
-                    // paste-and-Return after a misclick can activate
-                    // whatever the click opened; the refusal below is the
-                    // net. The height gate skips panels too short to have a
-                    // strip — and degenerate geometry AX failed to read.
-                    // ponytail: 55pt is a fixed offset measured against
-                    // today's VS Code layout; zoom or a taller control row
-                    // moves the input and the refusal catches the miss.
-                    // TWO OFFSETS, NOT ONE, AND THE SECOND IS ONLY REACHED ON
-                    // A VERIFIED MISS. 55pt was measured against today's VS
-                    // Code at default zoom; at 150% the input sits lower and
-                    // every fling at that editor was refused, permanently,
-                    // with no self-service fix. A second attempt is safe here
-                    // for exactly the reason a blind one is not — the focus
-                    // signature is read between them, so the retry only
-                    // happens when the first click provably did not land in
-                    // something that takes a paste, and the refusal below is
-                    // still the net when neither does.
-                    // ponytail: two measured offsets rather than a model of
-                    // the panel's layout; if a third editor needs a third
-                    // number, that is the point to derive it instead.
+                    // bottom strip of its panel. Click there, read the focus
+                    // signature, and try a second offset only on a verified miss:
+                    // the read between attempts is what makes a retry safe, since
+                    // a blind paste-and-Return after a misclick can activate
+                    // whatever the click opened. The height gate skips panels too
+                    // short to have a strip, and degenerate geometry AX failed to
+                    // read. If neither offset takes focus, the refusal below is
+                    // the net.
+                    // Fixed offsets, not a model of the panel layout: zoom or a
+                    // taller control row can move the input, and the refusal
+                    // catches a miss.
                     if let panel = container?.frame, panel.height > 120 {
                         for offset in [55.0, 30.0] {
                             let strip = CGPoint(x: panel.midX, y: panel.maxY - offset)
@@ -430,9 +345,8 @@ enum Handoff {
                         , reason: "no-focus")
                     }
                 } else {
-                    // The poke and its settle moved above, ahead of the first
-                    // focus read, where every host gets it. By here the tree
-                    // has been awake since before the click.
+                    // The AX poke and its settle happen earlier, ahead of the
+                    // first focus read.
                     container = dropContainer(near: point)
                     var found = container.flatMap { composer(in: $0.element) }
                     if found == nil {
@@ -460,32 +374,28 @@ enum Handoff {
                 }
             }
 
-            // THE FILE GUARD. When focus ends on something text-editable that
-            // is NOT under the drop point and NOT inside the panel the drop
-            // landed in, pasting would write the prompt into a text area the
-            // user never aimed at — the measured failure was 4k characters
-            // into an open source file, via a click that bounced focus to the
-            // editor's caret. An honest refusal beats that; the rendered
-            // prompt stays on disk beside the session either way.
+            // The file guard. When focus ends on something text-editable that is
+            // not under the drop point and not inside the panel the drop landed
+            // in, pasting would write the prompt into a text area the user never
+            // aimed at (for example an open source file). An honest refusal beats
+            // that; the rendered prompt stays on disk either way.
             //
-            // Geometry by MIDPOINT, not intersection — a Monaco caret
-            // textarea is zero-width and an empty rect intersects nothing.
-            // Deliberately narrow: unknown or non-editable focus (a
-            // browser's coarse web area) proceeds exactly as before, so no
-            // working host regresses; focus this code placed itself
-            // (`repairedFocus`) is trusted.
+            // Geometry by midpoint, not intersection: a Monaco caret textarea is
+            // zero-width. Deliberately narrow: unknown or non-editable focus (a
+            // browser's coarse web area) proceeds, so no working host regresses;
+            // focus this code placed itself (`repairedFocus`) is trusted.
             if let landing = after, !repairedFocus, isTextEditable(landing.role),
                let landingFrame = landing.frame,
                !landingFrame.contains(point) {
-                // Only REAL panel geometry may judge — an unreadable frame
-                // must not masquerade as a panel that contains nothing and
-                // refuse a delivery that was actually correct.
+                // Only real panel geometry may judge: an unreadable frame must
+                // not masquerade as a panel that contains nothing and refuse a
+                // correct delivery.
                 let panel = ((container ?? dropContainer(near: point))?.frame)
                     .flatMap { $0.width > 0 && $0.height > 0 ? $0 : nil }
                 let landingMid = CGPoint(x: landingFrame.midX, y: landingFrame.midY)
                 let outsidePanel = panel.map { !$0.contains(landingMid) }
-                    // No panel geometry to judge by — fall back to identity:
-                    // focus never moved off the pre-click element at all.
+                    // No panel geometry to judge by: fall back to identity
+                    // (focus never moved off the pre-click element).
                     ?? (before.map { CFEqual(landing.element, $0.element) } ?? false)
                 if outsidePanel {
                     throw HandoffError(
@@ -495,20 +405,16 @@ enum Handoff {
             }
         }
 
-        // IMAGES FIRST, TEXT LAST. A chat composer puts an attachment above the
-        // message being written, so this is the order that produces "here are
-        // two screenshots, and here is what I was saying" rather than the
-        // reverse — and `attachedText` numbers the images in exactly this
-        // order, so the order is load-bearing, not cosmetic.
-        // THE TARGET IS RE-CHECKED BEFORE EVERY KEYSTROKE, not once at the
-        // top. Three images is nine seconds of sleeps, and the keystrokes go
-        // to the HID tap — they land in whatever has focus, exactly as if the
-        // user had typed them. Cmd-Tab to answer a ping during that window and
-        // a screenshot of the screen went into Slack, then the prompt, then a
-        // Return that sent it. The 3s delay below is a mitigation for a paste
-        // landing; this is the guard against it landing somewhere else.
-        // Refusing mid-sequence is a partial send, which the header says is
-        // never reported as success — so it is thrown, not noted.
+        // Images first, text last. A chat composer puts an attachment above the
+        // message being written, and `attachedText` numbers the images in exactly
+        // this order, so the order is load-bearing.
+        //
+        // The target is re-checked before every keystroke, not once at the top.
+        // Several images take seconds of sleeps, and keystrokes land in whatever
+        // has focus as if the user had typed them: switching apps mid-sequence
+        // would send a screenshot, then the prompt, then a Return to the wrong
+        // app. Refusing mid-sequence is a partial send, so it is thrown rather
+        // than noted.
         func stillFocused(_ step: String) throws {
             guard app.isActive else {
                 throw HandoffError(
@@ -521,57 +427,28 @@ enum Handoff {
             try stillFocused("image \(index + 1) was pasted")
             note("pasting image \(index + 1)/\(payloads.count): \(payload.name)")
             try pasteImage(payload.data)
-            // `pasteboardRestoreDelay`, not a smaller number, and the reason is
-            // the one this file already worked out for the restore: nothing can
-            // observe that a paste has landed, because reading a pasteboard
-            // does not bump `changeCount`. The next image's `clearContents()`
-            // is the same hazard as an early restore — if the composer has not
-            // consumed this one yet, it is simply gone.
-            //
-            // And a lost image here is not a visibly missing attachment. The
-            // numbering in `attachedText` counts every crop, so image 2 going
-            // missing silently relabels 3 as 2 — every caption after the gap
-            // now names the wrong picture, which is worse than sending none.
-            // Slow and right beats fast and quietly wrong.
+            // `pasteboardRestoreDelay`, not a smaller number: nothing can observe
+            // that a paste has landed (reading a pasteboard does not bump
+            // `changeCount`), so the next image's `clearContents()` is the same
+            // hazard as an early restore. A lost image also relabels every later
+            // caption in `attachedText`, which is worse than sending none.
             try await Task.sleep(for: .seconds(pasteboardRestoreDelay))
         }
 
-        // THE PERSONA GOES IN FIRST, AS ITS OWN PASTE.
+        // The persona goes in first, as its own paste. A browser chat cannot
+        // open the file `text` would otherwise name, so the instructions travel
+        // as content, and both major composers fold a long paste into an
+        // attachment tile of its own: the persona as an attachment, the brief as
+        // the message. A chat that ignores the file paste is left with the short
+        // text below.
         //
-        // A browser chat cannot open the file `text` would otherwise name, so
-        // the instructions have to travel as content — and a thousand words of
-        // them pasted INTO the message would bury what the developer actually
-        // said. Both major composers fold a long paste into an attachment tile
-        // of its own, which is exactly the shape this wants: the persona as an
-        // attachment, the brief as the message.
+        // Whether the file landed is deliberately not detected: finding the tile
+        // means driving AXProbe's region sampler on every browser handoff, which
+        // is a lot of machinery to remove four lines of text that agree with the
+        // file. Either outcome loses no instruction, which is what makes not
+        // knowing acceptable.
         //
-        // Same delay as between images, for the same reason: nothing can
-        // observe that a paste has landed, so the next `clearContents()` is a
-        // hazard until the composer has taken this one.
-        // THE DOCUMENT FIRST, THEN THE WORDS. A chat that takes document
-        // pastes gets the persona as a named file — which is what somebody
-        // reading the thread later should see, rather than a page of
-        // instructions in the message. A chat that ignores it is left exactly
-        // as it was, and the short text below covers it. Deiko gets no signal
-        // about which happened, so it does both rather than guessing.
-        // WHETHER IT LANDED IS NOT WORTH KNOWING, and that was measured twice
-        // rather than assumed — the first answer was wrong both ways round.
-        //
-        // A chat that accepts the paste draws a tile naming the file, and that
-        // tile IS reachable: `ax-probe` reads `qa-ticket.md` off a real one.
-        // But Chrome only builds its page tree once an assistive client asks,
-        // the first read is what does the asking (which is why one probe says
-        // there is nothing there and the next says there is), and finding the
-        // tile reliably means driving `AXProbe`'s region sampler — a grid of
-        // hit tests — on every browser handoff. That is a lot of machinery,
-        // and a fresh way to be wrong, bought to remove four lines of text
-        // that agree with the file they accompany.
-        //
-        // So both travel. A chat that takes the file shows a document and four
-        // lines that agree with it; one that ignores the file (Gemini,
-        // measured: nothing inserted, no tile) is left with the four lines.
-        // Neither outcome loses an instruction, which is the property that
-        // makes not knowing acceptable.
+        // Same delay as between images, for the same reason.
         if let personaFile, FileManager.default.fileExists(atPath: personaFile) {
             let name = (personaFile as NSString).lastPathComponent
             try stillFocused("the persona file was pasted")
@@ -591,36 +468,28 @@ enum Handoff {
         note("pasting \(text.count) characters into \(target.appName)")
         try paste(text)
 
-        // Let the destination process the paste before anything else. A large
+        // Let the destination process the paste before anything else: a large
         // multi-line paste needs a beat to land in the input before a Return
-        // arrives, and 250ms was already measured as sufficient for the
-        // slash-command this replaced (`mddocs/spikes/T4.6-handoff-keystroke.md`).
+        // arrives.
         try await Task.sleep(for: .milliseconds(250))
 
-        // PASTE, WAIT, ONE RETURN. Four other sequences were tried against real
-        // hosts: two Returns, Escape-then-Return, a pasted trailing newline, and
-        // paste-only. This is the one that submits.
+        // Paste, wait, one Return. Other sequences (two Returns,
+        // Escape-then-Return, a pasted trailing newline, paste-only) do not
+        // submit.
         //
-        // MULTI-LINE PASTE RELIES ON BRACKETED PASTE. A single-line command
-        // could not be split; this text can. A host that does not honour
-        // bracketed paste will submit at each newline, which looks like the
-        // prompt fragmenting itself — several messages arriving instead of
-        // one, each a partial line. Claude Code's TUI and VS Code's chat input
-        // are BOTH EXPECTED to honour it, but that is an assumption, not a
-        // measurement: the live check against real hosts is a field
-        // verification step, not something this file can run on its own. If
-        // the fragmenting happens, this is where to look first.
-        // The Return is the one keystroke that cannot be taken back: a paste
-        // into the wrong app is a mess, a Return in the wrong app is a message
-        // SENT. Checked last of all, after the 250ms the paste needed to land.
+        // Multi-line paste relies on bracketed paste. A host that does not honour
+        // it submits at each newline, so the prompt arrives fragmented across
+        // several messages. If that happens, look here first.
+        //
+        // The Return cannot be taken back: a paste into the wrong app is a mess,
+        // a Return there is a message sent. It is checked last of all, after the
+        // delay the paste needed to land.
         try stillFocused("Return was pressed")
         tap(keyCode: kReturn)
         note("done")
     }
 
     private static let kReturn: CGKeyCode = 36
-
-    // ── Keystrokes ──────────────────────────────────────────────────────────
 
     /// Paste rather than per-character key events. `/` and `_` sit on
     /// different keys on different layouts, and typing them by keycode would
@@ -632,25 +501,22 @@ enum Handoff {
             item.setString(text, forType: .string)
             // Transient for the same reason a crop is: this text is the
             // developer's narration plus strings read off their screen, and a
-            // clipboard manager that archives it has taken a copy of session
+            // clipboard manager that archives it would take a copy of session
             // content nobody offered it.
             item.setString("", forType: transientType)
             return pasteboard.writeObjects([item])
         }
     }
 
-    /// A file on the clipboard, the way Finder's Copy puts it there.
-    ///
-    /// MEASURED: Chrome turns this into a real `File` in the page's paste
-    /// event — `types: ["Files"]`, `qa-ticket.md (text/markdown, 851b)` — so a
-    /// chat that handles document pastes attaches the persona as a document
-    /// instead of receiving it as prose. Gemini ignores it (nothing is
-    /// inserted, no tile appears), which is why the short text still follows.
+    /// A file on the clipboard, the way Finder's Copy puts it there. Chrome
+    /// turns this into a real `File` in the page's paste event, so a chat that
+    /// handles document pastes attaches the persona as a document instead of
+    /// receiving it as prose. Some chats ignore it (nothing is inserted), which
+    /// is why the short text still follows.
     ///
     /// No text flavour rides along, deliberately: when both were on the
-    /// pasteboard for images, browsers preferred the URL and inserted
-    /// `file:///Users/…` as dead text. A file URL alone either becomes a file
-    /// or becomes nothing.
+    /// pasteboard, browsers preferred the URL and inserted `file:///Users/…` as
+    /// dead text. A file URL alone either becomes a file or becomes nothing.
     private static func pasteFile(_ path: String) throws {
         let url = URL(fileURLWithPath: path)
         try pasteboardPaste(what: "the persona file") { pasteboard in
@@ -658,54 +524,43 @@ enum Handoff {
         }
     }
 
-    /// One crop, as image BYTES on the clipboard.
-    ///
-    /// The destination is a model that cannot reach this filesystem, so a
-    /// reference of any kind is useless to it — the pixels have to travel.
+    /// One crop, as image bytes on the clipboard. The destination is a model
+    /// that cannot reach this filesystem, so a reference of any kind is useless
+    /// to it.
     private static func pasteImage(_ data: Data) throws {
         try pasteboardPaste(what: "screenshot") { pasteboard in
             let item = NSPasteboardItem()
             item.setData(data, forType: .png)
-            // PNG BYTES ONLY — no `.fileURL` flavour riding along.
-            //
-            // It was there "for destinations that prefer it", and no such
-            // destination exists: this path is reached only for a browser, and
-            // a browser preferring the URL flavour inserts
-            // `file:///Users/…/h01-r002.png` as TEXT and attaches nothing —
-            // putting back the dead link this whole feature removes, under
-            // numbered captions naming attachments that never arrived.
+            // PNG bytes only, with no `.fileURL` flavour: this path is reached
+            // only for a browser, and a browser preferring the URL flavour
+            // inserts `file:///Users/…/h01-r002.png` as text and attaches
+            // nothing.
             item.setString("", forType: transientType)
             return pasteboard.writeObjects([item])
         }
     }
 
-    /// `org.nspasteboard.TransientType` — the convention clipboard managers
-    /// watch to leave an item out of their history.
-    ///
-    /// Not decoration. A crop is a photograph of the developer's screen, and
-    /// `redact.mjs` is explicit that redaction cannot touch pixels: text gets
-    /// scrubbed, an image cannot be. Putting raw crops on the system pasteboard
-    /// hands them to every clipboard manager running — and some of those sync
-    /// their history to a cloud account. That is screen content leaving the Mac
-    /// by a route nobody chose, which is the one thing this product promises
-    /// does not happen.
+    /// `org.nspasteboard.TransientType`: the convention clipboard managers
+    /// watch to leave an item out of their history. A crop is a photograph of
+    /// the developer's screen and redaction cannot touch pixels, so raw crops on
+    /// the system pasteboard would go to every clipboard manager running, some
+    /// of which sync their history to a cloud account. That would be screen
+    /// content leaving the Mac by a route nobody chose.
     private static let transientType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
 
     /// Save the developer's clipboard, put ours on it, Cmd+V, and schedule the
-    /// restore. Shared by the text and image paths because every subtle part of
-    /// it — what gets saved, which restore owns the true original, aborting
-    /// before the keystroke — was hard-won and must not exist twice.
+    /// restore. Shared by the text and image paths so the subtle parts (what
+    /// gets saved, which restore owns the true original, aborting before the
+    /// keystroke) exist once.
     private static func pasteboardPaste(
         what: String, write: (NSPasteboard) -> Bool
     ) throws {
         let pasteboard = NSPasteboard.general
 
-        // EVERY representation, not just the string. `clearContents()` destroys
-        // whatever was there regardless of what we bothered to read, so saving
-        // only `.string` meant an image or a file promise was wiped with nothing
-        // kept to put back — and, because the restore was skipped when there was
-        // no string, wiped *permanently*. Reading only the plain-text flavour
-        // also silently downgraded copied rich text.
+        // Save every representation, not just the string: `clearContents()`
+        // destroys whatever was there, so an image or file promise would
+        // otherwise be wiped with nothing to put back, and copied rich text
+        // would be downgraded.
         let saved = pendingRestore?.items ?? pasteboard.pasteboardItems?.map { item -> [NSPasteboard.PasteboardType: Data] in
             var copy: [NSPasteboard.PasteboardType: Data] = [:]
             for type in item.types {
@@ -714,24 +569,20 @@ enum Handoff {
             return copy
         } ?? []
 
-        // A restore already in flight owns the TRUE original. Reading the
-        // pasteboard again here would "save" our own command from the previous
-        // paste and hand that back as the user's clipboard, permanently.
+        // A restore already in flight owns the true original. Reading the
+        // pasteboard again here would save the previous paste's command
+        // and hand it back as the user's clipboard.
         pendingRestore?.work.cancel()
 
-        // BOTH failure exits clear `pendingRestore` as well as restoring.
-        //
-        // They used to only restore. The record stayed behind holding the
-        // developer's clipboard and a work item that had already been
-        // cancelled, so nothing would ever nil it — and the next paste, however
-        // much later, read its `saved` in preference to the live pasteboard and
-        // put a stale clipboard back three seconds after pasting. Copy a
-        // password in between and that is what gets restored over it.
+        // Both failure exits clear `pendingRestore` as well as restoring. A
+        // stale record would make the next paste read its `saved` in preference
+        // to the live pasteboard and put an old clipboard back three seconds
+        // after pasting, over whatever was copied in between.
         pasteboard.clearContents()
         guard write(pasteboard) else {
-            // Abort BEFORE any keystroke. The old code carried on: Cmd+V pasted
-            // nothing into an emptied pasteboard and Return was posted anyway,
-            // submitting whatever half-typed message was already in the input.
+            // Abort before any keystroke: Cmd+V would paste nothing into an
+            // emptied pasteboard and Return would submit whatever half-typed
+            // message was already in the input.
             restore(saved, to: pasteboard, ifStillAt: pasteboard.changeCount)
             pendingRestore = nil
             throw HandoffError("Could not put the \(what) on the clipboard.")
@@ -746,17 +597,15 @@ enum Handoff {
         }
         note("Cmd+V posted")
 
-        // Restore after the destination has read the pasteboard — ALWAYS
+        // Restore after the destination has read the pasteboard. Always
         // scheduled, even with nothing to put back, so the command never
         // becomes the user's clipboard by default.
         //
-        // The delay is a MITIGATION, not a fix. Reading a pasteboard does not
+        // The delay is a mitigation, not a fix: reading a pasteboard does not
         // bump `changeCount`, so nothing here can observe whether the paste has
-        // actually happened; restoring too early hands the destination the
-        // user's previous clipboard — which is how a password ends up pasted
-        // into an editor. Three seconds is far past any observed paste (this
-        // same function already budgets 2s for activation on a loaded Electron
-        // app) at the cost of the clipboard being unavailable that long.
+        // happened, and restoring too early hands the destination the user's
+        // previous clipboard. Three seconds is far past any observed paste, at
+        // the cost of the clipboard being unavailable that long.
         let work = DispatchWorkItem {
             restore(saved, to: pasteboard, ifStillAt: ours)
             pendingRestore = nil
@@ -765,24 +614,20 @@ enum Handoff {
         DispatchQueue.main.asyncAfter(deadline: .now() + pasteboardRestoreDelay, execute: work)
     }
 
-    /// How long to assume a destination needs to read the pasteboard.
-    ///
-    /// One number, used twice, because both uses are the same unanswerable
-    /// question: reading a pasteboard does not bump `changeCount`, so nothing
-    /// can observe that a paste landed. Restoring early hands the destination
-    /// the developer's previous clipboard; overwriting early for the next image
-    /// simply loses that image. Two constants would eventually disagree and
-    /// only one of them would be right.
+    /// How long to assume a destination needs to read the pasteboard. One
+    /// number, used twice, because both uses are the same unanswerable
+    /// question: nothing can observe that a paste landed. Restoring early hands
+    /// the destination the previous clipboard; overwriting early for the next
+    /// image loses that image.
     private static let pasteboardRestoreDelay: TimeInterval = 3.0
 
-    /// The user's clipboard, held between a paste and its restore. Keyed on
-    /// nothing — there is one system pasteboard, so there is one of these.
+    /// The user's clipboard, held between a paste and its restore. There is one
+    /// system pasteboard, so one of these.
     private static var pendingRestore: (items: [[NSPasteboard.PasteboardType: Data]], work: DispatchWorkItem)?
 
-    /// Put the user's clipboard back, but only if ours is still the thing on
-    /// it. If anything else has written in the meantime — the user copied
-    /// something, another tool ran — that write is newer than our save and
-    /// stomping it would destroy the more recent intent.
+    /// Put the user's clipboard back, but only if ours is still on it: anything
+    /// written in the meantime is newer than the saved copy, and overwriting it
+    /// would destroy the more recent intent.
     private static func restore(
         _ saved: [[NSPasteboard.PasteboardType: Data]],
         to pasteboard: NSPasteboard,
@@ -798,16 +643,14 @@ enum Handoff {
         })
     }
 
-    /// One key press-and-release at the session event tap level — the same
-    /// level Deiko's own hotkey tap listens at, so the destination receives it
-    /// exactly as it would a real key.
+    /// One key press-and-release at the session event tap level, so the
+    /// destination receives it exactly as it would a real key.
     @discardableResult
     private static func tap(keyCode: CGKeyCode, flags: CGEventFlags = []) -> Bool {
-        // A REAL event source, not nil. Cmd+V worked with nil because Electron
-        // serves it from the native menu accelerator, which reads the event at
-        // the app level; a plain Return has to travel into the Chromium
-        // renderer, and that path drops events whose source is not a proper
-        // HID-state source. Measured: paste landed in VS Code, Return did not.
+        // A real event source, not nil. Cmd+V works with nil because Electron
+        // serves it from the native menu accelerator; a plain Return has to
+        // travel into the Chromium renderer, which drops events whose source is
+        // not a proper HID-state source.
         let source = CGEventSource(stateID: .hidSystemState)
         guard let down = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
               let up = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
@@ -815,18 +658,17 @@ enum Handoff {
         down.flags = flags
         up.flags = flags
         down.post(tap: .cghidEventTap)
-        // Key-up in the same instant as key-down reads as a zero-length press.
-        // Real hardware holds a key for tens of milliseconds and some input
-        // layers debounce on that.
+        // Key-up in the same instant as key-down reads as a zero-length press,
+        // and some input layers debounce on that.
         usleep(20_000)
         up.post(tap: .cghidEventTap)
         return true
     }
 
     /// Roles a paste can land in. Deliberately the concrete input roles, not
-    /// AXWebArea: a coarse web area MIGHT route a paste correctly, and the
-    /// callers treat "not editable" as "try to do better, then proceed
-    /// anyway" — never as a reason to refuse a host that works today.
+    /// AXWebArea: a coarse web area might route a paste correctly, and callers
+    /// treat "not editable" as "try to do better, then proceed", never as a
+    /// reason to refuse a host that works.
     private static let textEditableRoles: Set<String> = [
         "AXTextArea", "AXTextField", "AXSearchField", "AXComboBox",
     ]
@@ -835,11 +677,11 @@ enum Handoff {
         role.map { textEditableRoles.contains($0) } ?? false
     }
 
-    /// Every AX round-trip is Mach IPC into the TARGET app's main thread — a
-    /// stuck modal or a debugger-paused process would otherwise block Deiko's
-    /// own main actor for the OS default. Same ceiling AXProbe uses, applied
-    /// to every element this file mints, because the timeout does not
-    /// propagate across separately-obtained refs.
+    /// Every AX round-trip is Mach IPC into the target app's main thread, so a
+    /// stuck modal or a debugger-paused process would block Deiko's main actor
+    /// for the OS default. Same ceiling as AXProbe, applied to every element
+    /// minted here because the timeout does not propagate across
+    /// separately-obtained refs.
     private static let axTimeout: Float = 0.25
 
     private static func withTimeout(_ element: AXUIElement) -> AXUIElement {
@@ -870,17 +712,12 @@ enum Handoff {
         return CGRect(origin: position, size: size)
     }
 
-    /// What holds keyboard focus right now, per Accessibility. Nil when AX
-    /// answers nothing (an app with no AX support, or focus genuinely
-    /// nowhere). The frame can be nil for a real element that exposes no
-    /// geometry; callers treat that as "cannot confirm".
-    /// Poll until the system-wide focused element belongs to `pid`, or the
+    /// Polls until the system-wide focused element belongs to `pid`, or the
     /// deadline passes. Returns elapsed milliseconds, or nil if it never did.
     ///
-    /// 2000ms rather than the ~1000ms of futile clicking the field logs show,
-    /// because the cost on the warm path is a single poll and the cost of being
-    /// short is the bug. `AXProbe.messagingTimeout` already bounds each AX call,
-    /// so a hung target cannot stretch one iteration past the deadline.
+    /// The deadline is generous because the warm path costs one poll and being
+    /// short is the bug. `AXProbe.messagingTimeout` bounds each AX call, so a
+    /// hung target cannot stretch an iteration past it.
     private static func awaitTree(pid: pid_t, deadlineMs: Double) async -> Double? {
         let start = Date()
         while Date().timeIntervalSince(start) * 1000 < deadlineMs {
@@ -895,6 +732,10 @@ enum Handoff {
         return nil
     }
 
+    /// What holds keyboard focus right now, per Accessibility. Nil when AX
+    /// answers nothing (an app with no AX support, or focus genuinely nowhere).
+    /// The frame can be nil for a real element that exposes no geometry; callers
+    /// treat that as "cannot confirm".
     private static func focusedElement() -> (element: AXUIElement, role: String, frame: CGRect?)? {
         let systemWide = withTimeout(AXUIElementCreateSystemWide())
         var focusedRef: CFTypeRef?
@@ -915,9 +756,9 @@ enum Handoff {
 
     /// The panel the drop landed in: ascend from the element under the point
     /// while the ancestor still contains it, is not the window, and stays
-    /// narrower than ~70% of a screen — the panel, never the whole window,
-    /// which is what keeps a code editor's text area out of both the
-    /// composer search and the file guard's notion of "where you aimed".
+    /// narrower than ~70% of a screen. That keeps a code editor's text area out
+    /// of both the composer search and the file guard's notion of where you
+    /// aimed.
     private static func dropContainer(near point: CGPoint) -> (element: AXUIElement, frame: CGRect?)? {
         let systemWide = withTimeout(AXUIElementCreateSystemWide())
         var hitRef: AXUIElement?
@@ -944,19 +785,18 @@ enum Handoff {
             container = parent
             cursor = parent
         }
-        // Nil frame stays nil — a `.zero` stand-in reads as "a panel that
-        // contains nothing" and once turned a correct delivery into a refusal.
+        // Nil frame stays nil: a `.zero` stand-in reads as a panel that contains
+        // nothing.
         return (container, frame(of: container))
     }
 
-    /// The text input belonging to a panel — a chat's composer sits at the
-    /// BOTTOM, under a transcript that eats stray clicks, so the lowest
-    /// editable descendant is the input meant. NO minimum size: a focused
-    /// Monaco composer manifests as a zero-width caret textarea, and a size
-    /// filter here is how the first hunt missed it.
+    /// The text input belonging to a panel. A chat's composer sits at the
+    /// bottom, under a transcript that eats stray clicks, so the lowest editable
+    /// descendant is the input meant. No minimum size: a focused Monaco composer
+    /// is a zero-width caret textarea.
     ///
-    /// ponytail: bounded DFS, 400-node budget, depth 12 — a panel that hides
-    /// its composer deeper than that fails safe to the caller's file guard.
+    /// Bounded DFS (400-node budget, depth 12); a panel that hides its composer
+    /// deeper fails safe to the caller's file guard.
     private static func composer(in container: AXUIElement) -> (element: AXUIElement, frame: CGRect)? {
         var budget = 400
         var best: (element: AXUIElement, frame: CGRect)?
@@ -978,14 +818,12 @@ enum Handoff {
         return best
     }
 
-    /// One left click at a CG-global point — the focus half of a drop.
+    /// One left click at a CG-global point: the focus half of a drop.
     ///
-    /// `clickState` is pinned to 1 on both halves: the focus ladder can
-    /// legitimately click the same neighbourhood twice inside the system
-    /// double-click interval (the key-window retry, the input-strip), and a
-    /// receiver that derives clickCount from the event would read that as a
-    /// word-select — after which a paste REPLACES the selection. Each of
-    /// these is a deliberate single click and says so.
+    /// `clickState` is pinned to 1 on both halves: the focus ladder can click
+    /// the same neighbourhood twice inside the system double-click interval, and
+    /// a receiver that derives clickCount from the event would read a
+    /// word-select, after which a paste replaces the selection.
     private static func click(at point: CGPoint) -> Bool {
         let source = CGEventSource(stateID: .hidSystemState)
         guard let down = CGEvent(
@@ -1009,9 +847,8 @@ enum Handoff {
 struct HandoffError: LocalizedError {
     let message: String
     /// A short, path-free name for the refusal, for `FlingReport.diagnosticLine`.
-    /// The `message` cannot be used there: it names the session's `prompt.txt`
-    /// so the developer can find their work, and diagnostics get pasted into
-    /// group chats where a session timestamp says when somebody was working.
+    /// `message` cannot be used there: it names the session's `prompt.txt`, and
+    /// diagnostics get pasted into group chats.
     let reason: String
     init(_ message: String, reason: String = "other") {
         self.message = message

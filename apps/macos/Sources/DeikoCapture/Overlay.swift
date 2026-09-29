@@ -2,37 +2,24 @@ import AppKit
 import Foundation
 import DeikoGesture
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THE OVERLAY
+// A transparent, click-through window above every app. It draws a cursor ring
+// while a session runs, the stroke while Left Option is held (nothing behind the
+// cursor otherwise), a pulse when a referent is captured (accent for a point,
+// teal for a region), and a flourish when a stroke commits (the classified
+// shape, so a misread is visible at once).
 //
-// A transparent, click-through window above every app, drawing:
-//   • a Deiko cursor ring while a session runs
-//   • the stroke while Left Option is held — and NOTHING behind the cursor
-//     otherwise. There used to be a fading comet tail; once moving the mouse
-//     became the drawing gesture, a coloured line on every ordinary move
-//     read as ink nobody asked for.
-//   • a pulse when a referent is captured (PRD §9.2) — accent for a point,
-//     teal for a region, distinguishable mid-session at a glance
-//   • a flourish when a stroke commits — the CLASSIFIED shape, briefly, so a
-//     misread is visible at the moment it happens
+// Everything is translucent accent except the capturing pill: an opaque red
+// capsule with a live timer on every display, which never fades or auto-hides.
+// macOS's own orange microphone dot says "something is recording"; the pill adds
+// how long, and how to stop it. Clicking it stops the session, so it lives in
+// its own panel rather than the click-through canvas.
 //
-// Everything here is translucent accent — quiet receipts, not decoration.
-// The ONE loud thing is the capturing pill, and it is loud on purpose: an
-// opaque red capsule with a live timer, on every display, that does not fade,
-// dim, or auto-hide. macOS's own orange microphone dot says "something is
-// recording" and cannot be faked or suppressed by this app; the pill adds what
-// that dot cannot — which app, for how long, and how to stop it. Clicking it
-// stops the session, which is why it lives in its own panel rather than the
-// click-through canvas.
-//
-// COORDINATES: AppKit windows and views are BOTTOM-LEFT origin; every capture
-// coordinate in this codebase is TOP-LEFT. The conversion happens once, in
-// `viewPoint(from:)`, and nowhere else.
-// ─────────────────────────────────────────────────────────────────────────────
+// Coordinates: AppKit windows and views are bottom-left origin; every capture
+// coordinate in this codebase is top-left. The conversion happens once, in
+// `viewPoint(from:)`.
 
 /// A captured-referent pulse's duration. Under Reduce Motion the expanding
-/// ring becomes a single short blink at fixed size — still a receipt, no
-/// motion.
+/// ring becomes a single short blink at fixed size.
 private let pulseLifetimeMs: Double = 450
 private let reducedPulseLifetimeMs: Double = 100
 
@@ -43,8 +30,7 @@ struct Pulse {
 }
 
 /// The classified form of the stroke that just committed, shown briefly where
-/// it was drawn — so a misread (a scribble read as emphasis, a tap read as a
-/// point) is visible the instant it happens, not discovered later in a crop.
+/// it was drawn, so a misread is visible at once.
 struct Flourish {
     let path: [Point]
     let kind: StrokeKind
@@ -61,13 +47,13 @@ final class Overlay {
     /// Union of every screen, in top-left global coordinates — the overlay
     /// spans all displays so pointing across monitors stays continuous.
     private var canvas: NSRect = .zero
-    /// Registered once and never removed — the callback is cheap, checks
-    /// whether an overlay is even up, and unregistering would mean holding an
-    /// exactly-matching function pointer and context to pass back.
+    /// Registered once and never removed: the callback is cheap and checks
+    /// whether an overlay is up, and unregistering needs the exact function
+    /// pointer and context.
     private var observingDisplays = false
 
-    /// What the pill's click does — supplied by the recorder, because the
-    /// pill's whole promise is "this stops it".
+    /// What the pill's click does. Supplied by the recorder, because the pill
+    /// promises "this stops it".
     var onStopRequested: (() -> Void)?
 
     func show() {
@@ -87,8 +73,8 @@ final class Overlay {
         window.hasShadow = false
         // Above normal windows and full-screen apps, below the screen saver.
         window.level = .screenSaver
-        // Click-through: the overlay must never intercept a click. The event
-        // tap already sees everything it needs; the window is purely visual.
+        // Click-through: the overlay must never intercept a click; the window
+        // is purely visual.
         window.ignoresMouseEvents = true
         window.collectionBehavior = [
             .canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle
@@ -96,12 +82,10 @@ final class Overlay {
 
         let view = OverlayView(frame: NSRect(origin: .zero, size: canvas.size))
         view.canvas = canvas
-        // The top-left↔bottom-left flip pivots on the MAIN screen's top edge —
-        // CG's global origin is the main display's top-left — not on the
-        // canvas height. The two coincide only when every screen shares the
-        // main screen's vertical extent; with a taller external monitor the
-        // difference put every ring and lasso a few hundred points from the
-        // real cursor.
+        // The y-flip pivots on the main screen's top edge (CG's global origin
+        // is the main display's top-left), not on the canvas height. The two
+        // coincide only when every screen shares the main screen's vertical
+        // extent.
         view.flipY = NSScreen.screens.first?.frame.maxY ?? canvas.height
         window.contentView = view
         window.orderFrontRegardless()
@@ -109,8 +93,8 @@ final class Overlay {
         self.window = window
         self.view = view
 
-        // One pill per display — the session records the whole desktop, so
-        // the disclosure belongs on every part of it.
+        // One pill per display: the session records the whole desktop, so the
+        // disclosure belongs on every part of it.
         pills = NSScreen.screens.map { screen in
             CapturePill(screen: screen) { [weak self] in self?.onStopRequested?() }
         }
@@ -133,31 +117,17 @@ final class Overlay {
         pills = []
     }
 
-    // ── Displays move while a session is running ────────────────────────────
-    //
-    // EVERY NUMBER IN `show()` IS READ ONCE. The canvas is the union of the
-    // screens as they were, `flipY` pivots on the main screen's top edge as it
-    // was, and there is exactly one `CapturePill` per screen that existed at
-    // the time. Plug in a monitor mid-session and that display gets no red
-    // capturing pill at all — which is not a cosmetic gap, it is the
-    // disclosure the product promises sits on every display, missing from the
-    // screen most likely to have somebody else looking at it.
-    //
-    // `Capture.swift` already registers a CGDisplayReconfiguration callback to
-    // invalidate its crop cache, and this uses the same mechanism rather than
-    // introducing the app's first NSNotification observer for the same event —
-    // one answer to "the displays moved", not two that can disagree.
-    //
-    // Rebuilding wholesale rather than patching: `show()` is idempotent behind
-    // its own guard, and re-deriving three values is cheaper to reason about
-    // than reconciling which screen gained or lost a pill.
+    /// Everything `show()` computes is read once (canvas, `flipY`, one pill per
+    /// screen), so a display added mid-session would get no capturing pill. This
+    /// rebuilds the overlay when the displays change, through the same
+    /// CGDisplayReconfiguration mechanism `Capture.swift` uses. Rebuilding
+    /// wholesale is simpler than reconciling which screen gained or lost a pill.
     private func observeDisplayChanges() {
         guard !observingDisplays else { return }
         observingDisplays = true
         CGDisplayRegisterReconfigurationCallback({ _, flags, userInfo in
-            // Only once the change has landed. The "beginConfiguration" pass
-            // fires before the new geometry exists, and rebuilding against it
-            // would lay the overlay out for the displays we are leaving.
+            // Only once the change has landed: the "beginConfiguration" pass
+            // fires before the new geometry exists.
             guard flags.contains(.setModeFlag) || flags.contains(.addFlag)
                     || flags.contains(.removeFlag) || flags.contains(.desktopShapeChangedFlag)
             else { return }
@@ -177,9 +147,8 @@ final class Overlay {
         cursor: Point, lasso: [Point]?, pulses: [Pulse],
         hearingVoice: Bool
     ) {
-        // Every pill, because the microphone belongs to the session rather than
-        // to a screen — and the one thing worse than a silent failure is a
-        // silent failure the user could only have seen on the other monitor.
+        // Every pill, because the microphone belongs to the session rather
+        // than to a screen.
         for pill in pills { pill.hearingVoice = hearingVoice }
         guard let view else { return }
         view.cursor = cursor
@@ -194,8 +163,6 @@ final class Overlay {
         view?.flourish = Flourish(path: path, kind: kind, t: Clock.nowMs())
     }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
 
 @MainActor
 final class OverlayView: NSView {
@@ -259,16 +226,13 @@ final class OverlayView: NSView {
             guard age < lifetime else { continue }
             let progress = age / lifetime
 
-            // Expanding ring that fades — reads as "captured" without stealing
-            // attention from what the user is actually looking at. Reduce
-            // Motion pins the radius: a fixed-size blink instead of growth.
+            // Expanding ring that fades; Reduce Motion pins the radius for a
+            // fixed-size blink.
             let radius = reduce ? 22 : 14 + 26 * progress
             let alpha = reduce ? 0.7 : 0.7 * (1 - progress)
             let center = viewPoint(from: pulse.position)
 
-            // Teal = a region was captured; accent = a point. The colour is
-            // never alone — a region pulse is born from a lasso the user just
-            // drew, a point pulse from a settle.
+            // Teal = a region was captured; accent = a point.
             ctx.setStrokeColor(
                 (pulse.isRegion ? DeikoStyle.regionTealNS : DeikoStyle.accentNS)
                     .withAlphaComponent(alpha).cgColor
@@ -283,10 +247,9 @@ final class OverlayView: NSView {
         }
     }
 
-    /// Shows the CLASSIFIED form of the stroke that just committed — not the
-    /// raw pixels drawn, but what `StrokeClassifier` read them as. A misread
-    /// (a scribble read as `.emphasis`, a real loop read as `.trace`) is
-    /// visible right here, at release, instead of discovered later in a crop.
+    /// Shows the classified form of the stroke that just committed: what
+    /// `StrokeClassifier` read the pixels as, not the pixels themselves, so a
+    /// misread is visible at release.
     private func drawFlourish(_ ctx: CGContext, now: Double) {
         guard let flourish else { return }
         let reduce = DeikoStyle.reduceMotion
@@ -294,8 +257,7 @@ final class OverlayView: NSView {
         let age = now - flourish.t
         guard age < lifetime else { return }
 
-        // Reduce Motion: no fade, a fixed-alpha blink — the same treatment
-        // pulses get, for the same reason.
+        // Reduce Motion: a fixed-alpha blink, as pulses get.
         let alpha = reduce ? 0.9 : 0.9 * (1 - age / lifetime)
         let color = DeikoStyle.accentNS.withAlphaComponent(alpha).cgColor
         let points = flourish.path.map(viewPoint(from:))
@@ -308,10 +270,9 @@ final class OverlayView: NSView {
 
         case .lasso:
             guard points.count >= 2 else { break }
-            // Same stroke as the live lasso — accent, 2.5pt, round joins —
-            // but CLOSED even if the release point never made it back to the
-            // start: the flourish shows the shape it was READ as, not the
-            // exact pixels drawn.
+            // Same stroke as the live lasso, but closed even if the release
+            // point never made it back to the start: the flourish shows the
+            // shape as read.
             ctx.beginPath()
             ctx.move(to: first)
             for p in points.dropFirst() { ctx.addLine(to: p) }
@@ -323,9 +284,8 @@ final class OverlayView: NSView {
             ctx.strokePath()
 
         case .connector:
-            // The classifier discarded the wobble and kept only the relation:
-            // one straight line between the two endpoints, arrow pointing at
-            // whatever the stroke ended on.
+            // The classifier discarded the wobble and kept only the relation: a
+            // straight line between the endpoints, arrow at the end.
             guard let last = points.last, points.count >= 2 else { break }
             ctx.setStrokeColor(color)
             ctx.setLineWidth(2.5)
@@ -362,9 +322,8 @@ final class OverlayView: NSView {
         }
     }
 
-    /// Two barbs at ±30° off the line's direction, 12pt long — the same
-    /// geometry `InkRenderer` burns into the saved crop, so the live answer
-    /// and the receipt agree.
+    /// Two barbs at ±30° off the line's direction, 12pt long: the same geometry
+    /// `InkRenderer` burns into the saved crop.
     private func drawArrowhead(_ ctx: CGContext, from a: NSPoint, to b: NSPoint, color: CGColor) {
         let angle = atan2(b.y - a.y, b.x - a.x)
         let len: CGFloat = 12
@@ -396,16 +355,12 @@ final class OverlayView: NSView {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-
 /// The capturing pill: `● Deiko is capturing 0:43 · tap right ⌥ to stop`.
 ///
-/// Its own panel, NOT part of the click-through overlay, because clicking it
-/// stops the session — the one clickable pixel region Deiko draws over your
-/// screen. Opaque record red (the only opaque surface in the product), white
-/// live timer, centred 8pt below the menu bar of its screen. It never fades or
-/// dims, and Reduce Transparency changes nothing because it was never
-/// transparent.
+/// Its own panel, not part of the click-through overlay, because clicking it
+/// stops the session: the one clickable region Deiko draws over the screen.
+/// Opaque record red (the only opaque surface in the product), it never fades or
+/// dims, and sits centred 8pt below its screen's menu bar.
 @MainActor
 final class CapturePill {
     private let panel: NSPanel
@@ -416,16 +371,10 @@ final class CapturePill {
     private let onStop: () -> Void
 
     /// Whether the microphone has heard anything recently. Set by `Overlay`
-    /// from the recorder's own gate, so the pill warns at exactly the moment
-    /// capture starts discarding what you point at, not on a second guess.
-    ///
-    /// This exists because the failure it catches has now happened three times
-    /// in this project's life — twice recorded in comments, both at a 27%
-    /// system input volume — and every time the user found out AFTER the
-    /// session, from a pipeline that had 44 seconds of unusable audio and
-    /// nothing to say about it until then. Everything needed to say so
-    /// earlier was already here: the gate is live, the pill redraws every
-    /// second, and it never mentioned it.
+    /// from the recorder's own gate, so the pill warns exactly when capture
+    /// starts discarding what you point at. It catches a silent failure (for
+    /// example a very low system input volume) that would otherwise only show
+    /// up after the session.
     var hearingVoice = true {
         didSet { if hearingVoice != oldValue { layout() } }
     }
@@ -454,9 +403,8 @@ final class CapturePill {
     func show() {
         layout()
         panel.orderFrontRegardless()
-        // A pill without a moving clock is a pill that might be a stale
-        // screenshot of itself. One second is enough; the timer's job is to
-        // prove liveness, not measure it.
+        // A pill without a moving clock might be a stale screenshot of itself.
+        // The timer proves liveness rather than measuring time.
         clock = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.layout() }
         }
@@ -481,11 +429,9 @@ final class CapturePill {
                 .foregroundColor: NSColor.white.withAlphaComponent(0.9),
             ]
         ))
-        // The warning REPLACES the stop hint rather than joining it. Both at
-        // once is a pill nobody finishes reading, and the hint is the more
-        // expendable of the two: the pill is clickable either way, and a
-        // session recording silence is worth more attention than a keyboard
-        // shortcut already printed in the log when it started.
+        // The warning replaces the stop hint rather than joining it: both at
+        // once is a pill nobody finishes reading, and the pill is clickable
+        // either way.
         text.append(NSAttributedString(
             string: hearingVoice
                 ? "  ·  tap \(SessionKey.selected.symbol) to stop"

@@ -1,68 +1,34 @@
 import Foundation
 import DeikoHandoff
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THE SESSIONS FOLDER, AND WHAT LIVES IN IT
-//
-// Every session Deiko has ever recorded sits in `Sessions.defaultRoot`, one
-// timestamped folder each, and until now nothing ever removed one. The audio is
-// deleted as soon as the brief exists — that has always been true and is the
-// promise the microphone prompt makes — but the crops are not: they are
-// full-resolution Retina PNGs of whatever was circled, and the product's own
-// habit target is five sessions a week. Nobody was told the folder existed,
-// nothing reported its size, and the only tool was Finder.
-//
-// So: one place that knows what a session folder is, and three things to do
-// with the answer — list them, measure them, and sweep the old ones.
-//
-// A SESSION IS ITS NAME. `stamp` is strict about the `yyyyMMdd-HHmmss` shape
-// the recorder mints, and everything here filters on it, because this file's
-// whole job is deleting things out of a folder on somebody's Mac.
-// Anything a person put there by hand is not a session and is never touched.
-// ─────────────────────────────────────────────────────────────────────────────
-
+/// The sessions folder: one timestamped folder per recording under `defaultRoot`. This lists, measures
+/// and sweeps them.
+///
+/// A session is its name. `stamp` is strict about the `yyyyMMdd-HHmmss` shape the recorder mints and
+/// everything here filters on it, because this file deletes from a folder on the user's Mac. Anything
+/// placed there by hand is not a session and is never touched.
 enum Sessions {
 
-    /// Where sessions live. `main.swift` can still override the root with
-    /// `--out`; this is the default both it and Diagnostics resolve to.
-    ///
-    /// NOT DOCUMENTS. It used to be `~/Documents/Deiko`, which iCloud's
-    /// Desktop & Documents sync carries off the Mac — screen text, crops and
-    /// all. Application Support is never synced, and it is where the models
-    /// already were (`models/` sits beside the session folders; nothing here
-    /// reads a folder that is not a session stamp).
+    /// Where sessions live; `main.swift` can override the root with `--out`. Application Support
+    /// rather than `~/Documents`, which iCloud's Desktop & Documents sync would carry off the Mac.
+    /// `models/` sits beside the session folders; nothing here reads a folder that is not a stamp.
     static let defaultRoot = "\(NSHomeDirectory())/Library/Application Support/Deiko"
 
-    /// ONCE: the board moves out of `~/Documents/Deiko` (see `BoardMove`).
+    /// One-time move of the board out of `~/Documents/Deiko` (see `BoardMove`).
     @discardableResult
     static func migrateFromDocuments(home: String = NSHomeDirectory()) -> Int {
         BoardMove.run(from: "\(home)/Documents/Deiko", to: defaultRoot)
     }
 
-    /// How long a finished session is kept before the launch sweep removes it.
-    ///
-    /// ONE constant, and a defaults key beside it for anybody who wants a
-    /// different answer without a rebuild. `0` disables the sweep entirely —
-    /// and is now the default. The board is Deiko's memory: every brief is a
-    /// candidate for "the same thing as last time", and a memory that forgets
-    /// on a timer is not much of one. Deleting is a decision, made on a card
-    /// or in Settings. Anyone who set the key keeps their number.
+    /// How long a finished session is kept before the launch sweep removes it. `0`, the default,
+    /// disables the sweep: the board is Deiko's memory, and deleting is a decision made on a card or in
+    /// Settings. The defaults key overrides it without a rebuild.
     static let retentionDaysKey = "DEIKO_SESSION_RETENTION_DAYS"
     static let defaultRetentionDays = 0
 
-    /// When retention first applied to this install.
-    ///
-    /// NOTHING RECORDED BEFORE THE RULE EXISTED IS EVER SWEPT. Without this,
-    /// the first launch of the build that introduced retention would delete a
-    /// user's entire back-catalogue — six months of screenshots, gone before
-    /// they had any opportunity to read the Settings line that explains the
-    /// policy, on an app they merely updated. Deleting somebody's data as a
-    /// side effect of an upgrade is not a default anyone gets to choose for
-    /// them.
-    ///
-    /// So the first launch records the date and sweeps nothing; from then on
-    /// only sessions minted under the rule age out. An old archive stays until
-    /// it is removed by hand, which Settings offers.
+    /// When retention first applied to this install. Nothing recorded before the rule existed is
+    /// swept: the first launch records the date and sweeps nothing, so an upgrade never deletes an
+    /// existing archive. Older sessions go only when removed by hand.
     static let retentionSinceKey = "DEIKO_RETENTION_SINCE"
 
     static func retentionStart(now: Date = Date()) -> Date {
@@ -74,22 +40,17 @@ enum Sessions {
     }
 
     static var retentionDays: Int {
-        // `object(forKey:)` rather than `integer(forKey:)`: the latter returns
-        // 0 for an unset key, which is the same value that means "never
-        // sweep" — so an install that had never chosen would read as having
-        // chosen to keep everything forever.
+        // `object(forKey:)` rather than `integer(forKey:)`, which returns 0 for an unset key and so
+        // cannot be told apart from an explicit "never sweep".
         guard let configured = UserDefaults.standard.object(forKey: retentionDaysKey) as? Int
         else { return defaultRetentionDays }
         return max(0, configured)
     }
 
-    /// The instant a session folder's name says it was recorded, or nil if the
-    /// name is not one Deiko minted.
-    ///
-    /// Two gates, and the second is not redundant: the regex accepts
-    /// `20261347-995999`, which `DateFormatter` then refuses. A folder whose
-    /// name merely looks like a stamp must not be dated by accident, because
-    /// being dated is what makes it eligible for deletion.
+    /// The instant a session folder's name says it was recorded, or nil if the name is not one Deiko
+    /// minted. Two gates, and the second is not redundant: the regex accepts `20261347-995999`, which
+    /// `DateFormatter` refuses. A name that merely looks like a stamp must not be dated, because being
+    /// dated makes it eligible for deletion.
     static func stamp(_ name: String) -> Date? {
         guard name.count == 15,
               name.range(of: #"^\d{8}-\d{6}$"#, options: .regularExpression) != nil
@@ -114,11 +75,7 @@ enum Sessions {
             .map(\.0)
     }
 
-    /// What the folder is costing, in bytes.
-    ///
-    /// Walks the whole tree, which is why callers do it off the main thread:
-    /// a year of sessions is thousands of PNGs, and this is drawn in a window
-    /// nobody wants to watch stutter.
+    /// What the folder costs, in bytes. Walks the whole tree, so callers run it off the main thread.
     static func sizeBytes(root: String = defaultRoot) -> Int64 {
         guard let enumerator = FileManager.default.enumerator(
             at: URL(fileURLWithPath: root),
@@ -136,15 +93,13 @@ enum Sessions {
             let values = try? url.resourceValues(
                 forKeys: [.totalFileAllocatedSizeKey, .fileSizeKey]
             )
-            // Allocated size where it is known — that is what the disk actually
-            // gives up when the file goes.
+            // Allocated size where known: that is what the disk gives up when the file goes.
             total += Int64(values?.totalFileAllocatedSize ?? values?.fileSize ?? 0)
         }
         return total
     }
 
-    /// "1.2 GB" / "480 MB" — for the one line in Settings that says what this
-    /// is costing.
+    /// "1.2 GB" / "480 MB".
     static func humanSize(_ bytes: Int64) -> String {
         let formatter = ByteCountFormatter()
         formatter.allowedUnits = [.useMB, .useGB]
@@ -152,12 +107,8 @@ enum Sessions {
         return formatter.string(fromByteCount: bytes)
     }
 
-    /// Delete sessions older than `days`, and say how many went.
-    ///
-    /// `keeping` is the session currently open, which is never touched however
-    /// old its name — a reopened session can carry a stamp from an earlier
-    /// launch, and deleting the folder being written to is the one mistake this
-    /// cannot make.
+    /// Delete sessions older than `days`, and return how many went. `keeping` is the open session,
+    /// never touched however old its name: a reopened session can carry an earlier stamp.
     @discardableResult
     static func sweep(
         root: String = defaultRoot, olderThanDays days: Int, keeping open: String? = nil
@@ -165,7 +116,7 @@ enum Sessions {
         guard days > 0 else { return 0 }
         let now = Date()
         let cutoff = now.addingTimeInterval(-Double(days) * 24 * 60 * 60)
-        // Never older than the rule itself — see `retentionStart`.
+        // Sessions from before the retention rule are never swept; see `retentionStart`.
         let floor = retentionStart(now: now)
         let openName = open.map { ($0 as NSString).lastPathComponent }
 
@@ -177,8 +128,7 @@ enum Sessions {
                 try FileManager.default.removeItem(atPath: "\(root)/\(name)")
                 removed += 1
             } catch {
-                // A session that will not delete is not worth failing a launch
-                // over — it is retried on the next one.
+                // Not worth failing a launch over; retried on the next one.
                 Emit.log("sweep: could not remove \(name): \(error.localizedDescription)")
             }
         }
@@ -188,24 +138,19 @@ enum Sessions {
         return removed
     }
 
-    /// Remove ONE session. Named by its folder, and only if that folder is
-    /// shaped like a session (`stamp` is strict for exactly this reason): this
-    /// deletes a directory on somebody's Mac, and the only thing
-    /// standing between it and an arbitrary path is that check.
+    /// Remove one session. Only a folder shaped like a session (`stamp` is strict for this reason) is
+    /// deleted: that check is all that stands between this and an arbitrary path.
     @discardableResult
     static func delete(dir: String) -> Bool {
         let name = (dir as NSString).lastPathComponent
         guard stamp(name) != nil else { return false }
-        // Its task's note quotes it. Read which task before the folder goes;
-        // the note is rebuilt on the next render if the task still has two
-        // briefs, and never again with this one's words.
+        // The task note quotes this brief: read which task it belongs to before the folder goes.
         let context = (try? JSONSerialization.jsonObject(
             with: Data(contentsOf: URL(fileURLWithPath: dir).appendingPathComponent("context.json"))
         )) as? [String: Any]
         let task = context?["task"] as? String ?? Tasks.own(name)
         guard trash(dir) else { return false }
-        // The board index keeps every brief's words too: a cache, rebuilt
-        // on the next read.
+        // The board index caches every brief's words; it is rebuilt on the next read.
         try? FileManager.default.removeItem(atPath: ((dir as NSString).deletingLastPathComponent as NSString)
             .appendingPathComponent(".board-index.json"))
         if task.range(of: #"^t-\d{8}-\d{6}$"#, options: .regularExpression) != nil {
@@ -216,18 +161,14 @@ enum Sessions {
         return true
     }
 
-    /// TO THE TRASH, as Finder deletes — a session deleted by mistake is one
-    /// drag back, not gone. The launch sweep, which nobody asked for in the
-    /// moment, still removes outright; it is off unless somebody set it.
+    /// Moves to the Trash, as Finder does, so a mistaken delete is one drag back. The launch sweep
+    /// removes outright.
     static func trash(_ path: String) -> Bool {
         (try? FileManager.default.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: nil)) != nil
     }
 
-    /// Remove every past session. The open one, if any, survives.
-    ///
-    /// The task notes and titles go too: they are made from what those
-    /// briefs said and what came of them, so keeping them kept the words.
-    /// The projects stay — a name and a line somebody typed, not a session.
+    /// Remove every past session; the open one survives. Task notes and titles go too, since they are
+    /// built from what those briefs said. Projects stay: a name and a line someone typed.
     @discardableResult
     static func deleteAll(root: String = defaultRoot, keeping open: String? = nil) -> Int {
         let openName = open.map { ($0 as NSString).lastPathComponent }

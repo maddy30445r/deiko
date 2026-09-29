@@ -1,33 +1,17 @@
 import AppKit
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THE COIN, AS A REAL DRAG
-//
-// A chat composer attaches a file that is DROPPED on it. It does not reliably
-// attach one that is pasted: measured, Gemini ignores a pasted file entirely,
-// and a drop of the same file works on Claude.ai, ChatGPT and Gemini alike.
-// Since somebody is already dragging the coin, the honest thing is for that
-// gesture to BE a drag — so the browser receives exactly what it would from
-// Finder.
-//
-// STARTED LATE, ON PURPOSE. A system drag delivers to whatever is under the
-// cursor, and dropping a `.md` on a terminal running Claude Code types its
-// path into the prompt — noise in front of the brief, at the destination that
-// already works best. So the session is not begun when the coin is picked up;
-// it is begun the first time the coin is over a BROWSER, and never otherwise.
-// Everything else keeps the delivery path it has always had.
-//
-// The event handed to `beginDraggingSession` is synthesised, because the real
-// mouse-down was consumed by the coin's own gesture long before we knew where
-// the fling was heading. If AppKit declines it, `begin` returns nil and the
-// caller is exactly where it was: the paste path, unchanged.
-// ─────────────────────────────────────────────────────────────────────────────
-
+/// Turns the coin into a real system drag, so a browser receives the file exactly as it would from Finder.
+/// Chat composers attach a dropped file more reliably than a pasted one.
+///
+/// The session begins only once the coin is over a browser, never on pickup: a `.md` dropped on a
+/// terminal would type its path into the prompt. Elsewhere the paste path applies. The event passed to
+/// `beginDraggingSession` is synthesised because the coin's own gesture consumed the real mouse-down;
+/// if AppKit declines it, `begin` returns false.
 @MainActor
 final class CoinDragSource: NSObject, NSDraggingSource {
 
-    /// Where the drag is now, in Cocoa screen coordinates — the aim label and
-    /// the target highlight are still ours to draw while AppKit owns the mouse.
+    /// Where the drag is now, in Cocoa screen coordinates. The aim label and target highlight
+    /// are still drawn by us while AppKit owns the mouse.
     var onMoved: ((NSPoint) -> Void)?
     /// Where it ended, and whether anything took it.
     var onEnded: ((NSPoint, NSDragOperation) -> Void)?
@@ -37,8 +21,7 @@ final class CoinDragSource: NSObject, NSDraggingSource {
     func draggingSession(
         _ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext
     ) -> NSDragOperation {
-        // `.copy` everywhere, including within Deiko: releasing back over the
-        // orb must not read as a move of somebody's persona file.
+        // `.copy` everywhere, including within Deiko, so releasing over the orb never reads as a move.
         .copy
     }
 
@@ -57,11 +40,9 @@ final class CoinDragSource: NSObject, NSDraggingSource {
     /// stay out of the way.
     var isDragging: Bool { session != nil }
 
-    /// Begin the drag, or report that it could not start.
+    /// Begin the drag, or return false if it could not start.
     ///
-    /// `image` is the coin as it looks on screen, so the thing that leaves the
-    /// card is the thing that lands — a default file icon here would make the
-    /// gesture read as "moving a document" rather than "handing this over".
+    /// `image` is the coin as drawn, so what leaves the card is what lands.
     @discardableResult
     func begin(from view: NSView, file: URL, image: NSImage, at pointInWindow: NSPoint) -> Bool {
         guard let window = view.window else { return false }

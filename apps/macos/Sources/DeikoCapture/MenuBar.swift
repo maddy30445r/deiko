@@ -6,34 +6,15 @@ import UniformTypeIdentifiers
 import DeikoGesture
 import DeikoHandoff
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THE MENU-BAR SHELL
-//
-// [BOX] work — boilerplate around the capture core, deliberately thin.
-//
-// It exists for two reasons beyond looking like an app:
-//
-//   1. PERMISSIONS. macOS attributes privacy requests to the *responsible*
-//      process, which for a terminal-launched binary is the terminal (or, from
-//      an IDE's embedded shell, Electron). Running as a real bundle makes Deiko
-//      answer for itself, so the four permissions attach to Deiko.app and stop
-//      depending on which terminal happened to start it.
-//
-//   2. It is the honest place to show what state capture is in. The overlay
-//      says "recording right now"; the status item says "armed and listening
-//      for the hotkey", which is a different and equally important claim.
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// The four things macOS must let us do, and what each is actually for. The
-/// strings are user-facing — they appear in the menu when something is missing.
+/// The four permissions macOS must grant, and what each is for. The strings are user-facing: they
+/// appear in the menu when something is missing.
 enum Permission: String, CaseIterable {
     case accessibility = "Accessibility"
     case screenRecording = "Screen Recording"
     case microphone = "Microphone"
     case speech = "Speech Recognition"
 
-    /// The canvas's rule: each reason is the DATA the permission takes,
-    /// stated plainly — that is what earns trust, not reassurance copy.
+    /// Each reason states the data the permission takes, plainly.
     var purpose: String {
         switch self {
         case .accessibility:
@@ -57,7 +38,7 @@ enum Permission: String, CaseIterable {
         }
     }
 
-    /// Deep-link into the exact Settings pane. Saves the user hunting.
+    /// Deep-link into the exact Settings pane.
     var settingsURL: URL? {
         let pane = switch self {
         case .accessibility: "Privacy_Accessibility"
@@ -82,16 +63,13 @@ enum Permission: String, CaseIterable {
         }
     }
 
-    /// Actually ASK. This is not the same as checking, and the difference is
-    /// user-visible: macOS does not list an app in a privacy pane until that
-    /// app has requested the permission at least once. Deiko was absent from
-    /// the Microphone list entirely — checking `authorizationStatus` never
-    /// prompts, and the mic is only opened once a session starts, which cannot
-    /// happen while the app is unarmed. Nothing to toggle, so nothing to grant.
+    /// Actually ask, which differs from checking: macOS lists an app in a privacy pane only after it has
+    /// requested the permission once, and `authorizationStatus` never prompts. The microphone is opened
+    /// only once a session starts, which cannot happen while the app is unarmed, so without this Deiko
+    /// would be absent from the Microphone list.
     ///
-    /// Requesting registers us with TCC and shows the system prompt. If the
-    /// user has already denied it, the prompt does not reappear — hence the
-    /// Settings deep-link afterwards.
+    /// Requesting registers with TCC and shows the system prompt. If the user already denied it the
+    /// prompt does not reappear, hence the Settings deep-link afterwards.
     func request(completion: @escaping @Sendable (Bool) -> Void) {
         switch self {
         case .accessibility:
@@ -108,14 +86,10 @@ enum Permission: String, CaseIterable {
         }
     }
 
-    /// Has this install ever requested this permission?
-    ///
-    /// Microphone and Speech carry it natively — `.notDetermined` means the
-    /// dialog has never been shown, and anything else means it has. The other
-    /// two have no such state (they are a bare true/false), so it is
-    /// remembered here. Written at the moment of the request, not after the
-    /// answer, because what it records is that the DIALOG has been seen — the
-    /// answer is `isGranted`'s job.
+    /// Has this install ever requested this permission? Microphone and Speech carry it natively
+    /// (`.notDetermined` means the dialog was never shown). The other two are a bare true/false, so it is
+    /// remembered here, written when the request is made because it records that the dialog was seen,
+    /// not the answer (`isGranted`'s job).
     var hasBeenAsked: Bool {
         switch self {
         case .microphone:
@@ -136,19 +110,10 @@ enum Permission: String, CaseIterable {
         }
     }
 
-    /// ONE ACTION PER CLICK — see `PermissionStep` for the whole reasoning.
-    ///
-    /// This used to request AND open Settings on every call, which for
-    /// Accessibility and Screen Recording meant a system alert with a Settings
-    /// window opening behind it, before the user had answered either. The alert
-    /// is the system's and does not close when the permission is granted
-    /// elsewhere, so it outlived the grant and only quitting Deiko cleared it.
-    ///
-    /// Asking is still what makes the app appear in the privacy pane at all —
-    /// Deiko was once absent from the Microphone list because nothing had ever
-    /// requested it — so the first click always requests. It is the SECOND
-    /// click, on a permission whose dialog has been seen and will not return,
-    /// that goes to Settings.
+    /// One action per click; see `PermissionStep`. The first click requests: asking is what makes the
+    /// app appear in the privacy pane at all. The second click, on a permission whose dialog has been
+    /// seen and will not return, opens Settings. Doing both at once would leave a system alert, which does
+    /// not close when the permission is granted elsewhere, behind the opening Settings window.
     @MainActor
     func ask() async {
         switch PermissionStep.next(granted: isGranted, asked: hasBeenAsked) {
@@ -166,12 +131,8 @@ enum Permission: String, CaseIterable {
     }
 }
 
-/// Quit and come back.
-///
-/// Screen Recording is only re-read at process start, so "grant it then
-/// relaunch" is the actual flow — done for the user rather than left as an
-/// instruction they have to follow by hand. Shared because both the menu and
-/// the welcome window offer it.
+/// Quit and come back. Screen Recording is only re-read at process start, so "grant it then relaunch"
+/// is the real flow; this does it for the user. Shared by the menu and the welcome window.
 @MainActor
 enum Relauncher {
     static func relaunch() {
@@ -184,6 +145,11 @@ enum Relauncher {
     }
 }
 
+/// The menu-bar shell around the capture core: the status item, its menu, and the app delegate.
+///
+/// It runs as a real bundle so macOS attributes the four privacy permissions to Deiko.app rather than to
+/// whichever terminal or IDE shell launched the binary. The status item also shows that capture is armed
+/// and listening for the hotkey, a different claim from the overlay's "recording right now".
 @MainActor
 final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
@@ -191,27 +157,19 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let iconTip = HoverTip()
     private let recorder: Recorder
 
-    /// Set once the event tap is up. Not a user-facing concept and deliberately
-    /// not a toggle: there used to be Pause/Resume here, and it was both
-    /// meaningless ("pause what? I'm not recording") and broken — `menuWillOpen`
-    /// re-armed automatically, so a pause silently undid itself the next time
-    /// the menu was opened. Deiko listens whenever it has permission to, and
-    /// Quit is how you stop it.
+    /// Set once the event tap is up. Not a user-facing concept and deliberately not a toggle: Deiko
+    /// listens whenever it has permission to, and Quit is how you stop it.
     private var isListening = false
 
     /// Held for the app's lifetime, not created per session: a second session
     /// while the orb is still up reuses it rather than stacking orbs.
     private let review = OrbController()
-    /// THE app window: the board, personas and every setting, in one place.
-    /// Settings used to be its own 520pt sheet; it is a section in here now,
-    /// because "where are my briefs" and "how do I change the hotkey" are the
-    /// same window in every Mac app anybody already uses.
+    /// The app window: the board, personas and every setting, in one place.
     private let main = MainWindowController()
     private let welcome = WelcomeWindowController()
 
-    /// Whether Screen Recording was still ungranted when this process came up.
-    /// Granted-now + missing-then = a relaunch is pending, and that is the ONE
-    /// moment the menu offers Relaunch Deiko.
+    /// Whether Screen Recording was still ungranted when this process came up. Granted now but missing
+    /// then means a relaunch is pending, the one moment the menu offers Relaunch Deiko.
     private var screenRecordingMissingAtLaunch = false
     private var relaunchPending: Bool {
         screenRecordingMissingAtLaunch && Permission.screenRecording.isGranted
@@ -221,20 +179,16 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// its clock honest while the user is looking at it.
     private weak var capturingItem: NSMenuItem?
     private var menuClock: Timer?
-    /// ONE menu, refilled in place. A new `NSMenu` built in `menuWillOpen`
-    /// never showed: the menu already opening is the old one, so the items on
-    /// screen were a rebuild behind, and the capturing clock ticked on a copy
-    /// nobody could see.
+    /// One menu, refilled in place: the menu already opening is the old one, so a new `NSMenu` built in
+    /// `menuWillOpen` would never show, and the capturing clock would tick on a copy nobody sees.
     private let menu = NSMenu()
     /// The permission answers the menu was last built from; the poll rebuilds
     /// only when they change.
     private var builtFor: [Bool] = []
-    /// Notices a permission granted or revoked in System Settings while Deiko
-    /// is running. Lives for the life of the app, unlike `menuClock`.
+    /// Notices a permission granted or revoked in System Settings while Deiko is running. Lives for
+    /// the life of the app, unlike `menuClock`.
     private var permissionPoll: Timer?
-    /// The interval `permissionPoll` is currently running at, so `refresh()`
-    /// can rebuild the timer only when the answer actually changes rather than
-    /// on every tick.
+    /// The interval `permissionPoll` is running at, so `refresh()` rebuilds the timer only when it changes.
     private var pollInterval: TimeInterval = 0
 
     init(recorder: Recorder) {
@@ -243,9 +197,8 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func install() {
-        // FIRST, before any window exists. Setting this after a window is on
-        // screen repaints it mid-flight; applied here, the orb and the app
-        // window come up already in the appearance somebody chose.
+        // First, before any window exists: setting it after a window is on screen repaints that window
+        // mid-flight.
         Appearance.selected.apply()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.addTrackingArea(NSTrackingArea(
@@ -254,72 +207,56 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         ))
         screenRecordingMissingAtLaunch = !Permission.screenRecording.isGranted
 
-        // Any change in the recorder — hold started, hold ended, session
-        // opened — redraws both the icon and the menu from `recorder` itself.
-        // Nothing about session state is mirrored into this class, so there is
-        // nothing to fall out of sync.
+        // Any change in the recorder redraws the icon and the menu from `recorder` itself. Nothing about
+        // session state is mirrored here, so nothing can fall out of sync.
         recorder.onStateChange = { [weak self] in
             self?.refresh()
         }
-        // Stop talking and the brief comes to you. Hung off the recorder rather
-        // than the Stop menu item so it fires however the session ended — hotkey
-        // tap, menu, or the silence watchdog.
+        // Hung off the recorder rather than the Stop menu item so it fires however the session ended:
+        // hotkey tap, menu, or the silence watchdog.
         recorder.onSessionClosed = { [weak self] dir, stats in
             self?.review.present(sessionDir: dir, stats: stats)
         }
-        // "Point at more" reopens the session the orb is showing and starts
-        // another hold. Routed through the recorder rather than done in the
-        // window, because reopening has to restore the session's counters and
-        // tell the hotkey a session is live again.
+        // "Point at more" reopens the session the orb is showing and starts another hold. Routed through
+        // the recorder because reopening must restore the session's counters and tell the hotkey a
+        // session is live again.
         review.onExtend = { [weak self] dir in
             self?.recorder.resumeForExtraHold(dir: dir) ?? false
         }
-        // The start gesture, thrown while the orb is up, adds to the session
-        // the orb is showing — the redesign's replacement for the orb's old
-        // "Add more" button.
+        // The start gesture, thrown while the orb is up, adds to the session the orb is showing.
         recorder.onStartGestureWhileIdle = { [weak self] in
             self?.review.extendPresentedSession() ?? false
         }
         review.onOpenSettings = { [weak self] in self?.main.present(.settings) }
-        // "Delete all past sessions" must never remove the one being recorded.
-        // Settings has no recorder of its own and should not grow one.
+        // "Delete all past sessions" must never remove the one being recorded; Settings has no recorder.
         main.openSessionDir = { [weak self] in self?.recorder.sessionDir }
         main.sessionRoot = recorder.sessionRoot
-        // The board must never show the session being recorded right now as
-        // "Unfinished recording" — see `SessionsStore.load`.
+        // The board must not show the session being recorded as "Unfinished recording"; see
+        // `SessionsStore.load`.
         SessionsStore.openSessionDir = { [weak self] in self?.recorder.sessionDir }
-        // Collections sit beside the sessions, wherever `--out` put them —
-        // the scripts resolve the same file from a session's own parent.
+        // Collections sit beside the sessions, wherever `--out` put them; the scripts resolve the same
+        // file from a session's own parent.
         Collections.root = recorder.sessionRoot
-        // Briefs that couldn't be filed when they were made (offline, the
-        // filing service busy) are filed when the network is back.
+        // Briefs that could not be filed when made (offline, filing service busy) are filed when the
+        // network is back.
         FilingQueue.shared.start()
         WeeklyNote.shared.onOpen = { [weak self] in self?.main.present(.dashboard) }
         WeeklyNote.shared.start()
-        // Remove the MCP entry earlier versions wrote. Nothing registers
-        // anything any more; this is only clearing up after what did.
+        // Clears the MCP entry written by earlier versions.
         LegacyMCP.cleanUpOnce()
-        // And read what those configs DO say, so the first brief of the
-        // session already knows whether Jira is reachable. Off the main
-        // thread; a cold answer only ever renders the cautious wording.
+        // Read those configs so the first brief of the session already knows whether Jira is reachable.
+        // Off the main thread; a cold answer only ever renders the cautious wording.
         AgentConfigs.warm()
-        // The meaning model, if it isn't already there. Filing works on words
-        // alone until this finishes, so nothing here blocks the app. The
-        // backfill it runs once ready has to land on THIS launch's board, not
-        // the default one — see `MeaningModel.root`.
+        // The meaning model, if it is not already there. Filing works on words alone until it finishes, so
+        // nothing blocks. Its backfill must land on this launch's board, not the default one; see
+        // `MeaningModel.root`.
         MeaningModel.shared.start(root: recorder.sessionRoot)
 
-        // OLD SESSIONS GO. Nothing ever removed one before, and a session is a
-        // folder of full-resolution screenshots — the folder grew for as long
-        // as the app was used and nobody was told it existed. Off the main
-        // thread because it walks a directory, and at launch because that is
-        // the one moment no session is open.
+        // Sweep old sessions at launch, the one moment no session is open, and off the main thread
+        // because it walks a directory.
         let root = recorder.sessionRoot
         let days = Sessions.retentionDays
-        // `keeping:` is passed even though nothing is open at launch: a
-        // reopened session carries a stamp from an earlier launch, so the guard
-        // is not hypothetical, and an argument that is never supplied is a
-        // guard that can never fire.
+        // `keeping:` is passed even though nothing is open at launch, so the guard can fire if that changes.
         let open = recorder.sessionDir
         Task.detached(priority: .utility) {
             Sessions.sweep(root: root, olderThanDays: days, keeping: open)
@@ -328,17 +265,13 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         startListeningIfPermitted()
         refresh()
 
-        // PERMISSIONS CHANGE OUTSIDE THIS PROCESS, and macOS does not tell us.
-        // Without a poll the only things that re-read TCC are a recorder state
-        // change and opening the menu, so revoking Accessibility left the icon
-        // reading "ready" indefinitely, and re-granting it did nothing until
-        // the app was quit.
+        // Permissions change outside this process and macOS does not say so. Without a poll only a
+        // recorder state change or opening the menu re-reads TCC, so a revoked or re-granted permission
+        // would go unnoticed.
         schedulePermissionPoll()
 
-        // If the last run died, say so once — with the button that turns it
-        // into a bug report. A menu-bar app with no window and no Dock icon
-        // otherwise just "disappears", which is the whole of what a user is
-        // able to report about it.
+        // If the last run died, say so once, with the button that turns it into a bug report. A menu-bar
+        // app with no window otherwise just "disappears".
         if CrashReport.previousRunCrashed() {
             CrashReport.clearPreviousRun()
             DispatchQueue.main.async {
@@ -357,17 +290,14 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
 
-        // First run says something. Before this, a new install put an eye in
-        // the menu bar and waited — and the hotkey did nothing, because no tap
-        // is installed until every grant is in.
+        // First run says something: no tap is installed until every grant is in, so the hotkey does
+        // nothing until then.
         welcome.onOpenSettings = { [weak self] in self?.main.present(.settings) }
         welcome.presentIfNeeded()
 
-        // Detached, and nothing waits for it: the menu is already usable, and a
-        // slow or absent network must not delay the app coming up. When it
-        // finds something the menu rebuilds and grows one item.
-        // And again every six hours: a menu-bar app runs for weeks, and a
-        // check made only at launch never hears of a release after it.
+        // Detached, and nothing waits for it: the menu is usable already, and a slow or absent network
+        // must not delay the app. When it finds something the menu rebuilds and grows one item. Repeated
+        // every six hours, since a menu-bar app runs for weeks.
         let checkForUpdate = { [weak self] in
             Task { @MainActor in
                 await Update.check()
@@ -378,26 +308,17 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let updates = Timer(timeInterval: 6 * 60 * 60, repeats: true) { _ in checkForUpdate() }
         RunLoop.main.add(updates, forMode: .common)
 
-        // What is left of the plan, so the menu's line is right the first time
-        // it is opened rather than after the first session. Detached for the
-        // same reason, and failure is silence — `planLine` simply says nothing
-        // when there is no cached answer.
+        // Refresh the plan cache so the menu's line is right the first time it is opened. Detached for the
+        // same reason; failure is silence, and `planLine` says nothing without a cached answer.
         Task { try? await License.refresh() }
     }
 
-    /// How often TCC is re-read, and it is not one number.
+    /// How often TCC is re-read: every 2s while a permission is missing, else every 30s.
     ///
-    /// THIRTY SECONDS IS THE WRONG ANSWER WHILE SOMETHING IS MISSING. That is
-    /// exactly the moment the user is in System Settings flipping a switch and
-    /// then looking back at Deiko to see whether it noticed — and half a minute
-    /// of no change reads as "it didn't work, I'll restart it", which is what
-    /// was reported. Two seconds while blocked makes the grant land visibly.
-    ///
-    /// It stays thirty once everything is in, because then the poll is only
-    /// watching for a REVOCATION, which nobody does by accident and nobody is
-    /// standing there waiting to see acknowledged. The checks are local — see
-    /// `isGranted` — so the fast rate costs little, and it only runs while the
-    /// app is not working anyway.
+    /// While something is missing the user is in System Settings flipping a switch and looking back to see
+    /// whether Deiko noticed, so a slow poll reads as "it didn't work". Once everything is granted the poll
+    /// only watches for a revocation, which nobody is waiting to see acknowledged. The checks are local
+    /// (see `isGranted`), so the fast rate costs little.
     private func schedulePermissionPoll() {
         let blocked = !Permission.allCases.allSatisfy(\.isGranted)
         let interval: TimeInterval = blocked ? 2 : 30
@@ -408,19 +329,15 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let poll = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh() }
         }
-        // `.common` so it keeps firing while a menu is open or a modal alert is
-        // up — the two states the user is most likely to be in when the grant
-        // finally lands.
+        // `.common` so it keeps firing while a menu is open or a modal alert is up, when the grant is
+        // most likely to land.
         RunLoop.main.add(poll, forMode: .common)
         permissionPoll = poll
     }
 
     private func refresh() {
-        // A REVOKED PERMISSION HAS TO TEAR THE TAP DOWN, or granting it again
-        // can never bring it back. `isListening` was set true once and never
-        // false, so `startListeningIfPermitted`'s guard short-circuited
-        // forever: revoke Accessibility, grant it again, and the only recovery
-        // was quitting the app — with nothing on screen saying so.
+        // A revoked permission must tear the tap down, or granting it again can never bring it back:
+        // `startListeningIfPermitted`'s guard would short-circuit on a stale `isListening`.
         if isListening, !Permission.allCases.allSatisfy(\.isGranted) {
             recorder.stopListening()
             isListening = false
@@ -436,21 +353,11 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func setIcon() {
         guard let button = statusItem.button else { return }
-        // The Deiko mark — the same ring-and-dot the orb's coin wears, so the
-        // status item and the orb are visibly the same object. "Deiko" is the
-        // part of the retina that sees detail; the mark is the product's whole
-        // thesis in one glyph: "I'm pointing at this."
-        //
-        // THE THIRD STATE EARNS ITS PLACE. Without a grant, the hotkey does
-        // nothing: `startListeningIfPermitted` returns early and no tap is
-        // installed. The icon used to look identical whether Deiko was armed or
-        // completely dead, so a new install presented as a working app that
-        // silently ignored every gesture — and the only explanation lived
-        // inside a menu nobody had a reason to open.
-        //
-        // Each state is a SHAPE change, not a tint: capturing swells the dot
-        // to fill the ring (and goes record-red), blocked hangs an `!` off the
-        // ring. Colour is never the only signal.
+        // The Deiko mark, the same ring-and-dot as the orb's coin, in one of three states. The third
+        // exists because without a grant the hotkey does nothing (`startListeningIfPermitted` returns early
+        // and no tap is installed), and the icon must not look identical to an armed one. Each state is a
+        // shape change, not a tint: capturing swells the dot to fill the ring (and goes record-red), blocked
+        // hangs an `!` off the ring. Colour is never the only signal.
         let recording = recorder.isRecording
         let blocked = !Permission.allCases.allSatisfy(\.isGranted)
 
@@ -459,28 +366,16 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
             blocked
             ? "Deiko — needs permission" : (recording ? "Deiko — capturing" : "Deiko — ready")
         button.image = image
-        // NIL FOR EVERYTHING EXCEPT RECORDING, and the comment this replaces was
-        // wrong about why.
-        //
-        // It said AppKit resolves the tint "against the menu bar's own
-        // appearance". It does not — it resolves against the BUTTON's
-        // effectiveAppearance, which follows the system Light/Dark setting,
-        // while how dark the menu bar actually renders follows the desktop
-        // content behind it. In Light Mode with a dark window under the bar the
-        // two disagree, and `needsYouNS` resolved to its light variant:
-        // rgb(201,52,0), a brick red at 4.0:1 against a dark bar. Reported as
-        // "it looks blackish, and I only see it on the desktop".
-        //
-        // A template image with no tint has no such gap — AppKit draws it black
-        // on a light bar and white on a dark one, always legible. The blocked
-        // state loses nothing by dropping the orange, because the `!` hanging
-        // off the ring is the signal; this file already says so two paragraphs
-        // up ("Each state is a SHAPE change, not a tint … Colour is never the
-        // only signal"). Recording keeps its red, because red MEANS recording
-        // here — but a fixed bright one that reads on any bar.
+        // Nil for everything except recording. AppKit resolves the tint against the button's
+        // effectiveAppearance, which follows the system Light/Dark setting, while the menu bar's actual
+        // darkness follows the desktop behind it. In Light Mode with a dark window under the bar the two
+        // disagree and a dynamic colour resolves to its light variant, hard to read on a dark bar. An
+        // untinted template image is drawn black on a light bar and white on a dark one. Blocked loses
+        // nothing by dropping orange, since the `!` is the signal. Recording keeps red, a fixed bright one
+        // that reads on any bar.
         button.contentTintColor = recording ? DeikoStyle.menuBarRecordingNS : nil
-        // Shown on hover in the app's own tip, and read aloud by VoiceOver —
-        // the only place the reason is available without opening the menu.
+        // Shown on hover in the app's own tip, and read aloud by VoiceOver: the only place the reason is
+        // available without opening the menu.
         let hint = blocked ? "Deiko needs permission to work — click to grant" : nil
         iconTip.text = hint
         button.setAccessibilityHelp(hint)
@@ -494,15 +389,11 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if !missing.isEmpty {
             addPermissionItems(missing, to: menu)
         } else if relaunchPending, recorder.sessionDir == nil {
-            // Never while a session is open — a live session needs its Stop
-            // item more than it needs relaunch advice, and relaunching would
-            // kill the recording anyway.
-            // Screen Recording was granted this launch. The system reports it
-            // granted immediately, but ScreenCaptureKit in THIS process keeps
-            // failing until a restart — and that failure is silent: crops come
-            // back with no path and no withheld reason. So the relaunch leads
-            // the menu at exactly the moment it applies, and ONLY then — an
-            // always-there Relaunch item quietly says "this app breaks".
+            // Never while a session is open: it needs its Stop item more than relaunch advice, and
+            // relaunching would kill the recording. Screen Recording was granted this launch: the system
+            // reports it granted immediately, but ScreenCaptureKit in this process keeps failing silently
+            // until a restart (crops come back with no path and no withheld reason). So the relaunch leads
+            // the menu only at the moment it applies; an always-there item would say "this app breaks".
             menu.addItem(disabled("Relaunch to finish"))
             menu.addItem(disabled("Screen Recording takes effect after a relaunch"))
             menu.addItem(NSMenuItem(
@@ -516,12 +407,9 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
 
-        // BACK TO A BRIEF YOU ALREADY DISMISSED.
-        //
-        // The orb was the only way to reach one, and `×` put it away for good:
-        // a mis-clicked close meant the session was reachable only as a folder
-        // of JSON in Finder. Re-presenting is cheap — the transcript cache
-        // means the pipeline does not re-recognise anything.
+        // Back to a brief already dismissed: `×` puts the orb away for good, so without this the session
+        // would be reachable only as a folder of JSON. Re-presenting is cheap since the transcript cache
+        // avoids re-recognising anything.
         let recent = Sessions.list(root: recorder.sessionRoot).prefix(5)
         if !recent.isEmpty {
             let item = NSMenuItem(title: "Recent sessions", action: nil, keyEquivalent: "")
@@ -568,8 +456,8 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
             action: #selector(openWelcome),
             keyEquivalent: ""
         ))
-        // Only when there is one. An always-present "Check for updates…" is a
-        // chore the user has to perform; this is an answer they already have.
+        // Only when there is one: an always-present "Check for updates…" is a chore, this is an answer
+        // they already have.
         if let update = Update.available {
             menu.addItem(NSMenuItem(
                 title: "Update to \(update.version)…",
@@ -577,10 +465,8 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 keyEquivalent: ""
             ))
         }
-        // Only when this build was stamped with somewhere to send it. The crash
-        // alert has always offered to copy diagnostics and never said where
-        // they should go; an item that opened an empty compose window would be
-        // the same dead end wearing a button.
+        // Only when this build was stamped with somewhere to send it; an item that opened an empty
+        // compose window would be a dead end.
         if Credentials.supportEmail != nil {
             menu.addItem(NSMenuItem(
                 title: "Send feedback…",
@@ -593,22 +479,15 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(NSMenuItem(title: "Quit Deiko", action: #selector(quit), keyEquivalent: "q"))
 
         for item in menu.items where item.action != nil { item.target = self }
-        // Rebuild every time it opens. Permission state changes outside this
-        // process — the user flips a switch in Settings — so a menu built once
-        // at launch confidently reports stale facts: it listed Speech
-        // Recognition as missing while Settings showed it granted.
+        // Rebuild every time it opens: permission state changes outside this process, so a menu built
+        // once reports stale facts.
         menu.delegate = self
         if statusItem.menu !== menu { statusItem.menu = menu }
     }
 
-    /// The normal menu: a state block first, then the utility tail. Idle names
-    /// the gesture, so the menu doubles as the cheat-sheet. Capturing leads
-    /// with the red dot and a LIVE mono timer, and Stop is the emphasised item.
-    ///
-    /// Cut, per the redesign: the session id line (nobody types it anywhere —
-    /// it lives in the sessions folder) and "Reveal this session" (the orb
-    /// arrives the moment a session closes; "Open sessions folder" covers the
-    /// archaeology case).
+    /// The normal menu: a state block first, then the utility tail. Idle names the gesture, so the menu
+    /// doubles as the cheat-sheet. Capturing leads with the red dot and a live mono timer, and Stop is
+    /// the emphasised item.
     private func addCaptureItems(to menu: NSMenu) {
         if recorder.sessionDir != nil {
             let header = NSMenuItem(title: "", action: nil, keyEquivalent: "")
@@ -622,10 +501,8 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 "\(referents) thing\(referents == 1 ? "" : "s") pointed at so far"
             ))
 
-            // The way out that does not produce a brief. A session started by
-            // accident, or one where the wrong thing got said, used to have to
-            // be carried all the way to an orb and dismissed — which left the
-            // recording and its screenshots on disk regardless.
+            // The way out that does not produce a brief: a session started by accident should not have to
+            // reach an orb and be dismissed, which leaves the recording and screenshots on disk.
             let discard = NSMenuItem(
                 title: "Stop and discard…",
                 action: #selector(discardSession),
@@ -662,16 +539,12 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// How much transcription is left, where somebody already looks when they
-    /// wonder what Deiko is doing.
-    ///
-    /// Read from the CACHE, never from the network. This runs on every menu
-    /// open, and a menu that waited on a round trip would hang on a bad
-    /// connection. Nil rather than a placeholder when there is nothing to say:
-    /// a line reading "checking…" forever is worse than no line at all.
+    /// How much transcription is left, where people already look when they wonder what Deiko is doing.
+    /// Read from the cache, never the network: this runs on every menu open and must not hang on a bad
+    /// connection. Nil rather than a "checking…" placeholder.
     private func planLine() -> String? {
-        // Their key, their bill — nothing here is metered, so any quota would
-        // be a number about an account Deiko does not hold.
+        // Their key, their bill: nothing is metered, so any quota would describe an account Deiko does
+        // not hold.
         if Credentials.willUse("GROQ_API_KEY") { return "Your own Groq key — nothing metered" }
         guard Credentials.relayURL != nil, let quota = License.cachedQuota else { return nil }
 
@@ -705,10 +578,8 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return line
     }
 
-    /// Missing permissions are the whole menu when present — there is nothing
-    /// else worth showing until they are resolved. The header says what the
-    /// user actually experiences ("the hotkey is doing nothing"), in words,
-    /// not an icon tint.
+    /// Missing permissions are the whole menu when present. The header says what the user experiences
+    /// ("the hotkey is doing nothing"), in words rather than an icon tint.
     private func addPermissionItems(_ missing: [Permission], to menu: NSMenu) {
         menu.addItem(disabled("The hotkey is doing nothing"))
         menu.addItem(disabled(
@@ -728,16 +599,9 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
-        // OPENS THE GUIDED WINDOW; it does not fire four requests.
-        //
-        // It used to loop `ask()` over every missing permission. Accessibility
-        // and Screen Recording return without waiting for an answer, so one
-        // click could stack two system alerts and send System Settings jumping
-        // between two panes before the microphone dialog had even appeared.
-        //
-        // The first-run window is already the surface for this — a row per
-        // permission, each with the data it takes and its own button — so this
-        // opens that instead of racing it. One click, one dialog, still true.
+        // Opens the guided first-run window rather than firing every request: Accessibility and Screen
+        // Recording return without waiting for an answer, so a loop of `ask()` could stack system alerts
+        // and bounce System Settings between panes. One click, one dialog.
         menu.addItem(NSMenuItem(
             title: "Grant permissions…",
             action: #selector(openWelcome),
@@ -751,29 +615,22 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return item
     }
 
-    // ── Actions ─────────────────────────────────────────────────────────────
+    // MARK: - Actions
 
-    /// The one button. Closes the session out — which includes waiting for crops
-    /// still being written — and the review window takes it from there, via
-    /// `onSessionClosed`. This used to reveal the session folder in Finder; a
-    /// folder of JSON and PNGs was the best answer available before there was a
-    /// window that could show what is in it.
+    /// The one button. Closes the session out, including waiting for crops still being written; the
+    /// review window takes it from there via `onSessionClosed`.
     @objc private func stopSession() {
         Task { @MainActor in
             _ = await recorder.stopSession()
         }
     }
 
-    /// Stop, and keep nothing. Confirmed, because the thing being thrown away
-    /// is minutes of somebody's narration and the click is next to Stop.
+    /// Stop, and keep nothing. Confirmed, because minutes of narration are being thrown away and the
+    /// click is next to Stop.
     @objc private func discardSession() {
-        // Captured BEFORE the alert. `runModal` spins a nested runloop and the
-        // hotkey tap is installed in `.commonModes`, so the user can tap the
-        // session key — or click the capture pill — while the sheet is up, and
-        // the session closes underneath it. Re-reading `recorder.sessionDir`
-        // after the click then found nil and returned: a confirmed, destructive
-        // action that silently did nothing, leaving on disk the recording the
-        // user had just agreed to throw away.
+        // Captured before the alert: `runModal` spins a nested runloop and the hotkey tap runs in
+        // `.commonModes`, so the session can close underneath the sheet. Re-reading `recorder.sessionDir`
+        // afterwards would find nil and silently skip a confirmed discard.
         guard let dir = recorder.sessionDir else { return }
 
         let alert = NSAlert()
@@ -835,12 +692,9 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Relauncher.relaunch()
     }
 
-    /// "Next brief as ▸", with the current answer ticked.
-    ///
-    /// The menu is where somebody already is when they decide how the next
-    /// brief should read — a window away is one window too many for a choice
-    /// made this often. It sets the DEFAULT; a brief already on screen changes
-    /// itself from the review window instead.
+    /// "Next brief as ▸", with the current answer ticked. The menu is where people already are when they
+    /// decide how the next brief should read. It sets the default; a brief already on screen changes
+    /// itself from the review window.
     private func personaItem() -> NSMenuItem {
         let item = NSMenuItem(title: "Next brief as", action: nil, keyEquivalent: "")
         let submenu = NSMenu()
@@ -895,8 +749,7 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func openSessionRoot() {
-        // The root, not the open session — "Reveal this session" is the item
-        // for that, and it only exists when there is one.
+        // The root, not the open session.
         let root = recorder.sessionRoot
         try? FileManager.default.createDirectory(
             atPath: root, withIntermediateDirectories: true
@@ -946,19 +799,15 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func quit() { NSApp.terminate(nil) }
 
-    /// EVERY QUIT CLOSES THE SESSION OUT FIRST — this menu's Quit, ⌘Q from the
-    /// app menu, a relaunch, logout and restart all land here. Only the menu's
-    /// Quit used to stop the recorder, so the others cut a live session off
-    /// mid-crop: its WAV never finished, and it came back as an unfinished
-    /// recording. The stop is the one the button does, crops in flight and all.
-    /// Opening Deiko while it runs — double-clicking it in Finder or
-    /// Launchpad, clicking its Dock tile — opens its window. It did nothing,
-    /// and with the menu-bar icon hidden behind a notch that left no way in.
+    /// Opening Deiko while it runs (double-clicking it in Finder, clicking its Dock tile) opens its
+    /// window, the only way in when the menu-bar icon is hidden behind a notch.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
         if !hasVisibleWindows { main.present(.dashboard) }
         return true
     }
 
+    /// Every quit closes the session out first: this menu's Quit, ⌘Q from the app menu, a relaunch, logout
+    /// and restart all land here. The stop is the one the button does, crops in flight and all.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard recorder.sessionDir != nil else { return .terminateNow }
         Task { @MainActor in
@@ -969,18 +818,13 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func menuWillOpen(_ menu: NSMenu) {
-        // A permission granted in Settings should take effect without a click
-        // here as well. This only ever STARTS listening — it can no longer
-        // fight a user decision, because there is no longer a way to pause.
-        // Listening first, ONE rebuild after: each rebuild costs four tccd
-        // round-trips for the permission checks, and this path used to do it
-        // twice per menu open.
+        // A permission granted in Settings takes effect without a click here as well. Listening first,
+        // then one rebuild: each rebuild costs four tccd round-trips for the permission checks.
         startListeningIfPermitted()
         rebuildMenu()
 
-        // The capturing header carries a clock; a menu held open for a minute
-        // must not claim 0:43 the whole time. `.common` because menu tracking
-        // runs the loop in a mode plain timers never fire in.
+        // The capturing header carries a clock, so a menu held open must not show a stale time. `.common`
+        // because menu tracking runs the loop in a mode plain timers never fire in.
         menuClock?.invalidate()
         if capturingItem != nil {
             let clock = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
@@ -1005,9 +849,8 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard !isListening, Permission.allCases.allSatisfy(\.isGranted) else { return }
         isListening = recorder.start()
         if !isListening {
-            // The worst state the app can be in: every permission granted, the
-            // icon reading ready, the menu listing nothing missing, and the
-            // hotkey dead. Nothing on screen said so until this was shown.
+            // The worst state: every permission granted, the icon reading ready, the menu listing nothing
+            // missing, and the hotkey dead.
             Emit.problem(
                 "could not create the event tap",
                 hint: "Accessibility is granted but macOS refused Deiko's keyboard listener, so the \(SessionKey.selected.name) shortcut won't work. Quit and relaunch Deiko. If it persists, remove Deiko from System Settings → Privacy & Security → Accessibility and add it again."
@@ -1017,8 +860,8 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
 }
 
 private extension NSFont {
-    /// The menu font at a different weight — NSFont has no variant API, and
-    /// the system font at menu size is the menu font.
+    /// The menu font at a different weight: NSFont has no variant API, and the system font at menu size
+    /// is the menu font.
     func withWeight(_ weight: NSFont.Weight) -> NSFont {
         NSFont.systemFont(ofSize: pointSize, weight: weight)
     }

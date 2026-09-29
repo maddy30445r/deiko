@@ -1,32 +1,21 @@
 import AppKit
 import SwiftUI
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THE DESIGN SYSTEM — one file, in code, because there is no asset pipeline
-//
-// From the Claude Design canvas (mddocs/design-brief.md was the prompt):
-// Deiko is a system service, not an app — nearer the volume HUD than a window.
-// Glass, hairlines, system type, and a strict chroma budget:
-//
-//   RED means "watching you" — capturing, and NOTHING else, ever.
-//   ORANGE means "needs you" — permissions and failures.
-//   ONE accent hue means "Deiko itself". Everything else is grey.
-//
-// The accent is Deiko indigo — oklch(0.50 0.13 272) light, oklch(0.74 0.11 272)
-// dark — desaturated enough not to glow over code, and far from every system
-// semantic colour so red and orange keep their meanings even for users whose
-// macOS accent is blue. The sRGB values below are those oklch coordinates
-// converted; the comments keep the originals so a future adjustment starts
-// from the design's coordinates, not from hex archaeology.
-//
-// Colours are NSColor first and Color second: the capture overlay draws in
-// Core Graphics, and a palette expressed only as SwiftUI Color would never
-// reach the cursor ring or the recording pill.
-// ─────────────────────────────────────────────────────────────────────────────
-
+/// The design system, in code. Glass, hairlines, system type and a strict chroma budget:
+///
+/// - Red means "watching you": capturing, and nothing else.
+/// - Orange means "needs you": permissions and failures.
+/// - One accent hue means "Deiko itself". Everything else is grey.
+///
+/// The accent is desaturated enough not to glow over code and far from every system semantic colour,
+/// so red and orange keep their meaning even where the macOS accent is blue. The sRGB values are
+/// converted from the oklch coordinates in the comments beside them.
+///
+/// Colours are NSColor first and Color second: the capture overlay draws in Core Graphics, so a
+/// SwiftUI-only palette would never reach the cursor ring or the recording pill.
 enum DeikoStyle {
 
-    // ── Colour ──────────────────────────────────────────────────────────────
+    // MARK: - Colour
 
     private static func dynamic(light: NSColor, dark: NSColor) -> NSColor {
         NSColor(name: nil) { appearance in
@@ -41,9 +30,8 @@ enum DeikoStyle {
         dark: NSColor(srgbRed: 146 / 255, green: 166 / 255, blue: 241 / 255, alpha: 1)
     )
 
-    /// The ink drawn onto a crop's own pixels — fixed, not dynamic. The crop
-    /// was captured under whatever appearance the SOURCE app was in, so the
-    /// ink drawn onto it must not shift with Deiko's own light/dark setting.
+    /// The ink drawn onto a crop's own pixels: fixed, not dynamic. The crop was captured under the
+    /// source app's appearance, so the ink must not shift with Deiko's light/dark setting.
     static let inkNS = NSColor(srgbRed: 74 / 255, green: 91 / 255, blue: 172 / 255, alpha: 1)
 
     /// The Deiko mark's stroke on the coin — brighter than the accent so it
@@ -82,24 +70,15 @@ enum DeikoStyle {
         dark: NSColor(srgbRed: 255 / 255, green: 69 / 255, blue: 58 / 255, alpha: 1)
     )
 
-    /// The menu bar's recording tint — deliberately NOT dynamic, for the same
-    /// class of reason as `inkNS` and the pill below.
+    /// The menu bar's recording tint, deliberately not dynamic (like `inkNS` and the pill below).
     ///
-    /// THE MENU BAR IS NOT THE APP'S APPEARANCE. How dark it renders follows
-    /// the desktop content behind it, while a dynamic NSColor resolves against
-    /// the app's own effectiveAppearance — i.e. the system Light/Dark setting.
-    /// In Light Mode with a dark window behind the bar, the two disagree: the
-    /// bar is dark and the colour resolves to its LIGHT variant. Measured on
-    /// `needsYouNS`, that is rgb(201,52,0) at 4.0:1 against a dark bar, versus
-    /// 10.2:1 for the dark variant — which is exactly the "it looks blackish
-    /// and disappears when another app is open" that was reported. A fixed
-    /// bright value cannot fall into that gap.
+    /// The menu bar's darkness follows the desktop behind it, but a dynamic NSColor resolves against the
+    /// app's own appearance. In Light Mode with a dark window behind the bar the two disagree and the
+    /// light variant lands on a dark bar, where it is hard to read. A fixed bright value avoids the gap.
     static let menuBarRecordingNS = NSColor(srgbRed: 255 / 255, green: 59 / 255, blue: 48 / 255, alpha: 1)
 
-    /// The capturing pill's body — deliberately NOT dynamic and NOT
-    /// translucent: the one opaque surface Deiko draws, identical over any
-    /// wallpaper, unchanged by Reduce Transparency because it was never
-    /// transparent.
+    /// The capturing pill's body: deliberately not dynamic and not translucent, the one opaque surface
+    /// Deiko draws, identical over any wallpaper and unaffected by Reduce Transparency.
     static let pillRedNS = NSColor(srgbRed: 229 / 255, green: 56 / 255, blue: 46 / 255, alpha: 1)
 
     /// Region-capture pulses only — the lasso's "got it" ring. A point's ring
@@ -116,14 +95,12 @@ enum DeikoStyle {
         dark: NSColor(white: 1, alpha: 0.12)
     )
 
-    // ── Surface ─────────────────────────────────────────────────────────────
-    //
-    // The studio white the site is built from, translated for a window that
-    // has to survive dark mode. Light mode is the site's own paper and white;
-    // dark mode is the same system rebuilt, NOT the light one dimmed — a card
-    // is lighter than its ground in the dark, where in the light it is darker.
+    // MARK: - Surface
 
-    /// A window's ground. Cards sit ON this, never the reverse.
+    // Dark mode is rebuilt, not the light palette dimmed: a card is lighter than its ground in the
+    // dark and darker than it in the light.
+
+    /// A window's ground. Cards sit on this, never the reverse.
     static let paperNS = dynamic(
         light: NSColor(srgbRed: 250 / 255, green: 250 / 255, blue: 251 / 255, alpha: 1),
         dark: NSColor(srgbRed: 30 / 255, green: 31 / 255, blue: 38 / 255, alpha: 1)
@@ -135,7 +112,7 @@ enum DeikoStyle {
         dark: NSColor(srgbRed: 38 / 255, green: 39 / 255, blue: 47 / 255, alpha: 1)
     )
 
-    /// 1px, and never more. The site's whole border vocabulary.
+    /// 1px, and never more.
     static let hairlineNS = dynamic(
         light: NSColor(srgbRed: 236 / 255, green: 236 / 255, blue: 239 / 255, alpha: 1),
         dark: NSColor(white: 1, alpha: 0.09)
@@ -161,35 +138,26 @@ enum DeikoStyle {
         dark: NSColor(srgbRed: 26 / 255, green: 27 / 255, blue: 34 / 255, alpha: 1)
     )
 
-    /// The second voice: notes under a control, metadata, the sentence that
-    /// explains a number.
+    /// The second voice: notes under a control, metadata, the sentence that explains a number.
     ///
-    /// NOT `.secondary`. AppKit's secondary label is black at 50%, which
-    /// composites to rgb(127,127,127) on white — a hard ceiling of 4.00:1 on
-    /// a card and 3.94:1 on paper. Every explanatory line in the app sat under
-    /// that ceiling at 11pt, in the appearance most people use in daylight,
-    /// and no per-element fix could lift it because it is one system colour
-    /// used everywhere. These two clear 4.5:1 on card, on paper AND on the
-    /// lavender wall, in their own appearance.
+    /// Not `.secondary`: AppKit's secondary label is black at 50%, which caps contrast at about 4:1 on
+    /// white, too low for 11pt text. These values clear 4.5:1 on card, paper and the lavender wall, each
+    /// in its own appearance.
     static let ink2NS = dynamic(
         light: NSColor(srgbRed: 100 / 255, green: 100 / 255, blue: 107 / 255, alpha: 1),
         dark: NSColor(srgbRed: 172 / 255, green: 172 / 255, blue: 182 / 255, alpha: 1)
     )
 
-    /// Shadows are long, soft and tinted indigo — paper resting on a desk,
-    /// never a hard offset.
-    /// The site's card shadow is `0 24px 60px -28px` — a long fall with a
-    /// NEGATIVE spread, which is what keeps it under the card instead of
-    /// around it. SwiftUI has no spread, so the same shape is bought with a
-    /// weaker colour and a lower offset; a stronger one here reads as a cloud.
+    /// Long, soft, indigo-tinted shadows, never a hard offset. The site's card shadow (`0 24px 60px
+    /// -28px`) has a negative spread that keeps it under the card; SwiftUI has no spread, so the shape
+    /// is approximated with a weaker colour and a lower offset (a stronger one reads as a cloud).
     static let shadowNS = dynamic(
         light: NSColor(srgbRed: 30 / 255, green: 36 / 255, blue: 90 / 255, alpha: 0.15),
         dark: NSColor(white: 0, alpha: 0.4)
     )
 
-    /// The lavender wall: the site's presentation surface, and the one place
-    /// colour fills an area. It goes behind a header or a preview — NEVER
-    /// behind a control, which is how it stays a backdrop instead of a theme.
+    /// The lavender wall: the one place colour fills an area. It goes behind a header or a preview,
+    /// never behind a control, so it stays a backdrop.
     static var wall: LinearGradient {
         LinearGradient(
             colors: [Color(nsColor: wallTopNS), Color(nsColor: wallBottomNS)],
@@ -207,9 +175,8 @@ enum DeikoStyle {
         dark: NSColor(srgbRed: 38 / 255, green: 40 / 255, blue: 56 / 255, alpha: 1)
     )
 
-    /// The tooltip: one slate with a lean towards the mark's indigo, the same
-    /// in Light and Dark, so a tip looks like a tip wherever it pops. Dark
-    /// enough to stand off white cards, light enough to lift off dark ones.
+    /// The tooltip: one slate with a lean towards the mark's indigo, the same in Light and Dark, dark
+    /// enough to stand off white cards and light enough to lift off dark ones.
     static let tipFillNS = NSColor(srgbRed: 74 / 255, green: 76 / 255, blue: 92 / 255, alpha: 1)
     static let tipTextNS = NSColor(white: 1, alpha: 0.94)
     /// The mark's dot, lifted so it reads on the tooltip's dark fill.
@@ -233,7 +200,7 @@ enum DeikoStyle {
     static var tipText: Color { Color(nsColor: tipTextNS) }
     static var tipDot: Color { Color(nsColor: tipDotNS) }
 
-    // ── Shape ───────────────────────────────────────────────────────────────
+    // MARK: - Shape
 
     /// 8 controls · 14 cards and rows · 18 floating panels · capsules for
     /// pills. Nested corners get smaller as they get deeper, never larger.
@@ -241,32 +208,24 @@ enum DeikoStyle {
     static let insetRadius: CGFloat = 14
     static let panelRadius: CGFloat = 18
 
-    // ── Type ────────────────────────────────────────────────────────────────
-    //
-    // TITLES ONLY, and this is the whole rule. Bricolage Grotesque carries
-    // window titles, card headings and the orb's verdict line — the few words
-    // that say whose app this is. Every control label, every sentence, and
-    // anything read at 11pt stays in the system face, because that is the type
-    // macOS hinted for small sizes and the type the rest of the Mac speaks.
-    //
-    // The face is registered into THIS PROCESS only (`.process` scope), so
-    // Deiko never installs a font on someone's Mac. If the file is missing —
-    // a build that forgot to copy it — `title` falls back to the system
-    // semibold and every window still reads correctly, just in SF.
+    // MARK: - Type
 
-    /// The 12pt optical size at SemiBold: the cut drawn for small text, which
-    /// is the only size this app uses it at. SIL OFL 1.1, see Bricolage-OFL.txt.
+    // Bricolage Grotesque is for titles only: window titles, card headings and the orb's verdict line.
+    // Every control label, sentence and anything at 11pt stays in the system face, which macOS hints for
+    // small sizes. The face is registered for this process only (`.process` scope), so Deiko never
+    // installs a font; if the file is missing, `title` falls back to system semibold.
+
+    /// The 12pt optical size at SemiBold: the cut drawn for small text, the only size used here.
+    /// SIL OFL 1.1, see Bricolage-OFL.txt.
     private static let titleFace: String? = {
         let fm = FileManager.default
         var candidates: [URL] = []
         if let resources = Bundle.main.resourceURL {
             candidates.append(resources.appendingPathComponent("Bricolage.ttf"))
         }
-        // `make dev` runs the bare binary straight out of `.build`, which has
-        // no Resources directory at all. The compile-time path of this file is
-        // the checkout it was built from — right for a developer's build, and
-        // simply a path that does not exist in anybody else's, which is what
-        // the `fileExists` below is for.
+        // `make dev` runs the bare binary out of `.build`, which has no Resources directory. The
+        // compile-time path of this file is the checkout it was built from: right for a developer's
+        // build, and a path that does not exist elsewhere (hence the `fileExists` below).
         candidates.append(
             URL(fileURLWithPath: #filePath)
                 .deletingLastPathComponent()
@@ -280,8 +239,7 @@ enum DeikoStyle {
         return CTFontDescriptorCopyAttribute(first, kCTFontNameAttribute) as? String
     }()
 
-    /// A title. Sentence case, always — the uppercase tracked label this app
-    /// used to shout in is not in the design any more.
+    /// A title. Sentence case, always.
     static func title(_ size: CGFloat) -> Font {
         if let titleFace { return .custom(titleFace, size: size) }
         return .system(size: size, weight: .semibold)
@@ -290,7 +248,7 @@ enum DeikoStyle {
     /// -0.02em, the tracking the display face is drawn to be set at.
     static func titleTracking(_ size: CGFloat) -> CGFloat { -size * 0.02 }
 
-    // ── Motion ──────────────────────────────────────────────────────────────
+    // MARK: - Motion
 
     /// Live, not cached: the user can flip Reduce Motion while the orb is on
     /// screen, and the next pulse should already obey it.
@@ -299,21 +257,14 @@ enum DeikoStyle {
     }
 }
 
-// ── Appearance ──────────────────────────────────────────────────────────────
+// MARK: - Appearance
 
-/// Light, dark, or whatever the Mac is doing.
+/// Light, dark, or whatever the Mac is doing. Every colour in `DeikoStyle` is a dynamic pair, so
+/// following the system is the default. The choice exists because the app draws over other apps'
+/// windows: someone on light macOS with a dark editor may want the orb dark.
 ///
-/// The design is built twice — every colour in `DeikoStyle` is a dynamic pair —
-/// so following the system is the right default and costs nothing. The choice
-/// exists because this app draws OVER other people's windows: somebody who
-/// runs macOS light but codes in a dark editor all day has a real reason to
-/// want the orb dark, and "match my editor, not my Finder" is not a preference
-/// the system can express for them.
-///
-/// Applied to `NSApp`, which every window and every dynamic colour resolves
-/// against — including the orb and the review panel, not just this window.
-/// The capture pill is deliberately exempt: it is a fixed red that must look
-/// identical over any wallpaper, in any appearance.
+/// Applied to `NSApp`, so every window and dynamic colour follows, the orb and review panel included.
+/// The capture pill is exempt: it is a fixed red that must look identical over any wallpaper.
 enum Appearance: String, CaseIterable, Identifiable {
     case system, light, dark
 
@@ -337,9 +288,8 @@ enum Appearance: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Nil means "stop deciding" — AppKit then follows the system, which is
-    /// not the same as setting it to the system's current value: that one
-    /// would freeze at whatever it was when the app launched.
+    /// Nil means "stop deciding": AppKit then follows the system, which differs from setting the
+    /// system's current value, since that would freeze at whatever it was at launch.
     func apply() {
         NSApp.appearance = switch self {
         case .system: nil
@@ -349,7 +299,7 @@ enum Appearance: String, CaseIterable, Identifiable {
     }
 }
 
-// ── The shared modifiers ────────────────────────────────────────────────────
+// MARK: - Shared modifiers
 
 extension View {
     /// Bricolage at this size, tracked the way it is drawn to be set.
@@ -357,8 +307,8 @@ extension View {
         font(DeikoStyle.title(size)).tracking(DeikoStyle.titleTracking(size))
     }
 
-    /// Paper resting on a desk: one long, soft, indigo-tinted shadow and a
-    /// hairline. Offset downward, because a shadow with no offset is a glow.
+    /// Paper resting on a desk: one long, soft, indigo-tinted shadow and a hairline. Offset downward,
+    /// since a shadow with no offset is a glow.
     func deikoCard(radius: CGFloat = DeikoStyle.insetRadius) -> some View {
         background(
             RoundedRectangle(cornerRadius: radius)
@@ -372,23 +322,20 @@ extension View {
     }
 }
 
-// ── The menu-bar mark ───────────────────────────────────────────────────────
+// MARK: - Menu-bar mark
 
 extension DeikoStyle {
 
-    /// The Deiko mark for the status item — the same ring-and-dot the orb's
-    /// coin wears, so the menu bar and the orb are visibly the same object.
+    /// The Deiko mark for the status item: the same ring-and-dot as the orb's coin.
     ///
-    /// Three states, each a SHAPE change so colour is never the only signal:
+    /// Three states, each a shape change so colour is never the only signal:
     ///   ready     — ring with a small centred dot
     ///   capturing — the dot swells to fill the ring
     ///   blocked   — ring-and-dot with an `!` at the corner
     ///
-    /// ALWAYS a template image, always drawn in black. Colour arrives from the
-    /// caller as `contentTintColor`, which AppKit resolves against the menu
-    /// bar's real appearance. Drawing colours in here instead meant guessing
-    /// that appearance from inside a drawing handler — and guessing wrong puts
-    /// a dark ring on a dark menu bar.
+    /// Always a template image drawn in black; the caller supplies colour as `contentTintColor`, which
+    /// AppKit resolves against the menu bar's real appearance. Drawing colours here would mean guessing
+    /// that appearance from inside a drawing handler.
     static func menuBarIcon(recording: Bool, blocked: Bool) -> NSImage {
         let size = NSSize(width: 18, height: 16)
         let image = NSImage(size: size, flipped: false) { _ in
@@ -403,8 +350,7 @@ extension DeikoStyle {
             path.stroke()
 
             if recording {
-                // The dot swells to fill the ring — legible at 16pt in a way a
-                // tint change alone is not.
+                // The dot swells to fill the ring: legible at 16pt in a way a tint change alone is not.
                 NSBezierPath(ovalIn: ring.insetBy(dx: 3, dy: 3)).fill()
             } else {
                 let dot = NSRect(x: ring.midX - 1.75, y: ring.midY - 1.75, width: 3.5, height: 3.5)
@@ -426,37 +372,18 @@ extension DeikoStyle {
     }
 }
 
-// ── The Deiko mark ──────────────────────────────────────────────────────────
+// MARK: - Keyboard focus
 
-// ── Keyboard focus ──────────────────────────────────────────────────────────
-
-/// THE ONE PIECE OF CHROME THAT IGNORED THE DESIGN SYSTEM.
+/// The app's own focus ring, replacing the system one.
 ///
-/// macOS draws its own focus ring: a system blue, at a system radius, with a
-/// system inset — over a control whose colour, shape and corner this app
-/// chose itself. On a sidebar row it lands as a rounded rectangle of the
-/// wrong blue at the wrong radius, sitting a pixel outside the indigo wash
-/// underneath it. Two shapes for one control, in two accent colours, on the
-/// surface people look at first.
+/// The system ring is a system blue at a system radius, which lands as a mismatched rounded rectangle
+/// over a control whose colour and shape the app chose. The system effect is switched off and the ring
+/// is redrawn from the palette, in the control's own shape.
 ///
-/// So the system effect is switched off and the ring is redrawn from the
-/// palette, in the shape the control actually has. `DESIGN.md` already
-/// assigns this colour: indigo marks what Deiko does, and focusing is on its
-/// list.
+/// The ring is not deleted: keyboard and switch users (Full Keyboard Access) have nothing else to show
+/// where they are. It is 2pt, unlike the 1pt hairlines, because a focus ring must be findable at a glance.
 ///
-/// THE RING IS NOT DELETED, which is the tempting one-line version and an
-/// accessibility regression. Somebody driving this app from the keyboard —
-/// Full Keyboard Access, or a switch device — has nothing but this ring to
-/// tell them where they are. Deleting it would make the app look tidier in a
-/// screenshot and unusable without a mouse.
-///
-/// 2pt, where every other border in this system is a 1pt hairline: a focus
-/// ring is not a border. It has to be findable at a glance from across a
-/// desk, and the hairline rule is about the edges of things at rest.
-///
-/// `.focused` binds to whatever focusability the control already had — this
-/// never makes something focusable that was not, so the tab order is exactly
-/// what it was before.
+/// `.focused` binds to whatever focusability the control already had, so the tab order is unchanged.
 struct DeikoFocusRing<S: InsettableShape>: ViewModifier {
     let shape: S
     @FocusState private var focused: Bool
@@ -485,9 +412,8 @@ extension View {
         deikoFocusRing(RoundedRectangle(cornerRadius: radius))
     }
 
-    /// A bare glyph or word with no background of its own. The ring needs a
-    /// little room around the letterforms or it reads as a box drawn on top
-    /// of them rather than around them.
+    /// A bare glyph or word with no background of its own. The ring needs a little room around the
+    /// letterforms or it reads as a box drawn over them.
     func deikoFocusRingLoose(radius: CGFloat = 6) -> some View {
         padding(4)
             .deikoFocusRing(RoundedRectangle(cornerRadius: radius))
@@ -495,10 +421,8 @@ extension View {
     }
 }
 
-/// A ring with a centred dot — the mark IS the product: "I'm pointing at
-/// this." Two strokes,
-/// scalable, and the same mark the menu bar will wear so the coin and the
-/// status item are visibly the same object.
+/// A ring with a centred dot: two strokes, scalable. The menu bar icon draws the same mark
+/// (`DeikoStyle.menuBarIcon`).
 struct DeikoMark: View {
     /// Outer diameter of the ring.
     var diameter: CGFloat = 20

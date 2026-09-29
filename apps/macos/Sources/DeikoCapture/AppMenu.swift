@@ -1,16 +1,7 @@
 import AppKit
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THE MENU BAR MENU — Deiko, Edit, Window
-//
-// Deiko lives in the menu bar and had no main menu at all. That cost more than
-// a menu: AppKit routes ⌘C / ⌘V / ⌘A through the Edit menu's key equivalents,
-// so a licence key could not be pasted into its field, and ⌘M / ⌘W had nothing
-// to call. The menu is installed once at launch; it only shows while the board
-// window has made Deiko a regular app (see `MainWindowController`), but its key
-// equivalents work either way.
-// ─────────────────────────────────────────────────────────────────────────────
-
+/// The main menu. AppKit routes ⌘C/⌘V/⌘A/⌘M/⌘W through its key equivalents, so it is installed
+/// once at launch even though it only shows while a window makes Deiko a regular app.
 @MainActor
 enum AppMenu {
     static func install() {
@@ -19,8 +10,7 @@ enum AppMenu {
         let app = NSMenu(title: "Deiko")
         app.addItem(withTitle: "About Deiko", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         app.addItem(.separator())
-        // ⌘, is where every Mac app keeps its settings. Nil target: the app
-        // delegate (`MenuBar`) answers it through the responder chain.
+        // Nil target: the app delegate (`MenuBar`) answers it through the responder chain.
         app.addItem(withTitle: "Settings…", action: #selector(MenuBar.showSettings(_:)), keyEquivalent: ",")
         app.addItem(.separator())
         app.addItem(withTitle: "Hide Deiko", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
@@ -60,9 +50,8 @@ enum AppMenu {
     }
 }
 
-/// A DOCK TILE WHILE A REAL WINDOW IS OPEN. The board and the welcome window
-/// each hold it while open; the last to close hands Deiko back to the menu
-/// bar. A count, not a flag, so closing one never strands the other.
+/// Keeps Deiko in the Dock while a real window is open. A count, not a flag, so closing
+/// one window never strands the other.
 @MainActor
 enum DockPresence {
     private static var holders = 0
@@ -79,9 +68,8 @@ enum DockPresence {
 }
 
 extension NSWindow {
-    /// The compact unified title bar: macOS 26 rounds a window's corners by
-    /// its title bar, and this one's 40pt stays clear of content laid out
-    /// 44pt down. Empty — nothing lives in it.
+    /// Compact unified title bar. macOS 26 rounds window corners by title-bar height; this
+    /// one's 40pt stays clear of content laid out 44pt down.
     func useRoundedTitleBar(_ id: String) {
         toolbar = NSToolbar(identifier: id)
         toolbarStyle = .unifiedCompact

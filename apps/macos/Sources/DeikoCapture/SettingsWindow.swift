@@ -4,28 +4,17 @@ import ServiceManagement
 import SwiftUI
 import DeikoHandoff
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SETTINGS — a section of the Deiko window, not a window of its own
+// Settings: a section of the Deiko window, not a window of its own (`MainWindow` presents this view).
 //
-// A licence key, and a transcription key. Nearly every other decision Deiko
-// makes is either settled in the design or answered per-session on the orb —
-// the one exception is the Memory section's button, which is the only thing
-// here that writes to a file this app does not own (see `MemoryHelper`).
-// There used to be a row per coding client too, writing that client's own
-// bridge config — gone along with the bridge it pointed at.
+// Nearly every decision is settled in the design or answered per session on the orb. What lives here is a
+// licence key, a transcription key, and the Memory section's button, the only control that writes to a
+// file this app does not own (see `MemoryHelper`).
 //
-// The licence row is not a sign-in. There is no email, no password, no account
-// to recover — the key IS the entitlement, and the window says so, because a
-// box that looks like a login makes people go looking for a password they were
-// never given.
-//
-// It had its own 520pt window until the board and personas arrived and made a
-// second, smaller window with its own chrome look like what it was: a settings
-// sheet bolted onto an app. `MainWindow` presents this view now; the sizing
-// note that used to live here belongs to that window.
-// ─────────────────────────────────────────────────────────────────────────────
+// The licence row is not a sign-in: there is no email, password or account to recover. The key is the
+// entitlement, and the window says so, because a box that looks like a login sends people looking for a
+// password.
 
-// ── State ───────────────────────────────────────────────────────────────────
+// MARK: - State
 
 @MainActor
 final class SettingsModel: ObservableObject {
@@ -37,17 +26,10 @@ final class SettingsModel: ObservableObject {
         Appearance.selected = next
     }
 
-    /// The boxes start EMPTY even when a key is stored.
-    ///
-    /// Pre-filling them meant decrypting on every open, which is what made
-    /// macOS demand the login password every single time this window appeared.
-    /// It also pulled two live credentials into view state for no reason —
-    /// nothing here ever needed to read a key back, only to replace one.
-    /// ONE KEY, and that is what makes the promise beside it true. There were
-    /// two — Sarvam for the words, Groq for the summary — and "Deiko's servers
-    /// never see it" was false for anybody who brought only the first, which is
-    /// what most people did. Whisper does both, so bringing one key really does
-    /// take us out of the path.
+    /// The boxes start empty even when a key is stored: pre-filling meant decrypting on every open, which
+    /// made macOS ask for the login password each time this window appeared, and pulled a live credential
+    /// into view state when nothing here needs to read one back, only replace it.
+    /// One Groq key covers both the words and the summary.
     @Published var groqKey: String = ""
     /// Whether the developer has actually typed in the box. An untouched box
     /// means "leave this alone"; a touched-and-emptied one means "remove it".
@@ -55,11 +37,10 @@ final class SettingsModel: ObservableObject {
 
     @Published private(set) var groqStored = Credentials.exists("GROQ_API_KEY")
 
-    // ── Licence ─────────────────────────────────────────────────────────────
+    // MARK: - Licence
 
-    /// Shown in full rather than masked. It is not a secret — the relay treats
-    /// it as a bearer and says so out loud — and somebody who has just pasted a
-    /// key out of an email needs to be able to see that they pasted it right.
+    /// Shown in full rather than masked. It is not a secret (the relay treats it as a bearer and says so),
+    /// and somebody who has just pasted a key out of an email needs to see that they pasted it right.
     @Published var licenseKey: String = License.key ?? ""
     @Published private(set) var checking = false
 
@@ -68,22 +49,16 @@ final class SettingsModel: ObservableObject {
     @Published private(set) var planDetail = "checking…"
     @Published private(set) var planIsProblem = false
 
-    /// The numbers behind that line — what is used, what is left.
-    ///
-    /// Seeded from the cache so the card draws real figures the moment the
-    /// window opens instead of an empty bar that fills in a second later. On a
-    /// failed refresh the last known numbers STAY: "we could not ask" is not
-    /// the same fact as "you have nothing", and blanking the bar would say the
-    /// second one.
+    /// The numbers behind that line: what is used, what is left. Seeded from the cache so the card draws
+    /// real figures the moment the window opens. On a failed refresh the last known numbers stay, since
+    /// "we could not ask" is not the same fact as "you have nothing".
     @Published private(set) var quota: License.Quota? = License.cachedQuota
 
     var isPro: Bool { License.isPro }
 
-    /// Whether the relay's LATEST answer says Pro — which is what the buttons
-    /// follow. `License.isPro` carries a seven-day grace so a paying customer on
-    /// a plane still reads as Pro; following it here would keep
-    /// offering "manage your subscription" to somebody whose key lapsed a week
-    /// ago, and hide the way to renew it.
+    /// Whether the relay's latest answer says Pro, which the buttons follow. `License.isPro` carries a
+    /// seven-day grace so a paying customer offline still reads as Pro; following it here would keep
+    /// offering "manage your subscription" to somebody whose key lapsed, and hide the way to renew.
     var isProNow: Bool { quota?.isPro ?? License.isPro }
 
     /// Ask the relay what this install is. Also the confirmation that a pasted
@@ -95,13 +70,8 @@ final class SettingsModel: ObservableObject {
             let quota = try await License.refresh()
             self.quota = quota
             plan = quota.isPro ? "Pro" : "Free"
-            // A KEY THAT DOES NOT VALIDATE HAS NO ALLOWANCE OF ITS OWN, and
-            // the sentence has to say so. It used to read "that key is not
-            // active — 30 min left of your trial" beside a full bar, which
-            // reads as a trial that reset. Nothing had reset: the bearer had
-            // changed, so a different subject's empty counter was on screen,
-            // and the machine's own trial was sitting where it was left. Say
-            // what to do instead of describing a trial they never started.
+            // A key that does not validate has no allowance of its own, and the sentence says so: a trial
+            // figure beside it would read as a trial that reset. Say what to do instead.
             planDetail = quota.isPro
                 ? "\(quota.remainingSentence) this month"
                 : (License.key == nil
@@ -113,10 +83,9 @@ final class SettingsModel: ObservableObject {
             planDetail = "this build has no transcription service — nothing is uploaded"
             planIsProblem = false
         } catch {
-            // An unreachable relay is NOT reported as a downgrade. The cached
-            // verdict still stands for a week, and telling somebody who has
-            // paid that they are on Free because their wifi dropped is the
-            // wrong failure to make loud.
+            // An unreachable relay is not reported as a downgrade: the cached verdict still stands for a
+            // week, and telling somebody who has paid that they are on Free because their wifi dropped is
+            // the wrong failure to make loud.
             plan = License.isPro ? "Pro" : "Free"
             planDetail = "could not reach Deiko just now"
             planIsProblem = false
@@ -128,14 +97,13 @@ final class SettingsModel: ObservableObject {
         await refreshPlan()
     }
 
-    // ── Sessions ────────────────────────────────────────────────────────────
+    // MARK: - Sessions
 
     @Published private(set) var sessionCount = 0
     @Published private(set) var sessionSize = ""
 
-    /// The session currently being recorded, so "delete all" cannot remove the
-    /// folder being written to. Supplied by `MenuBar`, which owns the recorder;
-    /// this window has no reference to it and should not grow one.
+    /// The session currently being recorded, so "delete all" cannot remove the folder being written to.
+    /// Supplied by `MenuBar`, which owns the recorder.
     var openSessionDir: (() -> String?)?
 
     /// The folder this run is using — see the controller's property.
@@ -160,23 +128,16 @@ final class SettingsModel: ObservableObject {
         await refreshSessions()
     }
 
-    // ── Startup ─────────────────────────────────────────────────────────────
+    // MARK: - Startup
 
-    /// Whether macOS launches Deiko at login.
-    ///
-    /// Read from `SMAppService` rather than mirrored in a default, so the
-    /// toggle reflects what the SYSTEM believes — somebody who turns Deiko off
-    /// in System Settings → General → Login Items must not come back to a
-    /// switch still showing on.
+    /// Whether macOS launches Deiko at login. Read from `SMAppService` rather than mirrored in a default,
+    /// so the toggle reflects what the system believes if it is turned off in System Settings →
+    /// General → Login Items.
     @Published var launchAtLogin = SMAppService.mainApp.status == .enabled
 
-    /// Whether a brief the classifier called quick carries the line telling
-    /// the agent a fast model is probably enough.
-    ///
-    /// OFF by default, and advisory even when on: Deiko does not pick the
-    /// model — whichever harness the brief lands in already did — so the most
-    /// this can honestly do is say what the brief looks like and leave the
-    /// judgement where it actually sits.
+    /// Whether a brief the classifier called quick carries the line telling the agent a fast model is
+    /// probably enough. Off by default, and advisory even when on: Deiko does not pick the model, so this
+    /// can only say what the brief looks like.
     @Published var optimizeCosts = UserDefaults.standard.bool(forKey: BriefPipeline.optimizeCostsKey)
 
     /// The Monday note — see `WeeklyNote`. Off unless turned on.
@@ -210,15 +171,14 @@ final class SettingsModel: ObservableObject {
                 try SMAppService.mainApp.unregister()
             }
         } catch {
-            // Throws for a bare SwiftPM binary, which has no bundle to
-            // register — the development path. Re-read rather than assert, so
-            // the toggle snaps back to the truth instead of lying.
+            // Throws for a bare SwiftPM binary, which has no bundle to register (the development path).
+            // Re-read rather than assert, so the toggle snaps back to the truth.
             Emit.log("launch at login: \(error.localizedDescription)")
         }
         launchAtLogin = SMAppService.mainApp.status == .enabled
     }
 
-    // ── The session key ─────────────────────────────────────────────────────
+    // MARK: - The session key
 
     @Published var sessionKey = SessionKey.selected
 
@@ -227,7 +187,7 @@ final class SettingsModel: ObservableObject {
         sessionKey = key
     }
 
-    // ── What language the brief is in ───────────────────────────────────────
+    // MARK: - Brief language
 
     @Published var narration = Narration.selected
     @Published var speechLocale = SpeechLocale.selected
@@ -244,27 +204,20 @@ final class SettingsModel: ObservableObject {
         speechLocale = identifier
     }
 
-    /// "Groq: from your login keychain" — named, because
-    /// the two can genuinely come from different places.
+    /// Names where the key comes from, such as "Groq: from your login keychain".
     var keySources: String {
         "Groq: \(Credentials.source(of: "GROQ_API_KEY"))"
     }
 
-    /// Whether a key will actually be USED — not merely whether one is stored.
-    ///
-    /// The two agree now that BYO is free, and the call stays anyway: `willUse`
-    /// is the same question the pipeline asks, which is the point — this used
-    /// to be its own rule and told a developer their live key was not in play.
+    /// Whether a key will actually be used, not merely whether one is stored. `willUse` is the same
+    /// question the pipeline asks, so this cannot disagree with it.
     var usingOwnKey: Bool {
         if groqTouched { return !groqKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         return Credentials.willUse("GROQ_API_KEY")
     }
 
-    /// The little grey word beside a key's label.
-    ///
-    /// Reports what is TRUE of this key rather than what is true of the plan:
-    /// bringing one is free, so the only two states are "there is one and it is
-    /// what runs" and "there is none and nothing needs one".
+    /// The little grey word beside a key's label. Reports what is true of this key rather than of the plan:
+    /// "in use" when there is one and it is what runs, "optional" otherwise.
     func tag(for name: String) -> String {
         Credentials.willUse(name) ? "in use" : "optional"
     }
@@ -273,22 +226,11 @@ final class SettingsModel: ObservableObject {
     /// recorded rather than after.
     var whereAudioGoes: String {
         if usingOwnKey {
-            // NO LONGER "Deiko's servers never see it" — the owner decided
-            // sorting runs through the relay for everyone, own-key users
-            // included, so a brief can still be placed into a task. Audio
-            // goes straight to Groq with the user's own key, exactly as
-            // before, and never reaches Deiko; the summary is produced there
-            // too, but a redacted copy of it still travels through the
-            // classifier — so this sentence has to admit that, not claim the
-            // summary never reaches Deiko either.
-            //
-            // THE SORTING CLAUSE IS CONDITIONAL, NOT ALWAYS TRUE. A build with
-            // no relay stamped at all (`Credentials.relayURL == nil`) never
-            // gets `DEIKO_CLASSIFY_URL` either — `childEnvironment` sets it
-            // from the same `relayURL` — and nor does anybody who turned
-            // "Sort briefs into tasks" off, so nothing is sorted and nothing
-            // reaches Deiko. Saying otherwise there would be the exact bug
-            // this sentence exists to avoid, just moved one line down.
+            // Audio goes straight to Groq with the user's own key and never reaches Deiko. Sorting still
+            // runs through the relay, so a redacted copy of the summary travels through the classifier and
+            // this sentence has to say so. That clause applies only when a relay is stamped
+            // (`Credentials.relayURL != nil`, which also gates `DEIKO_CLASSIFY_URL`) and "Sort briefs into
+            // tasks" is on; otherwise nothing is sorted and nothing reaches Deiko.
             let goesToGroq = "Your narration goes straight to Groq with your key. \(narration.comesBackAs)"
             guard sortBriefs, Credentials.relayURL != nil else { return goesToGroq }
             return goesToGroq + " To sort each brief into its task, what you said, a one-line summary, your window and page titles, web addresses (just the host and path, never what's after the ?), open document names and notes on earlier work go to Deiko, which passes them to TypeSafe's Jev sorting model and keeps nothing."
@@ -308,13 +250,10 @@ final class SettingsModel: ObservableObject {
         stored ? "•••••••••• — type to replace" : "paste a key…"
     }
 
-    /// Only boxes the developer actually touched are written. An untouched
-    /// empty box must not delete a perfectly good stored key — which is
-    /// exactly what saving would have done once the boxes stopped pre-filling.
-    /// The text is deliberately NOT cleared afterwards: `onChange` cannot tell
-    /// a programmatic reset from typing, so clearing here would mark the box
-    /// touched-and-empty and the next Save would delete the key that was just
-    /// stored.
+    /// Only boxes the developer actually touched are written: an untouched empty box must not delete a
+    /// stored key. The text is deliberately not cleared afterwards, since `onChange` cannot tell a
+    /// programmatic reset from typing, and clearing would mark the box touched-and-empty so the next Save
+    /// would delete the key just stored.
     func saveKeys() {
         if groqTouched {
             Credentials.store(groqKey, for: "GROQ_API_KEY")
@@ -324,13 +263,12 @@ final class SettingsModel: ObservableObject {
     }
 }
 
-// ── View ────────────────────────────────────────────────────────────────────
+// MARK: - View
 
 struct SettingsView: View {
     @StateObject private var model = SettingsModel()
     @ObservedObject private var meaning = MeaningModel.shared
-    /// Passed down rather than read from a global: see the controller's
-    /// properties of the same names.
+    /// Passed down rather than read from a global; see the controller's properties of the same names.
     let openSessionDir: (() -> String?)?
     let sessionRoot: String
     /// Momentary, so the button can say it worked.
@@ -409,9 +347,8 @@ struct SettingsView: View {
                     .frame(width: 180)
                     Spacer()
                 }
-                // Named because the default collides with a real key on most
-                // of the world's keyboards, and somebody hitting that has no
-                // way to guess this setting exists.
+                // Named because the default is AltGr on many keyboard layouts, and somebody hitting that
+                // has no way to guess this setting exists.
                 Text("Double-tap to start, tap to stop. Right Option is AltGr on many "
                     + "layouts — if typing brackets keeps starting a session, pick another key.")
                     .font(.system(size: 11))
@@ -646,9 +583,7 @@ struct SettingsView: View {
                         .font(.system(size: 11))
                         .foregroundStyle(model.planIsProblem ? DeikoStyle.needsYou : .secondary)
                     Spacer()
-                    // The card only asked on open and on Apply, so a bar
-                    // somebody was watching never moved. Same fetch, on demand;
-                    // "checking…" above is the feedback, so no spinner.
+                    // Refetches on demand; "checking…" above is the feedback, so no spinner.
                     Button { Task { await model.refreshPlan() } } label: {
                         Image(systemName: "arrow.clockwise")
                     }
@@ -659,28 +594,16 @@ struct SettingsView: View {
                     .tip("Ask Deiko again how much is left")
                 }
 
-                // HOW MUCH IS LEFT, as a quantity rather than a sentence.
+                // How much is left, as a quantity rather than a sentence: a bar answers "am I close?" at a
+                // glance.
                 //
-                // The trial's whole shape — thirty minutes, once — was
-                // knowable only by reading a sentence in a window nobody
-                // opens, so the first anybody learned of running out was a
-                // transcript that quietly read worse. A bar answers "am I
-                // close?" at a glance, which a sentence never does.
-                //
-                // NOTHING TO DRAW WHEN THERE IS NO ALLOWANCE. A licence the
-                // store does not recognise now has a cap of zero, and a bar of
-                // zero read "none of none used · one-time trial, then this Mac
-                // transcribes" — three claims, none of them true of a subject
-                // that has no trial and never had one. The plan line above
-                // already says what happened and what to do about it.
+                // Nothing to draw when there is no allowance: a licence the store does not recognise has a
+                // cap of zero, and a bar of zero would make claims that are not true of it. The plan line
+                // above already says what happened.
                 if let quota = model.quota, quota.capSeconds > 0 {
                     VStack(alignment: .leading, spacing: 6) {
-                        // DRAWN, not an NSProgressIndicator. The system bar
-                        // ignores `.tint` on macOS — it follows the user's own
-                        // accent colour — so the indigo fill this design asks
-                        // for, and the red one when the trial is spent, simply
-                        // never appeared. Two capsules cost less than the
-                        // workaround would.
+                        // Drawn, not an NSProgressIndicator: the system bar ignores `.tint` on macOS (it follows
+                        // the user's accent colour), so the indigo fill and the red spent state would never appear.
                         GeometryReader { bar in
                             ZStack(alignment: .leading) {
                                 Capsule().fill(DeikoStyle.hairline)
@@ -709,14 +632,11 @@ struct SettingsView: View {
                     TextField("paste the key from your email…", text: $model.licenseKey)
                         .font(.system(size: 12, design: .monospaced))
                         .textFieldStyle(.roundedBorder)
-                        // Return in this field applies THIS field. Pasting a
-                        // key and pressing Return is the whole interaction.
+                        // Return in this field applies this field.
                         .onSubmit { Task { await model.saveLicense() } }
-                    // A licence is meant to live on more than one Mac — the
-                    // hours are per licence — and it gets to the next one by
-                    // being copied off this one. The STORED key, not the
-                    // field's draft: what goes on the clipboard is what the
-                    // relay is actually being sent.
+                    // A licence is meant to live on more than one Mac and gets to the next one by being copied
+                    // off this one. The stored key, not the field's draft: the clipboard gets what the relay is
+                    // actually sent.
                     if let key = License.key {
                         Button {
                             NSPasteboard.general.clearContents()
@@ -741,29 +661,17 @@ struct SettingsView: View {
                 }
                 .padding(.top, 2)
 
-                // BUY, RENEW, REMOVE — the three things a licence needs doing
-                // to it that were not possible from inside the app at all.
-                //
-                // "Get Pro" appears when the relay's latest answer is not Pro,
-                // which covers both the never-bought case and the lapsed one:
-                // a key that has stopped validating needs a way to renew, and
-                // that way is the same checkout.
-                //
-                // ONLY when a checkout URL was stamped into this build. As
-                // things stand the published site answers 404 on every path,
-                // so a link derived from it would send somebody who had just
-                // decided to pay to a broken page — the worst possible moment
-                // for the product to look unfinished.
+                // Buy, renew, remove. "Get Pro" appears when the relay's latest answer is not Pro, which covers
+                // both never-bought and lapsed: a key that has stopped validating renews through the same
+                // checkout. It is shown only when a checkout URL was stamped into this build.
                 HStack(spacing: 12) {
                     if !model.isProNow, let buy = Credentials.buyURL {
                         Button("Get Pro…") { NSWorkspace.shared.open(buy) }
                             .buttonStyle(.link)
                     }
-                    // There is no "manage subscription" BUTTON, and that is not
-                    // an omission: Polar's customer portal is authenticated by
-                    // an emailed code, and the link that arrives with the
-                    // purchase is the shortest path back to it. Saying where it
-                    // is beats sending somebody to a sign-in they did not want.
+                    // There is no "manage subscription" button: Polar's customer portal is authenticated by an
+                    // emailed code, and the link in the purchase email is the shortest path back to it, so the
+                    // text says where it is.
                     if model.isProNow {
                         Text("Manage or cancel from the link in your purchase email.")
                             .font(.system(size: 11))
@@ -855,18 +763,15 @@ struct SettingsView: View {
                        prompt: model.groqStored ? model.placeholder(stored: true) : "gsk_…",
                        onSubmit: { model.saveKeys() })
                 HStack {
-                    // No longer a warning. A missing key used to mean briefs
-                    // stopped at "Transcribing…"; now it means somebody else
-                    // transcribes, which the sentence above already explains.
+                    // A missing key is not a warning: it means somebody else transcribes, which the sentence
+                    // above explains.
                     Text(model.keySources)
                         .font(.system(size: 11))
                         .foregroundStyle(DeikoStyle.ink2)
                     Spacer()
-                    // NOT `.defaultAction`. It was the only one in the pane,
-                    // so Return anywhere in Settings — including in the licence
-                    // field two cards up — saved transcription keys and left
-                    // the licence unapplied, silently. Each field submits
-                    // itself now (see `keyRow` and the licence row).
+                    // Not `.defaultAction`: as the only one in the pane, Return anywhere in Settings (including
+                    // the licence field) would save transcription keys and leave the licence unapplied. Each
+                    // field submits itself (see `keyRow` and the licence row).
                     Button("Save") { model.saveKeys() }
                 }
                 .padding(.top, 2)
@@ -893,9 +798,7 @@ struct SettingsView: View {
                 }
                 .tip("Version, permissions and where the log is — no session content.")
                 Button("Reveal log") { Diagnostics.revealLog() }
-                // Only when this build knows where feedback goes. Copying
-                // diagnostics with nowhere to send them was the whole of the old
-                // bug-report story.
+                // Only when this build knows where feedback goes.
                 if Diagnostics.feedbackURL() != nil {
                     Button("Send feedback…") {
                         if let url = Diagnostics.feedbackURL() { NSWorkspace.shared.open(url) }
@@ -936,14 +839,9 @@ struct SettingsView: View {
     }
 }
 
-// ── Shared pieces (Settings + first run share this vocabulary) ──────────────
+// MARK: - Shared pieces
 
-/// The heading over a group of rows.
-///
-/// It used to be an 11pt tracked uppercase label, borrowed from System
-/// Settings. It is a sentence-case title now: uppercase-tracked labels are
-/// harder to read, macOS itself has been leaving them behind, and every
-/// heading on the site is set this way. Same job, said at a normal volume.
+/// The heading over a group of rows: a sentence-case title, since tracked uppercase labels are harder to read.
 struct SectionLabel: View {
     let text: String
     init(_ text: String) { self.text = text }
@@ -953,8 +851,8 @@ struct SectionLabel: View {
     }
 }
 
-/// A card holding rows — the grouping surface every window is built from.
-/// Paper on a desk: solid, hairlined, with one long indigo-tinted shadow.
+/// A card holding rows: the grouping surface every window is built from. Solid and hairlined, with one
+/// long indigo-tinted shadow.
 struct InsetCard<Content: View>: View {
     @ViewBuilder let content: Content
     var body: some View {
@@ -964,23 +862,20 @@ struct InsetCard<Content: View>: View {
     }
 }
 
-/// The primary action — ink, not the system accent.
+/// The primary action: ink, not the system accent.
 ///
-/// The accent is spent on the GESTURE (the coin, the mark, a selected row);
-/// spending it on buttons too would make "Deiko is pointing at something" and
-/// "this is a button" the same colour. In dark mode ink inverts to the accent,
-/// because near-black on near-black is a button nobody can find.
+/// The accent is spent on the gesture (the coin, the mark, a selected row); spending it on buttons too
+/// would make "Deiko is pointing at something" and "this is a button" the same colour. In dark mode ink
+/// inverts to the accent, because near-black on near-black is hard to find.
 struct InkButtonStyle: ButtonStyle {
-    // Named `Label`, not `Body`: `Body` is the protocol's own associated type,
-    // and a nested struct by that name satisfies it instead — the conformance
-    // then fails on a private type it never meant to name.
+    // Named `Label`, not `Body`: `Body` is the protocol's associated type, and a nested struct by that
+    // name would satisfy it instead, so the conformance would fail on a private type.
     func makeBody(configuration: Configuration) -> some View { Label(configuration: configuration) }
 
     private struct Label: View {
         let configuration: Configuration
-        // Read here rather than on the style: a ButtonStyle is not a View, so
-        // this is the only place the environment actually resolves — and a
-        // disabled primary that looks enabled is the bug that ships otherwise.
+        // Read here rather than on the style: a ButtonStyle is not a View, so this is the only place the
+        // environment resolves, and without it a disabled button would look enabled.
         @Environment(\.isEnabled) private var enabled
 
         var body: some View {
@@ -989,10 +884,8 @@ struct InkButtonStyle: ButtonStyle {
                 .foregroundStyle(enabled ? DeikoStyle.buttonInkText : DeikoStyle.ink2)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 6)
-                // DISABLED IS ITS OWN PAIR, NOT AN OPACITY MULTIPLIER. At 35%
-                // the label measured 1.37:1 against its own fill — the worst
-                // contrast in the app, on the button a first run stares at
-                // while it waits for permissions.
+                // Disabled is its own colour pair, not an opacity multiplier: at 35% the label's contrast
+                // against its fill is far too low.
                 .background(
                     RoundedRectangle(cornerRadius: DeikoStyle.controlRadius)
                         .fill(enabled ? DeikoStyle.buttonInk : DeikoStyle.hairline)

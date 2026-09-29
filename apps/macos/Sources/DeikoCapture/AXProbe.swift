@@ -4,24 +4,18 @@ import CoreGraphics
 import Foundation
 import DeikoGrounding
 
-// ─────────────────────────────────────────────────────────────────────────────
-// AX RESOLUTION — the grounding layer
+// AX resolution, the grounding layer.
 //
-// Cost model drives every decision in this file: an AXUIElement is a handle
-// into ANOTHER PROCESS, and every attribute read is a synchronous Mach IPC
-// round-trip. So:
+// An AXUIElement is a handle into another process and every attribute read is a synchronous Mach IPC
+// round-trip, so:
+//   - Region capture hit-tests a grid first (one cheap call per sample), dedupes with CFEqual, and only
+//     then reads the full attribute set on the few unique survivors: 60 samples collapsing to 4 elements
+//     cost 60 + 4×N calls, not 60×N.
+//   - Every element touched gets a messaging timeout, or one wedged app freezes capture.
+//   - Values are copied out immediately; handles go stale, referents must not.
 //
-//   • Region capture hit-tests a grid FIRST (1 cheap call per sample), dedupes
-//     with CFEqual, and only then reads the full attribute set on the few
-//     unique elements that survive. 60 samples collapsing to 4 elements costs
-//     60 + 4×N calls, not 60×N.
-//   • Every element we touch gets a messaging timeout, or one wedged app
-//     freezes capture.
-//   • We copy values out immediately. Handles go stale; referents must not.
-//
-// Coordinates are top-left-origin global screen space throughout — AX's space,
-// and what CGEvent reports. No Cocoa flip anywhere in this file, deliberately.
-// ─────────────────────────────────────────────────────────────────────────────
+// Coordinates are top-left-origin global screen space throughout (AX's space, and what CGEvent reports).
+// There is no Cocoa flip anywhere in this file, deliberately.
 
 enum AXProbe {
 
@@ -36,39 +30,26 @@ enum AXProbe {
         kAXSelectedTextAttribute,
     ]
 
-    /// Apps we've already poked with AXManualAccessibility this run.
+    /// Apps already poked with AXManualAccessibility this run, keyed by pid and launch date.
     ///
-    /// Locked: the 60Hz sampler pokes on app switch from the main actor while
-    /// detached crop tasks poke from `probePoint`'s ungrounded retry — two
-    /// unsynchronised inserts into one Set is CoW buffer corruption. Trivially
-    /// reachable by pointing at something in VS Code and Cmd-Tabbing while the
-    /// crop still resolves.
-    /// KEYED BY LAUNCH DATE, NOT BY PID ALONE, because a pid is reused.
+    /// Locked: the 60Hz sampler pokes on app switch from the main actor while detached crop tasks poke
+    /// from `probePoint`'s ungrounded retry, and two unsynchronised inserts into one collection corrupt it.
     ///
-    /// A Set of pids never forgot anything, and the Bool this returns gates the
-    /// caller's wait for the tree to build. So quitting VS Code and starting it
-    /// again onto the same pid — ordinary on a Mac that has been up for days,
-    /// and Deiko is a menu-bar app meant to run for weeks — made the poke a
-    /// no-op against a brand-new dormant Electron tree, silently restoring the
-    /// exact bug the poke exists to prevent.
-    ///
-    /// `launchDate` distinguishes the two processes. Nil compares equal to nil,
-    /// so anything without one dedupes exactly as before. Chosen over observing
-    /// `didTerminateApplicationNotification` because it needs no observer, no
-    /// unregistration, and — the real reason — no ordering guarantee: a
-    /// termination notice arriving after a new process had taken the pid would
-    /// re-poison the entry, and this cannot.
+    /// The launch date is part of the key because a pid is reused: quitting and restarting VS Code onto
+    /// the same pid would otherwise make the poke a no-op against a new dormant Electron tree. Nil
+    /// compares equal to nil, so anything without a launch date dedupes by pid. Preferred over observing
+    /// `didTerminateApplicationNotification`, whose notice can arrive after a new process has taken the pid.
     nonisolated(unsafe) private static var poked: [pid_t: Date?] = [:]
     private static let pokedPidsLock = NSLock()
 
-    // ── Permission ──────────────────────────────────────────────────────────
+    // MARK: - Permission
 
     static func isTrusted() -> Bool {
         AXIsProcessTrusted()
     }
 
-    /// Prompts once if untrusted. The prompt names the *launching* process
-    /// (your terminal), not this binary — TCC grants attach to the parent.
+    /// Prompts once if untrusted. The prompt names the launching process (the terminal), not this binary:
+    /// TCC grants attach to the parent.
     @discardableResult
     static func ensureTrusted(prompt: Bool) -> Bool {
         // Spelled literally rather than via `kAXTrustedCheckOptionPrompt`: the
@@ -78,17 +59,12 @@ enum AXProbe {
         return AXIsProcessTrustedWithOptions(options)
     }
 
-    // ── Cursor ──────────────────────────────────────────────────────────────
+    // MARK: - Cursor
 
-    /// Area of the LARGEST single display, in points. Used to reject AX
-    /// rectangles that are really whole-window containers rather than the thing
-    /// pointed at.
-    ///
-    /// Summing all displays would be wrong: the guard is "is this rect an
-    /// implausibly large share of a screen", and on a three-monitor setup a
-    /// summed total makes a rect covering an entire display look small enough
-    /// to pass. The threshold has to mean the same thing regardless of how many
-    /// monitors are plugged in.
+    /// Area of the largest single display, in points, used to reject AX rectangles that are really
+    /// whole-window containers. Summing displays would be wrong: a summed total makes a rect covering a
+    /// whole display look small on a multi-monitor setup, and the threshold must mean the same thing
+    /// however many monitors are plugged in.
     static func screenArea() -> Double {
         NSScreen.screens
             .map { $0.frame.width * $0.frame.height }
@@ -105,7 +81,7 @@ enum AXProbe {
         return Point(x: loc.x, y: loc.y)
     }
 
-    // ── Public entry points ─────────────────────────────────────────────────
+    // MARK: - Public entry points
 
     /// "What is under this pixel." One hit-test plus ancestors.
     static func probePoint(
@@ -135,10 +111,9 @@ enum AXProbe {
         var poked = false
         var element = describe(hit, withAncestors: true)
 
-        // The Electron path. Chromium only mirrors its internal tree into the
-        // native AX API when it thinks assistive tech is listening; poking
-        // AXManualAccessibility flips that bridge on. The tree takes a moment
-        // to build, hence the sleep before re-probing.
+        // The Electron path. Chromium only mirrors its internal tree into the native AX API when it thinks
+        // assistive tech is listening; poking AXManualAccessibility flips that bridge on. The tree takes a
+        // moment to build, hence the sleep before re-probing.
         if allowManualRetry, looksUngrounded(element), let ownerPid = pid {
             poked = enableManualAccessibility(pid: ownerPid)
             if poked {
@@ -153,12 +128,9 @@ enum AXProbe {
 
         let neighbours = neighbourhood(around: p, excluding: hit, descend: descend)
 
-        // Order matters: the brief shows the first dozen strings, so whatever
-        // leads had better be what the user meant. The aimed-at element leads
-        // when it grounds something; when it does not — a bare `AXGroup`, a
-        // disclosure triangle — the neighbourhood leads and the hit goes last,
-        // still recorded, because its role is how we know the probe landed on
-        // furniture rather than on nothing.
+        // Order matters: the brief shows the first dozen strings. The aimed-at element leads when it
+        // grounds something; otherwise the neighbourhood leads and the hit goes last, still recorded because
+        // its role shows the probe landed on furniture rather than on nothing.
         let elements = groundsContent(element)
             ? [element] + neighbours
             : neighbours + [element]
@@ -182,27 +154,17 @@ enum AXProbe {
         )
     }
 
-    /// How far a point looks around itself for context. Wide and short because
-    /// text is: a line of a Compass document, a row of a table, a line of code.
-    /// Taller would reach into unrelated rows; narrower would miss the field
-    /// name sitting to the left of the value you pointed at.
+    /// How far a point looks around itself for context. Wide and short because text is: a line of a
+    /// document, a row of a table, a line of code. Taller would reach into unrelated rows; narrower would
+    /// miss the field name to the left of the value pointed at.
     private static let neighbourhoodWidth: Double = 200
     private static let neighbourhoodHeight: Double = 44
 
     /// The elements immediately around a point.
     ///
-    /// A point used to resolve to exactly one element — whatever
-    /// `AXUIElementCopyElementAtPosition` chose to answer with — and measurement
-    /// showed how thin that is. Session 20260728-230442, MongoDB Compass: the
-    /// twelve points averaged 4.6ms and returned one element each, seven of them
-    /// a childless `AXGroup` carrying no text at all. The four LASSOS in the same
-    /// session, in the same app, seconds apart, spent ~60ms and returned 8–20
-    /// real text elements. The content was in the tree the whole time; the
-    /// hit-test just does not reach it.
-    ///
-    /// So a point now samples a small box the way a region samples a large one,
-    /// through exactly the same machinery. This is not a heuristic bolted on —
-    /// it is the region path, run over a smaller shape.
+    /// A single hit-test is thin: it often returns a childless `AXGroup` carrying no text while the
+    /// content sits elsewhere in the tree. So a point samples a small box the way a region samples a large
+    /// one, through the same machinery.
     private static func neighbourhood(
         around p: Point, excluding hit: AXUIElement, descend: Bool
     ) -> [AXElement] {
@@ -220,25 +182,21 @@ enum AXProbe {
             path: nil
         )
 
-        // A tighter element cap than a region's 40. Descent is per-element and
-        // each one carries its own 120ms deadline, so the cap is what bounds the
-        // worst case — and a 200×44 box that resolves to more than a dozen
-        // distinct nodes is dense enough that another six add nothing.
+        // A tighter element cap than a region's 40: descent is per-element and each carries its own 120ms
+        // deadline, so the cap bounds the worst case, and a 200×44 box resolving to more than a dozen
+        // nodes is dense enough.
         let hits = collect(
             samples: gridSamples(in: box, maxSamples: 40, minStride: 12),
             maxElements: 12,
             descend: descend,
-            // Tighter than a region's: a lasso is an explicit "spend time on
-            // this", a settle is not, and points outnumber regions 3:1.
+            // Tighter than a region's: a lasso is an explicit "spend time on this", a settle is not.
             budgetMs: 200
         )
 
-        // Same application only. The box is OUR invention, not the user's — it
-        // reaches 100pt either side of where they actually pointed, and
-        // `AXUIElementCopyElementAtPosition` is system-wide, so a point near a
-        // window edge would otherwise pull a neighbouring app's text in and
-        // present it as this referent's grounding. A lasso does not need this
-        // guard: crossing a boundary there is a thing the user drew.
+        // Same application only. The box is our invention, not the user's, and
+        // `AXUIElementCopyElementAtPosition` is system-wide, so a point near a window edge would pull a
+        // neighbouring app's text in as this referent's grounding. A lasso does not need this guard:
+        // crossing a boundary there is something the user drew.
         let ownerPid = pidOf(hit)
         return hits
             .filter { !CFEqual($0.element, hit) }
@@ -251,13 +209,9 @@ enum AXProbe {
             }
     }
 
-    /// "What is inside this shape." AX has no rect query, so we sample a grid
-    /// inside the drawn path and collapse the hits.
-    ///
-    /// The samples→unique ratio this reports is the granularity measurement:
-    /// an app where 60 samples collapse into 1 AXGroup technically "supports
-    /// AX" but cannot ground a circled region, and that distinction is invisible
-    /// from point probing alone.
+    /// "What is inside this shape." AX has no rect query, so a grid inside the drawn path is sampled and the
+    /// hits collapsed. The samples→unique ratio reported is the granularity measurement: an app where 60
+    /// samples collapse into one AXGroup "supports AX" but cannot ground a circled region.
     static func probeRegion(
         _ shape: Shape,
         maxSamples: Int = 120,
@@ -288,9 +242,8 @@ enum AXProbe {
 
         var hits = collect(samples: samples, maxElements: maxElements, descend: descend)
 
-        // Same Electron bridge as the point path. We judge "ungrounded" on a
-        // cheap describe of the first hit rather than the whole set, so we
-        // don't pay for full attribute reads before deciding to retry.
+        // Same Electron bridge as the point path. "Ungrounded" is judged on a cheap describe of the first
+        // hit, not the whole set, to avoid full attribute reads before deciding to retry.
         var poked = false
         let firstPid = hits.first.flatMap { pidOf($0.element) }
         if allowManualRetry,
@@ -306,11 +259,9 @@ enum AXProbe {
 
         let described = hits.map { describe($0.element, withAncestors: false) }
 
-        // Drop containers that carry nothing. Circling one Compass document
-        // resolved 24 elements of which 16 were empty `AXGroup`s — they inflate
-        // the payload sent to the model and overstate what was actually
-        // captured. `uniqueElements` below still reports the pre-filter count,
-        // so the samples→elements granularity signal is preserved.
+        // Drop containers that carry nothing: empty `AXGroup`s inflate the payload sent to the model and
+        // overstate what was captured. `uniqueElements` below still reports the pre-filter count, so the
+        // samples→elements granularity signal is preserved.
         let elements = described
             .filter { carriesMeaning($0) }
             .sorted { a, b in
@@ -328,11 +279,9 @@ enum AXProbe {
                 resolved: !elements.isEmpty,
                 elements: elements,
                 samplesTested: samples.count,
-                // PRE-filter count, deliberately. This feeds the granularity
-                // measurement (how many distinct nodes a circled area resolves
-                // to); using the filtered count instead would make an app that
-                // exposes lots of empty containers look identical to one whose
-                // tree is genuinely too coarse to ground a region.
+                // Pre-filter count, deliberately: it feeds the granularity measurement, and the filtered count
+                // would make an app exposing many empty containers look like one whose tree is too coarse to
+                // ground a region.
                 uniqueElements: described.count,
                 manualAccessibilityApplied: poked,
                 elapsedMs: Clock.nowMs() - started,
@@ -343,7 +292,7 @@ enum AXProbe {
         )
     }
 
-    // ── Hit-testing ─────────────────────────────────────────────────────────
+    // MARK: - Hit-testing
 
     private static func hitTest(_ p: Point, descend: Bool = true) -> AXUIElement? {
         let systemWide = AXUIElementCreateSystemWide()
@@ -360,21 +309,17 @@ enum AXProbe {
         return refine(element, at: p)
     }
 
-    /// `AXUIElementCopyElementAtPosition` returns whatever node the app decides
-    /// to answer with, and Chromium often answers with a container — Compass and
-    /// Chrome both hand back an empty `AXGroup`/`AXWebArea` even once the bridge
-    /// is on. The leaf text nodes are in the tree; hit-testing just doesn't
-    /// reach them.
+    /// `AXUIElementCopyElementAtPosition` returns whatever node the app chooses, and Chromium often
+    /// answers with an empty container (`AXGroup`/`AXWebArea`) even once the bridge is on. The leaf text
+    /// nodes are in the tree; hit-testing just does not reach them.
     ///
-    /// So walk down: at each level pick the smallest child whose frame contains
-    /// the point, and remember the deepest one that actually carried text.
+    /// So walk down: at each level pick the smallest child whose frame contains the point, and remember
+    /// the deepest one that carried text.
     ///
-    /// Bounded by a wall-clock DEADLINE, not just by shape. Depth and per-level
-    /// caps bound each axis but not their product: 8 levels × 160 children ×
-    /// five IPC round-trips per child (two for the frame, three for the text)
-    /// is ~2500 synchronous calls into another process — seconds, on a probe
-    /// that has a few hundred milliseconds to spend. The caps stop pathological
-    /// trees; the deadline is what actually keeps us inside the budget.
+    /// Bounded by a wall-clock deadline, not just by shape: depth and per-level caps bound each axis but
+    /// not their product (8 levels × 160 children × five IPC round-trips per child is ~2500 synchronous
+    /// calls into another process). The caps stop pathological trees; the deadline keeps us inside the
+    /// budget.
     static func refine(
         _ element: AXUIElement,
         at p: Point,
@@ -383,14 +328,9 @@ enum AXProbe {
         budgetMs: Double = 120
     ) -> AXUIElement {
         let deadline = Clock.nowMs() + budgetMs
-        // If the hit already names CONTENT, the app answered properly — don't
-        // pay for a descent that can only make the referent less specific.
-        //
-        // The test used to be "has any text", and that is how three referents in
-        // one session came back as `Caret Right Icon`: the hit-tested `AXImage`
-        // had alt text, so the descent stopped on a disclosure triangle while
-        // the row it decorated sat one level down. Furniture no longer counts as
-        // the app having answered.
+        // If the hit already names content, the app answered properly: don't pay for a descent that can
+        // only make the referent less specific. Furniture (an `AXImage` with alt text, a disclosure
+        // triangle) does not count as the app having answered.
         if groundsContent(element) { return element }
 
         var current = element
@@ -461,22 +401,16 @@ enum AXProbe {
         return points.isEmpty ? [shape.origin] : points
     }
 
-    /// Hit-test every sample, keeping only distinct elements. CFEqual is the
-    /// correct identity test for AXUIElement — pointer comparison is not, since
-    /// separate copies can reference the same UI node.
+    /// Hit-test every sample, keeping only distinct elements. CFEqual is the correct identity test for
+    /// AXUIElement; pointer comparison is not, since separate copies can reference the same UI node.
     ///
-    /// Descent is deliberately OFF during sampling and applied afterwards to the
-    /// survivors only. Descending at every sample would multiply the most
-    /// expensive operation by the sample count; doing it after dedupe pays for
-    /// it once per distinct element. Each survivor keeps the sample point that
-    /// found it, since descent needs a point to aim at.
+    /// Descent is off during sampling and applied afterwards to the survivors only: descending at every
+    /// sample would multiply the most expensive operation by the sample count. Each survivor keeps the
+    /// sample point that found it, since descent needs a point to aim at.
     ///
-    /// `budgetMs` bounds the DESCENT phase as a whole. Each `refine` carries its
-    /// own 120ms deadline, so without this the worst case is the element cap
-    /// times that — 4.8s for a region, and the session's stop waits on these
-    /// tasks. It has never been observed (a region measures 58–67ms in total),
-    /// but "never observed" is not a bound, and a pathological tree on a stop
-    /// gesture is exactly when the user is watching.
+    /// `budgetMs` bounds the descent phase as a whole. Each `refine` carries its own 120ms deadline, so
+    /// without this the worst case is the element cap times that, and the session's stop waits on these
+    /// tasks.
     private static func collect(
         samples: [Point], maxElements: Int, descend: Bool, budgetMs: Double = 400
     ) -> [(element: AXUIElement, at: Point)] {
@@ -493,9 +427,8 @@ enum AXProbe {
         let deadline = Clock.nowMs() + budgetMs
         var refined: [(element: AXUIElement, at: Point)] = []
         for (el, p) in unique {
-            // Out of time: keep the remaining elements UNREFINED rather than
-            // dropping them. A container is worse grounding than its leaf, but
-            // both beat a referent that silently lost half its neighbourhood.
+            // Out of time: keep the remaining elements unrefined rather than dropping them. A container is
+            // worse grounding than its leaf, but both beat a referent that silently lost half its neighbourhood.
             guard Clock.nowMs() < deadline else {
                 if !refined.contains(where: { CFEqual($0.element, el) }) {
                     refined.append((el, p))
@@ -511,7 +444,7 @@ enum AXProbe {
         return refined
     }
 
-    // ── Describing an element (the expensive part) ───────────────────────────
+    // MARK: - Describing an element
 
     private static func describe(_ el: AXUIElement, withAncestors: Bool) -> AXElement {
         let names = attributeNames(of: el)
@@ -557,16 +490,12 @@ enum AXProbe {
         return result
     }
 
-    /// The enclosing window's title — free, high-value context. For an editor it
-    /// carries the active file and the workspace/repo folder; for a browser, the
-    /// page; for Postman, the request.
+    /// The enclosing window's title: free, high-value context (the active file for an editor, the page for
+    /// a browser, the request for Postman).
     ///
-    /// Asks the element directly via `kAXWindowAttribute` rather than walking up
-    /// the parent chain. The walk used to work and then silently stopped: once
-    /// hit-test descent started returning deep leaves, the window sat further
-    /// than 12 levels above them and every probe came back with no title —
-    /// 30 of 30 in a real session. A one-hop attribute read has no depth to be
-    /// wrong about, and costs one IPC instead of twelve.
+    /// Asks the element directly via `kAXWindowAttribute` rather than walking up the parent chain: once
+    /// hit-test descent returns deep leaves, the window can sit further above them than the walk reaches.
+    /// A one-hop read has no depth to be wrong about and costs one IPC instead of twelve.
     private static func windowTitle(for el: AXUIElement) -> String? {
         for attribute in [kAXWindowAttribute, kAXTopLevelUIElementAttribute] {
             guard let ref = copyAttr(el, attribute as String),
@@ -577,8 +506,8 @@ enum AXProbe {
             }
         }
 
-        // Fall back to the parent walk for apps that don't advertise the
-        // attribute, now deep enough to survive a descended leaf.
+        // Fall back to the parent walk for apps that don't advertise the attribute, deep enough to
+        // survive a descended leaf.
         var current = el
         for _ in 0..<40 {
             if stringify(copyAttr(current, kAXRoleAttribute as String)) == (kAXWindowRole as String) {
@@ -614,16 +543,13 @@ enum AXProbe {
         return (url, document)
     }
 
-    // ── Electron bridge ─────────────────────────────────────────────────────
+    // MARK: - Electron bridge
 
-    /// Turn the bridge on for the frontmost app BEFORE anything is pointed at,
-    /// so no referent pays the ~300ms tree-build we measured on first hit.
+    /// Turn the bridge on for the frontmost app before anything is pointed at, so no referent pays the
+    /// ~300ms tree build on first hit.
     ///
-    /// Called at hotkey-down and on app switch during a session — never at
-    /// launch, and never for apps the user isn't currently in. Poking builds an
-    /// accessibility tree the app then maintains, which costs that app memory
-    /// and a little CPU; doing it to every running app because we might one day
-    /// be pointed at it is not ours to spend.
+    /// Called at hotkey-down and on app switch during a session, never at launch and never for apps the
+    /// user isn't in: poking makes the app maintain an accessibility tree, which costs it memory and CPU.
     @discardableResult
     static func prePokeFrontmost() -> pid_t? {
         guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
@@ -632,9 +558,9 @@ enum AXProbe {
         return pid
     }
 
-    /// Chromium's private opt-in. Set on the APPLICATION element, not the hit
-    /// element. Returns whether we actually issued it this time (false if the
-    /// same process — same pid AND same launch date — was already poked).
+    /// Chromium's private opt-in, set on the application element, not the hit element. Returns whether it
+    /// was actually issued this time (false if the same process, same pid and launch date, was already
+    /// poked).
     @discardableResult
     static func enableManualAccessibility(pid: pid_t) -> Bool {
         let launch = NSRunningApplication(processIdentifier: pid)?.launchDate
@@ -650,10 +576,8 @@ enum AXProbe {
             app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
         let enhanced = AXUIElementSetAttributeValue(
             app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
-        // A FAILED POKE USED TO LOOK EXACTLY LIKE A SUCCESSFUL ONE, and the two
-        // have different fixes: a slow Electron tree needs waiting for, a poke
-        // that never landed needs explaining. `.attributeUnsupported` is the
-        // ordinary answer from a native app and is not a failure.
+        // Log a failed poke: a slow Electron tree needs waiting for, a poke that never landed needs
+        // explaining. `.attributeUnsupported` is the ordinary answer from a native app, not a failure.
         for (name, err) in [("AXManualAccessibility", manual), ("AXEnhancedUserInterface", enhanced)]
         where err != .success && err != .attributeUnsupported {
             Emit.log("ax: \(name) on pid \(pid) returned \(err.rawValue)")
@@ -661,12 +585,9 @@ enum AXProbe {
         return true
     }
 
-    /// `DeikoGrounding.groundsContent` for an already-described element.
-    ///
-    /// The judgement lives in its own target because it is pure and this file
-    /// is not: asking the question at all needs a live accessibility tree and a
-    /// running app to point at. See `Grounding.swift` for why "has any text" was
-    /// the wrong test.
+    /// `DeikoGrounding.groundsContent` for an already-described element. The judgement lives in its own
+    /// target because it is pure, while asking the question needs a live accessibility tree. See
+    /// `Grounding.swift`.
     static func groundsContent(_ e: AXElement) -> Bool {
         DeikoGrounding.groundsContent(
             role: e.role,
@@ -677,10 +598,9 @@ enum AXProbe {
         )
     }
 
-    /// The same question against a live element, for the descent — five IPC
-    /// reads instead of `hasText`'s three, paid only on elements we are already
-    /// considering. The extra one is the role, which is the whole point: it is
-    /// what separates a caret's alt text from a cell's contents.
+    /// The same question against a live element, for the descent: five IPC reads instead of `hasText`'s
+    /// three, paid only on elements already under consideration. The extra one is the role, which
+    /// separates a caret's alt text from a cell's contents.
     private static func groundsContent(_ el: AXUIElement) -> Bool {
         func read(_ attr: String) -> String? {
             stringify(copyAttr(el, attr))
@@ -712,9 +632,8 @@ enum AXProbe {
         }
     }
 
-    /// Heuristic for "AX answered, but told us nothing useful" — the shape of
-    /// an un-bridged Electron window, which hands back a bare container with no
-    /// text at all. This is what triggers the manual-accessibility retry.
+    /// Heuristic for "AX answered, but told us nothing useful": the shape of an un-bridged Electron window,
+    /// which hands back a bare container with no text. Triggers the manual-accessibility retry.
     static func looksUngrounded(_ e: AXElement) -> Bool {
         let hasText = [e.value, e.title, e.elementDescription, e.selectedText]
             .contains { ($0?.isEmpty == false) }
@@ -728,7 +647,7 @@ enum AXProbe {
         }
     }
 
-    // ── Low-level attribute plumbing ────────────────────────────────────────
+    // MARK: - Low-level attribute plumbing
 
     private static func copyAttr(_ el: AXUIElement, _ attr: String) -> CFTypeRef? {
         var value: CFTypeRef?
@@ -772,18 +691,13 @@ enum AXProbe {
         return Frame(x: origin.x, y: origin.y, width: size.width, height: size.height)
     }
 
-    /// AX values arrive as several unrelated CF types. Text roles give CFString;
-    /// geometry gives an opaque AXValue; checkboxes give CFNumber/CFBoolean.
+    /// AX values arrive as several unrelated CF types: text roles give CFString, geometry an opaque
+    /// AXValue, checkboxes CFNumber/CFBoolean.
     ///
-    /// TWO KINDS OF CAST LIVE HERE AND THE DIFFERENCE IS THE COMPILER'S, NOT A
-    /// PREFERENCE. A cast to a CoreFoundation type (`AXUIElement`, `AXValue`)
-    /// cannot fail — Swift rejects `as?` on one as "will always succeed" — so
-    /// those stay forced, guarded by the `CFGetTypeID` check above them. The
-    /// bridged Foundation casts (`String`, `Bool`, `NSNumber`) genuinely can
-    /// fail, and this runs against the accessibility tree of every third-party
-    /// app on the machine, where the type ID and the bridge have been known to
-    /// disagree. Those return nil rather than trapping: an attribute Deiko
-    /// cannot read is a missing label, not a reason to take the app down.
+    /// Casts to a CoreFoundation type (`AXUIElement`, `AXValue`) cannot fail (Swift rejects `as?` on one
+    /// as "will always succeed"), so those stay forced, guarded by the `CFGetTypeID` check. The bridged
+    /// Foundation casts (`String`, `Bool`, `NSNumber`) can fail, and this runs against every third-party
+    /// app's tree, where the type ID and the bridge can disagree; those return nil rather than trapping.
     private static func stringify(_ ref: CFTypeRef?) -> String? {
         guard let ref else { return nil }
 
@@ -824,10 +738,9 @@ enum AXProbe {
             }
         }
         if typeID == CFURLGetTypeID() {
-            // AXURL and AXDocument arrive as CFURL; they used to be dropped
-            // here. Query, fragment and userinfo can carry a session token or
-            // a reset code, so they come off here too — not only from the
-            // page address that already goes through `PageURL.trim`.
+            // AXURL and AXDocument arrive as CFURL. Query, fragment and userinfo can carry a session token
+            // or a reset code, so they are stripped here too, not only from the page address that goes
+            // through `PageURL.trim`.
             let url = ref as! CFURL   // a CF cast; cannot fail after the type check
             return PageURL.withoutQuery((url as URL).absoluteString)
         }

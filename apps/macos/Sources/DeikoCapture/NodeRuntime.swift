@@ -1,35 +1,14 @@
 import Foundation
 
-// ─────────────────────────────────────────────────────────────────────────────
-// FINDING NODE
-//
-// The transcribe-and-render work is Node, and a shipped app cannot assume the
-// machine has any. One resolver answers "which node" for the pipeline the app
-// runs itself — `BriefPipeline` shells out to it for every stage, and
-// `Diagnostics` reports what it found.
-//
-// The order matters and is deliberate:
-//
-//   1. BUNDLED  — `Contents/Resources/node`, present only in `make dist` builds.
-//      Wins outright: if we shipped a runtime, that is the one we tested against.
-//   2. PATH     — a plain `node`, for a developer running from Terminal.
-//      Also the case for anyone who installed Node the ordinary way.
-//   3. LOGIN SHELL — `zsh -lc 'command -v node'`. An app launched from Finder
-//      inherits none of a terminal's environment, and on this machine node lives
-//      under nvm at a version-specific path that only the login profile knows.
-//
-// Deciding the bundle later costs nothing because of this file: `make dist`
-// drops a binary into Resources and step 1 starts winning. Nothing else changes.
-// ─────────────────────────────────────────────────────────────────────────────
-
+/// Finds the `node` the pipeline runs on, in order:
+///  1. `Contents/Resources/node`, present only in `make dist` builds; a bundled runtime is the one that was tested.
+///  2. A plain `node` on `PATH`.
+///  3. `zsh -lc 'command -v node'`: an app launched from Finder inherits none of a terminal's environment,
+///     and nvm installs node at a version-specific path only the login profile knows.
 enum NodeRuntime {
 
-    /// Where Node is, or nil if this machine has none we can find.
-    ///
-    /// A lazy `static let` rather than a hand-rolled cache: Swift initialises it
-    /// exactly once, thread-safely, on first use. The login-shell probe spawns a
-    /// process and the pipeline asks for this on every stage of every session,
-    /// so "once" matters.
+    /// Where Node is, or nil if none can be found. A lazy `static let` so the login-shell probe,
+    /// which spawns a process, runs once however many stages ask.
     private static let resolved: URL? = bundled() ?? onPath() ?? viaLoginShell()
 
     static func resolve() -> URL? { resolved }
@@ -49,9 +28,8 @@ enum NodeRuntime {
         return nil
     }
 
-    /// The nvm case. `command -v` rather than `which`: it is a shell builtin, so
-    /// it reports what the shell would actually run, including a shell function
-    /// nvm may have installed.
+    /// The nvm case. `command -v` rather than `which`: as a shell builtin it reports what the shell
+    /// would run, including a shell function nvm may have installed.
     private static func viaLoginShell() -> URL? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
@@ -72,18 +50,8 @@ enum NodeRuntime {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// WHERE THE PIPELINE LIVES
-//
-// Two answers, and the DEVELOPMENT one wins when both are available.
-//
-// That order is the point. This project's loop is `make bundle && open
-// build/Deiko.app`, and a bundled copy that shadowed the checkout would mean
-// every edit to a script needed a re-bundle before it could be seen — the exact
-// slow loop the app was built to avoid. A developer's app runs the developer's
-// scripts; everyone else's runs the ones inside the bundle.
-// ─────────────────────────────────────────────────────────────────────────────
-
+/// Where the pipeline lives. The development layout wins when both apply, so a developer's app runs
+/// the checkout's scripts and edits show up without re-bundling.
 enum Layout {
     /// `<repo>/build/Deiko.app` — a Makefile sits beside the bundle.
     case development(repo: URL)
@@ -93,10 +61,8 @@ enum Layout {
     static func resolve() -> Layout? {
         let fm = FileManager.default
 
-        // `<repo>/build/Deiko.app` → up two → `<repo>`. THIS checkout's shape,
-        // not merely a Makefile: a shipped app in `~/Applications` with a
-        // `~/Makefile` two folders up used to take itself for a developer's,
-        // run that `make` and source the `.env` beside it.
+        // Checks this checkout's shape, not merely a Makefile: a shipped app in `~/Applications` with a
+        // `~/Makefile` two folders up must not run that `make` and source the `.env` beside it.
         let build = Bundle.main.bundleURL.deletingLastPathComponent()
         let beside = build.deletingLastPathComponent()
         if build.lastPathComponent == "build",

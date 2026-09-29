@@ -5,16 +5,10 @@ import ImageIO
 import DeikoGesture
 import UniformTypeIdentifiers
 
-// ─────────────────────────────────────────────────────────────────────────────
-// INK ON EVIDENCE
-//
-// Draws the user's actual stroke onto a finished crop, plus a numbered badge.
-// ADDITIVE, always: every captured pixel survives underneath a stroke overlay.
-// This is not maskToPath returning — that dimmed pixels and inverted on open
-// strokes, and was deleted for it.
-//
-// Runs AFTER Capture.crop: OCR reads the clean image; the agent reads this one.
-// ─────────────────────────────────────────────────────────────────────────────
+// Draws the user's stroke onto a finished crop, plus a numbered badge.
+// Additive: every captured pixel survives underneath the stroke overlay.
+// Runs after `Capture.crop`, so OCR reads the clean image and the agent reads
+// this one.
 
 enum InkRenderer {
 
@@ -51,9 +45,9 @@ enum InkRenderer {
             CGPoint(x: (p.x - cropRect.x) * sx, y: Double(h) - (p.y - cropRect.y) * sy)
         }
         let scale = max(1.0, sx)
-        // A scribble runs back and forth ACROSS the thing it emphasises, so at
-        // full strength it strikes out the text the agent is meant to read.
-        // Highlighter weight keeps it legible; every other kind outlines.
+        // A scribble runs back and forth across the thing it emphasises, so at
+        // full strength it would strike out the text. Highlighter weight keeps it
+        // legible; every other kind outlines.
         let ink = DeikoStyle.inkNS.withAlphaComponent(kind == .emphasis ? 0.35 : 0.9).cgColor
 
         let points = strokePath.map(px)
@@ -125,9 +119,9 @@ enum InkRenderer {
             p.x - r >= 0 && p.y - r >= 0
                 && p.x + r <= imageSize.width && p.y + r <= imageSize.height
         }
-        // A crop hugging its stroke may fit no corner; clamping the first
-        // candidate inside the image is the honest fallback — the badge may
-        // then touch the stroke box, but it will never be cut off.
+        // A crop hugging its stroke may fit no corner. Clamp the first candidate
+        // inside the image so the badge is never cut off, even if it touches the
+        // stroke box.
         let c = candidates.first(where: inside) ?? CGPoint(
             x: min(max(candidates[0].x, r), imageSize.width - r),
             y: min(max(candidates[0].y, r), imageSize.height - r)

@@ -4,19 +4,12 @@ import QuickLook
 import DeikoGesture
 import DeikoHandoff
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THE DEIKO WINDOW
+// The Deiko window: everything that is not the orb. What you have recorded, how
+// briefs get written, and every setting. Deiko stays an accessory app; a menu
+// cannot answer "where do my briefs go?".
 //
-// Everything that is not the orb: what you have recorded, how briefs get
-// written, and every setting. Deiko stays an accessory app — the orb over your
-// editor is still the product — but "where do my briefs go?" and "how do I
-// make it write tickets my way?" are questions a menu cannot answer, and a
-// 520pt settings sheet was never going to hold a board of sessions.
-//
-// ONE WINDOW, one sidebar, four places. Adding a fifth means adding a case and
-// a view, which is the point: the board, personas and the dashboard were three
-// separate designs before this, and each would have grown its own chrome.
-// ─────────────────────────────────────────────────────────────────────────────
+// One window, one sidebar, four places. Adding a fifth means adding a case and
+// a view.
 
 enum MainSection: String, CaseIterable, Identifiable {
     case dashboard, board, personas, settings
@@ -85,9 +78,9 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         MainNav.shared.section = section
         // Every time, not only on the first open.
         Task { await SessionsStore.shared.load(root: sessionRoot) }
-        // A REGULAR APP WHILE THIS WINDOW IS OPEN: a Dock tile for a
-        // minimized window to come back from, ⌘-Tab, full screen and the
-        // menu bar. `windowWillClose` hands the Dock tile back.
+        // A regular app while this window is open: a Dock tile to come back to
+        // when minimized, ⌘-Tab, full screen and the menu bar. `windowWillClose`
+        // hands the Dock tile back.
         if !holdsDock {
             DockPresence.acquire()
             holdsDock = true
@@ -105,17 +98,15 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         let window = NSWindow(contentViewController: hosting)
         window.title = "Deiko"
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
-        // The sidebar runs under the title bar, the way every Mac app with one
-        // does. Without `fullSizeContentView` the material stops at the bar and
-        // the window reads as a dialog wearing a sidebar.
+        // The sidebar runs under the title bar. Without `fullSizeContentView`
+        // the material stops at the bar.
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-        // THE CORNERS. On macOS 26 a window's corner radius follows its title
+        // The corners. On macOS 26 a window's corner radius follows its title
         // bar: a bare one gets 16pt, a compact unified toolbar 20pt, a full one
-        // 26pt. Compact, and empty: its 40pt bar stays above the 44pt this
-        // layout already leaves clear (sidebar brand row, pane headers), so no
-        // control ends up under the window's drag area. A full toolbar's 66pt
-        // bar would swallow the page headers' clicks.
+        // 26pt. Compact and empty: its 40pt bar stays above the 44pt this layout
+        // already leaves clear, so no control ends up under the drag area. A
+        // full toolbar's 66pt bar would swallow the page headers' clicks.
         window.useRoundedTitleBar("DeikoMainWindow")
         // The green button goes full screen, as in every other Mac app;
         // Option-click (or a double-click on the bar) zooms.
@@ -141,16 +132,15 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// ZOOM FILLS THE SCREEN'S HEIGHT, NOT ITS WIDTH: a board three cards
-    /// wide reads the same at 1320pt as at 2560, and an ultrawide stretch
-    /// only puts the cards further from each other.
+    /// Zoom fills the screen's height, not its width: a board three cards wide
+    /// reads the same at 1320pt as at 2560.
     func windowWillUseStandardFrame(_ window: NSWindow, defaultFrame: NSRect) -> NSRect {
         let width = min(defaultFrame.width, 1320)
         return NSRect(x: defaultFrame.midX - width / 2, y: defaultFrame.minY, width: width, height: defaultFrame.height)
     }
 }
 
-// ── The window ──────────────────────────────────────────────────────────────
+// MARK: - Window
 
 struct MainWindowView: View {
     @ObservedObject private var nav = MainNav.shared
@@ -159,14 +149,11 @@ struct MainWindowView: View {
     let sessionRoot: String
 
     var body: some View {
-        // AN EXPLICIT SPLIT, NOT `NavigationSplitView`.
-        //
-        // The sidebar here is fixed furniture: four places, always visible,
-        // 198pt, on paper. `NavigationSplitView` brings a collapsible column,
-        // a toolbar toggle and a translucent material to match — none of which
-        // this design wants, all of which would have to be argued back out.
-        // It also declines to lay out at all outside a real window scene,
-        // which made every shot of this window a blank column.
+        // An explicit split, not `NavigationSplitView`: the sidebar is fixed
+        // furniture (four places, always visible), and `NavigationSplitView`
+        // brings a collapsible column, a toolbar toggle and a translucent
+        // material this design does not want. It also declines to lay out
+        // outside a real window scene.
         HStack(spacing: 0) {
             sidebar
                 .frame(width: 198)
@@ -174,36 +161,23 @@ struct MainWindowView: View {
             Divider()
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                // PAPER, NOT CARD. This was `card`, which is also what every
-                // `InsetCard` inside it is filled with — white on white,
-                // measured at 1.00:1, with the whole grouping carried by one
-                // hairline at 1.17:1. Cards sit ON paper; that is the entire
-                // reason paper exists as a token.
+                // Paper, not card: cards sit on paper, and `InsetCard` fills
+                // with `card`, so a `card` background would be white on white.
                 .background(DeikoStyle.paper)
         }
         .task { await sessions.load(root: sessionRoot) }
-        // NO SAFE-AREA INSET. The window is `fullSizeContentView` with a hidden,
-        // transparent title bar, and under that style the pane's scroll view is
-        // handed a title-bar inset on top of the 44pt `PaneScroll` already pads
-        // by hand. Two things went wrong with that. The real window drew every
-        // pane lower than the design it was reviewed against, which was only
-        // ever rendered borderless. And inside the scroll view SwiftUI's own
-        // hit-testing did not agree with the drawing by that same inset: the
-        // board's filter chips drew in one place and took clicks in another,
-        // hovering them lit the card beneath, while the ⋯ menus — AppKit
-        // controls, hit-tested by AppKit — kept working, and the sidebar,
-        // outside any scroll view, was never affected. One coordinate space
-        // for both, and the 44pt is the whole of the title-bar allowance.
+        // No safe-area inset. The window is `fullSizeContentView` with a hidden,
+        // transparent title bar, and under that style a scroll view is handed a
+        // title-bar inset on top of the 44pt `PaneScroll` already pads by hand.
+        // Inside the scroll view SwiftUI's hit-testing then disagrees with the
+        // drawing by that inset (chips draw in one place and take clicks in
+        // another). One coordinate space for both, and the 44pt is the whole
+        // title-bar allowance.
         .ignoresSafeArea(.container, edges: .top)
-        // THE CONTROLS DEIKO DID NOT DRAW still have to carry the palette.
-        //
-        // A Toggle, a segmented Picker, a text field's caret and selection,
-        // and a standard button's focus ring all take the SYSTEM accent —
-        // whatever blue (or graphite, or pink) the person set in System
-        // Settings. So half this window is Deiko's indigo and the other half
-        // is a colour chosen by somebody who has never seen it. One line
-        // moves the lot onto the palette, and `DESIGN.md` already says which
-        // colour: indigo marks selecting and focusing.
+        // Controls Deiko did not draw (Toggle, segmented Picker, caret and
+        // selection, focus rings) take the system accent, so half this window
+        // would be a colour the person chose in System Settings. One line puts
+        // them on the palette: indigo marks selecting and focusing.
         .tint(DeikoStyle.accent)
     }
 
@@ -213,14 +187,12 @@ struct MainWindowView: View {
                 CoinView(kind: .ready, diameter: 24)
                 Text("Deiko").deikoTitle(17)
             }
-            // 9, not 12: the rows below inset their label by 6 (row padding)
-            // + 9 (content padding) = 15, and the wordmark sat 4pt right of
-            // every one of them.
+            // 9, not 12: the rows below inset their label by 6 (row padding) +
+            // 9 (content padding) = 15, so the wordmark lines up with them.
             .padding(.horizontal, 9)
-            // CLEAR OF THE TRAFFIC LIGHTS. The title bar is transparent and
-            // its title hidden, so the window's own buttons are drawn over
-            // this column — they finish around 32pt down, and the brand row
-            // was landing at 25.
+            // Clear of the traffic lights: the title bar is transparent, so the
+            // window's buttons are drawn over this column and finish around 32pt
+            // down.
             .padding(.top, 44)
             .padding(.bottom, 14)
 
@@ -228,8 +200,7 @@ struct MainWindowView: View {
                 SidebarRow(
                     section: section,
                     selected: nav.section == section,
-                    // ⌘1…⌘4. This is a menu-bar app for developers; the second
-                    // thing they try after opening a window is a number key.
+                    // ⌘1…⌘4.
                     shortcut: KeyEquivalent(Character("\(index + 1)"))
                 ) {
                     nav.section = section
@@ -243,9 +214,8 @@ struct MainWindowView: View {
         .padding(.vertical, 10)
     }
 
-    /// What is left, where it is always visible. The trial was knowable only
-    /// from a sentence in a window nobody opened; this is the same number the
-    /// Settings card draws, in the place people actually look.
+    /// What is left, where it is always visible: the same number the Settings
+    /// card draws.
     @ViewBuilder private var quotaStrip: some View {
         if let quota = License.cachedQuota, quota.capSeconds > 0 {
             VStack(alignment: .leading, spacing: 5) {
@@ -277,10 +247,9 @@ struct MainWindowView: View {
         case .personas: PersonasPane()
         case .settings:
             SettingsView(openSessionDir: openSessionDir, sessionRoot: sessionRoot)
-                // Its own scroll view, so it is not wrapped in `PaneScroll` —
-                // but it carries the same header, because a section that
-                // opens differently from its neighbours reads as a different
-                // window.
+                // Its own scroll view, so it is not wrapped in `PaneScroll`, but
+                // it carries the same header so the section opens like its
+                // neighbours.
 
         }
     }
@@ -325,36 +294,32 @@ private struct SidebarRow: View {
     }
 }
 
-// ── What has been recorded ──────────────────────────────────────────────────
+// MARK: - Sessions
 
 @MainActor
 final class SessionsStore: ObservableObject {
 
     /// Shared, so `MainWindowController.present()` can refresh it. The window
-    /// is kept alive between openings (`isReleasedWhenClosed = false`), so a
-    /// `.task` on the view runs exactly once per launch — and the pane whose
-    /// lede is "what Deiko has heard on this Mac" was showing what it had
-    /// heard by the time you first opened the window.
+    /// is kept alive between openings, so a `.task` on the view runs once per
+    /// launch and the pane would show stale data.
     static let shared = SessionsStore()
 
     /// The session being recorded right now, if any. Set once at launch
-    /// alongside `Collections.root` (see `MenuBar`). `load` skips this
-    /// session entirely — never "Unfinished recording", never a card, never
-    /// a "Delete…" on the brief that is still being made.
+    /// alongside `Collections.root` (see `MenuBar`). `load` skips it entirely:
+    /// no card, no "Delete…" on a brief still being made.
     nonisolated(unsafe) static var openSessionDir: (() -> String?)?
 
     struct Item: Identifiable, Sendable {
         let id: String
         let dir: String
         let date: Date
-        /// The narration, which is the only line anybody recognises a session
-        /// by. A session whose brief never rendered has none — it is listed
-        /// anyway, because it is still theirs and still on the disk.
+        /// The narration, the only line anybody recognises a session by. A
+        /// session whose brief never rendered has none, and is listed anyway.
         let line: String?
 
         /// What to call this when the narration is missing or says nothing
-        /// ("Thank you." is a real transcript, and a real board is full of
-        /// them). The app it was captured from beats an apology.
+        /// ("Thank you." is a real transcript). The app it was captured from
+        /// beats an apology.
         var title: String {
             if unreadable { return "Couldn't read this brief" }
             if unfinished { return "Unfinished recording" }
@@ -363,9 +328,8 @@ final class SessionsStore: ObservableObject {
             return crops.isEmpty ? "A session with nothing saved" : "\(crops.count) screenshots, no words"
         }
 
-        /// Drops the trailing full stop a sentence naturally ends on and caps
-        /// at a word boundary — mirrors `tasks.mjs`'s `trimTitle`, so a title
-        /// never runs to paragraph length.
+        /// Drops the trailing full stop a sentence naturally ends on and caps at
+        /// a word boundary. Mirrors `trimTitle` in `tasks.mjs`; change both.
         private static func trimmedTitle(_ text: String) -> String {
             var trimmed = text
             while let last = trimmed.last, ".!? ".contains(last) { trimmed.removeLast() }
@@ -380,9 +344,8 @@ final class SessionsStore: ObservableObject {
         /// The pages and files the brief is about — what its work is named after.
         var pages: [String] = []
         var files: [String] = []
-        /// Where this brief sits in what Deiko remembers — see `Context.swift`.
-        /// All three come from the same detached pass that reads the manifest,
-        /// so the memory costs the board one more small decode per session.
+        /// Where this brief sits in what Deiko remembers (see `Context.swift`).
+        /// All three come from the same detached pass that reads the manifest.
         var collection: String?
         /// The task this brief belongs to; its own when nobody moved it. An
         /// odds brief still carries its own id here but is in no task, so
@@ -392,15 +355,14 @@ final class SessionsStore: ObservableObject {
         var odds: Bool
         /// The first line an agent wrote back about what it did, if one did.
         let outcome: String?
-        /// No brief.json: a recording that never finished rendering. Set
-        /// aside as "Unfinished recording".
-        /// ponytail: a brief mid-pipeline reads as unfinished for the seconds
-        /// before its first render; the board reloads when it lands.
+        /// No brief.json: a recording that never finished rendering, set aside
+        /// as "Unfinished recording". A brief mid-pipeline reads as unfinished
+        /// for the seconds before its first render; the board reloads when it
+        /// lands.
         let unfinished: Bool
-        /// A brief.json exists but this build could not decode it — an older
-        /// schema, or a write that was cut short. Distinct from `unfinished`:
-        /// the recording finished, this build just can't read what it wrote.
-        /// Set aside alongside it, as "Couldn't read this brief".
+        /// A brief.json exists but this build could not decode it (a different
+        /// schema, or a write cut short). Distinct from `unfinished`; set aside
+        /// alongside it as "Couldn't read this brief".
         let unreadable: Bool
         /// The likeliest task the classifier asked "Which one?" about, while
         /// this brief is still its own task — the board's "Looks like …?".
@@ -440,11 +402,8 @@ final class SessionsStore: ObservableObject {
     @Published private(set) var collections: [Collection] = []
 
     /// How many briefs sit in each collection, and how many sit in none.
-    ///
-    /// Tallied once when the board loads rather than filtered per lookup: the
-    /// chip row sorts collections by size, and a comparator that walks every
-    /// session is the shape of thing that is fine at thirty briefs and silly
-    /// at three thousand.
+    /// Tallied once when the board loads rather than filtered per lookup, since
+    /// the chip row sorts collections by size.
     @Published private(set) var counts: [String: Int] = [:]
     @Published private(set) var unsortedCount = 0
 
@@ -500,13 +459,13 @@ final class SessionsStore: ObservableObject {
 
     static let ownTaskTakenHelp = "Other briefs are already in the task this one started, so this would join them rather than start a new one."
 
-    /// Put a brief in another task. Re-rendered, because the prompt carries
-    /// the task — unlike a collection move, which changes nothing it says.
     /// The board window's, set by `BoardPane`: every move is one ⌘Z.
     weak var undoManager: UndoManager?
 
+    /// Puts a brief in another task. Re-rendered, because the prompt carries the
+    /// task, unlike a collection move.
     func move(_ item: Item, toTask id: String) {
-        // UNDO PUTS BACK EXACTLY WHAT WAS THERE — the file as it was, not a
+        // Undo puts back exactly what was there (the file as it was), not a
         // second move, which would stamp the brief as placed by hand.
         let file = SessionContext.path(sessionDir: item.dir)
         let before = try? Data(contentsOf: file)
@@ -519,8 +478,8 @@ final class SessionsStore: ObservableObject {
         context.placeTask(id)
         try? context.write(sessionDir: item.dir)
         SessionContext.noteCorrection(sessionDir: item.dir, task: id)
-        // On the board at once — a drag that takes a re-render to land reads
-        // as a drag that did nothing. The reload after it says the same.
+        // On the board at once: a drag that takes a re-render to land reads as
+        // a drag that did nothing.
         if let index = items.firstIndex(where: { $0.id == item.id }) {
             items[index].task = id
             items[index].odds = false
@@ -545,10 +504,10 @@ final class SessionsStore: ObservableObject {
     }
 
     /// Whether an earlier brief of this one's task wrote back since this one
-    /// rendered — see `TaskMemory`. Earlier only: those are all
-    /// `render-brief.mjs` carries. Its own task from `context.json`, not the
-    /// board, which may not have caught up with the filing yet; odds and ends
-    /// have no task to remember.
+    /// rendered (see `TaskMemory`). Earlier only, since those are all
+    /// `render-brief.mjs` carries. Uses the task from `context.json`, not the
+    /// board, which may not have caught up with the filing; odds and ends have
+    /// no task to remember.
     func memoryIsStale(sessionDir: String) -> Bool {
         let id = (sessionDir as NSString).lastPathComponent
         let context = SessionContext.read(sessionDir: sessionDir)
@@ -581,7 +540,7 @@ final class SessionsStore: ObservableObject {
         items[index].collection = collection
     }
 
-    // ── "Added to … · Undo", shown once ─────────────────────────────────────
+    // MARK: - "Added to … · Undo", shown once
 
     /// Where the seen-markers live. Nil in `ui-shot`, which must never mark
     /// a real brief as seen.
@@ -608,9 +567,8 @@ final class SessionsStore: ObservableObject {
 
     func windowClosed() { showing = [] }
 
-    /// FIRST RUN OF THE TIMELINE: every filing already on the board is old
-    /// news. Without this the first open wore an Undo on every joined brief
-    /// Deiko ever made; the announcement is for filings from now on.
+    /// First run of the timeline: every filing already on the board is old news,
+    /// so only filings from now on announce an Undo.
     private func seedSeen(_ read: [Item]) {
         guard let defaults = Self.seenDefaults, defaults.object(forKey: Self.seenKey) == nil else { return }
         seen = Set(read.filter(\.filedByDeiko).map(\.id))
@@ -646,10 +604,10 @@ final class SessionsStore: ObservableObject {
         Collections.root = root
         let known = Set(Collections.all().map(\.id))
         let names = Sessions.list(root: root)
-        // The session being recorded right now, if any — computed on the main
+        // The session being recorded right now, if any: computed on the main
         // actor (it asks the recorder) and captured by value, because it must
-        // never appear on the board at all: no card means no "Delete…" for it.
-        // By name, matching `Sessions.deleteAll(keeping:)`, not by full path.
+        // never appear on the board, so it gets no "Delete…". By name, matching
+        // `Sessions.deleteAll(keeping:)`, not by full path.
         let openName = Self.openSessionDir?().map { ($0 as NSString).lastPathComponent }
         // Manifests are small but there can be hundreds; read them off the main
         // actor so opening the window never stutters.
@@ -665,10 +623,9 @@ final class SessionsStore: ObservableObject {
                 )
                 let digest = try? BriefPipeline.digest(sessionDir: dir)
                 let narration = digest?.summary.narration.trimmingCharacters(in: .whitespacesAndNewlines)
-                // An id no collection claims any more — its collection was
-                // deleted — reads as Unsorted, which is what the confirmation
-                // promised and what the card says. Left as-is, those briefs
-                // answered to no chip at all.
+                // An id no collection claims (its collection was
+                // deleted) reads as Unsorted, so those briefs still answer to a
+                // chip.
                 let stored = SessionContext.read(sessionDir: dir)
                 let context = known.contains(stored?.collection ?? "") ? stored : nil
                 let own = Tasks.own(name)
@@ -721,7 +678,7 @@ final class SessionsStore: ObservableObject {
     }
 }
 
-// ── Dashboard ───────────────────────────────────────────────────────────────
+// MARK: - Dashboard
 
 private struct DashboardPane: View {
     @ObservedObject var sessions: SessionsStore
@@ -731,10 +688,8 @@ private struct DashboardPane: View {
     var body: some View {
         PaneScroll(title: "Dashboard", lede: "What Deiko has heard on this Mac.") {
             if sessions.items.isEmpty {
-                // NO ZEROES. Three 28pt noughts were the first thing a new
-                // install showed, with the one sentence that tells you what to
-                // do pushed underneath them. Nothing recorded is not a
-                // statistic, it is an invitation.
+                // No zeroes: nothing recorded is not a statistic, it is an
+                // invitation.
                 EmptyPane(
                     title: sessions.loaded ? "Nothing on the desk yet" : "Reading your sessions…",
                     line: "Double-tap \(SessionKey.selected.name), point at something, and say what should change. Whatever you say lands here — and nowhere else."
@@ -785,9 +740,9 @@ private struct DashboardPane: View {
         }
     }
 
-    /// THE LAST BRIEF, NOT A COUNT OF THEM. What somebody wants from this pane
-    /// ninety seconds after talking to their screen is the thing they just
-    /// made — and the one action that was missing everywhere: take it with you.
+    /// The last brief, not a count of them: what somebody wants ninety seconds
+    /// after talking to their screen is the thing they just made, and a way to
+    /// take it with them.
     private var latest: some View {
         let item = sessions.items[0]
         return VStack(alignment: .leading, spacing: 11) {
@@ -876,9 +831,9 @@ private struct DashboardPane: View {
     }
 }
 
-/// THIS WEEK, WHERE THINGS STAND: every piece of work that had a brief in
-/// the last seven days, busiest first, with what its last agent left open —
-/// read the way the work view reads it, corrections applied. All on this Mac.
+/// This week, where things stand: every piece of work that had a brief in the
+/// last seven days, busiest first, with what its last agent left open, read the
+/// way the work view reads it (corrections applied). All on this Mac.
 struct WeekDigest: View {
     let rows: [Row]
 
@@ -962,7 +917,7 @@ struct WeekDigest: View {
     }
 }
 
-// ── Board ───────────────────────────────────────────────────────────────────
+// MARK: - Board
 
 private struct BoardPane: View {
     @ObservedObject var sessions: SessionsStore
@@ -987,9 +942,9 @@ private struct BoardPane: View {
     @State private var unfolded: Set<String> = UIShotPose.unfolded
     @FocusState private var searching: Bool
 
-    /// Which slice of the board is on screen. Unsorted is its own answer
-    /// rather than an empty collection: "nothing filed this yet" is a thing
-    /// somebody looks for on purpose.
+    /// Which slice of the board is on screen. Unsorted is its own answer rather
+    /// than an empty collection: "nothing filed this yet" is something to look
+    /// for on purpose.
     private enum Filter: Hashable {
         case all, unsorted, collection(String)
     }
@@ -1002,15 +957,15 @@ private struct BoardPane: View {
             case .collection(let id): return item.collection == id
             }
         }
-        // ONE PIECE OF WORK READS FORWARDS: how it started, then what came of
+        // One piece of work reads forwards: how it started, then what came of
         // it. The timeline reads the other way, newest on top.
         if let work { inFilter = inFilter.filter { $0.task == work && !$0.setAside }.reversed() }
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         guard !q.isEmpty else { return inFilter }
-        // A TASK IS FOUND BY ITS NAME, and found whole: its tag counts its
-        // briefs, so showing only the ones whose words also matched made the
-        // count and the cards disagree. Titled from the group, not per brief
-        // — `title(ofTask:)` walks the board for an untitled task.
+        // A task is found by its name, and found whole: its tag counts its
+        // briefs, so showing only the ones whose words also matched would make
+        // the count and the cards disagree. Titled from the group, not per
+        // brief: `title(ofTask:)` walks the board for an untitled task.
         let named = Set(sessions.groups(of: inFilter).filter { group in
             (sessions.taskTitles[group.id] ?? group.items.last?.title ?? "").lowercased().contains(q)
                 || (sessions.workNames[group.id] ?? "").lowercased().contains(q)
@@ -1023,13 +978,9 @@ private struct BoardPane: View {
         }
     }
 
-    /// THE PROJECT, AS ONE QUIET MENU. Projects were a row of chips over the
-    /// timeline, a third way of grouping briefs beside days and works, and
-    /// the loudest of the three. A filter somebody uses now and then reads
-    /// as a filter: "Project: All", its choices ordered by size.
-    ///
-    /// It sits in the pane's fixed band, not in the scroll view with the
-    /// cards — see `body` for why that is the whole of the fix.
+    /// The project filter, as one quiet menu: "Project: All", its choices
+    /// ordered by size. It sits in the pane's fixed band, not in the scroll view
+    /// with the cards; see `body`.
     @ViewBuilder private var projectMenu: some View {
         if !sessions.collections.isEmpty {
             let sorted = sessions.collections.sorted { sessions.count(of: $0.id) > sessions.count(of: $1.id) }
@@ -1070,9 +1021,8 @@ private struct BoardPane: View {
         }
     }
 
-    /// The way back from one piece of work, in the band for the same reason
-    /// the chips are: nothing clickable lives above the cards in their own
-    /// scroll view.
+    /// The way back from one piece of work, in the fixed band like the project
+    /// menu.
     @ViewBuilder private var workRow: some View {
         if let work {
             HStack(spacing: 10) {
@@ -1163,22 +1113,14 @@ private struct BoardPane: View {
         return "Newest first. Drag one brief onto another to group them."
     }
 
-    /// CHROME ABOVE, CONTENT BELOW, AND NEVER IN THE SAME SCROLL VIEW.
-    ///
-    /// The other panes use `PaneScroll`, where the title scrolls away with
-    /// the content. The board does not, because it has a filter, and the
-    /// filter cannot share a scroll view with the cards it filters. Each card
-    /// carries four AppKit tracking areas — help, context menu, hover, tap —
-    /// and when a segment changed and the grid reflowed from two cards to
-    /// thirty-seven, the first card's stale tracking rect landed on the
-    /// filter: the segment stuck, and the pointer over it lit the card. Every
-    /// version of the filter as a chip died the same way, for the same
-    /// reason, before the cause was found.
-    ///
-    /// So the board is built the way a browser is: a fixed band holding the
-    /// title, the search and the filter, a hairline, and a scroll view holding
-    /// only the grid. The scroll view clips its content, so a card's tracking
-    /// area cannot exist above the hairline whatever the grid is doing.
+    /// Chrome above, content below, never in the same scroll view. Each card
+    /// carries four AppKit tracking areas (help, context menu, hover, tap), and
+    /// when the grid reflows a card's stale tracking rect can land on a filter
+    /// sharing its scroll view: the control sticks and the pointer over it lights
+    /// the card. So the board is built like a browser: a fixed band holding the
+    /// title, search and filter, a hairline, and a scroll view holding only the
+    /// grid. The scroll view clips its content, so a card's tracking area cannot
+    /// exist above the hairline.
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 16) {
@@ -1231,19 +1173,18 @@ private struct BoardPane: View {
             // A brief opens at its top, whatever depth of board it came from.
             .onChange(of: nav.brief) { _, _ in scroller.scrollTo("top", anchor: .top) }
             }
-            // EMPTY SPACE IS A PLACE TO DROP. A card's own destination wins
-            // over this one, so only a drop between or below cards lands here.
+            // Empty space is a place to drop. A card's own destination wins over
+            // this one, so only a drop between or below cards lands here.
             .dropDestination(for: String.self) { ids, _ in
                 standAlone(ids)
             } isTargeted: { overSpace = $0 }
         }
     }
 
-    /// NOTHING MOVES UNLESS YOU MOVE IT. Newest first under the day it was
-    /// said, so a brief just recorded is always the first card — never
-    /// halfway down the page inside whichever task Deiko thought it was.
-    /// No pinned headers: a pinned view fights the scroll view for the same
-    /// tracking areas the fixed band escaped.
+    /// Nothing moves unless you move it: newest first under the day it was
+    /// said, so a brief just recorded is always the first card. No pinned
+    /// headers: a pinned view fights the scroll view for the same tracking areas
+    /// the fixed band escaped.
     private var timeline: some View {
         let sections = work == nil
             ? BoardTimeline.sections(shown, date: \.date, now: Date())
@@ -1264,10 +1205,10 @@ private struct BoardPane: View {
                             Text("· \(section.items.count)")
                                 .font(.system(size: 11))
                                 .foregroundStyle(DeikoStyle.ink2)
-                            // SET ASIDE, FOLDED INTO THE HEADING: mic checks
-                            // and unfinished recordings take no row of their
-                            // own, so they never push the work down or break
-                            // its grid. Opens in place, under the heading.
+                            // Set-aside briefs fold into the heading: mic checks
+                            // and unfinished recordings take no row of their own,
+                            // so they never push the work down or break its grid.
+                            // Opens in place, under the heading.
                             if !fold.folded.isEmpty {
                                 foldLine(section.title, count: fold.folded.count)
                                     .padding(.leading, 12)
@@ -1303,8 +1244,6 @@ private struct BoardPane: View {
 
     /// "3 mic checks & scraps", a hairline chip on a hairline rule beside the
     /// day's heading: the quietest thing on the board until it is clicked.
-    /// Named for what is in it — "set aside" said only that something was
-    /// hidden, never what.
     private func foldLine(_ key: String, count: Int) -> some View {
         let open = unfolded.contains(key)
         return HStack(spacing: 10) {
@@ -1395,8 +1334,7 @@ private struct BoardPane: View {
             .font(.system(size: 12))
             .frame(width: 190)
             .focused($searching)
-            // ⌘F puts the cursor here. A search field nobody can reach
-            // from the keyboard is a search field for other people.
+            // ⌘F puts the cursor here.
             .overlay {
                 Button("") { searching = true }
                     .keyboardShortcut("f", modifiers: .command)
@@ -1406,20 +1344,15 @@ private struct BoardPane: View {
     }
 }
 
-/// A chip that is a button. `on` is the wash chip the system already has
-/// (DESIGN.md §Chips), with an accent edge under the pointer; off is a hairline
-/// outline that takes a faint wash.
+/// A chip that is a button. `on` is the wash chip the system already has, with
+/// an accent edge under the pointer; off is a hairline outline that takes a
+/// faint wash.
 ///
-/// THE WHOLE LOOK LIVES IN A `ButtonStyle`, and that is the point rather than
-/// a tidying. This was built the way `SidebarRow` is — `.buttonStyle(.plain)`
-/// with the capsule drawn in the label's `.background` — and the sidebar works.
-/// In a pane it did not: the chips drew correctly and took neither a hover nor
-/// a click, while the pointer carried on to the cards. The sidebar is not
-/// inside a `ScrollView` and every pane is, and inside a pane every control
-/// that works is either a menu or a custom `ButtonStyle` (`InkButtonStyle` on
-/// the Dashboard). The chip was the only `.plain` button in a scrolling pane,
-/// and the only dead one. So it is built the way the ones that work are built.
-/// The review card's "Carries on from which?" chips borrow it, for the same reason.
+/// The whole look lives in a `ButtonStyle` rather than a `.plain` button with a
+/// capsule in the label's background: inside a `ScrollView` a `.plain` button
+/// draws correctly but takes neither hover nor click, while menus and custom
+/// `ButtonStyle`s (`InkButtonStyle`) work. The review card's "Carries on from
+/// which?" chips borrow it.
 struct ChipButtonStyle: ButtonStyle {
     let on: Bool
 
@@ -1427,9 +1360,9 @@ struct ChipButtonStyle: ButtonStyle {
         Chip(configuration: configuration, on: on)
     }
 
-    /// Named `Chip`, not `Body`: `Body` is the protocol's own associated type
-    /// and a nested struct by that name satisfies it instead — the same trap
-    /// `InkButtonStyle` documents.
+    /// Named `Chip`, not `Body`: `Body` is the protocol's associated type, and a
+    /// nested struct by that name satisfies it instead (the same trap
+    /// `InkButtonStyle` documents).
     private struct Chip: View {
         let configuration: ButtonStyleConfiguration
         let on: Bool
@@ -1465,12 +1398,10 @@ struct ChipButtonStyle: ButtonStyle {
 /// tallest card, cards top-aligned: `LazyVGrid(.adaptive(minimum:))`'s look,
 /// without its laziness.
 ///
-/// WHY NOT LAZY. A lazy grid guesses the height of every row it has not
-/// drawn yet, and corrects the guess as the row scrolls in. With an open
-/// "mic checks & scraps" fold — a second grid above the day's cards — each
-/// correction moved everything below it, and scrolling past it jittered
-/// back and forth. This lays every card out once, at its real height. The
-/// board is a few hundred cards at most; laying them all out is cheap.
+/// Not lazy: a lazy grid guesses the height of rows it has not drawn and
+/// corrects as they scroll in, which made an open "mic checks & scraps" fold
+/// jitter the scroll. This lays every card out once at its real height; a
+/// board is a few hundred cards at most.
 struct CardGrid: SwiftUI.Layout {
     var minColumn: CGFloat = 210
     var spacing: CGFloat = 14
@@ -1538,25 +1469,16 @@ private struct BoardCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             if let first = item.crops.first {
-                // SET ASIDE BY ITS PICTURES, NOT ITS WORDS: the thumbnail
-                // fades, the text keeps full contrast (an opacity of 0.6 on
-                // the whole card put it under AA).
+                // Set aside by its picture, not its words: the thumbnail fades
+                // and the text keeps full contrast (an opacity of 0.6 on the
+                // whole card fails AA).
                 CropThumbnail(path: first, height: 74)
                     .opacity(item.setAside ? 0.4 : 1)
             }
-            // EVERYTHING THIS CARD CAN DO, VISIBLE AT REST.
-            //
-            // The verbs were reachable only by right-click, a gesture you
-            // have to already suspect is there. Nothing on the card said so,
-            // so copying a brief or filing it in a collection was a feature
-            // you found by accident or never found.
-            //
-            // The same `ellipsis.circle` the Personas pane uses, not a second
-            // affordance invented for this one. Beside the title rather than
-            // on the metadata line, which it crowded into wrapping a date
-            // mid-string; and not over the thumbnail, because a crop is
-            // somebody else's pixels and this app does not paint its own
-            // colours onto those.
+            // Everything this card can do is visible at rest: the ⋯ menu, the
+            // same `ellipsis.circle` the Personas pane uses. It sits beside the
+            // title rather than on the metadata line, which it crowded, and not
+            // over the thumbnail, because a crop is somebody else's pixels.
             HStack(alignment: .top, spacing: 6) {
                 Text(item.title)
                     .font(.system(size: 12.5))
@@ -1573,11 +1495,9 @@ private struct BoardCard: View {
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
-                // TINT, NOT `foregroundStyle`. A menu label takes its colour
-                // from the tint, so the window-wide accent won and every card
-                // wore a full-strength indigo dot — a grid of buttons with the
-                // briefs arranged around them. Quiet until the card is under
-                // the cursor.
+                // Tint, not `foregroundStyle`: a menu label takes its colour
+                // from the tint, so the window-wide accent would win. Quiet until
+                // the card is under the cursor.
                 .tint(hovering ? DeikoStyle.mark : DeikoStyle.ink2)
                 .tip("Copy, open, file or delete this brief")
             }
@@ -1587,13 +1507,10 @@ private struct BoardCard: View {
                     .foregroundStyle(DeikoStyle.ink2)
                     .lineLimit(1)
             }
-            // WHAT CAME OF IT, in the agent's own words, when one wrote back.
-            //
-            // Labelled rather than dropped in bare: an unmarked second
-            // sentence under the narration reads as more of what the
-            // developer said, and this is the one line on the card that
-            // somebody else wrote. Both stay in the second voice — the
-            // narration is still how you recognise the session.
+            // What came of it, in the agent's own words, when one wrote back.
+            // Labelled because an unmarked second sentence under the narration
+            // reads as more of what the developer said, and this is the one line
+            // on the card that somebody else wrote.
             if let outcome = item.outcome {
                 (Text("What happened: ").font(.system(size: 11, weight: .medium))
                     + Text(outcome).font(.system(size: 11)))
@@ -1601,8 +1518,7 @@ private struct BoardCard: View {
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            // ONE LINE, the date whole: "Sat, 19 Sep at 19:01" broke in two
-            // on a narrow card; the repo gives way first.
+            // One line, the date whole; the repo gives way first.
             HStack(spacing: 6) {
                 Text(Self.stamp(item.date)).layoutPriority(1)
                 if !item.crops.isEmpty {
@@ -1627,21 +1543,18 @@ private struct BoardCard: View {
                 )
                 .shadow(color: DeikoStyle.shadow, radius: hovering || lit ? 16 : 10, x: 0, y: hovering || lit ? 9 : 5)
         )
-        // NO GROWING, NO LIFTING. A card that scaled up on hover or drop
-        // reached over the controls beside it — a day heading's chip, a
-        // neighbour's tag — and took their clicks. A card says "hovered" and
-        // "drop here" with its border and shadow alone, inside its own frame.
+        // No growing, no lifting: a card that scaled on hover or drop would
+        // reach over the controls beside it and take their clicks. Border and
+        // shadow alone say "hovered" and "drop here".
         .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: hovering)
         .animation(reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.8), value: lit)
         .onHover { hovering = $0 }
-        // A CLICK OPENS THE BRIEF, in the app — as a card opens on any board.
-        // The card's own controls (its tag, ⋯, "Put with…?", Undo) are buttons
-        // and keep their clicks; a drag still groups. A double-click is two
-        // clicks, so it opens it too.
+        // A click opens the brief, in the app. The card's own controls (tag, ⋯,
+        // "Put with…?", Undo) are buttons and keep their clicks; a drag still
+        // groups.
         .contentShape(RoundedRectangle(cornerRadius: DeikoStyle.insetRadius))
         .onTapGesture { openBrief() }
-        // Kept beside the button: somebody who already reaches for a
-        // right-click should not have to learn a new way to do it.
+        // Kept beside the button for anybody who reaches for a right-click.
         .contextMenu { SessionMenu(item: item, store: store) }
         .tip("Click to open this brief · drag onto another to group them")
         .onAppear { store.sawFiling(item) }
@@ -1664,7 +1577,7 @@ private struct BoardCard: View {
                 .foregroundStyle(DeikoStyle.mark)
                 .padding(.vertical, 3)
         } else if store.announces(item) {
-            // FILING IS VISIBLE. Deiko put this with earlier work on its own;
+            // Filing is visible: Deiko put this with earlier work on its own;
             // said once, beside the way to take it back.
             HStack(spacing: 8) {
                 WorkTag(text: "Added to \(store.workName(ofTask: item.task))") { openWork(item.task) }
@@ -1678,9 +1591,8 @@ private struct BoardCard: View {
                     .fixedSize()
             }
         } else if let target = suggestion {
-            // ONE CLICK TO ANSWER. "Looks like Sitemap?" was a question with
-            // no way to say yes but a drag. Yes files it by hand, exactly as
-            // a drag would; no makes it its own work, as Undo does.
+            // One click to answer: yes files it by hand, exactly as a drag
+            // would; no makes it its own work, as Undo does.
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 8) { suggestionButtons(target) }
                 VStack(alignment: .leading, spacing: 4) { suggestionButtons(target) }
@@ -1736,8 +1648,8 @@ private struct BoardCard: View {
         id.flatMap { id in store.items.contains { $0.task == id && !$0.odds } ? id : nil }
     }
 
-    /// The work Deiko thinks this brief carries on — asked at the card's
-    /// foot as "Put with …?". While that question is open, "Related to" waits.
+    /// The work Deiko thinks this brief carries on, asked at the card's foot as
+    /// "Put with …?". While that question is open, "Related to" waits.
     private var suggestion: String? { live(item.maybe) }
 
     private var link: String? {
@@ -1745,9 +1657,8 @@ private struct BoardCard: View {
         return "Related to \(store.workName(ofTask: id))"
     }
 
-    /// Day and time, because six sessions from one afternoon were
-    /// typographically identical; the year appears only when it is not this
-    /// one, so the common case stays short.
+    /// Day and time, since sessions from one afternoon would otherwise look
+    /// identical; the year appears only when it is not this one.
     static let when: DateFormatter = {
         let f = DateFormatter()
         f.setLocalizedDateFormatFromTemplate("EEE d MMM HH:mm")
@@ -1767,10 +1678,9 @@ private struct BoardCard: View {
     }
 }
 
-/// A card's work tag: the wash chip (DESIGN.md §Chips), name first and the
-/// count quiet, the name giving way before the count does. Clicking it opens
-/// that work on its own — which the chevron says at rest and the accent edge
-/// says under the pointer, because a wash chip alone reads as a label.
+/// A card's work tag: the wash chip, name first and the count quiet, the name
+/// giving way before the count does. Clicking it opens that work on its own,
+/// which the chevron says at rest and the accent edge says under the pointer.
 private struct WorkTag: View {
     let text: String
     var count: Int?
@@ -1800,9 +1710,6 @@ private struct TightLabel: LabelStyle {
     }
 }
 
-/// A verb said as a word: mark indigo, underlined under the pointer. A
-/// `ButtonStyle` for the reason `ChipButtonStyle` gives — a `.plain` button
-/// in a scrolling pane took no clicks.
 /// "Waiting to be filed": briefs that went to their agent while Deiko
 /// couldn't reach its filing service, and are filed when it can.
 private struct FilingQueueRow: View {
@@ -1832,6 +1739,9 @@ private struct FilingQueueRow: View {
     }
 }
 
+/// A verb said as a word: mark indigo, underlined under the pointer. A
+/// `ButtonStyle` for the reason `ChipButtonStyle` gives: a `.plain` button in a
+/// scrolling pane takes no clicks.
 private struct TextButtonStyle: ButtonStyle {
     /// Ink 2 instead of the mark: the verb beside a stronger one.
     var quiet = false
@@ -1857,12 +1767,11 @@ private struct TextButtonStyle: ButtonStyle {
     }
 }
 
-/// The head of one piece of work: its name, its span, what you last asked,
-/// and what agents wrote back about it — where it stands and what was
-/// decided, read from each brief's `outcome.md`. Everything else the next
-/// brief carries (every brief, every note in full) waits behind "Full
-/// history". On the wall, because it is a header; above the cards in the
-/// stack (`zIndex`), so a hovered card never takes its buttons' clicks.
+/// The head of one piece of work: its name, its span, what you last asked, and
+/// what agents wrote back about it (where it stands, what was decided), read
+/// from each brief's `outcome.md`. Everything else waits behind "Full history".
+/// It sits above the cards in the stack (`zIndex`), so a hovered card never
+/// takes its buttons' clicks.
 private struct WorkNotes: View {
     let task: String
     let store: SessionsStore
@@ -1920,8 +1829,8 @@ private struct WorkNotes: View {
                 }
             }
             if let wrote = state.wroteBack {
-                // One column at a reading measure: two side by side squeezed
-                // each note into a narrow wrap at this window's width.
+                // One column at a reading measure; two side by side squeeze each
+                // note.
                 VStack(alignment: .leading, spacing: 16) {
                     blocks(state, wrote: wrote)
                     let hidden = max(0, state.open.count - Self.folded) + max(0, state.decided.count - Self.folded)
@@ -2090,7 +1999,7 @@ private struct WorkNotes: View {
         NoteStyle.toggle(label, open: open, action: action)
     }
 
-    /// "19 Sep · Claude Code", or just the day when no agent signed it.
+    /// The day, then the agent that signed it, if any.
     private func meta(_ date: Date, _ agent: String?) -> String {
         [Self.day.string(from: date), agent].compactMap { $0 }.joined(separator: " · ")
     }
@@ -2105,7 +2014,7 @@ private struct WorkNotes: View {
         return f
     }()
 
-    /// "5 briefs · 16 Sep – 18 Sep · build"
+    /// Brief count, date span, then the project name.
     private func span(_ briefs: [SessionsStore.Item]) -> String {
         let dates = briefs.map(\.date)
         var parts = ["\(briefs.count) brief\(briefs.count == 1 ? "" : "s")"]
@@ -2120,7 +2029,7 @@ private struct WorkNotes: View {
     }
 }
 
-// ── One brief ──────────────────────────────────────────────────────────────
+// MARK: - One brief
 
 /// Everything the brief view shows, read off disk once, off the main thread.
 /// Only reads: opening a brief never re-runs the pipeline the way the review
@@ -2167,12 +2076,12 @@ private struct BriefDetail: Sendable {
     }
 }
 
-/// ONE BRIEF, READ LIKE THE HANDOFF IT WAS: what you asked, what you said,
-/// what you pointed at (each screenshot with the sentence said over it),
-/// what came back, and the brief itself behind a disclosure. The work view
-/// explains a task; this is the only place a brief in no task is explained
-/// at all. A reading column, not panes: narrations run long, and a
-/// screenshot is only worth opening at a size you can read.
+/// One brief, read like the handoff it was: what you asked, what you said,
+/// what you pointed at (each screenshot with the sentence said over it), what
+/// came back, and the brief itself behind a disclosure. The work view explains
+/// a task; this is the only place a brief in no task is explained. A reading
+/// column, not panes: narrations run long, and a screenshot is only worth
+/// opening at a size you can read.
 private struct BriefView: View {
     let item: SessionsStore.Item
     @ObservedObject var store: SessionsStore
@@ -2211,7 +2120,7 @@ private struct BriefView: View {
         }
     }
 
-    // ── Header ──────────────────────────────────────────────────────────────
+    // MARK: - Header
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -2231,7 +2140,7 @@ private struct BriefView: View {
         .background(DeikoStyle.wall, in: RoundedRectangle(cornerRadius: DeikoStyle.insetRadius))
     }
 
-    /// "Tue 16 Sep at 01:39 · 43s · Chrome · Pricing"
+    /// Date and time, duration, apps, then the page or repo.
     private var meta: String {
         var parts = [BoardCard.stamp(item.date)]
         if let ms = detail?.summary?.durationMs, ms > 0 { parts.append(Self.duration(ms)) }
@@ -2298,7 +2207,7 @@ private struct BriefView: View {
         id.flatMap { id in store.items.contains { $0.task == id && !$0.odds } ? id : nil }
     }
 
-    // ── Sections ────────────────────────────────────────────────────────────
+    // MARK: - Sections
 
     @ViewBuilder private func said(_ d: BriefDetail) -> some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -2424,7 +2333,7 @@ private struct BriefView: View {
         return rows.filter { !$0.1.isEmpty }
     }
 
-    // ── Formatting ──────────────────────────────────────────────────────────
+    // MARK: - Formatting
 
     /// The same words, ignoring case, spacing and a closing full stop.
     static func same(_ a: String?, _ b: String) -> Bool {
@@ -2454,8 +2363,8 @@ private struct BriefView: View {
     }()
 }
 
-/// A screenshot whole — `.fit`, never the card's cropped `.fill` — at a size
-/// it can be read, decoded off the main thread through the shared cache.
+/// A screenshot whole (`.fit`, never the card's cropped `.fill`) at a size it
+/// can be read, decoded off the main thread through the shared cache.
 private struct LargeCrop: View {
     let path: String
     @State private var image: NSImage?
@@ -2479,8 +2388,8 @@ private struct LargeCrop: View {
     }
 }
 
-/// "BEST MATCHES": what the search found by meaning, above the board's own
-/// word matches, so "the graph thing" finds the chart work. Five at most.
+/// "Best matches": what the search found by meaning, above the board's own word
+/// matches, so "the graph thing" finds the chart work. Five at most.
 private struct BestMatches: View {
     let ids: [String]
     /// The search by meaning is still running: said, so a pause never reads
@@ -2534,8 +2443,8 @@ private struct BestMatches: View {
     }
 }
 
-/// A HAND-OFF: this work as clean Markdown for a person — a PR description,
-/// a teammate, a ticket. Copy is the text alone; Export is a folder with the
+/// A hand-off: this work as clean Markdown for a person (a PR description, a
+/// teammate, a ticket). Copy is the text alone; Export is a folder with the
 /// screenshots beside it.
 private struct HandoffButtons: View {
     let task: String
@@ -2756,11 +2665,11 @@ struct SessionMenu: View {
             Button("New project…") { newCollection() }
         }
         Menu("Move to task") {
-            // The brief that started its task is already on its own task:
-            // moving it there would change nothing — unless it is in odds
-            // and ends, which this takes it out of.
-            // Its own id taken by briefs moved into it since: "new" would
-            // join them, so that is chosen from the list instead.
+            // The brief that started its task is already on its own task, so
+            // moving it there would change nothing, unless it is in odds and
+            // ends, which this takes it out of. If its own id is taken by briefs
+            // moved into it since, "new" would join them, so that is chosen from
+            // the list instead.
             let own = Tasks.own(item.id)
             let taken = (item.odds || item.task != own) && store.hasOthers(inTask: own, besides: item.id)
             Button("Start a new task") { store.move(item, toTask: own) }
@@ -2768,8 +2677,8 @@ struct SessionMenu: View {
                 .tip(taken ? SessionsStore.ownTaskTakenHelp : "")
             let others = store.recentTasks(excluding: item.odds ? nil : item.task)
             if !others.isEmpty { Divider() }
-            // The short name a tag wears ("Sitemap · 3"), not the sentence
-            // the task was summarised as: a menu of sentences is unreadable.
+            // The short name a tag wears ("Sitemap · 3"), not the sentence the
+            // task was summarised as.
             ForEach(others) { group in
                 Button("\(store.workName(ofTask: group.id)) · \(group.items.count)") {
                     store.move(item, toTask: group.id)
@@ -2789,9 +2698,8 @@ struct SessionMenu: View {
         Task { await store.load(root: store.root) }
     }
 
-    /// ASKED, ALWAYS. The screenshots are the only copy, and "Delete all past
-    /// sessions" in Settings already sets the house rule that removing
-    /// somebody's captures is a question, not a click.
+    /// Always asked: the screenshots are the only copy, and removing somebody's
+    /// captures is a question, not a click.
     private func confirmDelete() {
         let alert = NSAlert()
         alert.alertStyle = .critical
@@ -2887,10 +2795,7 @@ private struct SessionRow: View {
                 .foregroundStyle(DeikoStyle.ink2)
             }
             Spacer()
-            // `SessionMenu`'s own note says the board card and this row must
-            // not drift apart. A lone "Open folder" here against a full menu
-            // there was exactly that drift: the same object, two different
-            // ideas of what you can do to it.
+            // Same menu as the board card, so the two cannot drift apart.
             Menu {
                 SessionMenu(item: item, store: store)
             } label: {
@@ -2912,11 +2817,11 @@ private struct SessionRow: View {
     }
 }
 
-// ── Shared pane furniture ───────────────────────────────────────────────────
+// MARK: - Shared pane furniture
 
 /// Every pane opens the same way: a title, a line under it, and room. The
-/// window has no toolbar, so this IS the header — and being one view rather
-/// than four means a new section cannot invent its own.
+/// window has no toolbar, so this is the header, and being one view means a new
+/// section cannot invent its own.
 struct PaneScroll<Content: View, Trailing: View>: View {
     let title: String
     let lede: String
@@ -2942,7 +2847,7 @@ struct PaneScroll<Content: View, Trailing: View>: View {
             }
             .padding(.horizontal, 26)
             // Same reason as the sidebar's: there is no title bar to sit under,
-            // so the pane has to leave the room one would have taken.
+            // so the pane leaves the room one would have taken.
             .padding(.top, 44)
             .padding(.bottom, 28)
             .frame(maxWidth: .infinity, alignment: .leading)

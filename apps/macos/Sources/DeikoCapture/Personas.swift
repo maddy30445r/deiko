@@ -2,25 +2,12 @@ import CryptoKit
 import Foundation
 import DeikoHandoff
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THE PERSONAS FOLDER
-//
-// `<board>/personas/<id>.md`, one file each, beside the sessions they
-// shape. Files rather than a preferences blob because the whole feature is "a
-// prompt you can own": a developer who wants to read one, diff it, put it in a
-// repo or rewrite it in their own editor should not have to go through us.
-//
-// THE FILE ON DISK WINS. Every read compares the file against the digest we
-// stored when we last wrote it; if they differ, somebody edited it by hand and
-// that text becomes the persona — the form is put away rather than silently
-// re-rendered over their work. Reset brings the form back. This is the one
-// rule that makes a folder-of-files safe to also have a UI for.
-//
-// What lives in `UserDefaults` is the FORM (options, names, which one is the
-// default) and the digests. What lives on disk is the prose. Neither can be
-// reconstructed from the other, and only one of them is somebody's writing.
-// ─────────────────────────────────────────────────────────────────────────────
-
+/// Persona files live in `<board>/personas/<id>.md`, one per persona, so they can be read, diffed and
+/// edited in any editor.
+///
+/// The file on disk wins: every read compares it with the digest stored at the last write, and a
+/// mismatch means it was hand-edited, so that text becomes the persona (Reset restores the form).
+/// `UserDefaults` holds the form (options, names, default) and the digests; the disk holds the prose.
 @MainActor
 enum Personas {
 
@@ -28,27 +15,20 @@ enum Personas {
     private static let defaultKey = "DEIKO_PERSONA_DEFAULT"
     private static let digestKey = "DEIKO_PERSONA_DIGESTS"
 
-    /// Beside the sessions, not inside one. `Sessions`'s sweep only ever
-    /// touches folders named like a timestamp, so this cannot age out.
+    /// Beside the sessions, not inside one: `Sessions`'s sweep only touches timestamp-named folders,
+    /// so this never ages out.
     static var root: String { Sessions.defaultRoot + "/personas" }
 
     static func file(for id: String) -> URL {
         URL(fileURLWithPath: root).appendingPathComponent("\(id).md")
     }
 
-    // ── What exists ─────────────────────────────────────────────────────────
-
-    /// Every persona, with hand-edited files already adopted.
-    ///
-    /// Seeding is additive and never destructive: a built-in the user deleted
-    /// from the list stays gone, but a built-in this VERSION added appears.
+    /// Every persona, with hand-edited files already adopted. Seeding only adds built-ins this
+    /// version introduced.
     static func all() -> [Persona] {
         var list = retireBugReport(stored())
         let known = Set(list.map(\.id))
-        // Additive, and that is all it needs to be: `remove` refuses to delete
-        // a built-in, so one can never go missing and come back. An earlier
-        // version kept a "already seeded" set to prevent exactly that, which
-        // could not happen.
+        // Additive is enough: `remove` refuses to delete a built-in, so one cannot go missing and return.
         for builtIn in Persona.builtIns where !known.contains(builtIn.id) {
             list.append(builtIn)
         }
@@ -57,18 +37,9 @@ enum Personas {
         return list
     }
 
-    /// "Bug report" was a built-in until it was cut — it wrote the same
-    /// document as a QA ticket in a second vocabulary. Removing it from the
-    /// code is not enough: it was already seeded into this list and onto the
-    /// disk, and `all()` would keep handing it back.
-    ///
-    /// UNLESS SOMEBODY WROTE IN IT. A persona whose file no longer matches the
-    /// digest Deiko stored is one its author has edited, and deleting that is
-    /// deleting their writing. Those survive as ordinary personas — renameable,
-    /// duplicable, and deletable when THEY decide.
-    ///
-    /// Runs once, then never again: the flag is what stops a persona somebody
-    /// deliberately recreated under the same name from vanishing a week later.
+    /// Removes the retired built-in "Bug report" persona, once. One whose file no longer matches its
+    /// stored digest was edited by hand, so it is kept as an ordinary persona. The flag stops a persona
+    /// recreated later under the same name from being removed.
     private static func retireBugReport(_ list: [Persona]) -> [Persona] {
         let done = "DEIKO_BUG_REPORT_RETIRED"
         guard !UserDefaults.standard.bool(forKey: done) else { return list }
@@ -96,25 +67,19 @@ enum Personas {
         set { UserDefaults.standard.set(newValue, forKey: defaultKey) }
     }
 
-    /// The persona a new brief is written for. Nil only when the user has
-    /// deleted every persona they had, which is allowed — a brief without one
-    /// is the document Deiko always produced.
+    /// The persona a new brief is written for. Nil only when every persona has been deleted, which is allowed.
     static func current() -> Persona? {
         let list = all()
         return list.first { $0.id == defaultID } ?? list.first
     }
-
-    // ── Writing ─────────────────────────────────────────────────────────────
 
     static func save(_ list: [Persona]) {
         guard let data = try? JSONEncoder().encode(list) else { return }
         UserDefaults.standard.set(data, forKey: listKey)
     }
 
-    /// Render a persona to its file and remember what we wrote.
-    ///
-    /// The digest is of OUR text, so the next read can tell "unchanged since
-    /// Deiko wrote it" from "somebody has been in here".
+    /// Render a persona to its file and remember what was written. The digest is of Deiko's own text,
+    /// so the next read can tell an unchanged file from a hand edit.
     @discardableResult
     static func write(_ persona: Persona) -> URL? {
         let url = file(for: persona.id)
@@ -134,12 +99,8 @@ enum Personas {
         }
     }
 
-    /// Point a session at the persona its brief should be written for.
-    ///
-    /// The same shape as `narration.override.txt`: a file beside the session
-    /// that `render-brief.mjs` reads if it is there. Absent — no personas, or
-    /// a brief rendered from the command line — the renderer behaves exactly
-    /// as it did before this feature existed.
+    /// Point a session at the persona its brief should be written for: a file beside the session, like
+    /// `narration.override.txt`, that `render-brief.mjs` reads if present.
     static func point(session sessionDir: String, to persona: Persona?) {
         let pointer = URL(fileURLWithPath: sessionDir).appendingPathComponent("persona.txt")
         guard let persona else {
@@ -150,9 +111,8 @@ enum Personas {
         // and a stale file would shape this one.
         guard let url = write(persona) else { return }
         try? url.path.write(to: pointer, atomically: true, encoding: .utf8)
-        // The browser form, beside it. Written here rather than derived at the
-        // moment of release: the fling has 250ms budgets in it and no business
-        // rendering a template.
+        // The browser form, beside it. Written here rather than at release time: the fling has a tight
+        // time budget and no business rendering a template.
         let brief = URL(fileURLWithPath: sessionDir).appendingPathComponent("persona.brief.txt")
         if let summary = persona.summary(connected: AgentConfigs.connectedTrackers) {
             try? summary.write(to: brief, atomically: true, encoding: .utf8)
@@ -161,15 +121,8 @@ enum Personas {
         }
     }
 
-    /// The file's contents, for a destination that cannot open a path.
-    ///
-    /// `nonisolated`: this reads two files and touches none of the state the
-    /// rest of this type guards, so it does not need the main actor — and
-    /// `BriefPipeline.prompt` had to reach for `MainActor.assumeIsolated` to
-    /// call it, which is a crash for the first caller that is not already
-    /// there rather than a compile error.
-    /// The persona file this session points at, for a destination that can
-    /// take a document rather than prose.
+    /// The persona file this session points at, for a destination that can take a document rather
+    /// than prose. `nonisolated` because it touches no main-actor state.
     nonisolated static func file(forSession sessionDir: String) -> String? {
         let pointer = URL(fileURLWithPath: sessionDir).appendingPathComponent("persona.txt")
         guard let path = try? String(contentsOf: pointer, encoding: .utf8)
@@ -179,8 +132,8 @@ enum Personas {
         return path
     }
 
-    /// WHAT A BROWSER GETS: the short form when there is one, the whole file
-    /// when the persona is hand-written (see `Persona.summary`).
+    /// What a browser gets: the short form when there is one, the whole file when the persona is
+    /// hand-written (see `Persona.summary`).
     nonisolated static func browserText(forSession sessionDir: String) -> String? {
         let brief = URL(fileURLWithPath: sessionDir).appendingPathComponent("persona.brief.txt")
         if let short = try? String(contentsOf: brief, encoding: .utf8)
@@ -200,13 +153,9 @@ enum Personas {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    /// Which persona THIS session will be written up as, read from the
-    /// pointer beside it rather than from the current default — change the
-    /// default while a brief is rendering and those are two different answers,
-    /// and only one of them is what the agent is about to be told.
-    ///
-    /// The name comes out of the file's own `# Heading`, so a hand-edited
-    /// persona is called whatever its author called it.
+    /// Which persona this session will be written up as, read from the pointer beside it rather than
+    /// the current default, which can change while a brief renders. The name comes from the file's own
+    /// `# Heading`.
     nonisolated static func name(forSession sessionDir: String) -> String? {
         let pointer = URL(fileURLWithPath: sessionDir).appendingPathComponent("persona.txt")
         guard let path = try? String(contentsOf: pointer, encoding: .utf8)
@@ -217,15 +166,12 @@ enum Personas {
         return String(heading.dropFirst(2)).trimmingCharacters(in: .whitespaces)
     }
 
-    // ── Hand edits ──────────────────────────────────────────────────────────
-
     /// Adopt whatever is on disk when it is not what we put there.
     private static func adoptHandEdit(_ persona: Persona) -> Persona {
         var persona = persona
         let url = file(for: persona.id)
         guard let onDisk = try? String(contentsOf: url, encoding: .utf8) else {
-            // Deleted — including by somebody tidying the folder. Put it back
-            // from the form rather than losing the persona with the file.
+            // Deleted, including by tidying the folder: restore it from the form rather than lose the persona.
             write(persona)
             return persona
         }

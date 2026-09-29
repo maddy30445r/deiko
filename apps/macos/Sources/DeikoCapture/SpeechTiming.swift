@@ -3,39 +3,10 @@ import Foundation
 import DeikoVoice
 import Speech
 
-// ─────────────────────────────────────────────────────────────────────────────
-// WORD TIMING — on-device, from Apple's Speech framework
-//
-// Two recognisers with different jobs:
-//
-//   Apple Speech  →  WHEN words were said   →  drives alignment
-//   Sarvam        →  WHAT was said          →  drives the plan text
-//
-// Sarvam's Hinglish text is excellent (`mode=translit` returns "Yeh jo data hai
-// ismein taxonomy ke andar board ka naam") but its REST API returns a single
-// timestamp spanning the whole clip on every model and parameter combination we
-// tried — no word-level timing exists to bind against. Apple's recogniser gives
-// a timestamp and duration per segment, on-device, free, with no duration cap.
-//
-// We do not need Apple's transcription to be *good*. We need its clock to be
-// right, and enough token overlap to locate the deictic words. Its Hinglish
-// accuracy is mediocre and that is fine.
-//
-// LATENCY: this is why it's Apple rather than another network call. It runs
-// on-device at 7–12x realtime, so a 40s recording is transcribed in about 5s
-// with nothing uploaded — which is what PRD §9's latency budget assumes.
-//
-// This comment used to claim recognition ran on the buffers as they ARRIVED,
-// during the session. It never did: the request below is a
-// `SFSpeechURLRecognitionRequest` over a finished file. Live recognition would
-// shave the remaining few seconds, and is worth doing eventually, but it is not
-// what made this slow — see `RecognitionCompletion`.
-// ─────────────────────────────────────────────────────────────────────────────
-
 struct TimedWord: Codable {
     let text: String
-    /// Milliseconds from the start of the audio, NOT the session clock. The
-    /// caller adds `audioT0` — see `packages/core/src/transcribe.mjs`.
+    /// Milliseconds from the start of the audio, not the session clock. The caller adds `audioT0`;
+    /// see `packages/core/src/transcribe.mjs`.
     let start: Double
     let end: Double
 }
@@ -51,11 +22,16 @@ struct TimingResult: Codable {
     var deliveryGapsMs: [Double]? = nil
 }
 
+/// Word timing from Apple's Speech framework, on-device.
+///
+/// Apple Speech says when words were said (it drives alignment); Sarvam says what was said (it drives
+/// the plan text). Sarvam's REST API returns one timestamp for the whole clip, so it has no word-level
+/// timing to bind against. Apple's transcription need not be good, only its clock right and its tokens
+/// close enough to locate the deictic words. It runs on-device at roughly 7-12x realtime, uploading nothing.
 enum SpeechTiming {
 
-    /// Ask for permission. Speech Recognition is its own TCC prompt — a fourth
-    /// one alongside Accessibility, Screen Recording and Microphone, which is
-    /// real onboarding friction and worth being deliberate about.
+    /// Ask for permission. Speech Recognition is its own TCC prompt, alongside Accessibility, Screen
+    /// Recording and Microphone.
     static func requestAuthorization() async -> SFSpeechRecognizerAuthorizationStatus {
         await withCheckedContinuation { continuation in
             SFSpeechRecognizer.requestAuthorization { status in
@@ -66,27 +42,15 @@ enum SpeechTiming {
 
     /// Transcribe a WAV file, returning per-word timings.
     ///
-    /// `en-IN` by default, for two independent reasons.
+    /// `en-IN` by default: `hi-IN` may have no on-device asset (`supportsOnDeviceRecognition == false`), and
+    /// falling back to Apple's servers would send narration off the device. An Indian-English recogniser
+    /// also renders Hindi words phonetically in Latin script ("yeh", "isko"), the form the Hinglish half of
+    /// the deictic lexicon matches, while a Hindi-locale one mangles the English technical terms that make
+    /// up most of a developer's speech.
     ///
-    /// Availability: `hi-IN` has no on-device asset on this machine
-    /// (`supportsOnDeviceRecognition == false`), and falling back to Apple's
-    /// servers would send narration off the device — which PRD §10 forbids.
-    /// `en-IN` and `en-US` both run on-device.
-    ///
-    /// Fit: an Indian-English recogniser renders Hindi words phonetically in
-    /// LATIN script — "yeh", "isko", "yahan" — which is precisely the form the
-    /// Hinglish half of the deictic lexicon matches. A Hindi-locale recogniser
-    /// would return Devanagari, which the lexicon also handles, but it mangles
-    /// the English technical terms that make up most of a developer's speech.
-    ///
-    /// `contextualStrings` is the recogniser's vocabulary hint list, and it is
-    /// the one lever that makes on-device recognition competitive on the words
-    /// a developer actually says. `useEffect` comes back as "use effect" and
-    /// `nginx` as "engine x" because neither is in a dictation model's
-    /// vocabulary — but both are usually ON THE SCREEN the user is pointing at,
-    /// and Deiko has already read them through AX and OCR. Passing them costs
-    /// nothing, sends nothing anywhere, and is measured by `make bakeoff`
-    /// before anything in the product depends on it.
+    /// `contextualStrings` is the recogniser's vocabulary hint list. `useEffect` comes back as "use effect"
+    /// because a dictation model does not know it, but it is usually on the screen the user is pointing at
+    /// and Deiko has already read it through AX and OCR. Passing it sends nothing anywhere.
     static func transcribe(
         url: URL,
         localeIdentifier: String = "en-IN",
@@ -102,28 +66,21 @@ enum SpeechTiming {
         }
 
         let request = SFSpeechURLRecognitionRequest(url: url)
-        // Partials ON, and every result accumulated.
-        //
-        // With partials off, a multi-utterance recording comes back as only its
-        // LAST utterance: a 31s clip returned 12 segments covering 21.6s-28.7s
-        // and silently dropped the first twenty seconds. The recogniser splits
-        // on pauses and marks each utterance final in turn, so the only way to
-        // see all of them is to watch every result and union the segments.
+        // Partials on, and every result accumulated: with partials off, a multi-utterance recording comes
+        // back as only its last utterance. The recogniser splits on pauses and marks each utterance final
+        // in turn, so all of them are seen only by watching every result and unioning the segments.
         request.shouldReportPartialResults = true
         request.requiresOnDeviceRecognition = forceOnDevice
         request.taskHint = .dictation
-        // Capped and de-duplicated. The API takes a hint list, not a corpus;
-        // handing it every OCR line on screen dilutes the bias it is supposed
-        // to apply, and the identifiers worth biasing toward are few.
+        // Capped and de-duplicated: the API takes a hint list, not a corpus, and a long list dilutes the bias.
         if !contextualStrings.isEmpty {
             request.contextualStrings = Array(Set(contextualStrings)).prefix(100).map { $0 }
         }
 
         let onDevice = recognizer.supportsOnDeviceRecognition && forceOnDevice
         if forceOnDevice && !recognizer.supportsOnDeviceRecognition {
-            // Refuse to silently fall back to Apple's servers. The product's
-            // whole privacy posture is that narration and screen content do not
-            // leave the machine except to the disclosed APIs (PRD §10).
+            // Refuse to fall back silently to Apple's servers: narration and screen content must not
+            // leave the machine except to the disclosed APIs.
             return failure(
                 "on-device recognition unavailable for \(localeIdentifier) — refusing to fall back to network recognition",
                 locale: localeIdentifier
@@ -132,18 +89,15 @@ enum SpeechTiming {
 
         // Opened once; both the deadline and the completeness check need it.
         let durationMs = audioDurationSeconds(url).map { $0 * 1000 }
-        // Completion is judged against the last WORD, not the last sample —
-        // see `speechEndMs`. Falling back to the duration keeps the old, slow
-        // behaviour for a file we cannot measure, rather than finishing early.
+        // Completion is judged against the last word, not the last sample (see `speechEndMs`). The
+        // duration is the fallback for a file that cannot be measured: slower, but it terminates.
         let targetMs = speechEndMs(url) ?? durationMs
 
         return await withCheckedContinuation { continuation in
             let collector = SegmentCollector(speechEndMs: targetMs)
 
-            // The idle half of `RecognitionCompletion` — polled, because nothing
-            // calls back when the recogniser goes quiet. The coverage half is
-            // checked inside the result handler below, where `isFinal` gives it
-            // a natural moment to run.
+            // The idle half of `RecognitionCompletion`, polled because nothing calls back when the
+            // recogniser goes quiet. The coverage half runs in the result handler, on `isFinal`.
             Task {
                 while !collector.isResumed() {
                     try? await Task.sleep(for: .milliseconds(150))
@@ -159,26 +113,15 @@ enum SpeechTiming {
                 }
             }
 
-            // SILENCE GETS ITS OWN, MUCH SHORTER DEADLINE.
-            //
-            // The backstop below waits duration + 20s, which is right for a
-            // recognition in progress — cutting one of those off would truncate
-            // a transcript. But a recogniser that has produced NOTHING is not
-            // in progress, and it was being given the same generous wait.
-            // Measured on session 20260801-215445: 16s of audio took 38.4s
-            // through the pipeline, and 27 of those seconds were one 7.1s hold
-            // sitting at its full deadline having recognised nothing. The app
-            // launch this was blamed on costs 0.1s.
-            //
-            // Recognition streams at 7–12× realtime, so a first segment arrives
-            // early or never. Allow generously for a cold model load, then stop.
-            // Being wrong here is cheap: no timings means the transcript is kept
-            // with estimated word times, not that the hold is lost.
+            // Silence gets its own, much shorter deadline. The backstop below waits duration + 20s, right
+            // for a recognition in progress, but a recogniser that has produced nothing is not in progress.
+            // Recognition streams at 7-12x realtime, so a first segment arrives early or never: allow for a
+            // cold model load, then stop. Being wrong is cheap: no timings means the transcript is kept with
+            // estimated word times.
             let silenceDeadline = max(8.0, (durationMs.map { $0 / 1000 } ?? 60) * 1.5)
             Task {
                 try? await Task.sleep(for: .seconds(silenceDeadline))
-                // Anything at all arrived → this is a real recognition, and the
-                // backstop below owns it.
+                // Anything at all arrived: this is a real recognition, and the backstop below owns it.
                 guard collector.isEmpty(), collector.markResumed() else { return }
                 continuation.resume(returning: failure(
                     "nothing recognised in \(Int(silenceDeadline))s — no speech the on-device model could hear",
@@ -186,9 +129,8 @@ enum SpeechTiming {
                 ))
             }
 
-            // Hard deadline, now a backstop rather than the common path. The
-            // recogniser signals completion inconsistently — sometimes an error
-            // at end-of-audio, sometimes a final result, sometimes neither.
+            // Hard deadline, a backstop rather than the common path: the recogniser signals completion
+            // inconsistently (an error at end-of-audio, a final result, or neither).
             let deadline = (durationMs.map { $0 / 1000 } ?? 60) + 20
             Task {
                 try? await Task.sleep(for: .seconds(deadline))
@@ -209,9 +151,8 @@ enum SpeechTiming {
             recognizer.recognitionTask(with: request) { result, error in
                 if let error {
                     if let final = collector.finish() {
-                        // Partial results already in hand beat nothing: the
-                        // recogniser often errors at end-of-file having already
-                        // delivered every utterance.
+                        // Partial results in hand beat nothing: the recogniser often errors at
+                        // end-of-file having already delivered every utterance.
                         continuation.resume(returning: TimingResult(
                             words: final.words, transcript: final.transcript,
                             locale: localeIdentifier, onDevice: onDevice, error: nil,
@@ -228,10 +169,8 @@ enum SpeechTiming {
                 guard let result else { return }
                 collector.absorb(result.bestTranscription)
 
-                // `isFinal` fires once per utterance, not once per file, so it
-                // is a signal to keep the segments — not to stop listening.
-                // The task ends by calling back with an error (end of audio),
-                // which is handled above.
+                // `isFinal` fires once per utterance, not once per file, so it means keep the segments,
+                // not stop listening. The task ends with an error at end of audio, handled above.
                 if result.isFinal, collector.decideCompletion() == .finishedCovering {
                     if let final = collector.finish() {
                         continuation.resume(returning: TimingResult(
@@ -254,18 +193,13 @@ enum SpeechTiming {
         return Double(file.length) / file.fileFormat.sampleRate
     }
 
-    /// Where the SPEECH ends, which is not where the file ends.
+    /// Where the speech ends, which is not where the file ends: a recording stops seconds after the
+    /// last word, when the developer reaches for the hotkey. Judged against the file's duration, the
+    /// recogniser could never "reach the end" and every session would wait out its deadline.
     ///
-    /// A recording stops when the developer reaches over and presses the hotkey,
-    /// seconds after their last word — the measured session trails 3940ms of
-    /// silence. Completion was being judged against the file's duration, so the
-    /// recogniser could never "reach the end" and every session waited out a
-    /// 97-second deadline for work that took six.
-    ///
-    /// Judged by `VoiceGate`, the same relative-to-the-room test the recorder
-    /// uses live, so "speech" means the same thing on both sides of the pipeline.
-    /// Nil when the file cannot be read or holds no speech at all; callers fall
-    /// back to the duration, which is the old behaviour and still terminates.
+    /// Judged by `VoiceGate`, the same relative-to-the-room test the recorder uses live, so "speech" means
+    /// the same on both sides. Nil when the file cannot be read or holds no speech; callers fall back to
+    /// the duration.
     static func speechEndMs(_ url: URL) -> Double? {
         guard let file = try? AVAudioFile(forReading: url) else { return nil }
         let format = file.processingFormat
@@ -283,10 +217,9 @@ enum SpeechTiming {
             let count = Int(buffer.frameLength)
             if count == 0 { break }
 
-            // Float or int16 depending on the processing format, but VoiceGate's
-            // floor is calibrated in int16 units (see its `absoluteFloor`), so
-            // scale float samples up rather than letting a quiet-looking file
-            // read as pure silence.
+            // Float or int16 depending on the processing format, but `VoiceGate`'s floor is calibrated in
+            // int16 units (see `absoluteFloor`), so float samples are scaled up rather than letting a
+            // quiet-looking file read as silence.
             var sumOfSquares = 0.0
             if let ints = buffer.int16ChannelData?[0] {
                 for i in 0..<count {
@@ -313,28 +246,17 @@ enum SpeechTiming {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// LIVE TIMING — the same recogniser, fed while the session is still running
-//
-// The file-based path above is correct and slow, and the slowness is structural:
-// handed a finished WAV, the recogniser has no way to say "that was the end", so
-// completion has to be INFERRED — an 8s idle threshold, a silence deadline, a
-// duration+20s backstop. Measured on real sessions, that inference was 92-99% of
-// the wait between letting go of the hotkey and reading a brief, against roughly
-// 1.5s of actual recognition for 13s of audio.
-//
-// Fed live, end-of-audio stops being a guess: `endAudio()` states it, and the
-// recogniser delivers its final result in well under a second. The heuristics
-// are not tuned — they are not needed.
-//
-// This does NOT replace the file path. It is best-effort in exactly the way the
-// crops are: if the recogniser is unavailable, errors, or returns nothing, no
-// file is written and `BriefPipeline.precomputeTimings` recognises the WAV
-// afterwards exactly as it does today. Same output format, same consumer, so
-// nothing downstream can tell which path produced a timing file.
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Recognises one hold as it is spoken. One instance per hold.
+/// Recognises one hold as it is spoken, feeding the same recogniser while the session runs. One
+/// instance per hold.
+///
+/// A finished WAV gives the recogniser no way to say "that was the end", so the file path infers
+/// completion (idle threshold, silence deadline, backstop) and that inference dominates the wait after
+/// the hotkey is released. Fed live, `endAudio()` states the end and the final result lands quickly.
+///
+/// This does not replace the file path. It is best-effort: if the recogniser is unavailable, errors or
+/// returns nothing, no file is written and `BriefPipeline.precomputeTimings` recognises the WAV
+/// afterwards. The output format and consumer are the same, so nothing downstream can tell which path
+/// produced a timing file.
 final class LiveSpeechTiming: @unchecked Sendable {
     private let locale: String
     private let request: SFSpeechAudioBufferRecognitionRequest
@@ -345,24 +267,21 @@ final class LiveSpeechTiming: @unchecked Sendable {
     private var continuation: CheckedContinuation<TimingResult, Never>?
     private var finished = false
 
-    /// Nil when live recognition cannot run at all — no recogniser for the
-    /// locale, unavailable, or no on-device model. Every one of those is a
-    /// reason to leave the work to the file path rather than to report an error:
-    /// the session is recording either way and the user must not be told about a
-    /// shortcut that did not happen.
+    /// Nil when live recognition cannot run at all (no recogniser for the locale, unavailable, or no
+    /// on-device model). Each of those leaves the work to the file path rather than reporting an error:
+    /// the session is recording either way.
     init?(localeIdentifier: String = "en-IN") {
         guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: localeIdentifier)),
               recognizer.isAvailable,
-              // Same refusal as the file path: narration does not go to Apple's
-              // servers because a local model was missing.
+              // Same refusal as the file path: narration does not go to Apple's servers because a
+              // local model was missing.
               recognizer.supportsOnDeviceRecognition
         else { return nil }
 
         self.locale = localeIdentifier
         self.request = SFSpeechAudioBufferRecognitionRequest()
-        // Live has no `speechEndMs` to measure — the audio does not exist yet.
-        // Nil means the collector's coverage test never fires, which is right:
-        // `endAudio()` is the completion signal here, not a coverage guess.
+        // Live has no `speechEndMs` to measure. Nil means the coverage test never fires: `endAudio()`
+        // is the completion signal here.
         self.collector = SegmentCollector(speechEndMs: nil)
 
         request.shouldReportPartialResults = true
@@ -372,9 +291,8 @@ final class LiveSpeechTiming: @unchecked Sendable {
         task = recognizer.recognitionTask(with: request) { [weak self] result, error in
             guard let self else { return }
             if let result { self.collector.absorb(result.bestTranscription) }
-            // An error at end-of-stream is the recogniser's normal way of
-            // saying it is done, and it usually arrives having already
-            // delivered everything. Partial results in hand beat nothing.
+            // An error at end-of-stream is the recogniser's normal way of saying it is done, usually
+            // after delivering everything.
             if error != nil || (result?.isFinal ?? false) { self.deliver() }
         }
     }
@@ -388,13 +306,9 @@ final class LiveSpeechTiming: @unchecked Sendable {
         request.append(buffer)
     }
 
-    /// Say the audio has ended and wait for the last result.
-    ///
-    /// The deadline is a backstop, not the expected path — the final result
-    /// lands in well under a second once the stream is closed. Whatever has been
-    /// collected by then is returned rather than discarded, because a partial
-    /// timeline still binds most of the words and the alternative is recognising
-    /// the whole file again.
+    /// Say the audio has ended and wait for the last result. The deadline is a backstop: whatever has
+    /// been collected by then is returned rather than discarded, since a partial timeline still binds
+    /// most of the words.
     func finish(timeout: Duration = .seconds(3)) async -> TimingResult {
         request.endAudio()
         let waiter = Task { [weak self] in
@@ -405,9 +319,8 @@ final class LiveSpeechTiming: @unchecked Sendable {
 
         return await withCheckedContinuation { cont in
             lock.lock()
-            // The result handler may already have fired — `deliver` sets
-            // `finished` before it can resume anything, so check it under the
-            // same lock rather than parking a continuation nobody will resume.
+            // The result handler may already have fired: `deliver` sets `finished` before it resumes
+            // anything, so check under the same lock rather than parking a continuation nobody will resume.
             if finished {
                 lock.unlock()
                 cont.resume(returning: result())
@@ -418,8 +331,7 @@ final class LiveSpeechTiming: @unchecked Sendable {
         }
     }
 
-    /// Abandon the recognition without waiting — the hold produced no audio, or
-    /// the session is being torn down.
+    /// Abandon the recognition without waiting: the hold produced no audio, or the session is torn down.
     func cancel() {
         lock.lock()
         finished = true
@@ -432,9 +344,8 @@ final class LiveSpeechTiming: @unchecked Sendable {
         pending?.resume(returning: SpeechTiming.failure("cancelled", locale: locale))
     }
 
-    /// The recognition task is written in `init` and cleared from whichever
-    /// thread finishes first, so it is held under the same lock as everything
-    /// else here rather than being the one field left to chance.
+    /// `task` is written in `init` and cleared from whichever thread finishes first, so it is held under
+    /// the same lock as everything else here.
     private func clearTask() {
         lock.lock()
         task = nil
@@ -448,9 +359,8 @@ final class LiveSpeechTiming: @unchecked Sendable {
         let pending = continuation
         continuation = nil
         lock.unlock()
-        // Nil when `finish()` has not been called yet: the recogniser finished
-        // before we asked it to, which is fine — `finish()` reads the collected
-        // result directly in that case.
+        // Nil when `finish()` has not been called yet: the recogniser finished first, and `finish()`
+        // reads the collected result directly.
         pending?.resume(returning: result())
     }
 
@@ -466,23 +376,18 @@ final class LiveSpeechTiming: @unchecked Sendable {
     }
 }
 
-/// Accumulates segments across every result the recogniser emits.
-///
-/// Keyed by start time so re-delivered segments (the recogniser revises an
-/// utterance as it hears more) overwrite rather than duplicate, and so
-/// utterances from anywhere in the file survive regardless of the order they
-/// arrive in.
+/// Accumulates segments across every result the recogniser emits. Keyed by start time so re-delivered
+/// segments (revised as the recogniser hears more) overwrite rather than duplicate, and utterances from
+/// anywhere in the file survive in any arrival order.
 private final class SegmentCollector: @unchecked Sendable {
     private var segments: [Int: TimedWord] = [:]
     private var resumed = false
     private let lock = NSLock()
-    /// When `absorb` last took anything. Wall-clock, not the audio clock — the
-    /// question it answers is "has the recogniser gone quiet", which is about
-    /// delivery, not about where we are in the recording.
+    /// When `absorb` last took anything. Wall-clock, not the audio clock: it answers "has the recogniser
+    /// gone quiet", which is about delivery.
     private var lastSegmentAt: Date?
     private var deliveryGaps: [Double] = []
-    /// Measured once by the caller — this class used to reopen the WAV on
-    /// every `isFinal`, parsing the same header dozens of times per hold.
+    /// Measured once by the caller, not reopened from the WAV on every `isFinal`.
     private let speechEndMs: Double?
     private let policy = RecognitionCompletion()
 
@@ -497,13 +402,10 @@ private final class SegmentCollector: @unchecked Sendable {
         let placed = transcription.segments.filter { $0.timestamp > 0 }
         guard !placed.isEmpty else { return }
 
-        // Evict everything inside the span this hypothesis covers before
-        // inserting it. Keying by start time alone left GHOSTS: a revision
-        // that merged "is"+"mein" into "ismein" at a nudged timestamp added
-        // the new word but kept the superseded ones, and the transcript read
-        // "ismein mein" — a phantom token the aligner then treated as really
-        // spoken. Utterances never overlap in time, so the eviction can only
-        // remove earlier hypotheses of THIS utterance, never another one.
+        // Evict everything inside the span this hypothesis covers before inserting it. Keying by start
+        // time alone leaves ghosts: a revision merging "is"+"mein" into "ismein" at a nudged timestamp
+        // would keep the superseded words, and the transcript would read "ismein mein". Utterances never
+        // overlap, so this only removes earlier hypotheses of the same utterance.
         let spanStart = placed.map { $0.timestamp * 1000 }.min()!
         let spanEnd = placed.map { ($0.timestamp + $0.duration) * 1000 }.max()!
         for key in segments.keys
@@ -532,10 +434,8 @@ private final class SegmentCollector: @unchecked Sendable {
         return deliveryGaps
     }
 
-    /// Ask `RecognitionCompletion` whether this recognition is done, from the
-    /// state held right now. One lock, one snapshot: reading "how many segments"
-    /// and "how long since the last" through separate calls would let a delivery
-    /// land between them and answer about two different moments.
+    /// Ask `RecognitionCompletion` whether this recognition is done. One lock, one snapshot, so a delivery
+    /// cannot land between reads and answer about two different moments.
     func decideCompletion() -> RecognitionCompletion.Decision {
         lock.lock()
         defer { lock.unlock() }
@@ -552,8 +452,7 @@ private final class SegmentCollector: @unchecked Sendable {
         return resumed
     }
 
-    /// Nothing recognised at all — as opposed to "recognised something and
-    /// gone quiet", which is what `decideCompletion` is for.
+    /// Nothing recognised at all, as opposed to "recognised something and gone quiet" (`decideCompletion`).
     func isEmpty() -> Bool {
         lock.lock()
         defer { lock.unlock() }

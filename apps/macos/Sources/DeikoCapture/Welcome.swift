@@ -3,25 +3,10 @@ import SwiftUI
 import DeikoGesture
 import DeikoHandoff
 
-// ─────────────────────────────────────────────────────────────────────────────
-// FIRST RUN — the one screen where reading is the point
-//
-// What a new install used to do: put a mark in the menu bar and wait. The
-// hotkey did nothing, because `startListeningIfPermitted` installs no event tap
-// until all four grants are in — and the list of what was missing lived inside
-// a menu the user had no reason to open. The app presented as working and
-// silently ignored every gesture.
-//
-// So this appears once, unprompted. One column, one read: what Deiko does,
-// each permission with the DATA it takes (that is what earns trust, not
-// reassurance copy), the key — its row deep-links to Settings to add one,
-// rather than granting itself — and the gesture. The primary button is
-// "Start pointing", not "Done": the moment everything is in, the next action
-// is the product.
-//
-// Shown again from the menu's "Getting started…", because "I clicked past it"
-// is not a reason to have to reinstall.
-// ─────────────────────────────────────────────────────────────────────────────
+// First run: one column shown once, unprompted. It says what Deiko does, lists
+// each permission with the data it takes, and shows the key and the gesture.
+// Gestures are ignored until every permission is granted, so this is where they
+// are collected. Reachable again from the menu's "Getting started…".
 
 @MainActor
 final class WelcomeWindowController: NSObject, NSWindowDelegate {
@@ -40,8 +25,7 @@ final class WelcomeWindowController: NSObject, NSWindowDelegate {
     /// deep-links there for typing the key itself.
     var onOpenSettings: (() -> Void)?
 
-    /// Show on first launch, or whenever a permission is missing and the user
-    /// has never completed the flow.
+    /// Shows the window unless the user has already finished first-run.
     func presentIfNeeded() {
         guard !Self.hasBeenSeen else { return }
         present()
@@ -67,17 +51,14 @@ final class WelcomeWindowController: NSObject, NSWindowDelegate {
         }
 
         let hosting = NSHostingController(rootView: WelcomeView(model: model))
-        // 540×720 is the design's size and the window keeps it; the content
-        // scrolls. See `Orb.swift`'s `makeWindow`.
+        // Fixed size: the hosting controller must not resize the window to its
+        // content, which scrolls. See `makeWindow` in `Orb.swift`.
         hosting.sizingOptions = []
         let window = NSWindow(contentViewController: hosting)
         window.title = "Welcome to Deiko"
-        // Minimizable, not resizable: the design's size is the window's size.
         window.styleMask = [.titled, .closable, .miniaturizable]
         window.useRoundedTitleBar("DeikoWelcome")
-        // Tall enough that nothing scrolls. At 560 the content overflowed and
-        // the window opened showing the description with the title scrolled off
-        // the top — the first screen of a first run, missing its own name.
+        // Tall enough that the title is never scrolled off the top.
         window.setContentSize(NSSize(width: 540, height: 720))
         window.center()
         window.delegate = self
@@ -89,8 +70,7 @@ final class WelcomeWindowController: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
-        // Closing counts as seen. Re-presenting a window somebody dismissed is
-        // the behaviour that makes people uninstall things.
+        // Closing counts as seen: a dismissed window is never re-presented.
         Self.hasBeenSeen = true
         if holdsDock {
             DockPresence.release()
@@ -98,8 +78,6 @@ final class WelcomeWindowController: NSObject, NSWindowDelegate {
         }
     }
 }
-
-// ── State ───────────────────────────────────────────────────────────────────
 
 @MainActor
 final class WelcomeModel: ObservableObject {
@@ -109,9 +87,8 @@ final class WelcomeModel: ObservableObject {
         let symbol: String
         let purpose: String
         let granted: Bool
-        /// What clicking this row's button will actually do — so the label can
-        /// say it. A button reading "Grant" that silently opens System Settings
-        /// instead of prompting is the same lie the old flow told by doing both.
+        /// What clicking this row's button will do, so the label can say it. A
+        /// "Grant" button that silently opens System Settings would mislead.
         let step: PermissionStep
     }
 
@@ -122,11 +99,8 @@ final class WelcomeModel: ObservableObject {
     var onOpenSettings: (() -> Void)?
     var onDone: (() -> Void)?
 
-    /// "Start pointing" enables when the app can actually deliver on it —
-    /// which is the four grants, and nothing else. It used to require a Sarvam
-    /// key too, back when a session without one produced nothing at all. A
-    /// keyless install now transcribes; asking for a key before letting anyone
-    /// start would be demanding something the product no longer needs.
+    /// "Start pointing" enables once the four grants are in. A key is not
+    /// required: a keyless install still transcribes.
     var readyToPoint: Bool { rows.allSatisfy(\.granted) }
 
     private var screenRecordingWasMissing = false
@@ -142,7 +116,7 @@ final class WelcomeModel: ObservableObject {
                 step: PermissionStep.next(granted: $0.isGranted, asked: $0.hasBeenAsked)
             )
         }
-        // `exists`, not `value` — first run must not demand the login password
+        // Presence check only: first run must not demand the login password
         // just to draw a checkmark.
         keyPresent = Credentials.willUse("GROQ_API_KEY")
     }
@@ -151,27 +125,20 @@ final class WelcomeModel: ObservableObject {
     func request(_ name: String) {
         guard let permission = Permission.allCases.first(where: { $0.rawValue == name }) else { return }
 
-        // Screen Recording is the one that needs a restart: the system reports
-        // it granted immediately, but ScreenCaptureKit in THIS process keeps
-        // failing until relaunch. Remember that it was missing so the relaunch
-        // prompt appears rather than the user discovering it later as crops
-        // that silently never arrive.
+        // Screen Recording needs a restart: the system reports it granted at
+        // once, but ScreenCaptureKit in this process keeps failing until
+        // relaunch. Remember it was missing so the relaunch prompt appears.
         if permission == .screenRecording, !permission.isGranted {
             screenRecordingWasMissing = true
         }
 
-        // ONE action — a dialog, or Settings, never both. See `Permission.ask`.
+        // One action, a dialog or Settings, never both. See `Permission.ask`.
         Task { await permission.ask() }
     }
 
-    /// Watch for as long as this window is on screen.
-    ///
-    /// It used to poll for ten seconds after a click and then stop, which is
-    /// shorter than granting Accessibility actually takes: find the pane,
-    /// unlock it, find Deiko, tick it. Anybody slower than ten seconds came
-    /// back to a row still reading "Grant" for a permission they had just
-    /// given, and the obvious next move is to restart the app. Now the window
-    /// keeps looking while it is open, and stops when it closes.
+    /// Watch for as long as this window is on screen. Granting Accessibility
+    /// takes longer than any fixed polling window (find the pane, unlock it,
+    /// tick Deiko), so this polls until the window closes.
     func startWatching() {
         guard watcher == nil else { return }
         watcher = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -192,8 +159,6 @@ final class WelcomeModel: ObservableObject {
 
     func relaunch() { Relauncher.relaunch() }
 }
-
-// ── View ────────────────────────────────────────────────────────────────────
 
 struct WelcomeView: View {
     @ObservedObject var model: WelcomeModel
@@ -218,16 +183,14 @@ struct WelcomeView: View {
             model.startWatching()
         }
         .onDisappear { model.stopWatching() }
-        // The controls Deiko did not draw take the SYSTEM accent — whatever
-        // colour the person set in System Settings. One line puts them on
-        // the palette instead; see `MainWindowView` for the long version.
+        // Controls Deiko did not draw would take the system accent; this puts
+        // them on the palette. See `MainWindowView`.
         .tint(DeikoStyle.accent)
     }
 
-    /// The header sits on the lavender wall — the one surface in the app that
-    /// is allowed to be a colour rather than paper, and the same one the site
-    /// stands its product windows on. It opens on the product's own sentence
-    /// rather than its name: nobody installed this to read the word "Deiko".
+    /// The header sits on the lavender wall, the one surface allowed to be a
+    /// colour rather than paper. It opens on the product's own sentence rather
+    /// than its name.
     private var header: some View {
         HStack(spacing: 14) {
             ZStack {
@@ -268,9 +231,8 @@ struct WelcomeView: View {
                     if row.granted {
                         grantedTag("Granted")
                     } else {
-                        // "Open Settings" once the dialog has been seen: it
-                        // will not come back, and a second "Grant" that only
-                        // opened a window would be the old confusion again.
+                        // "Open Settings" once the dialog has been seen: it will not
+                        // come back.
                         Button(row.step == .openSettings ? "Open Settings" : "Grant") {
                             model.request(row.id)
                         }
@@ -279,9 +241,8 @@ struct WelcomeView: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 11)
 
-                // The relaunch strip renders INLINE under Screen Recording,
-                // with the fix on the same line — not discovered later as
-                // crops that never arrive with no reason given.
+                // The relaunch strip renders inline under Screen Recording,
+                // next to the fix.
                 if row.id == Permission.screenRecording.rawValue, model.needsRelaunch {
                     HStack(spacing: 8) {
                         Text("Takes effect after a relaunch.")
@@ -300,12 +261,9 @@ struct WelcomeView: View {
         }
     }
 
-    /// NO LONGER "Deiko's servers never see your narration" — the classifier
-    /// sends it, redacted, to sort the brief into a task, whenever sorting is
-    /// on and there is a relay to sort it through. Same claim as
-    /// `SettingsWindow.whereAudioGoes`, kept in sync by hand since this card
-    /// has no room for the fuller sentence — see that file for why the sorting
-    /// clause is conditional.
+    /// The keychain sentence for the key row. Same claim as
+    /// `SettingsWindow.whereAudioGoes`, kept in sync by hand; see that file for
+    /// why the sorting clause is conditional.
     private var ownKeySubtitle: String {
         guard model.keyPresent else { return "optional — transcription works without one" }
         let local = "in your login keychain — transcription and the summary go straight to Groq"
@@ -335,12 +293,10 @@ struct WelcomeView: View {
         }
     }
 
-    /// The gesture, as three keycaps — the menu repeats this later, but the
-    /// first run is where the muscle memory starts.
+    /// The gesture, as three keycaps.
     private var gestureStrip: some View {
-        // Reads the CURRENT key rather than the default, so the first-run
-        // window teaches the gesture that actually works on this Mac. Left
-        // Option is fixed — it is the drawing key, not the session key.
+        // Reads the current key so the window teaches the gesture that works
+        // on this Mac. Left Option is fixed: it is the drawing key.
         let key = SessionKey.selected
         return HStack(spacing: 16) {
             keycap("\(key.symbol) \(key.symbol)", "double-tap \(key.name) — start")
@@ -359,9 +315,7 @@ struct WelcomeView: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(DeikoStyle.ink2)
                 .deikoFocusRingLoose()
-            // "Start pointing", not "Done" — the moment it enables, the next
-            // action is the product itself. Half-lit until the app can
-            // actually deliver on the promise.
+            // "Start pointing", not "Done"; disabled until the app can deliver.
             Button("Start pointing") { model.onDone?() }
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(InkButtonStyle())
@@ -369,8 +323,6 @@ struct WelcomeView: View {
         }
         .padding(.top, 2)
     }
-
-    // ── Pieces ──────────────────────────────────────────────────────────────
 
     private func glyphTile(_ symbol: String) -> some View {
         Image(systemName: symbol)

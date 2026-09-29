@@ -2,39 +2,17 @@ import CoreGraphics
 import Foundation
 import Vision
 
-// ─────────────────────────────────────────────────────────────────────────────
-// OCR — the conditional half of the Tier 1 base
-//
-// Vision runs on-device: no API key, no network, no per-call cost. That is why
-// it can be the universal fallback without touching the pricing model.
-//
-// It runs only when AX came back with no usable text. Where AX resolves, its
-// strings are exact — OCR has to *decide* between `l`, `1` and `I`, and in a
-// field name or identifier that goes into an executed plan, one wrong character
-// is a wrong edit.
-//
-// Recognised text carries its rectangle, not just the string. Positions let the
-// assembled context say "this text, at the point you indicated" instead of
-// handing the model an unordered bag of words from a 460×220 box.
-// ─────────────────────────────────────────────────────────────────────────────
-
+/// On-device text recognition (Vision): no key, no network. It runs only when accessibility returned
+/// no usable text, since AX strings are exact where OCR must choose between `l`, `1` and `I`. Lines keep
+/// their rectangles so the assembled context can say "this text, at the point you indicated".
 enum OCR {
 
-    /// Discard near-noise. Vision happily reports single stray glyphs from UI
-    /// chrome at low confidence.
+    /// Discard near-noise: Vision reports stray glyphs from UI chrome at low confidence.
     static let minimumConfidence: Float = 0.3
 
-    /// Recognise text in `image`, returning lines positioned in global screen
-    /// coordinates. `rect` is where the image came from, in that same space.
-    /// The user's languages first, English last so it is never dropped.
-    ///
-    /// MATCHED BY LANGUAGE AND SCRIPT, NOT BY STRING. Vision names its
-    /// languages `en-US`, `zh-Hans`, `ja-JP`; macOS reports the user's as
-    /// `en-IN`, `zh-Hans-CN`, `zh-CN`. An `contains` filter therefore matched
-    /// NOTHING on every Mac including this one — measured — and the list fell
-    /// back to `["en-US"]`, which is exactly the English-only behaviour this
-    /// exists to fix. Script matters and is kept: `zh-Hans-CN` and `zh-CN`
-    /// both resolve to `zh-Hans`, `zh-Hant-TW` to `zh-Hant`.
+    /// The user's languages first, English last so it is never dropped. Matched by language and
+    /// script, not by string: Vision names `en-US`, `zh-Hans`; macOS reports `en-IN`, `zh-Hans-CN`.
+    /// `zh-Hant-TW` resolves to `zh-Hant`.
     private static let recognitionLanguages: [String] = {
         let supported = (try? VNRecognizeTextRequest().supportedRecognitionLanguages()) ?? ["en-US"]
         var out: [String] = []
@@ -53,18 +31,16 @@ enum OCR {
         return out
     }()
 
+    /// Recognise text in `image`, returning lines positioned in global screen coordinates.
+    /// `rect` is where the image came from, in that same space.
     static func recognize(_ image: CGImage, in rect: Frame) -> [OCRLine] {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
-        // Identifiers, paths and JSON keys are not dictionary words; language
-        // correction "fixes" them into English and destroys exactly the strings
-        // we care about.
+        // Identifiers, paths and JSON keys are not dictionary words; language correction
+        // "fixes" them into English.
         request.usesLanguageCorrection = false
-        // NOT ONLY ENGLISH. Vision reads only the scripts of the languages it
-        // is given, so with `["en-US"]` a Chinese menu came back as nothing and
-        // the brief named nothing it pointed at — the first Mandarin user's
-        // screenshots arrived with no labels. The Mac's own languages, English
-        // always kept for the identifiers, and Vision picks the script per line.
+        // Vision reads only the scripts of the languages it is given: pass the Mac's languages
+        // (English always kept, for identifiers) and let it pick the script per line.
         request.recognitionLanguages = recognitionLanguages
         request.automaticallyDetectsLanguage = true
 
@@ -93,10 +69,8 @@ enum OCR {
         .sorted { Frame.readingOrder($0.frame, $1.frame) }
     }
 
-    /// Vision reports normalised boxes with a BOTTOM-LEFT origin; everything
-    /// else in this codebase is top-left. The `1 - maxY` is that flip — get it
-    /// wrong and OCR text lands mirrored against the AX frames it should agree
-    /// with, which looks like a subtle grounding bug rather than a unit error.
+    /// Vision reports normalised boxes with a bottom-left origin; the rest of this codebase is
+    /// top-left. The `1 - maxY` is that flip; without it OCR text lands mirrored against AX frames.
     private static func screenFrame(of boundingBox: CGRect, in rect: Frame) -> Frame {
         Frame(
             x: rect.x + boundingBox.minX * rect.width,
@@ -105,23 +79,4 @@ enum OCR {
             height: boundingBox.height * rect.height
         )
     }
-
-    // There used to be an `isNeeded(for:)` here — a predicate that skipped OCR
-    // when accessibility had already produced text. It is gone, and every
-    // referent is now read off its pixels.
-    //
-    // It was deleted rather than fixed because it failed twice, the same way,
-    // for different reasons. First a git-blame annotation ("You, 6 hours ago")
-    // counted as "AX has text" and suppressed OCR for an entire circled region
-    // of code — which is why regions were exempted from it. Then, in session
-    // 20260728-230442, `"Caret Right Icon"` did the same for three point
-    // referents and a tab labelled `"0"` for a fourth; all four reached the
-    // aligner carrying nothing about what the user meant. Any predicate of this
-    // shape has to decide whether a string is meaningful, and it will keep
-    // getting that wrong on content it has never seen.
-    //
-    // What it bought was never worth defending: each referent resolves inside
-    // its own detached `Task`, so the ~163ms measured cost overlaps other work
-    // and nothing waits on it except the end of the session. It was optimising
-    // background time nobody was blocked on, and paying for it in referents.
 }

@@ -1,17 +1,9 @@
 import AppKit
 import DeikoHandoff
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GIVING YOUR AGENT THE DEIKO MEMORY
-//
-// The app's half of `AgentSetup`: it knows where THIS install's node and
-// memory script live, and hands them over. Which agents exist, where each keeps
-// its MCP config and how that file is edited safely is all `AgentSetup`, tested
-// against a temp HOME. The entry names the node this app resolved and the
-// script by absolute path, because the agent spawns it with its own
-// environment. `LegacyMCP` only ever removes `fovea`, never this.
-// ─────────────────────────────────────────────────────────────────────────────
-
+/// The app's half of `AgentSetup`: supplies this install's node and memory script paths.
+/// The entry uses the resolved node and the script's absolute path because the agent
+/// spawns it with its own environment.
 enum MemoryHelper {
 
     enum Failure: Error, LocalizedError {

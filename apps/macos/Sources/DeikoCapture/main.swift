@@ -5,15 +5,8 @@ import Foundation
 import DeikoGesture
 import DeikoHandoff
 
-// ─────────────────────────────────────────────────────────────────────────────
-// deiko-capture — the capture binary
-//
-//   hello                     handshake; proves the Swift→Node stdio contract
-//   ax-probe                  resolve what's under (or inside) the cursor
-//
-// Subcommand parsing is hand-rolled on purpose: ~40 lines versus an external
-// dependency that would make `make dev` need the network.
-// ─────────────────────────────────────────────────────────────────────────────
+// deiko-capture: the capture binary. Subcommand parsing is hand-rolled to avoid a dependency that
+// would make `make dev` need the network.
 
 struct Args {
     let subcommand: String
@@ -25,9 +18,8 @@ struct Args {
         var bools: Set<String> = []
         var subcommand: String
 
-        // Double-clicking Deiko.app passes no subcommand. Inside a bundle the
-        // sensible default is the product itself; from a terminal it is the
-        // handshake, which is what a developer poking at the binary wants.
+        // Double-clicking Deiko.app passes no subcommand: inside a bundle the default is the app,
+        // from a terminal it is the handshake.
         var subcommandDefault = "hello"
         if Bundle.main.bundleIdentifier != nil { subcommandDefault = "app" }
         subcommand = subcommandDefault
@@ -38,10 +30,9 @@ struct Args {
             rest = rest.dropFirst()
         }
 
-        // Index-based with a PEEK, never a consume. An earlier version pulled
-        // the next token to test it, and when that token was itself a flag it
-        // registered it as a bool — so `--no-ocr --region 90` silently dropped
-        // the 90 and captured a point. Flag order must not change behaviour.
+        // Index-based with a peek, never a consume: consuming the next token to test it would register a
+        // following flag as a bool, so `--no-ocr --region 90` would drop the 90. Flag order must not
+        // change behaviour.
         let tokens = Array(rest)
         var i = 0
         while i < tokens.count {
@@ -56,7 +47,7 @@ struct Args {
                 continue
             }
 
-            // `--flag value` — only when the next token isn't itself a flag.
+            // `--flag value`, only when the next token isn't itself a flag.
             if i < tokens.count, !tokens[i].hasPrefix("--") {
                 flags[name] = tokens[i]
                 i += 1
@@ -101,19 +92,18 @@ case "icon":
     renderIconset(args)
 
 // deiko-capture ink-demo --out /tmp/ink-demo.png
-// Draws all five mark kinds on a flat background — the smallest thing that
-// fails if the geometry (flip, scale, arrowhead, badge) breaks.
+// Draws all five mark kinds on a flat background: the smallest check that fails if the geometry
+// (flip, scale, arrowhead, badge) breaks.
 case "ink-demo":
     runInkDemo(args)
 
 // deiko-capture ui-shot --out /tmp/deiko-ui
-// Every window, light and dark, as PNGs — the design system's ink-demo.
+// Every window, light and dark, as PNGs.
 case "ui-shot":
     UIShot.run(args)
 
-// Also a subcommand, not only a Settings button. The moment diagnostics are
-// worth having is the moment the app is not working — and if it will not
-// launch, a button inside it is not reachable.
+// Also a subcommand, not only a Settings button: diagnostics matter most when the app will not
+// launch, when a button inside it is unreachable.
 case "diagnostics":
     print(Diagnostics.report())
 
@@ -126,8 +116,6 @@ default:
     exit(2)
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-
 func runAXProbe(_ args: Args) async {
     guard AXProbe.ensureTrusted(prompt: true) else {
         Emit.event(ErrorEvent(
@@ -137,9 +125,8 @@ func runAXProbe(_ args: Args) async {
         exit(1)
     }
 
-    // Region radius: when set, we probe a circular lasso around the cursor
-    // instead of a single point. Stands in for the freehand path until the
-    // recorder's drawing UI exists, and exercises the identical code path.
+    // Region radius: when set, probe a circular lasso around the cursor instead of a single point,
+    // exercising the same code path as a freehand path.
     let regionRadius = args.double("region")
     let allowManual = !args.has("no-manual")
     let descend = !args.has("no-descend")
@@ -149,8 +136,7 @@ func runAXProbe(_ args: Args) async {
         try? await Task.sleep(for: .seconds(delay))
     }
 
-    // Crop + OCR: the Tier 1 base. Opt-in here so the AX matrix stays a clean
-    // measurement of AX alone; the recorder will always run it.
+    // Crop + OCR is opt-in here so the AX matrix measures AX alone; the recorder always runs it.
     let wantsCrop = args.has("crop") || args.has("crop-dir")
     let cropDir = args.string("crop-dir") ?? "sessions/crops"
     var cropIndex = 0
@@ -180,9 +166,7 @@ func runAXProbe(_ args: Args) async {
             let crop = await Capture.crop(
                 snapshot: event.snapshot,
                 outputPath: "\(cropDir)/probe-\(String(format: "%03d", cropIndex)).png",
-                // Unconditional, matching the recorder — this is the tool used
-                // to check what the recorder will capture, so it must not
-                // capture something different.
+                // Unconditional, matching the recorder: this tool checks what the recorder will capture.
                 runOCR: true,
                 rectFromAX: fromAX,
                 rect: rect
@@ -199,9 +183,8 @@ func runAXProbe(_ args: Args) async {
         return
     }
 
-    // Watch mode: probe on cursor SETTLE, not on every move. Same trigger the
-    // recorder will use for point-moments, so tuning these numbers here is not
-    // throwaway work.
+    // Watch mode probes when the cursor settles, not on every move: the same trigger the recorder
+    // uses for point-moments.
     let settleRadius = args.double("settle-radius") ?? 6
     let dwellMs = args.double("dwell") ?? 350
     let pollMs: UInt32 = 40
@@ -213,9 +196,8 @@ func runAXProbe(_ args: Args) async {
     var hasMoved = false
     var firedForThisRest = false
 
-    // Pre-poke the app you're in, and again whenever you switch. Stands in for
-    // what the recorder does at hotkey-down: get Chromium's tree built before
-    // the first referent, rather than making that referent wait ~300ms for it.
+    // Pre-poke the frontmost app, and again on each switch, as the recorder does at hotkey-down: it
+    // gets Chromium's accessibility tree built before the first referent needs it.
     var lastFrontPid = allowManual ? AXProbe.prePokeFrontmost() : nil
 
     while true {
@@ -246,22 +228,19 @@ func runAXProbe(_ args: Args) async {
 
 /// The product: a menu-bar app that arms the hotkey and stays out of the way.
 ///
-/// This is what `Deiko.app` runs when double-clicked, and the difference from
-/// `record` is not cosmetic — launched through LaunchServices, macOS holds
-/// Deiko responsible for its own privacy requests. Run the same binary from a
-/// terminal and the permissions attach to the terminal instead, which is why
-/// `record` needs four things granted to whatever shell you happened to use.
+/// This is what `Deiko.app` runs when double-clicked. Launched through LaunchServices, macOS holds
+/// Deiko responsible for its own privacy requests; run from a terminal, the permissions attach to the
+/// terminal instead, which is why `record` needs grants on whatever shell was used.
 @MainActor
 func runApp(_ args: Args) {
     let app = NSApplication.shared
-    // .accessory: no Dock icon, no app switcher. It is an input peripheral,
-    // not something you alt-tab to — except while its board window is open,
-    // when `MainWindowController` makes it a regular app for as long.
+    // .accessory: no Dock icon, no app switcher. `MainWindowController` makes it a regular app while
+    // its board window is open.
     app.setActivationPolicy(.accessory)
     AppMenu.install()
 
-    // A ROOT, not a session directory. The session folder is minted on the
-    // first hold and named `20260728-011253` — see `Recorder.startSessionIfNeeded`.
+    // A root, not a session directory: the session folder is minted on the first hold
+    // (see `Recorder.startSessionIfNeeded`).
     if args.string("out") == nil { Sessions.migrateFromDocuments() }
     let root = args.string("out") ?? Sessions.defaultRoot
 
@@ -269,12 +248,10 @@ func runApp(_ args: Args) {
     if let radius = args.double("settle-radius") { recorder.settleRadius = radius }
     if let dwell = args.double("dwell") { recorder.dwellMs = dwell }
 
-    // Events go to a file rather than stdout: an app launched from Finder has
-    // nowhere to print. Until a session exists they go to a launch log, so a
-    // permission failure at startup is still recoverable after the fact.
+    // Events go to a file because an app launched from Finder has nowhere to print. Until a session
+    // exists they go to a launch log, so a startup permission failure stays recoverable.
     Emit.redirectToFile(Paths.launchLog)
-    // After the sink exists, because a crash report with nowhere to go is not
-    // a crash report.
+    // After the sink exists: a crash report with nowhere to go is not a crash report.
     CrashReport.install()
 
     let menu = MenuBar(recorder: recorder)
@@ -285,9 +262,8 @@ func runApp(_ args: Args) {
     app.run()
 }
 
-
-/// Word timings for a recorded WAV, on-device. Emits JSON on stdout so the
-/// Node side can merge these times with Sarvam's better text.
+/// Word timings for a recorded WAV, on-device. Emits JSON on stdout so the Node side can merge these
+/// times with the better transcript text.
 func runTiming(_ args: Args) async {
     guard let path = args.string("wav") else {
         Emit.event(ErrorEvent("timing needs --wav <path>"))
@@ -303,26 +279,20 @@ func runTiming(_ args: Args) async {
         exit(1)
     }
 
-    // No network fallback and no flag for one. The only thing such a flag
-    // could do is ship narration to Apple's servers — the exact thing
-    // SpeechTiming's guard exists to refuse (PRD §10).
+    // No network fallback and no flag for one: it could only ship narration to Apple's servers, which
+    // SpeechTiming's guard exists to refuse.
     //
-    // `--live` runs the WAV through the LIVE recogniser instead, by handing it
-    // the file's samples the way the microphone tap hands it buffers. That is
-    // the one thing about the live path a unit test cannot answer: whether the
-    // recogniser accepts the 16kHz mono int16 buffers we feed it. Since
-    // recording now depends on that being true, it needs a way to be checked
-    // that does not involve speaking into a microphone and hoping.
+    // `--live` runs the WAV through the live recogniser by handing it the file's samples the way the
+    // microphone tap hands it buffers, to check that it accepts the 16kHz mono int16 buffers we feed it.
     let result: TimingResult
     if args.has("live") {
         result = await liveTimingFromFile(
             path: path, locale: args.string("locale") ?? "hi-IN"
         )
     } else {
-        // `--context <file>`: newline-separated vocabulary hints, so the
-        // bakeoff can measure on-device recognition WITH the identifiers that
-        // were on screen against the same audio without them. A file rather
-        // than a flag because the list runs to dozens of symbols.
+        // `--context <file>`: newline-separated vocabulary hints, to compare on-device recognition with
+        // and without the on-screen identifiers over the same audio. A file because the list runs to
+        // dozens of symbols.
         let context = args.string("context")
             .flatMap { try? String(contentsOfFile: $0, encoding: .utf8) }?
             .split(separator: "\n")
@@ -335,23 +305,18 @@ func runTiming(_ args: Args) async {
         )
     }
 
-    // Writing to a file rather than only stdout, because this has to be
-    // launchable via `open -a`: TCC blames the RESPONSIBLE process, and a
-    // binary exec'd from a terminal inherits that terminal's identity — inside
-    // an IDE that is Electron, whose Info.plist has no speech key, so the
-    // request is killed before our own plist is ever consulted. Going through
-    // LaunchServices makes the app responsible for itself, and then it has no
-    // stdout to write to.
+    // Written to a file, not only stdout, so this can run via `open -a`: TCC blames the responsible
+    // process, and a binary exec'd from an IDE terminal inherits the IDE's identity (Electron, whose
+    // Info.plist has no speech key), so the request dies before our plist is consulted. LaunchServices
+    // makes the app responsible for itself, and then it has no stdout.
     if let out = args.string("out") {
         let url = URL(fileURLWithPath: out)
         try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true
         )
         if let data = try? JSONEncoder().encode(result) {
-            // Atomic: transcribe.mjs polls for this file's existence and reads
-            // it the instant it appears. A plain write is create-then-fill, so
-            // the poller could catch it at zero bytes and JSON.parse("") threw
-            // the whole hold away.
+            // Atomic: transcribe.mjs polls for this file and reads it the instant it appears, and a plain
+            // write could be caught at zero bytes.
             try? data.write(to: url, options: .atomic)
         }
     }
@@ -368,22 +333,15 @@ func runTiming(_ args: Args) async {
     }
 }
 
-/// Replay a WAV through the live recogniser, in the buffer shape AND at the pace
-/// the mic tap produces: 16kHz mono int16, 4096 frames at a time, one buffer per
-/// 256ms of audio.
+/// Replay a WAV through the live recogniser in the buffer shape and at the pace the mic tap produces:
+/// 16kHz mono int16, 4096 frames at a time, one buffer per 256ms of audio.
 ///
-/// Read AS int16 rather than through the default float processing format, so
-/// what reaches `append` is the same thing `Audio`'s converter emits. Reading it
-/// as float would test a format the app never sends and pass while the real path
-/// failed.
+/// Read as int16 rather than the default float processing format, so what reaches `append` is what
+/// `Audio`'s converter emits; float would test a format the app never sends.
 ///
-/// THE PACING IS NOT POLITENESS, it is the difference between a valid test and a
-/// misleading one. Fed a whole file as fast as the disk allows, the recogniser
-/// drops most of it: this replay returned three garbled segments where the
-/// file-based path on the same WAV returned twenty-one correct words. A
-/// microphone cannot deliver faster than realtime, so an unpaced replay tests a
-/// condition the app can never be in — and fails it, which would have looked
-/// exactly like a broken live path.
+/// The pacing matters: fed a whole file as fast as the disk allows, the recogniser drops most of it.
+/// A microphone cannot deliver faster than realtime, so an unpaced replay tests a condition the app
+/// can never be in.
 func liveTimingFromFile(path: String, locale: String) async -> TimingResult {
     guard let live = LiveSpeechTiming(localeIdentifier: locale) else {
         return TimingResult(
@@ -413,10 +371,9 @@ func liveTimingFromFile(path: String, locale: String) async -> TimingResult {
     return await live.finish()
 }
 
-/// Push-to-talk session recorder. Unlike the other subcommands this needs a
-/// real AppKit run loop — the overlay is a window, and the event tap delivers
-/// on a run loop source. `.accessory` keeps it out of the Dock and the app
-/// switcher: it is an input peripheral, not an app you switch to.
+/// Push-to-talk session recorder. Unlike the other subcommands this needs a real AppKit run loop: the
+/// overlay is a window and the event tap delivers on a run loop source. `.accessory` keeps it out of
+/// the Dock and the app switcher.
 @MainActor
 func runRecord(_ args: Args) {
     guard AXProbe.ensureTrusted(prompt: true) else {
@@ -430,8 +387,8 @@ func runRecord(_ args: Args) {
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
 
-    // Same session model as the app: a root that session folders are minted
-    // under, one folder per session, named by timestamp.
+    // Same session model as the app: a root that session folders are minted under, one per session,
+    // named by timestamp.
     let root = args.string("out") ?? "sessions"
 
     let recorder = Recorder(sessionRoot: root, captureCrops: !args.has("no-crop"))
@@ -446,11 +403,10 @@ func runRecord(_ args: Args) {
         exit(1)
     }
 
-    // Ctrl-C is this command's "Stop session" button, so it must close the
-    // session out properly rather than killing the process mid-write: default
-    // SIGINT would leave the last crops unwritten and no `sessionEnd` line.
-    // The default handler has to be disabled explicitly — a DispatchSource for
-    // a signal observes it, it does not replace it.
+    // Ctrl-C is this command's "Stop session": it must close the session out rather than kill the
+    // process mid-write, which would leave the last crops unwritten and no `sessionEnd` line. The
+    // default handler has to be disabled explicitly, since a DispatchSource for a signal observes it
+    // rather than replacing it.
     signal(SIGINT, SIG_IGN)
     let interrupt = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
     interrupt.setEventHandler {
@@ -489,11 +445,9 @@ func circlePath(around center: Point, radius: Double, segments: Int = 24) -> [Po
     }
 }
 
-/// Draws all five `StrokeKind`s onto a flat 900×300 background and writes it
-/// to `--out` (default `/tmp/ink-demo.png`) — a synthetic crop so InkRenderer
-/// can be eyeballed without a real session. The five calls ink the SAME file
-/// in sequence, so the result accumulates; that is fine, and makes a single
-/// image reviewable for all five kinds at once.
+/// Draws all five `StrokeKind`s onto a flat 900×300 background and writes it to `--out` (default
+/// `/tmp/ink-demo.png`), so InkRenderer can be eyeballed without a real session. The five calls ink
+/// the same file in sequence, so one image shows all five kinds.
 func runInkDemo(_ args: Args) {
     let outPath = args.string("out") ?? "/tmp/ink-demo.png"
     let w = 900, h = 300
@@ -543,8 +497,8 @@ func summarize(_ event: ProbeEvent) -> String {
     let flag = snap.manualAccessibilityApplied ? " [poked]" : ""
     let timing = String(format: "%.0fms", snap.elapsedMs)
 
-    // Crop line, when one was taken. `ax-rect` vs `box` is the interesting bit:
-    // it shows whether AX gave us precise geometry even where it gave no text.
+    // Crop line, when one was taken. `ax-rect` vs `box` shows whether AX gave precise geometry even
+    // where it gave no text.
     var cropLine = ""
     if let crop = event.crop {
         if let err = crop.error {
@@ -568,10 +522,8 @@ func summarize(_ event: ProbeEvent) -> String {
         .first ?? "—"
     let clipped = text.count > 70 ? String(text.prefix(70)) + "…" : text
 
-    // Points show the ancestor chain — a bare AXScrollArea under AXGroup/AXGroup
-    // is the signature of an unbridged Electron window, and you want to see that
-    // live rather than discover it in the JSON afterwards.
-    // Regions show the sample→element collapse, which is the granularity signal.
+    // Points show the ancestor chain: a bare AXScrollArea under AXGroup/AXGroup is the signature of an
+    // unbridged Electron window. Regions show the sample→element collapse, the granularity signal.
     let context: String
     if let samples = snap.samplesTested {
         context = "\(snap.uniqueElements ?? 0) elems / \(samples) samples · \(first.role ?? "?")"
@@ -583,11 +535,9 @@ func summarize(_ event: ProbeEvent) -> String {
     return "  ✓ \(app): \(context) · \"\(clipped.replacingOccurrences(of: "\n", with: "⏎"))\" (\(timing))\(flag)\(cropLine)"
 }
 
-/// Held in a type rather than as a top-level `let`. Globals in main.swift are
-/// initialised in source order as execution reaches them, so a top-level
-/// `let usage` declared below the dispatch switch read back as an EMPTY STRING
-/// — `deiko-capture help` printed nothing and exited 0. Static members are
-/// initialised lazily on first access, so declaration order stops mattering.
+/// Held in a type rather than a top-level `let`: globals in main.swift initialise in source order as
+/// execution reaches them, so a `let usage` below the dispatch switch would read as an empty string.
+/// Static members initialise lazily, so declaration order does not matter.
 enum Usage {
     static let text = """
 deiko-capture \(DeikoVersion.current)

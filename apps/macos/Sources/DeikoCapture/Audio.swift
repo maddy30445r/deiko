@@ -1,95 +1,53 @@
 import AVFoundation
-// AVFAudio predates Sendable annotations, so `AVAudioPCMBuffer` and the
-// converter's input block trip strict-concurrency checks. The block is
-// documented as being invoked synchronously by `convert(to:error:)` on the
-// calling thread — nothing actually crosses a concurrency boundary — so the
-// suppression is scoped to this one import rather than silenced per-warning.
+// AVFAudio predates Sendable annotations, so `AVAudioPCMBuffer` and the converter's input block trip
+// strict concurrency checks. The block runs synchronously inside `convert(to:error:)` and nothing
+// crosses a concurrency boundary, so the suppression is scoped to this one import.
 @preconcurrency import AVFAudio
 import Foundation
 import DeikoVoice
-
-// ─────────────────────────────────────────────────────────────────────────────
-// NARRATION CAPTURE
-//
-// 16kHz mono WAV — what Sarvam and Whisper both want, and small enough that a
-// 30-second session is under a megabyte.
-//
-// The only subtle part is TIME. Alignment binds spoken words to pointing
-// events, so audio has to live on the same monotonic clock as the cursor
-// samples and the crops. We record `t0` — the `Clock.nowMs()` reading at the
-// moment the first audio buffer lands — and every word timestamp the ASR later
-// returns is an offset from it. Using wall-clock here, or assuming recording
-// starts the instant the hotkey goes down, would put a fixed skew into every
-// binding and quietly cost us the 80% gate.
-//
-// The mic runs only while the hotkey is held. Nothing is recorded otherwise.
-// ─────────────────────────────────────────────────────────────────────────────
 
 /// One-shot flag for the converter's input block. See `append(_:)`.
 private final class ConversionState: @unchecked Sendable {
     var supplied = false
 }
 
+/// Captures narration as 16kHz mono WAV while the hotkey is held. `t0` is the `Clock.nowMs()` reading
+/// when the first buffer lands, and every ASR word timestamp is an offset from it: audio must share the
+/// monotonic clock with cursor samples and crops, or every binding skews.
 final class Audio {
-    /// A FRESH ENGINE PER RECORDING — see `start(path:)`. It was one engine for
-    /// the life of the app, and that is what crashed 0.4.6 in the field.
+    /// A fresh engine per recording; see `start(path:)`.
     private var engine = AVAudioEngine()
     private var file: AVAudioFile?
     private var converter: AVAudioConverter?
     private var targetFormat: AVAudioFormat?
 
-    /// `Clock.nowMs()` at the first captured buffer. Nil until audio actually
-    /// starts flowing — the engine takes a few ms to spin up, and that gap is
-    /// exactly what this exists to measure rather than assume.
+    /// `Clock.nowMs()` at the first captured buffer. Nil until audio flows: the engine takes a few ms
+    /// to spin up, and this measures that gap rather than assuming it.
     private(set) var t0: Double?
 
     private(set) var isRecording = false
 
-    /// `Clock.nowMs()` when speech was last heard. Nil if none yet.
+    /// `Clock.nowMs()` when speech was last heard, or nil if none yet. The recorder uses it to skip
+    /// cursor settles made in silence (transit, scrolling, reading).
     ///
-    /// The recorder uses this to decide whether a cursor settle is worth
-    /// capturing at all. With the session always recording, every settle would
-    /// otherwise become a referent — including transit, scrolling, reading and
-    /// getting a coffee. "Narration is the filter" was always the design; this
-    /// applies it at capture time as well as at alignment time.
-    ///
-    /// Written on the audio thread, read on the main actor — a `Double` write
-    /// is atomic on every platform this runs on, and a reader that catches a
-    /// stale value is off by one buffer (~256ms at 16kHz/4096), which the
-    /// multi-second gate absorbs.
+    /// Written on the audio thread, read on the main actor: a `Double` write is atomic on the platforms
+    /// this runs on, and a stale read is off by one buffer (~256ms), which the multi-second gate absorbs.
     nonisolated(unsafe) private(set) var lastVoiceMs: Double?
 
-    /// Handed every converted buffer, on the audio thread, immediately before it
-    /// is written to the WAV.
+    /// Handed every converted buffer, on the audio thread, just before it is written to the WAV, so
+    /// recognition can run during the session instead of on the finished file.
     ///
-    /// This exists so recognition can run DURING the session instead of on the
-    /// finished file afterwards, which is where the wait used to be: the work is
-    /// ~1.5s for 13s of audio, and the rest was a file-based recogniser having to
-    /// *infer* that it had reached the end. Live, end-of-audio is a fact we state.
-    ///
-    /// It gets the CONVERTED buffer rather than the mic's native one for two
-    /// reasons: the recognition stream then contains exactly the samples the WAV
-    /// contains, so a hold that falls back to the file path keeps the same
-    /// timeline; and 16kHz mono int16 is already proven to work with this
-    /// recogniser, because it is what it reads out of our WAVs today.
-    ///
-    /// Called on the real-time thread, so whatever is on the other end must be
-    /// cheap. `SFSpeechAudioBufferRecognitionRequest.append` is — it hands the
-    /// buffer off and returns.
+    /// It gets the converted buffer, not the mic's native one, so the recognition stream holds exactly
+    /// the samples in the WAV and a fallback to the file path keeps the same timeline. It runs on the
+    /// real-time thread, so the receiver must be cheap.
     nonisolated(unsafe) var onBuffer: ((AVAudioPCMBuffer) -> Void)?
 
-    /// Decides whether a buffer is speech, relative to the room rather than
-    /// against a fixed number. See `VoiceGate` for why — a fixed threshold was
-    /// measurably losing referents at the volume this app is actually spoken
-    /// at.
+    /// Decides whether a buffer is speech, relative to the room rather than a fixed threshold. See
+    /// `VoiceGate`.
     ///
-    /// Touched ONLY from the audio thread — including the per-recording reset,
-    /// which happens on the first buffer rather than in `start()`. That is not
-    /// tidiness: unlike `lastVoiceMs`, this holds an array, and `removeTap` does
-    /// not promise an in-flight tap callback has returned. Resetting from the
-    /// caller's thread could mutate a copy-on-write buffer the audio thread was
-    /// reading. Single ownership removes the question instead of reasoning about
-    /// how narrow the window is.
+    /// Touched only from the audio thread, including the per-recording reset (done on the first buffer,
+    /// not in `start()`): it holds an array, and `removeTap` does not promise an in-flight callback has
+    /// returned, so resetting from the caller's thread could mutate a buffer being read.
     nonisolated(unsafe) private var gate = VoiceGate()
 
     enum AudioError: LocalizedError {
@@ -104,35 +62,21 @@ final class Audio {
         }
     }
 
-    /// Begins recording to `path`. Throws rather than failing quietly: a session
-    /// recorded without audio is useless for alignment, and the user should
-    /// find out at the start rather than at transcription time.
+    /// Begins recording to `path`. Throws rather than failing quietly: a session without audio is
+    /// useless for alignment.
     func start(path: String) throws {
-        // Self-heal rather than silently succeed: returning early here while
-        // recording meant the caller recorded an `audioPath` for a file that
-        // was never created — the mic kept writing into the PREVIOUS hold's
-        // WAV, and transcription later failed on a path that does not exist.
+        // Self-heal rather than return early: the caller would record an `audioPath` for a file that
+        // was never created.
         if isRecording { stop() }
 
-        // AN ENGINE REMEMBERS THE HARDWARE IT FIRST SAW. Its input node caches a
-        // format, and nothing refreshes it when the hardware changes underneath
-        // a menu-bar app that lives for days: AirPods connecting, a call app
-        // switching the sample rate, the mic permission being granted mid-run.
-        // The next `installTap` was then handed a stale format and raised
-        // "Failed to create tap due to format mismatch, 1 ch, 44100 Hz" — an
-        // Objective-C exception, which no `do/catch` here can see, so the whole
-        // app died at the start of a session. The two sessions before that
-        // crash recorded a 4KB WAV with no samples: same stale engine, started
-        // "successfully" against a device it was no longer attached to.
-        //
-        // A new engine asks the hardware again. It costs nothing measurable
-        // next to the spin-up `t0` already exists to absorb.
+        // A fresh engine per recording. An engine's input node caches the hardware format and nothing
+        // refreshes it (AirPods connecting, a call app changing the sample rate, mic permission granted
+        // mid-run), so a reused engine hands `installTap` a stale format. That raises an Objective-C
+        // exception ("Failed to create tap due to format mismatch") which no `do/catch` sees, and the app dies.
         engine = AVAudioEngine()
 
-        // Reset the origin FIRST, before anything can throw. It used to be
-        // reset after the file was opened, so a throwing `start` left the
-        // previous recording's t0 in place — and `stop()` then reported that
-        // stale origin for a recording that captured nothing.
+        // Reset the origin first, before anything can throw, so a failed `start` cannot leave the
+        // previous recording's t0 for `stop()` to report.
         t0 = nil
         lastVoiceMs = nil
 
@@ -155,8 +99,8 @@ final class Audio {
             throw AudioError.converterUnavailable
         }
 
-        // Write as 16-bit PCM WAV, not the hardware's float format: it is what
-        // the ASR APIs accept directly, and it is a third of the size.
+        // 16-bit PCM WAV, not the hardware's float format: the ASR APIs accept it directly and it is
+        // a third of the size.
         self.file = try AVAudioFile(
             forWriting: url,
             settings: target.settings,
@@ -166,11 +110,9 @@ final class Audio {
         self.converter = converter
         self.targetFormat = target
 
-        // `format: nil` — the tap takes whatever the node is producing NOW. The
-        // mismatch exception is only raised for an explicit format, so there is
-        // no longer a format here for the hardware to disagree with. If the
-        // device changes in the instant since `inputFormat` was read, the
-        // converter reports an error on that buffer instead of the app aborting.
+        // `format: nil`: the tap takes whatever the node is producing now. The mismatch exception is
+        // raised only for an explicit format; a device change since `inputFormat` was read surfaces as a
+        // converter error on that buffer instead.
         input.installTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self] buffer, _ in
             self?.append(buffer)
         }
@@ -179,9 +121,8 @@ final class Audio {
         do {
             try engine.start()
         } catch {
-            // Unwind the tap. Leaving it installed meant the NEXT hold's
-            // `installTap` hit AVAudioEngine's one-tap-per-bus precondition
-            // and aborted the whole process mid-session.
+            // Unwind the tap: a leftover one would trip AVAudioEngine's one-tap-per-bus precondition on
+            // the next hold and abort the process.
             input.removeTap(onBus: 0)
             self.file = nil
             self.converter = nil
@@ -190,9 +131,8 @@ final class Audio {
         isRecording = true
     }
 
-    /// Stops and returns the audio origin, so the caller can record it against
-    /// the same clock everything else uses. Nil when nothing was recorded —
-    /// never a previous hold's origin.
+    /// Stops and returns the audio origin so the caller can record it against the shared clock. Nil
+    /// when nothing was recorded, never a previous hold's origin.
     @discardableResult
     func stop() -> Double? {
         guard isRecording else { return nil }
@@ -204,18 +144,13 @@ final class Audio {
         return t0
     }
 
-    // ── Tap callback (real-time thread — keep it cheap) ─────────────────────
-
+    /// Tap callback, on the real-time thread: keep it cheap.
     private func append(_ buffer: AVAudioPCMBuffer) {
         guard let converter, let targetFormat, let file else { return }
 
-        // Stamp the origin on the FIRST buffer, not at engine.start(): the gap
-        // between asking for audio and receiving it is real, and guessing it
-        // puts a constant offset into every word timestamp.
-        //
-        // `start()` nils `t0`, so this is also where "a new recording began" is
-        // observable ON THE AUDIO THREAD — which is the only thread allowed to
-        // touch the gate. See its declaration.
+        // Stamp the origin on the first buffer, not at `engine.start()`: the gap between asking for audio
+        // and receiving it is real. `start()` nils `t0`, so this is also where a new recording is
+        // observable on the audio thread, the only thread allowed to touch the gate.
         if t0 == nil {
             t0 = Clock.nowMs()
             gate.reset()
@@ -227,14 +162,12 @@ final class Audio {
             pcmFormat: targetFormat, frameCapacity: capacity
         ) else { return }
 
-        // Held in a reference box rather than a captured `var`: the input block
-        // is typed `@Sendable`, so mutating a local from inside it is a
-        // concurrency error even though the call is synchronous.
+        // A reference box rather than a captured `var`: the input block is `@Sendable`, so mutating a
+        // local from it is a concurrency error even though the call is synchronous.
         let state = ConversionState()
         var error: NSError?
         converter.convert(to: output, error: &error) { _, status in
-            // The converter pulls until satisfied; hand it this buffer once and
-            // report end-of-stream after, or it spins on the same data.
+            // The converter pulls until satisfied; supply this buffer once, then report no data, or it spins.
             if state.supplied {
                 status.pointee = .noDataNow
                 return nil
@@ -246,15 +179,12 @@ final class Audio {
 
         guard error == nil, output.frameLength > 0 else { return }
         noteVoiceActivity(in: output)
-        // Before the write, so a disk error cannot cost the recogniser a buffer
-        // it has no way to ask for again.
+        // Before the write, so a disk error cannot cost the recogniser a buffer it cannot ask for again.
         onBuffer?(output)
         try? file.write(from: output)
     }
 
-    /// RMS of the converted buffer, on the audio thread. Cheap on purpose —
-    /// one pass over int16 samples, no allocation — because this runs inside
-    /// the real-time tap callback.
+    /// RMS of the converted buffer, on the audio thread: one pass over int16 samples, no allocation.
     private func noteVoiceActivity(in buffer: AVAudioPCMBuffer) {
         guard let channel = buffer.int16ChannelData?[0] else { return }
         let count = Int(buffer.frameLength)

@@ -2,20 +2,9 @@ import AppKit
 import SwiftUI
 import DeikoHandoff
 
-// ─────────────────────────────────────────────────────────────────────────────
-// PERSONAS, IN SETTINGS
-//
-// The form is the product here. Somebody who writes QA tickets for a living
-// should be able to say "P0–P3, Jira markup, no Environment field" without
-// reading a prompt — so the controls are the vocabulary of the job, and the
-// prose is generated from them. "Overwrite this persona" is the escape hatch
-// for the person who would rather write the prompt themselves, and it takes
-// over completely: no form, no merging, no help.
-//
-// Every row of this is also the vocabulary the board and the persona list in
-// a future main window will be built from — a row, a chip, a default marker,
-// a menu. It is worth more than a settings card.
-// ─────────────────────────────────────────────────────────────────────────────
+// The Personas settings pane. The form's controls are the vocabulary of the job
+// and the persona prose is generated from them. "Overwrite this persona" is the
+// escape hatch: it takes over completely, with no form and no merging.
 
 @MainActor
 final class PersonaStore: ObservableObject {
@@ -32,8 +21,7 @@ final class PersonaStore: ObservableObject {
     func reload() {
         list = Personas.all()
         defaultID = Personas.defaultID
-        // Off the main actor: `~/.claude.json` carries per-project history and
-        // is routinely megabytes.
+        // Off the main actor: `~/.claude.json` can be megabytes.
         Task.detached(priority: .utility) {
             let fresh = AgentConfigs.refresh()
             await MainActor.run { self.connected = fresh }
@@ -63,9 +51,8 @@ final class PersonaStore: ObservableObject {
         makeDefault(persona)
     }
 
-    /// "QA ticket v2" — the version somebody makes when the built-in is nearly
-    /// right. It copies the options AND any hand-written text, because those
-    /// are exactly what they are about to change.
+    /// A copy for when the built-in is nearly right. It copies the options and
+    /// any hand-written text, since those are what is about to change.
     func duplicate(_ persona: Persona) {
         var copy = persona
         copy.id = freeID(persona.id)
@@ -85,8 +72,8 @@ final class PersonaStore: ObservableObject {
     }
 
     func remove(_ persona: Persona) {
-        // A built-in has no delete — it has Reset. Deleting one would leave a
-        // gap that seeding deliberately does not fill again.
+        // A built-in has no delete, only Reset: deleting one would leave a gap
+        // that seeding does not refill.
         guard !persona.isBuiltIn else { return }
         list.removeAll { $0.id == persona.id }
         Personas.save(list)
@@ -118,8 +105,6 @@ final class PersonaStore: ObservableObject {
         return "\(stem) v\(n)"
     }
 }
-
-// ── The pane ────────────────────────────────────────────────────────────────
 
 struct PersonasPane: View {
     @StateObject private var store = PersonaStore()
@@ -174,8 +159,7 @@ struct PersonasPane: View {
         .onAppear { store.reload() }
     }
 
-    /// A row is the whole hit target, and the menu is the only thing inside it
-    /// that is not "show me this one" — an arrangement the board will reuse.
+    /// The whole row is the hit target.
     private func row(_ persona: Persona) -> some View {
         let isSelected = selected?.id == persona.id
         return HStack(spacing: 10) {
@@ -189,9 +173,8 @@ struct PersonasPane: View {
                     .font(.system(size: 11))
                     .foregroundStyle(DeikoStyle.ink2)
                 if let t = persona.destination {
-                    // Where it goes, and whether anything here can take it. No
-                    // red or green: the accent is spent on the gesture, and not
-                    // having connected a tracker is not a failure.
+                    // Where it goes, and whether anything here can take it. Neutral
+                    // colour: not having connected a tracker is not a failure.
                     Text(filingLine(t))
                         .font(.system(size: 11))
                         .foregroundStyle(DeikoStyle.ink2)
@@ -222,10 +205,8 @@ struct PersonasPane: View {
         .padding(.vertical, 11)
         .background(
             RoundedRectangle(cornerRadius: DeikoStyle.insetRadius)
-                // THE SAME SELECTION LANGUAGE AS THE SIDEBAR. This was a
-                // black outline in light mode, so the window taught "indigo
-                // wash = where I am" in one pane and contradicted it in the
-                // next.
+                // Same selection language as the sidebar: accent wash means
+                // "where I am".
                 .fill(isSelected ? DeikoStyle.accentSoft : DeikoStyle.card)
                 .overlay(
                     RoundedRectangle(cornerRadius: DeikoStyle.insetRadius)
@@ -239,8 +220,8 @@ struct PersonasPane: View {
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 
-    /// The file itself, because that is what actually ships — a preview that
-    /// paraphrased it would be a second thing to keep in sync.
+    /// The file itself, because that is what ships; a preview that paraphrased
+    /// it would be a second thing to keep in sync.
     @ViewBuilder private var preview: some View {
         if let persona = selected {
             VStack(spacing: 0) {
@@ -280,12 +261,9 @@ struct PersonasPane: View {
         }
     }
 
-    /// WHERE THE SETUP NUDGE LIVES.
-    ///
-    /// The persona file says nothing about connecting anything — a brief is
-    /// not the place to be sold a tool. So it lives here, next to the choice
-    /// it affects, where a command can be copied rather than read aloud to
-    /// somebody by their own agent.
+    /// The setup nudge lives here rather than in the persona file, so a brief
+    /// never advertises a tool, and a command can be copied instead of read
+    /// aloud by somebody's own agent.
     private var connectedTools: some View {
         VStack(alignment: .leading, spacing: 8) {
             SectionLabel("Connected tools")
@@ -346,8 +324,6 @@ struct PersonasPane: View {
             .background(DeikoStyle.accentSoft, in: Capsule())
     }
 }
-
-// ── The editor ──────────────────────────────────────────────────────────────
 
 private struct PersonaEditor: View {
     @State private var draft: Persona
@@ -415,9 +391,8 @@ private struct PersonaEditor: View {
                             VStack(alignment: .leading, spacing: 8) {
                                 SectionLabel(group.title)
                                 InsetCard {
-                                    // FILTERED BEFORE ENUMERATING, or the
-                                    // dividers count fields nobody can see and
-                                    // the card opens with a rule.
+                                    // Filter before enumerating, or the dividers
+                                    // count fields nobody can see.
                                     let shown = group.fields.filter { draft.shows($0) }
                                     ForEach(Array(shown.enumerated()), id: \.element.id) { index, field in
                                         if index > 0 { Divider().padding(.horizontal, 14) }
@@ -432,10 +407,8 @@ private struct PersonaEditor: View {
                         .font(.system(size: 13))
                         .onChange(of: overwriting) { _, on in
                             if on { text = draft.markdown(connected: connected); return }
-                            // ASKED, BECAUSE IT IS A DELETION. Turning this off
-                            // returns to the form, and the prompt somebody
-                            // wrote by hand is gone with it — an 11pt caption
-                            // underneath was not a warning, it was a label.
+                            // Ask first, because it is a deletion: turning this off
+                            // returns to the form and discards any hand-written prompt.
                             guard draft.overrideText != nil
                                     || text != draft.markdown(connected: connected) else {
                                 draft.overrideText = nil
@@ -515,8 +488,7 @@ private struct PersonaEditor: View {
                     .font(.system(size: 13))
                 }
             case .paragraph(let placeholder):
-                // Body font, not mono: the file that ships is a document, but
-                // this is a sentence somebody types.
+                // Body font, not mono: this is a sentence somebody types.
                 TextEditor(text: Binding(
                     get: { draft.value(field.id) },
                     set: { draft.options[field.id] = $0 }

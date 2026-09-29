@@ -3,52 +3,16 @@ import Combine
 import SwiftUI
 import DeikoHandoff
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THE ORB — the session's last step, on screen instead of in a terminal
-//
-// A session ends and the orb appears: a small always-on-top glass card, centred,
-// showing Deiko's three-line reading of what it heard. Its 56pt COIN — a disc
-// wearing the Deiko mark — is the drag handle: fling it onto the window running
-// Claude Code and the brief lands in that live session — the app switch, the
-// paste of the prompt itself, and the Return that submits it — all inside one
-// gesture.
-//
-// While you aim, the coin DETACHES: it follows the cursor at full weight with
-// the aim label riding underneath, and the card stays behind at 35% opacity
-// with a dashed socket where the coin was. What you are throwing is the coin,
-// not the card — the design (mddocs/design-brief.md → Claude Design canvas)
-// made that literal.
-//
-// Clicking the coin opens the full review panel directly. The old unfold-on-
-// click options row is gone (canvas cut 1r): two hidden buttons behind a click,
-// on a non-activating panel where hover can't teach, was a dead end. "Add more"
-// lives on as the panel's "Point at more" button, and as double-tapping Right
-// Option while the orb is up — which resumes the SAME session.
-//
-// The summary sits at rest deliberately. A mis-heard identifier in the
-// narration does more damage than anywhere else in the brief, so "did it hear
-// me" must be answerable at a glance, before the fling, without opening
-// anything.
-//
-// The gesture's decisions live in `DeikoHandoff.FlingGesture`, tested without a
-// screen. This file feeds it mouse events and obeys what comes back.
-// ─────────────────────────────────────────────────────────────────────────────
-
 /// What the orb window is currently showing.
 enum OrbMode {
     /// The card: summary and the coin.
     case collapsed
-    /// The full review panel.
     case expanded
 }
 
-/// What the fling is currently over.
-///
-/// A three-case enum rather than the `HandoffTarget??` this used to be, where
-/// `nil` meant "not flinging" and `.some(nil)` meant "over nothing". Those read
-/// identically at a glance and only one of them should show a target name.
+/// What the fling is currently over. A three-case enum rather than an optional of an optional, where
+/// `nil` and `.some(nil)` read identically at a glance and only one should show a target name.
 enum Aim {
-    /// No fling in flight.
     case idle
     /// Flinging, but over nothing a brief can go to.
     case overNothing
@@ -60,8 +24,8 @@ final class OrbState: ObservableObject {
     @Published var mode: OrbMode = .collapsed
     /// The app the fling is currently over, for the label under the coin.
     @Published var aim: Aim = .idle
-    /// What the session captured, for the working readout — known the moment
-    /// the recorder closes, long before the pipeline has anything to say.
+    /// What the session captured, for the working readout: known the moment the recorder closes, long
+    /// before the pipeline has anything to say.
     @Published var captured: SessionStats?
     /// The app a brief goes to without a fling — the last one used before
     /// Deiko — named on the review panel's Send button and the coin's action.
@@ -71,22 +35,32 @@ final class OrbState: ObservableObject {
     var isOverTarget: Bool { if case .over = aim { return true }; return false }
 }
 
-/// One below the lasso overlay, and written as arithmetic so the rule cannot drift.
+/// One below the lasso overlay, written as arithmetic so raising the overlay raises the orb with it and
+/// the overlay stays the topmost thing Deiko draws.
 ///
-/// `.floating` (3) WAS NOT ENOUGH, and the proof was already in the app: the red
-/// capture bar is visible over a full-screen Space with the SAME
-/// `collectionBehavior` and differs only in level (`Overlay.swift`, `.screenSaver`).
-/// A full-screen app's own window is elevated above the floating band, so a
-/// non-activating panel at 3 sits behind it however many Spaces it may join —
-/// which is why the orb appeared over Chrome and not over a full-screened editor,
-/// and `.fullScreenAuxiliary` could not save it: that covers auxiliary panels of
-/// the app that OWNS the full-screen window, not a third-party accessory app.
-///
-/// Expressed as `screenSaver - 1` rather than a literal so that raising the
-/// overlay raises the orb with it: the documented invariant is that the lasso
-/// overlay stays the topmost thing Deiko draws, and subtraction cannot invert it.
+/// `.floating` (3) is not enough: a full-screen app's own window is elevated above the floating band, so a
+/// non-activating panel at that level sits behind it however many Spaces it may join, and
+/// `.fullScreenAuxiliary` only covers auxiliary panels of the app that owns the full-screen window. The red
+/// capture bar shows over a full-screen Space with the same `collectionBehavior` and differs only in level
+/// (`Overlay.swift`, `.screenSaver`).
 private let orbWindowLevel = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue - 1)
 
+/// The orb: the session's last step, on screen instead of in a terminal.
+///
+/// When a session ends a small always-on-top glass card appears, showing Deiko's three-line reading of what
+/// it heard. Its 56pt coin (a disc wearing the Deiko mark) is the drag handle: fling it onto the window
+/// running Claude Code and the brief lands in that live session (app switch, paste of the prompt, and the
+/// Return that submits) in one gesture. While aiming, the coin detaches and follows the cursor with the aim
+/// label riding underneath, and the card stays behind at 35% opacity with a dashed socket.
+///
+/// Clicking the coin opens the full review panel. "Add more" is the panel's "Point at more" button, or a
+/// double-tap of Right Option while the orb is up, which resumes the same session.
+///
+/// The summary sits at rest on purpose: a mis-heard identifier does the most damage in the narration, so
+/// "did it hear me" must be answerable at a glance, before the fling.
+///
+/// The gesture's decisions live in `DeikoHandoff.FlingGesture`, tested without a screen; this file feeds it
+/// mouse events and obeys what comes back.
 @MainActor
 final class OrbController: NSObject {
 
@@ -100,15 +74,12 @@ final class OrbController: NSObject {
     private var escapeMonitor: Any?
     private var fadeTask: Task<Void, Never>?
 
-    /// Reopen a finished session and start recording again. Set by `MenuBar`,
-    /// which owns the recorder — the same contract the review window had.
+    /// Reopen a finished session and start recording again. Set by `MenuBar`, which owns the recorder.
     var onExtend: ((String) -> Bool)?
 
-    /// Open Settings — set by `MenuBar`, which owns that window. A failure whose
-    /// fix is "add your key" should be one click from the key.
-    ///
-    /// Forwarded to the model too, so the expanded panel's failure view offers
-    /// the same button as the collapsed orb.
+    /// Open Settings; set by `MenuBar`, which owns that window. A failure whose fix is "add your key" should
+    /// be one click from the key. Forwarded to the model too, so the expanded panel's failure view offers
+    /// the same button.
     var onOpenSettings: (() -> Void)? {
         didSet { model.onOpenSettings = onOpenSettings }
     }
@@ -116,14 +87,6 @@ final class OrbController: NSObject {
     /// The session currently being extended, if any.
     private var extending: String?
 
-    /// The point the last processed drag update resolved its target at, in CG
-    /// global coordinates.
-    ///
-    /// The release used to re-read `NSEvent.mouseLocation`, which is a
-    /// DIFFERENT point: SwiftUI coalesces drag updates, so on a fast fling the
-    /// cursor can travel tens of points past the last position we actually
-    /// resolved an app at. That made the named target and the clicked pixel two
-    /// different questions. Now they are the same one.
     /// The system drag the fling is upgraded to over a browser, and whether
     /// the destination took the file. See `upgradeToSystemDrag`.
     private let dragSource = CoinDragSource()
@@ -135,6 +98,10 @@ final class OrbController: NSObject {
     /// the moment AppKit takes the mouse.
     private var lastTranslation = CGSize.zero
 
+    /// The point the last processed drag update resolved its target at, in CG global coordinates. The
+    /// release reuses it instead of re-reading `NSEvent.mouseLocation`: SwiftUI coalesces drag updates, so on
+    /// a fast fling the cursor can be tens of points past the last position an app was resolved at, and the
+    /// named target and the clicked pixel would differ.
     private var aimPoint: CGPoint?
 
     /// The last app other than Deiko to come to the front: where ⌘↩ and
@@ -144,18 +111,13 @@ final class OrbController: NSObject {
     }
     private var activationObserver: NSObjectProtocol?
 
-    // ── Presenting ──────────────────────────────────────────────────────────
+    // MARK: - Presenting
 
     /// A session has just closed: show the orb and run the pipeline behind it.
     func present(sessionDir: String, stats: SessionStats? = nil) {
-        // Narrate every handoff into the app's log. The first live fling
-        // failed with nothing on screen and nothing on disk — the only trace
-        // hook lived in a test subcommand, so the field run was undiagnosable
-        // and the whole investigation started from "nothing happened". A field
-        // run must never be quieter than a harness; this is now the only hook,
-        // and Diagnostics (`deiko-capture diagnostics`, or Settings' "Copy
-        // diagnostics") is what reads it back, alongside
-        // `~/Library/Logs/Deiko/launch.jsonl` directly.
+        // Log every handoff so a field run is never quieter than a harness: `Diagnostics`
+        // (`deiko-capture diagnostics`, or Settings' "Copy diagnostics") reads it back, alongside
+        // `~/Library/Logs/Deiko/launch.jsonl`.
         if Handoff.trace == nil {
             Handoff.trace = { Emit.log("handoff: \($0)") }
         }
@@ -175,24 +137,11 @@ final class OrbController: NSObject {
     }
 
     private func show() {
-        // A NEW PANEL EVERY TIME, never the last one ordered front again.
-        //
-        // The orb was one panel for the life of the app, and a panel that has
-        // been through a delivered fling stops joining all Spaces: it was key
-        // while `Handoff.deliver` activated another app and the Space changed
-        // under it, and from then on the window server kept it on ONE Space,
-        // whatever `collectionBehavior` said. Every session after the first
-        // fling then ended with transcription succeeding and "nothing
-        // happening" — the orb was up, on a Space nobody was looking at. Two
-        // launches on 18 Sep show the same line: fine until the first
-        // "handoff: done", `ordered front but not on screen` ever after.
-        //
-        // Measured rather than reasoned, because the last fix for this was
-        // reasoned (`orbWindowLevel`) and did not hold: fourteen throwaway
-        // panels with this exact configuration, put through hide/reshow,
-        // resize, becoming key and app activation, ALL reached every Space.
-        // The only thing a fresh panel lacks is a past. Everything the orb
-        // knows lives in `model` and `state`, so nothing is lost with it.
+        // A new panel every time, never the last one ordered front again. A panel that has been through a
+        // delivered fling stops joining all Spaces: it was key while `Handoff.deliver` activated another app
+        // and the Space changed under it, and from then on the window server keeps it on one Space whatever
+        // `collectionBehavior` says, so the orb appears on a Space nobody is looking at. A fresh panel has no
+        // such past, and everything the orb knows lives in `model` and `state`, so nothing is lost.
         window?.close()
         window = makeWindow()
         applyMode()
@@ -201,17 +150,10 @@ final class OrbController: NSObject {
         verifyOnScreen()
     }
 
-    /// ORDERING FRONT IS A REQUEST, NOT A RESULT.
-    ///
-    /// The whole of the full-screen bug was the orb being ordered front and
-    /// simply not arriving, while the app carried on as though it had. Nothing
-    /// in here fixes that — `orbWindowLevel` does — but it turns the next
-    /// occurrence from "sometimes nothing appears" into one line of a grep.
-    ///
-    /// LOG ONLY, never act. A Space transition reads as occluded for a frame or
-    /// two, and hiding or re-ordering on that reading would make the orb flicker
-    /// for real. Checked a beat later because occlusion is answered by the
-    /// window server on a later turn, not synchronously.
+    /// Ordering front is a request, not a result: log when the orb did not arrive on screen. Log only,
+    /// never act: a Space transition reads as occluded for a frame or two, and hiding or re-ordering on that
+    /// reading would make the orb flicker. Checked a beat later because the window server answers occlusion
+    /// on a later turn.
     private func verifyOnScreen() {
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(250))
@@ -226,23 +168,18 @@ final class OrbController: NSObject {
             )
         }
 
-        // Fading is phase-driven rather than wired into each send path, so the
-        // orb behaves the same whether the brief left via a fling or via the
-        // expanded panel's own button.
-        //
-        // `.failed` CANCELS a scheduled fade. Without that, a handoff that
-        // fails after the copy succeeded could flash its message and vanish —
-        // the orb dismissing itself over the one screen the developer needed
-        // to read.
+        // Fading is phase-driven rather than wired into each send path, so the orb behaves the same whether
+        // the brief left via a fling or the expanded panel's own button. `.failed` cancels a scheduled fade,
+        // so a handoff that fails after the copy succeeded does not vanish over the message the developer
+        // needs to read.
         if phaseWatcher == nil {
             phaseWatcher = model.$phase.sink { [weak self] phase in
                 switch phase {
                 case .sent: self?.fadeSoon()
                 case .failed:
                     self?.fadeTask?.cancel()
-                    // The failure block is taller than the readout — message,
-                    // a button, the folded details. Give it the room now; a
-                    // scrolling one-liner was the old design's mistake.
+                    // The failure block is taller than the readout (message, a button, the folded
+                    // details): give it the room now.
                     self?.applyMode()
                 case .working, .ready: break
                 }
@@ -260,15 +197,13 @@ final class OrbController: NSObject {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
-        // Above every normal window on every space — the orb is a handoff
-        // object, not a document, and it must be visible wherever the session
-        // ended, INCLUDING over a full-screen app. See `orbWindowLevel`.
+        // Above every normal window on every space, including over a full-screen app: the orb is a handoff
+        // object, not a document. See `orbWindowLevel`.
         panel.level = orbWindowLevel
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         panel.isReleasedWhenClosed = false
-        // Nonactivating: pressing the orb must not pull focus off the app the
-        // developer is working in — the whole point is to aim at *that* app.
-        // The panel still becomes key itself when the editor needs typing.
+        // Non-activating: pressing the orb must not pull focus off the app the developer is working in, since
+        // the point is to aim at that app. The panel still becomes key itself when text input needs it.
         panel.hidesOnDeactivate = false
 
         let hosting = NSHostingController(
@@ -292,15 +227,9 @@ final class OrbController: NSObject {
                 )
             )
         )
-        // THE WINDOW OWNS ITS SIZE, NOT SWIFTUI.
-        //
-        // The default sizing options push the SwiftUI content's ideal size back
-        // onto the window, which silently beat every `setFrame` here: the
-        // expanded panel grew past the bottom of the display and took "Point at
-        // more" and "Good to go" off screen with it — two buttons that existed
-        // and could not be clicked. The collapsed card had the same disease,
-        // harmlessly. Now nothing resizes this window except `applyMode` and
-        // `fit(cardHeight:)`.
+        // The window owns its size, not SwiftUI: the default sizing options push the content's ideal size back
+        // onto the window, beating every `setFrame` here, and the expanded panel grew past the display and took
+        // its buttons off screen. Nothing resizes this window except `applyMode` and `fit(cardHeight:)`.
         hosting.sizingOptions = []
         panel.contentViewController = hosting
         return panel
@@ -310,15 +239,8 @@ final class OrbController: NSObject {
     /// first measurement lands.
     private var measuredCardHeight: CGFloat?
 
-    /// Size and recentre for the current mode. Centred, on purpose — if that
-    /// turns out to sit where you are looking, that is dogfooding feedback
-    /// worth having, not a setting worth pre-building.
-    ///
-    /// The panel is the design's fixed 620×640 and scrolls internally. The card
-    /// is 400 wide and exactly as tall as its content — "the readout earns its
-    /// height, no more" — which is a measurement rather than the three guessed
-    /// constants this used to carry, one of which was always wrong for a
-    /// three-line summary.
+    /// Size and recentre for the current mode. Centred, on purpose. The panel is a fixed 620×640 and scrolls
+    /// internally; the card is 400 wide and exactly as tall as its content, measured rather than guessed.
     private func applyMode() {
         let size: NSSize
         switch state.mode {
@@ -338,8 +260,8 @@ final class OrbController: NSObject {
         setFrame(to: NSSize(width: 400, height: rounded))
     }
 
-    /// How many times the panel has been resized since it appeared, and when
-    /// the first one was — see the warning in `setFrame`.
+    /// How many times the panel has been resized since it appeared, and when the first one was; see the
+    /// warning in `setFrame`.
     private var resizeCount = 0
     private var firstResizeAt = Date()
 
@@ -351,14 +273,8 @@ final class OrbController: NSObject {
             y: screen.frame.midY - size.height / 2
         )
 
-        // A settled orb resizes a handful of times: once when it appears, once
-        // when the summary lands, once per phase. A LOOP resizes forever, and
-        // the difference between "the layout is jittering" and "the layout is
-        // fine" is not something anybody can judge by watching it. So count.
-        //
-        // Instrumented because this was guessed at once already and the guess
-        // was wrong: the first fix assumed a spring on the mode change, and the
-        // orb kept moving during a phase that never changes mode.
+        // A settled orb resizes a handful of times (when it appears, when the summary lands, once per phase).
+        // A layout loop resizes forever, and that is hard to judge by eye, so count.
         resizeCount += 1
         if resizeCount == 1 { firstResizeAt = Date() }
         let elapsed = Date().timeIntervalSince(firstResizeAt)
@@ -375,12 +291,9 @@ final class OrbController: NSObject {
         window.invalidateShadow()
     }
 
-    /// The × — the session is already on disk; this only puts the orb away.
-    ///
-    /// `cancelPendingWork()` is the invariant the review window's
-    /// `windowWillClose` used to carry: closing the surface stops the pipeline
-    /// behind it, so a transcription nobody is waiting for does not go on
-    /// writing into a model the next session is about to reuse.
+    /// The ×: the session is already on disk; this only puts the orb away. `cancelPendingWork()` stops the
+    /// pipeline behind the surface, so a transcription nobody is waiting for does not keep writing into a
+    /// model the next session is about to reuse.
     private func dismiss() {
         fadeTask?.cancel()
         cancelFling()
@@ -389,15 +302,10 @@ final class OrbController: NSObject {
         window?.orderOut(nil)
     }
 
-    /// Delete the session on screen, folder and all.
-    ///
-    /// The `×` only puts the orb away — deliberately, because a dismissed
-    /// session is still on disk and still openable. That left no way at all to
-    /// say "this should not exist": a session recorded by mistake, or one that
-    /// caught something private, could be dismissed but not removed, and the
-    /// screenshots stayed. Confirmed, and refused while the pipeline is still
-    /// running, because deleting a directory being written to is the one
-    /// mistake worth making impossible rather than merely unlikely.
+    /// Delete the session on screen, folder and all. The `×` only puts the orb away, so this is the way to
+    /// say "this should not exist" (a session recorded by mistake, or one that caught something private).
+    /// Confirmed, and refused while the pipeline is running: deleting a directory being written to is the one
+    /// mistake worth making impossible.
     private func deleteSession() {
         guard let dir = model.currentSessionDir, extending != dir else { return }
         if case .working = model.phase, model.digest == nil { return }
@@ -409,22 +317,11 @@ final class OrbController: NSObject {
             "The brief and its screenshots go to the Trash."
         alert.addButton(withTitle: "Delete")
         alert.addButton(withTitle: "Cancel")
-        // ABOVE THE ORB, explicitly. An alert opens at the modal-panel level
-        // (8); the orb sits at `orbWindowLevel` (999) and its expanded panel is
-        // bigger than the alert, so the alert opened entirely behind it. The
-        // modal loop then blocked the orb while the only way out was invisible
-        // — which reads as a hang, in an app that Force Quit does not list.
-        //
-        // HELD there for as long as the alert is up, not set once. `runModal`
-        // resets the level to 8 as it starts (measured: 1000 before, 8 during),
-        // so it has to be set from inside the modal loop — and setting it once
-        // in there still lost on the FIRST alert after launch and won on the
-        // second, which is AppKit resetting it again as it activates this
-        // accessory app. Rather than guess when the last reset lands, put it
-        // back whenever it is found changed, and say so.
-        //
-        // ponytail: a 50ms poll for the life of one alert. If the log below
-        // pins down the exact reset, replace with a single set after it.
+        // Above the orb, explicitly: an alert opens at the modal-panel level (8), the orb sits at
+        // `orbWindowLevel`, and its expanded panel is bigger than the alert, so the alert would open entirely
+        // behind it while the modal loop blocks the orb, which reads as a hang. The level is held rather than
+        // set once: `runModal` resets it as it starts, and AppKit resets it again while it activates this
+        // accessory app, so it is put back whenever it is found changed (a 50ms poll for the life of one alert).
         let above = NSWindow.Level(rawValue: orbWindowLevel.rawValue + 1)
         let hold = Timer(timeInterval: 0.05, repeats: true) { _ in
             MainActor.assumeIsolated {
@@ -438,19 +335,11 @@ final class OrbController: NSObject {
         defer { hold.invalidate() }
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
-        // THE ALERT SPINS A NESTED RUNLOOP, so the world can move while it is
-        // up: the hotkey tap stays live (`.commonModes`) and main-actor work
-        // keeps draining. By the time Delete is clicked, this orb may have been
-        // extended into a new hold, or be showing an entirely different
-        // session. So act on the directory captured BEFORE the alert — that is
-        // what the user was looking at and agreed to delete — and only touch
-        // the model if it is still pointing at it.
-        //
-        // The first version re-read the model here. It would have cancelled a
-        // newer session's pipeline and hidden its orb while deleting the old
-        // directory, and — because `extending` could be set during the alert —
-        // could also return early and do nothing at all, having just told the
-        // user it would.
+        // The alert spins a nested runloop, so the world can move while it is up: the hotkey tap stays live
+        // (`.commonModes`) and main-actor work keeps draining. By the time Delete is clicked this orb may have
+        // been extended into a new hold or be showing a different session. So act on the directory captured
+        // before the alert, which is what the user agreed to delete, and touch the model only if it still
+        // points at it.
         do {
             guard Sessions.trash(dir) else { throw CocoaError(.fileWriteUnknown) }
             Emit.log("✕ session \((dir as NSString).lastPathComponent) deleted from the review panel")
@@ -480,11 +369,10 @@ final class OrbController: NSObject {
         }
     }
 
-    // ── "Point at more" ─────────────────────────────────────────────────────
+    // MARK: - "Point at more"
 
-    /// Identical contract to the review window's extend: hand control back to
-    /// the recorder for another hold, and get the orb out of the way — the
-    /// developer is about to point at the thing it would be covering.
+    /// Identical contract to the review window's extend: hand control back to the recorder for another
+    /// hold, and get the orb out of the way, since the developer is about to point at what it would cover.
     func extendSession() {
         guard let dir = model.currentSessionDir, let onExtend else { return }
         model.prepareToExtend()
@@ -494,19 +382,16 @@ final class OrbController: NSObject {
         }
         extending = dir
         state.mode = .collapsed
-        // Not `dismiss()`: this must NOT cancel the model's work — the
-        // recording it is waiting for has just begun. Only the interaction
-        // state is torn down.
+        // Not `dismiss()`: that would cancel the model's work, and the recording it is waiting for has just
+        // begun. Only the interaction state is torn down.
         cancelFling()
         removeEscapeMonitor()
         window?.orderOut(nil)
     }
 
-    /// The start gesture arrived while the orb is up: add to the session it is
-    /// showing instead of opening a second one the agent would have to
-    /// reconcile. Returns false when there is nothing extendable — no window,
-    /// no digest yet, or a brief already handed over — and the recorder then
-    /// starts a fresh session exactly as before.
+    /// The start gesture arrived while the orb is up: add to the session it is showing instead of opening a
+    /// second one. Returns false when there is nothing extendable (no window, no digest yet, or a brief
+    /// already handed over), and the recorder starts a fresh session.
     func extendPresentedSession() -> Bool {
         guard window?.isVisible == true, model.digest != nil else { return false }
         switch model.phase {
@@ -518,7 +403,7 @@ final class OrbController: NSObject {
         }
     }
 
-    // ── Sending without a fling ─────────────────────────────────────────────
+    // MARK: - Sending without a fling
 
     private func trackLastApp() {
         let isOther = { (app: NSRunningApplication?) in
@@ -535,10 +420,8 @@ final class OrbController: NSObject {
         }
     }
 
-    /// SENDING IS NOT DRAG-ONLY. The fling is the gesture; this is the same
-    /// send for a keyboard (⌘↩ on the review panel) and for VoiceOver (the
-    /// coin's Send action), into the last app used — its focused field, as a
-    /// fling with no drop point would.
+    /// Sending is not drag-only: the same send for a keyboard (⌘↩ on the review panel) and for VoiceOver
+    /// (the coin's Send action), into the last app used, its focused field, as a fling with no drop point would.
     private func sendToLastApp() {
         guard let app = lastApp, !app.isTerminated else { return }
         switch model.phase {
@@ -551,29 +434,20 @@ final class OrbController: NSObject {
         send(to: HandoffTarget(pid: app.processIdentifier, appName: app.localizedName ?? "the app"))
     }
 
-    // ── The fling ───────────────────────────────────────────────────────────
+    // MARK: - The fling
 
     private func flingPressed() {
         dragAttempted = false
         personaDroppedOnTarget = false
         releasing = false
-        // STALE TRAVEL IS A FLING NOBODY MADE. The first update of a press can
-        // carry a zero translation, and `flingDragged` falls back to the last
-        // one when it does — so without this, a click after a long throw
-        // measured as a throw and sent the brief to whatever was behind the
-        // orb, which is the exact failure `travelThreshold` exists to prevent.
+        // Stale travel is a fling nobody made: the first update of a press can carry a zero translation, and
+        // `flingDragged` falls back to the last one, so without this a click after a long throw would measure
+        // as a throw and send the brief to whatever is behind the orb (what `travelThreshold` prevents).
         lastTranslation = .zero
-        // Armed whenever a throw can still mean something — which now includes
-        // BEFORE the brief exists. `.working` with no digest is the pipeline
-        // still rendering; the throw is held and delivered the moment it
-        // finishes (`ReviewModel.queuedHandoff`). It used to refuse, and refuse
-        // in complete silence: no detached coin, no aim label, no highlight, no
-        // message. Whether the gesture worked came down to how fast you reached
-        // for the coin after the orb appeared.
-        //
-        // `.working` WITH a digest is a different thing — a correction being
-        // applied, or a send already in flight — and a second throw on top of
-        // that is not a throw anyone meant.
+        // Armed whenever a throw can still mean something, including before the brief exists: `.working` with
+        // no digest is the pipeline still rendering, and the throw is held and delivered when it finishes
+        // (`ReviewModel.queuedHandoff`). `.working` with a digest is a correction being applied or a send in
+        // flight, and a second throw on top of that is not one anyone meant.
         fling.isArmed = {
             switch model.phase {
             case .ready, .failed: return model.digest != nil
@@ -582,10 +456,7 @@ final class OrbController: NSObject {
             }
         }()
         if !fling.isArmed {
-            // Said out loud, because this is the branch that made the bug
-            // undiagnosable: a refused press left nothing on screen AND nothing
-            // on disk, so the report could only ever be "sometimes nothing
-            // happens". A field run must never be quieter than a harness.
+            // Said out loud: a refused press would otherwise leave nothing on screen and nothing on disk.
             Handoff.trace?("fling: not armed — phase \(model.phase), digest \(model.digest == nil ? "absent" : "present")")
             Emit.event(FlingEvent(FlingReport(
                 outcome: .notArmed,
@@ -595,13 +466,10 @@ final class OrbController: NSObject {
         _ = fling.press()
     }
 
-    /// Upgrade the fling to a real system drag, once, the first time it is
-    /// over a browser and there is a persona file to hand over.
-    ///
-    /// Not at press: a system drag delivers to whatever is under the cursor
-    /// when it ends, and a `.md` dropped on a terminal types its path into the
-    /// prompt. Browsers are the only destination that gains anything here —
-    /// they attach a dropped file and ignore a pasted one.
+    /// Upgrade the fling to a real system drag, once, the first time it is over a browser and there is a
+    /// persona file to hand over. Not at press: a system drag delivers to whatever is under the cursor when
+    /// it ends, and a `.md` dropped on a terminal types its path into the prompt. Browsers are the only
+    /// destination that gains: they attach a dropped file and ignore a pasted one.
     private func upgradeToSystemDrag(target: HandoffTarget) {
         guard UserDefaults.standard.object(forKey: "DEIKO_DRAG_HANDOFF") as? Bool ?? true,
               !dragSource.isDragging, !dragAttempted,
@@ -613,16 +481,13 @@ final class OrbController: NSObject {
         dragAttempted = true
 
         dragSource.onMoved = { [weak self] _ in
-            // AppKit owns the mouse now, but the aim label and the target
-            // highlight are still ours to draw. `.zero` means "no fresh
-            // translation" — `flingDragged` falls back to the last one so the
-            // gesture does not read this as a coin that never travelled.
+            // AppKit owns the mouse now, but the aim label and the target highlight are still ours to draw.
+            // `.zero` means "no fresh translation"; `flingDragged` falls back to the last one.
             self?.flingDragged(.zero)
         }
         dragSource.onEnded = { [weak self] _, operation in
             guard let self else { return }
-            // `.none` means nothing took it — the paste path still has to carry
-            // the persona, exactly as it did before any of this existed.
+            // `.none` means nothing took it; the paste path still has to carry the persona.
             self.personaDroppedOnTarget = operation != []
             Handoff.trace?(operation != []
                            ? "fling: the persona file was accepted by the drop"
@@ -664,8 +529,8 @@ final class OrbController: NSObject {
         )
         if case .aiming(let target) = decision {
             state.aim = target.map(Aim.over) ?? .overNothing
-            // Only remembered when it actually resolved to the target we are
-            // naming — an aim point over nothing must not become a click point.
+            // Only remembered when it resolved to the target being named: an aim point over nothing must not
+            // become a click point.
             aimPoint = target == nil ? nil : cgPoint
             // The detached coin rides the cursor with the aim label under it;
             // the card behind keeps only its dashed socket.
@@ -680,9 +545,8 @@ final class OrbController: NSObject {
     }
 
     private func flingReleased() {
-        // ONE RELEASE PER FLING. While a system drag runs, AppKit owns the
-        // mouse and the drag session reports the end; the coin's own gesture
-        // may report it too. Sending twice would deliver two briefs.
+        // One release per fling: while a system drag runs, AppKit owns the mouse and the drag session reports
+        // the end, and the coin's own gesture may report it too. Sending twice would deliver two briefs.
         guard !releasing else { return }
         guard !dragSource.isDragging else { return }   // the session will call us
         releasing = true
@@ -692,27 +556,22 @@ final class OrbController: NSObject {
         dragAttempted = false
         switch fling.release() {
         case .openOptions:
-            // The gesture still calls a travel-free release `openOptions` —
-            // the name is the package's tested contract. What it OPENS changed
-            // with the redesign: the options row is cut, so a click goes
-            // straight to the review panel.
+            // The gesture still calls a travel-free release `openOptions` (the name is the package's tested
+            // contract); here it opens the review panel.
             state.mode = .expanded
             applyMode()
         case .commit(let target):
-            // Pin the aim point onto the target. The paste can only land where
-            // focus is, and this is the one pixel the user actually aimed at —
-            // deliver clicks it before typing. `aimPoint`, not a fresh cursor
-            // read: they are not the same point on a fast fling.
+            // Pin the aim point onto the target: the paste lands only where focus is, and this is the one pixel
+            // the user aimed at, so `deliver` clicks it before typing. `aimPoint`, not a fresh cursor read, which
+            // differs on a fast fling.
             if let drop = aimPoint {
                 send(to: target.dropped(atX: drop.x, y: drop.y))
             } else {
                 send(to: target)
             }
         case .cancelled:
-            // Released back over the orb, or over something with no app behind
-            // it — the desktop, a menu, one of Deiko's own windows. Deliberate
-            // for the first, a miss for the rest, and indistinguishable on disk
-            // until now.
+            // Released back over the orb, or over something with no app behind it (the desktop, a menu, one of
+            // Deiko's own windows): deliberate for the first, a miss for the rest.
             Handoff.trace?("fling: cancelled — released over nothing sendable")
             Emit.event(FlingEvent(FlingReport(outcome: .cancelled, reason: "no-target")))
         case .none, .aiming:
@@ -729,34 +588,27 @@ final class OrbController: NSObject {
         personaDroppedOnTarget = false
     }
 
-    /// The drop pastes and submits. If either half misses, `prompt.txt` is
-    /// still on disk — that is the fallback, and the orb names the file rather
-    /// than a command form, because there is no longer a command to type.
+    /// The drop pastes and submits. If either half misses, `prompt.txt` is still on disk as the fallback,
+    /// and the orb names the file.
     private func send(to target: HandoffTarget) {
         let sessionDir = model.currentSessionDir
-        // Read HERE, not inside the closure: `approve` queues the handoff when
-        // the brief is still rendering, and a press in the meantime resets it.
+        // Read here, not inside the closure: `approve` queues the handoff when the brief is still rendering,
+        // and a press in the meantime resets it.
         let dropped = personaDroppedOnTarget
         model.approve(handingTo: target.appName) { prompt in
             do {
-                // Decided HERE, at the release, from the app actually under the
-                // cursor — not baked into the rendered file, which is written
-                // long before anybody knows where this is going. A browser gets
-                // the image bytes because the model behind it cannot open a
-                // path on this Mac; everything else gets the paths, which is
-                // what Claude Code reads with its own tools.
+                // Decided here, at the release, from the app actually under the cursor, not baked into the
+                // rendered file. A browser gets the image bytes because the model behind it cannot open a path
+                // on this Mac; everything else gets paths, which Claude Code reads with its own tools.
                 let attach = Handoff.needsAttachedImages(target)
-                // Already dropped as a file, so it must not be pasted again —
-                // and the short text is what the paste path sends INSTEAD of
-                // the file, so that goes too.
+                // Already dropped as a file, so it must not be pasted again; the short text is what the paste
+                // path sends instead of the file, so that goes too.
                 try await Handoff.deliver(
                     to: target,
                     text: attach ? prompt.attachedText : prompt.text,
                     images: attach ? prompt.images : [],
-                    // Only where a path is useless. A local agent was already
-                    // told where the persona file is and reads it itself;
-                    // pasting its contents there too would put the same
-                    // instructions in the chat twice.
+                    // Only where a path is useless: a local agent is told where the persona file is and reads it
+                    // itself, and pasting its contents too would put the same instructions in the chat twice.
                     persona: (attach && !dropped) ? prompt.personaText : nil,
                     personaFile: (attach && !dropped) ? prompt.personaFile : nil
                 )
@@ -765,11 +617,9 @@ final class OrbController: NSObject {
                     Emit.event(FlingEvent(Handoff.lastReport))
                 }
             } catch {
-                // EMITTED BEFORE THE RETHROW, because this is the path that was
-                // silent. `Handoff.deliver` fills the report as it goes and then
-                // throws; the sentence below is shown in the orb and dropped, so
-                // without this a failed fling left no terminal line in the log
-                // at all — a narration that simply stopped.
+                // Emitted before the rethrow: the sentence below is shown in the orb and dropped, so without this
+                // a failed fling would leave no terminal line in the log. `Handoff.deliver` fills the report as it
+                // goes and then throws.
                 await MainActor.run {
                     Handoff.lastReport.outcome = .refused
                     if let handoff = error as? HandoffError {
@@ -786,24 +636,18 @@ final class OrbController: NSObject {
         }
     }
 
-    // ── Escape ──────────────────────────────────────────────────────────────
+    // MARK: - Escape
 
-    /// Escape cancels a fling in flight, and puts the orb away when no fling
-    /// is running — the keyboard route to dismiss, so the orb is never a window
-    /// you are stuck with.
-    ///
-    /// Installed for the orb's whole visible life rather than per-fling. The
-    /// per-fling version leaked: it was installed on every press including
-    /// unarmed ones and removed only on release, so a gesture interrupted by
-    /// `extendSession` (which orders the panel out, and `onEnded` never
-    /// arrives) left a monitor swallowing Escape for the rest of the process.
+    /// Escape cancels a fling in flight, and puts the orb away when no fling is running: the keyboard
+    /// route to dismiss. Installed for the orb's whole visible life rather than per fling: a per-fling
+    /// monitor leaked when `extendSession` orders the panel out and `onEnded` never arrives, swallowing
+    /// Escape for the rest of the process.
     private func installEscapeMonitor() {
         guard escapeMonitor == nil else { return }
         escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, event.keyCode == 53 else { return event }
-            // While the narration editor is open, Escape belongs to the text
-            // field — dismissing the panel out from under someone typing a
-            // correction would throw the correction away.
+            // While the narration editor is open, Escape belongs to the text field; dismissing the panel
+            // would throw away a correction being typed.
             if state.mode == .expanded { return event }
             if fling.isFlinging {
                 cancelFling()
@@ -819,9 +663,8 @@ final class OrbController: NSObject {
         escapeMonitor = nil
     }
 
-    /// Cocoa global (bottom-left origin) → CG global (top-left). The flip
-    /// pivots on the MAIN screen's top edge, exactly as `Overlay` documents —
-    /// CG's origin is the main display's top-left, not the canvas top.
+    /// Cocoa global (bottom-left origin) → CG global (top-left). The flip pivots on the main screen's top
+    /// edge, as `Overlay` documents: CG's origin is the main display's top-left.
     private func cocoaToCG(_ p: NSPoint) -> CGPoint {
         let flipY = NSScreen.screens.first?.frame.maxY ?? 0
         return CGPoint(x: p.x, y: flipY - p.y)
@@ -834,7 +677,7 @@ private final class OrbPanel: NSPanel {
     override var canBecomeKey: Bool { true }
 }
 
-// ── The detached coin ───────────────────────────────────────────────────────
+// MARK: - The detached coin
 
 /// The coin while it is being thrown: a click-through panel that follows the
 /// cursor, drawing the coin at full weight with the aim label riding under it.
@@ -944,7 +787,7 @@ private struct CoinCursorView: View {
     }
 }
 
-// ── The coin ────────────────────────────────────────────────────────────────
+// MARK: - The coin
 
 /// The orb's handle: a 56pt disc with rim light, an inset ring, and a real
 /// shadow — the one element in the product with depth, because it is the one
@@ -954,10 +797,9 @@ struct CoinView: View {
         /// Grey, pulsing — no accent until there is something to throw.
         case working
         case ready
-        /// In flight, over nothing a brief can go to. The coin LOSES its
-        /// accent and its mark goes dashed — this is the one moment it most
-        /// needs to say "letting go here sends nothing", and a coin that looks
-        /// identical over a target and over the desktop says the opposite.
+        /// In flight, over nothing a brief can go to. The coin loses its accent and its mark goes dashed:
+        /// letting go here sends nothing, and a coin that looks identical over a target and over the desktop
+        /// would say the opposite.
         case overNothing
         case failed
     }
@@ -966,11 +808,8 @@ struct CoinView: View {
     /// Held coins float: the shadow grows from 2pt to 8pt of throw the moment
     /// the coin is picked up. The card's shadow never changes.
     var held: Bool = false
-    /// 56 is the coin you throw. EVERYTHING inside scales with this, because
-    /// the size used to be hard-coded at the bottom of `body` — so asking for
-    /// a smaller one with `.frame(width: 26)` clipped the layout box and left
-    /// a 56pt coin painting straight over the window's own title bar. The
-    /// sidebar's brand row was exactly that bug.
+    /// 56 is the coin you throw. Everything inside scales with this: a hard-coded size would let a smaller
+    /// `.frame(width:)` clip the layout box while a 56pt coin painted over neighbouring content.
     var diameter: CGFloat = 56
 
     var body: some View {
@@ -1036,7 +875,7 @@ struct CoinView: View {
     }
 }
 
-// ── The aiming outline ──────────────────────────────────────────────────────
+// MARK: - The aiming outline
 
 /// A stroked rectangle over the window the fling would land on. Purely visual,
 /// click-through, and gone the moment the fling ends.
@@ -1082,7 +921,7 @@ final class TargetHighlight {
     }
 }
 
-// ── Views ───────────────────────────────────────────────────────────────────
+// MARK: - Views
 
 struct OrbActions {
     let onPress: () -> Void
@@ -1092,8 +931,7 @@ struct OrbActions {
     let onExtend: () -> Void
     let onSetMode: (OrbMode) -> Void
     let onOpenSettings: () -> Void
-    /// Delete this session's folder outright — the recourse for a session that
-    /// should not exist, which until now had none.
+    /// Delete this session's folder outright: the recourse for a session that should not exist.
     let onDelete: () -> Void
     /// Send to the last app used, without a fling.
     let onSend: () -> Void
@@ -1131,9 +969,8 @@ struct OrbRootView: View {
                 measured { card }
             }
         }
-        // The controls Deiko did not draw take the SYSTEM accent — whatever
-        // colour the person set in System Settings. One line puts them on
-        // the palette instead; see `MainWindowView` for the long version.
+        // The controls Deiko did not draw take the system accent, whatever colour the person set in System
+        // Settings; this puts them on the palette. See `MainWindowView`.
         .tint(DeikoStyle.accent)
     }
 
@@ -1142,13 +979,9 @@ struct OrbRootView: View {
     private func measured<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         content()
             .fixedSize(horizontal: false, vertical: true)
-            // `.topLeading`, NOT `.top`. `.top` means
-            // `Alignment(horizontal: .center, vertical: .top)`, so anything
-            // that made the card momentarily narrower or wider than 400 —
-            // an animating width, a re-layout after a window resize — moved
-            // its contents sideways to keep them centred. Pinned to the
-            // leading edge, a width that wobbles cannot translate into the
-            // coin sliding across the card.
+            // `.topLeading`, not `.top`: `.top` centres horizontally, so anything that momentarily made the
+            // card narrower or wider than 400 (an animating width, a re-layout after a resize) would slide its
+            // contents sideways. Pinned to the leading edge, a wobbling width cannot move the coin.
             .frame(width: 400, alignment: .topLeading)
             .background(
                 GeometryReader { proxy in
@@ -1160,23 +993,21 @@ struct OrbRootView: View {
             }
     }
 
-    // ── The card ────────────────────────────────────────────────────────────
+    // MARK: - The card
 
     private var card: some View {
         HStack(alignment: .top, spacing: 14) {
             coinSlot
             readout
-                // The canvas gives the readout its own right margin and floats
-                // the ✕ above it. As an HStack member the ✕ stole width from
-                // the summary and shifted the text every time it appeared.
+                // The readout gets its own right margin and the ✕ floats above it: as an HStack member the ✕
+                // would steal width from the summary and shift the text whenever it appeared.
                 .padding(.trailing, 16)
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        // Material FIRST, card colour over it. The material is what makes this
-        // legible over a dark editor and what answers Reduce Transparency
-        // without a second code path; the card colour on top pulls it to the
-        // paper white every other Deiko surface is made of.
+        // Material first, card colour over it: the material keeps it legible over a dark editor and answers
+        // Reduce Transparency without a second code path, and the card colour pulls it to the paper white
+        // every other Deiko surface uses.
         .background(
             RoundedRectangle(cornerRadius: DeikoStyle.panelRadius)
                 .fill(.regularMaterial)
@@ -1190,11 +1021,9 @@ struct OrbRootView: View {
                 )
         )
         .overlay(alignment: .topTrailing) {
-            // ALWAYS present, in every phase. A pipeline that failed before
-            // producing a digest once left a borderless, always-on-top,
-            // all-Spaces panel with no close box and no way out but quitting
-            // Deiko. Hidden only while aiming, where it would sit under the
-            // cursor mid-fling.
+            // Always present, in every phase: a pipeline that fails before producing a digest would otherwise
+            // leave an always-on-top, all-Spaces panel with no way out but quitting Deiko. Hidden only while
+            // aiming, where it would sit under the cursor.
             if !state.isAiming {
                 Button {
                     actions.onDismiss()
@@ -1212,63 +1041,36 @@ struct OrbRootView: View {
             }
         }
         .opacity(state.isAiming ? 0.35 : 1)
-        // NO SPRING ON THE MODE CHANGE.
-        //
-        // A spring overshoots — that is what makes it feel like a spring — and
-        // this one was applied to a view whose WIDTH changes when the mode
-        // does: coming back from the 620pt panel, `maxWidth: .infinity`
-        // re-resolves to 400 and the spring carried it past 400 and back.
-        // With the frame above centring its contents, that read as the coin
-        // bouncing left and right until it settled.
-        //
-        // It bought nothing even when it worked: `body` swaps the whole card
-        // for `expandedPanel` on a mode change, so this was animating a layout
-        // on its way out of the hierarchy. The aiming fade below stays — it is
-        // an opacity change on a view that remains, and easeOut cannot
+        // No spring on the mode change: a spring overshoots, and this view's width changes with the mode
+        // (`maxWidth: .infinity` re-resolves to 400 coming back from the 620pt panel), so the overshoot would
+        // bounce the coin left and right. `body` swaps the whole card for `expandedPanel` on a mode change
+        // anyway. The aiming fade stays: an opacity change on a view that remains, which easeOut cannot
         // overshoot.
         .animation(.easeOut(duration: 0.15), value: state.isAiming)
     }
 
-    /// The coin at rest, or the socket it left behind while being thrown.
-    ///
-    /// The socket is drawn OVER an invisible coin, not INSTEAD of it: the
-    /// coin's view owns the drag gesture in flight, and SwiftUI cancels a
-    /// gesture whose view leaves the hierarchy — swap the views and the
-    /// release never arrives, stranding the fling mid-air with the cursor
-    /// coin stuck on screen.
+    /// The coin at rest, or the socket it left behind while being thrown. The socket is drawn over an
+    /// invisible coin, not instead of it: the coin's view owns the drag gesture in flight, and SwiftUI cancels
+    /// a gesture whose view leaves the hierarchy, so the release would never arrive.
     private var coinSlot: some View {
         ZStack {
             CoinView(kind: coinKind)
                 .padding(5)
                 .background(DeikoStyle.accentSoft, in: Circle())
                 .modifier(Breathing(active: isWorking))
-                // THE COIN MUST NOT ANIMATE ITS OWN POSITION.
-                //
-                // `Breathing` runs a `repeatForever` animation, and a
-                // repeating animation is PERSISTENT — it stays the active
-                // animation for this subtree. When the panel resizes (it does,
-                // once, the moment the first height measurement corrects the
-                // default the window opened at), the coin's resolved position
-                // moves, SwiftUI animates that move with whatever animation is
-                // active, and "forever" turns a one-off 40pt correction into a
-                // permanent oscillation. The coin swung left and right until
-                // the view was rebuilt — which is exactly why opening the
-                // review panel and coming back appeared to fix it: that path
-                // resizes to an already-measured height, so `setFrame`
-                // early-returns and there is no geometry change to capture.
-                //
-                // `geometryGroup()` resolves this subtree's geometry as a unit
-                // with its parent instead of letting it animate independently.
-                // It is the API Apple added for precisely this.
+                // The coin must not animate its own position. `Breathing` runs a `repeatForever` animation, which
+                // stays the active animation for this subtree. When the panel resizes (once, when the first
+                // height measurement corrects the default the window opened at), the coin's resolved position
+                // moves, SwiftUI animates that move with the active animation, and "forever" turns a one-off
+                // correction into a permanent oscillation. `geometryGroup()` resolves this subtree's geometry as
+                // a unit with its parent instead of letting it animate independently.
                 .geometryGroup()
                 .opacity(state.isAiming ? 0 : 1)
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { value in
-                            // The first update IS the press. Not
-                            // `translation == .zero` — a fast fling's first
-                            // event can arrive with the mouse already moved,
-                            // and the press would never register.
+                            // The first update is the press, not `translation == .zero`: a fast fling's first
+                            // event can arrive with the mouse already moved.
                             if !pressed {
                                 pressed = true
                                 actions.onPress()
@@ -1300,7 +1102,7 @@ struct OrbRootView: View {
     @ViewBuilder private var readout: some View {
         VStack(alignment: .leading, spacing: 6) {
             if state.isAiming {
-                // The aim label rides under the coin now; the dimmed card only
+                // The aim label rides under the coin; the dimmed card only
                 // reassures that nothing has been decided yet.
                 if let summary = model.summary ?? digestLine {
                     Text(summary)
@@ -1335,8 +1137,7 @@ struct OrbRootView: View {
         case .ready:
             summaryLines
         case .sent:
-            // Unreachable — the sent phase swaps the whole card for the pill —
-            // but the switch must be total.
+            // Unreachable, since the sent phase swaps the whole card for the pill, but the switch must be total.
             EmptyView()
         }
     }
@@ -1354,8 +1155,7 @@ struct OrbRootView: View {
                         .font(.system(size: 12, weight: .semibold))
                 }
             }
-            // Kept, folded — the raw output is the only thing worth having in
-            // a bug report, and not what the person in front of it needs.
+            // Kept, folded: the raw output is what a bug report needs, not what the person in front of it needs.
             if !problem.raw.isEmpty {
                 DisclosureGroup("Details") {
                     ScrollView {
@@ -1375,14 +1175,10 @@ struct OrbRootView: View {
     /// Deiko's reading when it exists; the digest's counts when it does not
     /// (no `GROQ_API_KEY`). Either way, "did it hear me" is answerable here.
     @ViewBuilder private var summaryLines: some View {
-        // One title line, so the card says what STATE it is in before it says
-        // what it heard. Everything under it stays in the system face.
+        // One title line, so the card says what state it is in before it says what it heard.
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text("Ready to hand over").deikoTitle(15)
-            // WHICH PERSONA IS ABOUT TO SHAPE THIS. The one moment somebody
-            // would want to know is the moment before they throw the coin,
-            // and until now nothing on this card said it — the answer lived
-            // two windows away in Settings.
+            // Which persona is about to shape this, shown at the moment before the coin is thrown.
             if let persona = model.personaName {
                 Text(persona)
                     .font(.system(size: 11, weight: .medium))
@@ -1404,9 +1200,8 @@ struct OrbRootView: View {
                 ProgressView().controlSize(.small)
             }
         }
-        // WHERE IT IS BEING FILED, on the card most throws leave from. The
-        // panel has the menus; this is one line so nobody has to open it to
-        // know whether the brief joined its task.
+        // Where it is being filed, on the card most throws leave from: one line, so nobody has to open the
+        // panel to know whether the brief joined its task.
         if let placement = placementLine {
             Text(placement)
                 .font(.system(size: 11))
@@ -1414,22 +1209,16 @@ struct OrbRootView: View {
                 .lineLimit(1)
                 .tip(model.notFiled ? ReviewView.notFiledHelp(queued: model.filingQueued) : "")
         }
-        // ONCE, for somebody on their own key: filing now sends what they
-        // said to the relay. Here because every brief passes this card, and
-        // the next one never shows it again — nothing to dismiss.
+        // Once, for someone on their own key: filing sends what they said to the relay. Shown here because
+        // every brief passes this card, and the next one never shows it again.
         if model.sortingNotice {
             Text("Deiko can now sort briefs into tasks. To do that it sends what you said, a one-line summary, your window and page titles, web addresses (just the host and path, never what's after the ?), open document names and notes on earlier work through its relay to TypeSafe's Jev sorting model; the relay keeps nothing. You can turn this off in Settings.")
                 .font(.system(size: 11))
                 .foregroundStyle(DeikoStyle.ink2)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        // WHY THIS ONE READS WORSE, on the card somebody actually looks at.
-        //
-        // The expanded panel carries this too, but most sessions never open it
-        // — the coin is thrown straight off this card. A degraded transcript
-        // with no explanation is precisely what turned "your free minutes ran
-        // out" into "the transcription is bad" in the inbox. Same sentence,
-        // from the same function, so the two surfaces cannot drift.
+        // Why this one reads worse, on the card people actually look at: most sessions never open the expanded
+        // panel, which carries the same sentence. Same function, so the two surfaces cannot drift.
         if let d = model.digest,
            let sentence = ReviewView.degradedSentence(
                d.summary.degradedReason, degraded: d.summary.degraded == true
@@ -1462,7 +1251,7 @@ struct OrbRootView: View {
         }
     }
 
-    // ── The sent pill ───────────────────────────────────────────────────────
+    // MARK: - The sent pill
 
     /// The card collapses to a capsule on the way out the door — less to read
     /// once there is nothing left to decide. Fades 2.5s later.
@@ -1497,17 +1286,15 @@ struct OrbRootView: View {
                 .fill(.regularMaterial)
                 .overlay(Capsule().strokeBorder(DeikoStyle.hairline, lineWidth: 1))
         )
-        // Centred in the 400pt width but NOT stretched to it — the canvas
-        // draws a pill on its own, and a pill inside an invisible card carries
-        // the card's shadow with it.
+        // Centred in the 400pt width but not stretched to it: a pill inside an invisible card would carry the
+        // card's shadow with it.
         .frame(maxWidth: .infinity)
         .accessibilityLabel(model.sentUnfiled ? "\(sentLine). Sent before Deiko finished filing it" : sentLine)
     }
 
-    // ── The expanded panel ──────────────────────────────────────────────────
+    // MARK: - The expanded panel
 
-    /// The full review, unchanged — this is the old window's body wearing the
-    /// orb as chrome. Collapsing keeps every edit: the narration lives in the
+    /// The full review, wearing the orb as chrome. Collapsing keeps every edit: the narration lives in the
     /// model, not the view.
     private var expandedPanel: some View {
         VStack(spacing: 0) {
@@ -1544,9 +1331,8 @@ struct OrbRootView: View {
                 onSend: actions.onSend
             )
         }
-        // The design's panel, exactly. Nothing inside may grow it: the content
-        // scrolls and the footer is pinned, so "Good to go" is on screen for a
-        // one-line narration and a thirty-line one alike.
+        // The design's panel, exactly. The content scrolls and the footer is pinned, so "Good to go" is on
+        // screen for a one-line narration and a thirty-line one alike.
         .frame(width: 620, height: 640)
         .background(
             RoundedRectangle(cornerRadius: DeikoStyle.panelRadius)
@@ -1562,7 +1348,7 @@ struct OrbRootView: View {
         )
     }
 
-    // ── Wording ─────────────────────────────────────────────────────────────
+    // MARK: - Wording
 
     private var isWorking: Bool {
         if case .working = model.phase { return model.digest == nil }
@@ -1599,10 +1385,8 @@ struct OrbRootView: View {
         model.handedTo.map { "Handed to \($0)" } ?? "Handed over"
     }
 
-    /// Nothing until a placement exists — with no relay, only odds and ends
-    /// or a short follow-up ever make one. Once one exists there is always a
-    /// line — "A new task" when it joined nothing — so the card does not
-    /// shrink under the coin as "Filing…" goes.
+    /// Nothing until a placement exists. Once one does there is always a line ("A new task" when it joined
+    /// nothing), so the card does not shrink under the coin as "Filing…" goes.
     private var placementLine: String? {
         if model.placing { return "Filing…" }
         if model.notFiled { return model.filingQueued ? "Not filed yet" : "Not filed" }
@@ -1622,23 +1406,14 @@ struct OrbRootView: View {
     }
 }
 
-/// A soft breathing pulse for the working state — motion says "busy" without a
-/// spinner fighting the summary for attention.
+/// A soft breathing pulse for the working state: motion says "busy" without a spinner fighting the summary
+/// for attention.
 ///
-/// **Opacity, never scale.** This used to scale the coin 1.0↔1.06. A 6% swell
-/// on a 56pt disc moves each edge about 1.7pt outward and back, once a second,
-/// for the whole twenty seconds a transcription takes — and because `CoinView`
-/// carries a drop shadow, `scaleEffect` scaled the shadow's blur and its
-/// y-offset along with it. Watched rather than glanced at, that does not read
-/// as breathing. It reads as the coin twitching left and right, and it was
-/// reported as a bug twice.
+/// Opacity, never scale: scaling a 56pt disc with a drop shadow also scales the shadow's blur and offset,
+/// which reads as the coin twitching rather than breathing. Opacity changes no geometry, and is also the
+/// Reduce Motion alternative.
 ///
-/// The design canvas offers exactly this form as its Reduce Motion
-/// alternative. Making it the only form costs nothing — the coin still says
-/// "busy" — and it cannot move anything, because no geometry changes at all.
-///
-/// (Not Overlay's `Pulse`, which is a captured-referent ring; the name is
-/// taken.)
+/// (Not Overlay's `Pulse`, which is a captured-referent ring.)
 private struct Breathing: ViewModifier {
     let active: Bool
     @State private var dim = false

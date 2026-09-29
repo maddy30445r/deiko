@@ -1,23 +1,14 @@
 import Foundation
 import Speech
 
-// ─────────────────────────────────────────────────────────────────────────────
-// WHAT LANGUAGE THE BRIEF IS WRITTEN IN
-//
 // Two settings, both read by the pipeline through `Credentials.childEnvironment`:
 //
-//   DEIKO_NARRATION      english — Whisper translates whatever was spoken into
-//                                  English, and the on-device recogniser's timeline
-//                                  is matched against it (the original design).
-//                        native  — Whisper writes down what it heard, with its own
-//                                  word timestamps, and the brief is in that
-//                                  language. The first Mandarin-speaking user got
-//                                  an English brief and did not expect one.
-//   DEIKO_SPEECH_LOCALE  which of Apple's on-device recognisers runs — the offline
-//                        path and the timing source. It was `en-IN` in three
-//                        places; a Mandarin speaker past their trial got English
-//                        applied to Chinese, which is noise.
-// ─────────────────────────────────────────────────────────────────────────────
+//   DEIKO_NARRATION      english: Whisper translates the speech into English and the
+//                                 on-device recogniser's timeline is matched against it.
+//                        native:  Whisper transcribes what it heard with its own word
+//                                 timestamps, and the brief is in that language.
+//   DEIKO_SPEECH_LOCALE  which of Apple's on-device recognisers runs: the offline path
+//                        and the timing source.
 
 enum Narration: String, CaseIterable {
     case english
@@ -50,16 +41,12 @@ enum SpeechLocale {
     static let defaultsKey = "DEIKO_SPEECH_LOCALE"
     static let fallback = "en-IN"
 
-    /// BCP-47, with a hyphen — the spelling `SFSpeechRecognizer(locale:)` and
-    /// `transcribe.mjs --locale` have always been handed.
+    /// BCP-47, with a hyphen: the spelling `SFSpeechRecognizer(locale:)` and
+    /// `transcribe.mjs --locale` take.
     ///
-    /// RESOLVED AGAINST WHAT THIS MAC HAS. Which locales are on-device depends
-    /// on the models the user has downloaded: this Mac reports five, all
-    /// English, and a Mac set up in Chinese may report none of them. A stored
-    /// or default `en-IN` that is not in that list would leave the Settings
-    /// picker blank and hand the recogniser a locale it refuses, so an
-    /// unavailable choice degrades to one that exists — the system language's
-    /// if this Mac has it, otherwise the first.
+    /// Resolved against what this Mac has. On-device locales depend on the
+    /// models downloaded, so a stored or default `en-IN` may be unavailable; it
+    /// then degrades to the system language's locale if present, else the first.
     static var selected: String {
         get {
             let stored = UserDefaults.standard.string(forKey: defaultsKey) ?? fallback
@@ -73,9 +60,9 @@ enum SpeechLocale {
         set { UserDefaults.standard.set(newValue, forKey: defaultsKey) }
     }
 
-    /// The locales THIS Mac can recognise without the network, which is the
-    /// only kind the offline path is allowed to use (see `SpeechTiming`).
-    /// Computed once: it asks the speech framework once per locale.
+    /// The locales this Mac can recognise without the network, the only kind
+    /// the offline path may use (see `SpeechTiming`). Computed once: it queries
+    /// the speech framework per locale.
     static let onDevice: [String] = SFSpeechRecognizer.supportedLocales()
         .filter { SFSpeechRecognizer(locale: $0)?.supportsOnDeviceRecognition == true }
         .map { $0.identifier(.bcp47) }

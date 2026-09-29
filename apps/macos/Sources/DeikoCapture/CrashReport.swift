@@ -1,34 +1,14 @@
 import Foundation
 
-// ─────────────────────────────────────────────────────────────────────────────
-// WHEN DEIKO DIES, SAY SO NEXT TIME.
-//
-// There was nothing here at all: an uncaught exception or a signal took the
-// menu-bar app down without a trace, and since it has no Dock icon and no
-// window, "it disappeared" is the entire bug report a user can write. macOS
-// keeps a .ips in ~/Library/DiagnosticReports, which nobody who is not already
-// a developer will ever find, and which "Reveal log" does not point at.
-//
-// DELIBERATELY NOT A CRASH SDK. Sentry or Crashlytics would mean a network
-// pipeline, a DSN to configure, a privacy surface to describe in PAYMENTS.md,
-// and a dependency — for an invited beta whose users are in a chat window with
-// the people who wrote this. One line in the log the app already writes, plus
-// an offer to copy it on the next launch, is the whole of what is needed until
-// the inbox proves otherwise.
-//
-// What it records is deliberately thin: the kind of death, and the stack. No
-// session ids (timestamps are a record of when somebody was working), no
-// paths, no transcript. The same rule `Diagnostics` documents at length.
-// ─────────────────────────────────────────────────────────────────────────────
-
+/// Records that the previous run died, so the next launch can say so.
+///
+/// Deliberately not a crash SDK: it writes a marker file and one line to the launch log. It records
+/// only the kind of death and the stack (no session ids, paths or transcript), as in `Diagnostics`.
 enum CrashReport {
 
     private static let markerPath = Paths.launchLog + ".crashed"
 
-    /// Did the previous run end badly?
-    ///
-    /// Read once at startup, and clearing it is the caller's job — the menu
-    /// bar decides whether it is worth saying anything about.
+    /// Whether the previous run ended badly. Read once at startup; clearing it is the caller's job.
     static func previousRunCrashed() -> Bool {
         FileManager.default.fileExists(atPath: markerPath)
     }
@@ -39,18 +19,12 @@ enum CrashReport {
 
     /// Catch what can be caught, and leave a note for the next launch.
     ///
-    /// Signal handlers may only call async-signal-safe functions, which
-    /// `Emit.event` and `String` interpolation emphatically are not. The
-    /// honest options are to write with `write(2)` and nothing else, or to
-    /// accept that a handler doing more than that USUALLY works and sometimes
-    /// deadlocks instead of reporting. This takes the first: the signal path
-    /// writes a fixed byte string to a marker file with raw POSIX calls, and
-    /// the readable half is assembled on the NEXT launch, where every API is
-    /// legal again.
+    /// Signal handlers may only call async-signal-safe functions, which `Emit.event` and string
+    /// interpolation are not. The signal path therefore writes a fixed byte to a marker file with raw
+    /// POSIX calls, and the readable report is assembled on the next launch.
     static func install() {
         NSSetUncaughtExceptionHandler { exception in
-            // An ObjC exception is not a signal — the process is still in a
-            // state where this is safe, and the reason is worth having.
+            // An ObjC exception is not a signal, so the process is still in a state where this is safe.
             Emit.event(CrashEvent(
                 kind: "exception",
                 reason: "\(exception.name.rawValue): \(exception.reason ?? "no reason")",
@@ -61,12 +35,11 @@ enum CrashReport {
 
         for sig in [SIGSEGV, SIGBUS, SIGILL, SIGABRT, SIGFPE] {
             signal(sig) { received in
-                // ASYNC-SIGNAL-SAFE ONLY past this point. No allocation, no
-                // Foundation, no Swift runtime that might take a lock the
-                // crashing thread already holds.
+                // Async-signal-safe calls only past this point: no allocation, no Foundation, no
+                // Swift runtime that might take a lock the crashing thread holds.
                 markCrashedSignalSafe(received)
-                // Restore the default and re-raise, so the process still dies
-                // the way it was going to and macOS still writes its own .ips.
+                // Restore the default and re-raise, so the process still dies as it would have
+                // and macOS still writes its own .ips.
                 signal(received, SIG_DFL)
                 raise(received)
             }

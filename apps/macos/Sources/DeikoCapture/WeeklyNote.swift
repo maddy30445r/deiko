@@ -1,15 +1,9 @@
 import AppKit
 import UserNotifications
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THE MONDAY NOTE. Optional, off unless turned on in Settings: once a week,
-// on Monday from 9 in the morning, one notification says how many pieces of
-// work moved in the last seven days and how many still have something open.
-// Clicking it opens the Dashboard's "This week". Built from the board on this
-// Mac (`WeekDigest.load`); nothing is sent anywhere. A week nothing moved
-// gets no note at all.
-// ─────────────────────────────────────────────────────────────────────────────
-
+/// Optional weekly notification (Mondays from 9:00) saying how many pieces of work moved
+/// in the last seven days. Built from the local board; a quiet week gets no note.
+/// Clicking it opens the Dashboard's "This week".
 @MainActor
 final class WeeklyNote: NSObject, UNUserNotificationCenterDelegate {
     static let shared = WeeklyNote()

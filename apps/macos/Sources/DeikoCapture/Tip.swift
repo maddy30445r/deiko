@@ -1,25 +1,14 @@
 import AppKit
 import SwiftUI
 
-// ─────────────────────────────────────────────────────────────────────────────
-// DEIKO'S OWN TOOLTIP
+// Deiko's own tooltip: `.help()` cannot be styled or animated. After the usual
+// hover delay a speech bubble pops out of the view being pointed at, and goes
+// away on click, key, scroll or hover-out. Reduce Motion gets a plain fade.
 //
-// `.help()` is macOS's tooltip: correct, and impossible to style or animate.
-// This is the same idea with the app's charm. After the usual hover delay a
-// small speech bubble POPS out of the thing you're pointing at: it grows from
-// its tail's tip with a slight tilt and a little overshoot, and it shrinks
-// away the moment you click, type, scroll or move off. Reduce Motion gets a
-// plain fade.
-//
-// One slate bubble in Light and Dark, standing off both white and dark cards, with the
-// dot from Deiko's mark in front — "I'm pointing at that". The tail points at
-// the pointer, below it, or above it near the bottom of the screen.
-//
-// It lives in its own borderless, click-through panel rather than as an
+// The bubble lives in its own borderless, click-through panel rather than an
 // overlay: every pane is a scroll view that would clip an overlay, and the orb
-// floats above normal windows. The text is also the view's accessibility
-// hint, which is what `.help()` gave VoiceOver.
-// ─────────────────────────────────────────────────────────────────────────────
+// floats above normal windows. The text is also the view's accessibility hint,
+// which is what `.help()` gave VoiceOver.
 
 extension View {
     /// A hover explanation that pops out: Deiko's `.help()`.
@@ -64,7 +53,7 @@ final class HoverTip: NSResponder {
     }
 }
 
-/// Whether the bubble is out — the view animates on it, both ways.
+/// Whether the bubble is out; the view animates on it.
 @MainActor
 private final class TipState: ObservableObject {
     @Published var shown = false
@@ -74,8 +63,8 @@ private final class TipState: ObservableObject {
 final class Tips {
     static let shared = Tips()
 
-    /// The macOS tooltip delay, near enough: moving across a window never
-    /// sets off a string of pops.
+    /// The macOS tooltip delay, so moving across a window never sets off a
+    /// string of pops.
     private let delay: TimeInterval = 0.55
     /// The shadow's room inside the panel, on every side.
     fileprivate static let margin: CGFloat = 16
@@ -267,11 +256,10 @@ private struct TipBubble: View {
 
     /// The width the text will actually take: its one-line width, capped.
     ///
-    /// PINNED, NOT `maxWidth`. The panel is sized from `fittingSize`, which
-    /// asks for the ideal size with no width proposed; under a `maxWidth`
-    /// frame the text then reports its ONE-LINE height, the frame clamps the
-    /// width, and the text wraps to four lines inside a one-line bubble. With
-    /// the width pinned, the height is measured at the wrapped width.
+    /// Pinned rather than `maxWidth`: the panel is sized from `fittingSize`,
+    /// which proposes no width, so under a `maxWidth` frame the text reports its
+    /// one-line height and then wraps inside a one-line bubble. With the width
+    /// pinned, the height is measured at the wrapped width.
     static func textWidth(_ s: String) -> CGFloat {
         let one = (s as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: fontSize)]).width
         return min(ceil(one) + 1, maxTextWidth)

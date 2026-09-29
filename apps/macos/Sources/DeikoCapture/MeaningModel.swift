@@ -1,16 +1,10 @@
 import Foundation
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THE MEANING MODEL, FETCHED ONCE
-//
-// Filing blends word matching with an on-device embedding model (see
-// packages/core/src/lib/meaning.mjs). The model is ~226 MB, so the installer does not
-// carry it: the app asks `packages/core/src/meaning.mjs` to download it once, from
-// Deiko's own storage, every file checked against a pinned SHA-256. Until it
-// is ready, or if it never is, filing uses words alone — nothing waits on it.
-// After the first download, old briefs get their vectors once (`backfill`).
-// ─────────────────────────────────────────────────────────────────────────────
-
+/// Downloads the on-device embedding model once and backfills vectors for existing briefs.
+///
+/// Filing blends word matching with the model (see packages/core/src/lib/meaning.mjs). The model is
+/// large, so the installer does not carry it; every downloaded file is checked against a pinned
+/// SHA-256. Until the model is ready, or if it never is, filing uses words alone.
 @MainActor
 final class MeaningModel: ObservableObject {
     static let shared = MeaningModel()
@@ -25,10 +19,8 @@ final class MeaningModel: ObservableObject {
 
     @Published private(set) var state: State = .checking
     private var running = false
-    /// The board this launch is recording to — `recorder.sessionRoot`, not
-    /// necessarily `Sessions.defaultRoot` (`--out` can point elsewhere). Set
-    /// by the first `start(root:)` call and reused afterwards, including by
-    /// Settings' "Try again", which has no recorder of its own to ask.
+    /// The board this launch records to (`recorder.sessionRoot`), which `--out` can move away from
+    /// `Sessions.defaultRoot`. Set by the first `start(root:)` and reused, including by Settings' "Try again".
     private var root: String?
     /// One retry per launch after a failed download — see `retryAfterFailure`.
     private var retriedAfterFailure = false
@@ -62,9 +54,7 @@ final class MeaningModel: ObservableObject {
             key = String(last.dropFirst(6))
         }
         state = .ready
-        // OLD BRIEFS, ONCE PER MODEL. Writes <session>/meaning.f32 beside each,
-        // under the root THIS launch is actually recording to — never the
-        // default one, which may not be where `--out` put this session.
+        // Writes <session>/meaning.f32 beside each brief, under the root this launch records to.
         let flag = "meaningBackfilled.\(key ?? "")"
         if !UserDefaults.standard.bool(forKey: flag) {
             let done = await Self.lines(["backfill", root ?? Sessions.defaultRoot]).last ?? ""
@@ -72,10 +62,8 @@ final class MeaningModel: ObservableObject {
         }
     }
 
-    /// Launch at Login can start Deiko before Wi-Fi is up, and that shouldn't
-    /// need a trip to Settings to fix itself. One retry, about ten minutes
-    /// later — `retriedAfterFailure` stops a second failure from stacking a
-    /// second one on top.
+    /// One retry about ten minutes later, since Launch at Login can start Deiko before Wi-Fi is up.
+    /// `retriedAfterFailure` stops a second failure from stacking another.
     private func retryAfterFailure() {
         guard !retriedAfterFailure else { return }
         retriedAfterFailure = true
@@ -85,15 +73,11 @@ final class MeaningModel: ObservableObject {
         }
     }
 
-    /// Run `node packages/core/src/meaning.mjs <args>` and collect its stdout lines,
-    /// handing each to `each` as it arrives. Never throws: no Node, no script
-    /// or a crash is an empty list, which reads as "failed".
+    /// Run `node packages/core/src/meaning.mjs <args>` and collect its stdout lines, handing each to
+    /// `each` as it arrives. Never throws: no Node, no script or a crash is an empty list, which reads as "failed".
     ///
-    /// `nonisolated`, off the main actor: reading the process to EOF and then
-    /// `waitUntilExit()` (which blocks the thread it runs on) must not run on
-    /// the UI's. Sequential reading with `bytes.lines` also fixes the race the
-    /// old readabilityHandler/terminationHandler pair had — the handoff
-    /// between them could drop the final "ready" line.
+    /// `nonisolated` so the blocking `waitUntilExit()` stays off the main actor. Lines are read
+    /// sequentially so the final "ready" line cannot be dropped.
     nonisolated private static func lines(_ args: [String], each: (@Sendable (String) -> Void)? = nil) async -> [String] {
         guard let node = NodeRuntime.resolve(), let script = scriptURL() else { return [] }
         let process = Process()
@@ -110,8 +94,7 @@ final class MeaningModel: ObservableObject {
                 each?(line)
             }
         } catch {
-            // A read error ends the stream early; whatever came through still
-            // stands, same as a crash mid-output did before this.
+            // A read error ends the stream early; keep whatever came through.
         }
         process.waitUntilExit()
         return collected
