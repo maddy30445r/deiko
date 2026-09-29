@@ -187,8 +187,9 @@ guard-clean:
 models-publish: ## Upload the meaning model to the download mirror
 	@set -a; [ -f .env ] && . ./.env; set +a; ./scripts/publish-models.sh
 
-site-deploy: ## Deploy apps/web to Cloudflare Pages
-	@./scripts/deploy-site.sh
+site-deploy: ## Deploy the website (a separate checkout at apps/web)
+	@test -x apps/web/deploy.sh || (echo "✗ the website is a separate repository; check it out at apps/web"; exit 1)
+	@./apps/web/deploy.sh
 
 relay-deploy: ## Deploy the relay to AWS Lambda (keys from .env)
 	@set -a; [ -f .env ] && . ./.env; set +a; ./services/relay/deploy.sh

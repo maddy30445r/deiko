@@ -17,11 +17,9 @@ crops/
 *.jsonl
 *.wav
 *.png
-!apps/web/public/**/*.png
 !docs/assets/*.png
 
 # Deploy artifacts
-apps/web/public/install.sh
 .wrangler/
 
 # Local tooling
@@ -35,4 +33,6 @@ graphify-out/
 research_notes/
 reports/
 private/
+# The website, a separate checkout
+apps/web/
 *.zip

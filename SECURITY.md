@@ -15,7 +15,7 @@ if you prefer.
 
 - The macOS app (`apps/macos`) and its bundled pipeline (`packages/core`)
 - The relay (`services/relay`)
-- The website and its functions (`apps/web`)
+- deiko.app and its download endpoints
 
 Secret redaction is a security feature: a brief that carries a credential
 from your screen to an agent is a vulnerability, and reports of one are welcome.

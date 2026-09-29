@@ -6,9 +6,8 @@
 # Uploads the DMG and writes the version.json beside it that the app reads at
 # launch to check whether it is out of date.
 #
-# /download is a separate prefix, deployed separately from the site, so a copy
-# fix does not republish the disk image. deploy-site.sh syncs with --delete and
-# excludes this prefix; without that, a site deploy would remove every build.
+# /download is served from R2, separately from the site's own deploy, so a
+# copy fix on the site never republishes a disk image.
 #
 # Versioned filenames are kept: version.json names the current one, and old
 # builds stay downloadable.
@@ -123,5 +122,5 @@ done
 echo
 echo "✓ $SITE_ORIGIN/download/$NAME"
 echo "  install with:  curl -fsSL $SITE_ORIGIN/install.sh | sh"
-echo "  (install.sh ships with the site — run deploy-site.sh if the origin changed)"
+echo "  (install.sh ships with the site — redeploy the site if the origin changed)"
 echo "  running installs will offer $VERSION on their next launch."

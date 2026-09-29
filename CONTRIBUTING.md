@@ -31,7 +31,6 @@ without rebuilding the app.
 | Path | What it is |
 |---|---|
 | `apps/macos` | The menu-bar app (Swift package): capture, gestures, voice, the board and hand-off |
-| `apps/web` | deiko.app (Cloudflare Pages): the site, its functions and the waitlist schema |
 | `packages/core` | The Node pipeline the app runs: transcription, briefs, filing, task memory and the memory MCP server |
 | `packages/alignment` | Matches spoken words to what you pointed at (TypeScript) |
 | `services/relay` | The hosted relay for transcription, summaries and filing (AWS Lambda) |
