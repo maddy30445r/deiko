@@ -1,14 +1,10 @@
 #!/usr/bin/env node
-// ─────────────────────────────────────────────────────────────────────────────
-// THE RELAY, ON A PORT
+// The relay on a port: a thin adapter over `relay.mjs` for local development and
+// container hosts. Production is `lambda.mjs`; every decision lives in
+// `relay.mjs`, so what runs here is what runs there.
 //
-// A thin adapter over `relay.mjs` for local development and for anywhere that
-// runs a container. Production is `lambda.mjs`; every decision lives in
-// `relay.mjs`, so what you test here is what runs there.
-//
-//   SARVAM_API_KEY=… GROQ_API_KEY=… node services/relay/src/server.mjs
+//   GROQ_API_KEY=… node services/relay/src/server.mjs
 //   DEIKO_RELAY_URL=http://localhost:8787 open build/Deiko.app
-// ─────────────────────────────────────────────────────────────────────────────
 
 import { createServer } from "node:http";
 import { handle, bearerFrom, logLine, MAX_BODY_BYTES } from "./relay.mjs";
@@ -17,8 +13,7 @@ const PORT = Number(process.env.PORT ?? 8787);
 
 /// Read the whole body into memory, refusing anything oversized.
 ///
-/// In memory on purpose: a temp file is a copy of somebody's voice on a disk
-/// this service does not own, and the promise is that no such copy is made.
+/// In memory on purpose: no copy of a user's voice is written to disk.
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];

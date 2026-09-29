@@ -1,19 +1,16 @@
 #!/usr/bin/env node
-// ─────────────────────────────────────────────────────────────────────────────
-// THE RELAY ON THIS MAC, METERING INTO MEMORY
+// The relay on this machine, metering into memory.
 //
 //   node services/relay/src/local.mjs          # what `make relay-dev` and
 //                                          # `scripts/flow-check.sh` run
 //
-// `server.mjs` alone meters into the real `deiko-usage` table whenever this
-// Mac holds AWS credentials — so a morning of local test runs spent the live
-// relay's per-device, per-IP and global daily allowances. This starts a
-// DynamoDB that lives in a Map first and points the SDK at it through
+// `server.mjs` alone meters into the real `deiko-usage` table whenever AWS
+// credentials are present, spending the live relay's daily allowances. This
+// starts a DynamoDB that lives in a Map and points the SDK at it through
 // `AWS_ENDPOINT_URL_DYNAMODB` (the same seam `test/metering.test.mjs` uses),
 // then loads the relay unchanged. Nothing it counts outlives the process.
 //
 // Never deployed: `deploy.sh` packages its files by name.
-// ─────────────────────────────────────────────────────────────────────────────
 
 import { createServer } from "node:http";
 

@@ -1,28 +1,16 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// THE NUMBERS, AND WHERE THEY LIVE
+// Usage counters and licence verdicts, kept in one DynamoDB table
+// (`deiko-usage`, partition key `subject`). Row shapes:
 //
-// One DynamoDB table, `deiko-usage`, on-demand billing, partition key `subject`.
-// Everything stateful the relay needs is a row in it:
+//   dev:<token>              lifetime free-trial seconds. No TTL: the trial is
+//                            once, and an expiring row would renew it.
+//   lic:<key>#YYYY-MM        a licence's audio seconds this month. 40-day TTL.
+//   lic:<key>                the cached Polar verdict. Expires at four cache
+//                            lifetimes; refreshed when older than a day.
+//   global#YYYY-MM-DD        every subject's audio today. 7-day TTL.
 //
-//   dev:<token>              lifetime free-trial seconds. No TTL — the trial is
-//                            once, and a row that expired would silently renew it.
-//   lic:<key>#2026-08        a licence's audio seconds this month. 40-day TTL.
-//   lic:<key>                the cached Polar verdict. Expires at four
-//                            cache lifetimes; refreshed when older than a day.
-//   global#2026-08-10        every subject's audio today. 7-day TTL.
-//
-// COUNTERS ARE INCREMENTED, NOT READ-THEN-WRITTEN. `UpdateItem` with `ADD`
-// returns the new total in the same round trip, which is atomic across every
-// concurrent Lambda container. Read-then-write would need a transaction to be
-// correct, and would still cost two calls to be wrong more slowly.
-//
-// The SDK is bundled into the deployment zip rather than taken from the Lambda
-// runtime — the runtime does provide one, but AWS's own guidance is to ship your
-// own so the version is yours to choose. Hand-rolling SigV4 would have kept the
-// zip dependency-free, which is tempting in a service that has no other
-// dependencies, and it is the wrong place to save: a signing bug is a security
-// bug, and this is three API calls.
-// ─────────────────────────────────────────────────────────────────────────────
+// Counters are incremented, not read-then-written: `UpdateItem` with `ADD`
+// returns the new total in one round trip and is atomic across concurrent
+// Lambda containers.
 
 import {
   DynamoDBClient,
@@ -47,68 +35,49 @@ import {
 } from "./quota.mjs";
 
 const TABLE = process.env.DEIKO_USAGE_TABLE ?? "deiko-usage";
-/// Polar's PUBLIC validate endpoint — the one its docs say is safe to call from
-/// a desktop app — so the relay stores no Polar credential at all. The
-/// authenticated `/v1/license-keys/validate` would buy nothing here except a
-/// token to leak and to rotate.
-///
-/// `POLAR_API_BASE` points this at `https://sandbox-api.polar.sh` for a test
-/// purchase against Polar's sandbox organisation.
+/// Polar's public validate endpoint, which its docs say is safe to call from a
+/// desktop app, so the relay stores no Polar credential. `POLAR_API_BASE` points
+/// it at `https://sandbox-api.polar.sh` for test purchases.
 const POLAR_API = process.env.POLAR_API_BASE ?? "https://api.polar.sh";
 const POLAR_VALIDATE = `${POLAR_API}/v1/customer-portal/license-keys/validate`;
 
-/// NOT A SECRET — it is in every checkout URL, and the validate endpoint is
-/// unauthenticated by design. A constant rather than an environment variable
-/// because a missing one would fail every validation, and a failed validation
-/// demotes a paying customer.
+/// Not a secret: it is in every checkout URL and the validate endpoint is
+/// unauthenticated. A constant rather than an environment variable because a
+/// missing one would fail every validation and demote paying customers.
 const POLAR_ORGANIZATION_ID =
   process.env.POLAR_ORGANIZATION_ID ?? "a5147c76-3225-423b-ab8c-bdee6d06353a";
 
-/// How long a Polar verdict is trusted before it is checked again.
-///
-/// `transcribe.mjs` splits audio at 25 seconds, so one long session is dozens of
-/// relay calls; validating each against Polar would add a second of
-/// latency per chunk and hammer somebody else's rate limit for an answer that
-/// changes at most once a month. A cancellation therefore takes up to a day to
-/// bite, which is the right trade for a $2.99 product.
+/// How long a Polar verdict is trusted before it is checked again. A long
+/// session is dozens of relay calls (audio is split at 25 seconds), so
+/// validating each would add latency and hit Polar's rate limit. A cancellation
+/// therefore takes up to a day to bite.
 const LICENSE_CACHE_MS = 24 * 60 * 60 * 1000;
 
-/// How soon an ERROR-derived verdict is rechecked. Minutes, not a day: an
-/// error is not a fact about the licence, only about the network between two
-/// clouds, and it heals on Polar's schedule, not ours.
+/// How soon an error-derived verdict is rechecked. An error says nothing about
+/// the licence, only about the network, so it is retried within minutes.
 const ERROR_RETRY_MS = 5 * 60 * 1000;
 
-/// What a caller is told when the usage table cannot be reached.
-///
-/// FIXED TEXT. The real error is a DynamoDB message carrying the table name
-/// and an ARN-shaped resource string, and it was going straight into the HTTP
-/// body of a public endpoint. It goes to CloudWatch instead, where the person
-/// who needs it can read it and the person probing the service cannot.
+/// What a caller is told when the usage table cannot be reached. Fixed text: the
+/// real DynamoDB error carries the table name and an ARN, so it goes to
+/// CloudWatch instead of the response body.
 export function unavailable(err) {
   console.error(`usage table unreachable: ${String(err?.message ?? err)}`);
   return "usage service unavailable";
 }
 
-/// Created once per container, not per request, so the connection and its TLS
-/// handshake are reused across a warm Lambda's invocations.
+/// Created once per container so a warm Lambda reuses the connection.
 let client;
 function db() {
   client ??= new DynamoDBClient({});
   return client;
 }
 
-/// Can this relay actually meter, right now?
+/// Can this relay meter right now?
 ///
-/// A REAL CALL, not a check on a configured name. The obvious version of this
-/// reads an environment variable that has a default and reports whether it is
-/// set — which is to say it reports `true` always, and reassures you on exactly
-/// the deploy where the table is missing or the role has no policy. The one
-/// thing this flag exists to catch is the one thing that version cannot see.
-///
-/// AT MOST ONCE A MINUTE PER CONTAINER. `/health` takes no bearer, and a
-/// control-plane call per anonymous GET let anybody spend the account's
-/// DescribeTable rate on a loop. The PROMISE is what is cached, so a burst of
-/// concurrent checks shares one call instead of racing to make its own.
+/// Makes a real DescribeTable call rather than checking a configured name, so a
+/// missing table or a role without a policy is caught. Cached for a minute per
+/// container, as a promise so concurrent checks share one call: `/health` takes
+/// no bearer and must not let anybody spend the account's DescribeTable rate.
 const HEALTH_CACHE_MS = 60_000;
 let health = null;
 export function meteringHealthy(now = Date.now()) {
@@ -124,13 +93,12 @@ export function meteringHealthy(now = Date.now()) {
 
 /// Add `seconds` to a subject's counter and return the new total.
 ///
-/// `ttl` is only set on rows that should expire. DynamoDB ignores the attribute
-/// unless TTL is enabled on the table pointing at this exact name, so a missing
-/// TTL config shows up as rows that never expire — costing storage, never
-/// correctness.
+/// `ttl` is set only on rows that should expire. DynamoDB ignores the attribute
+/// unless TTL is enabled on the table for this exact name; rows then never
+/// expire, which costs storage, not correctness.
 async function addSeconds(key, seconds, ttlSeconds) {
-  // `createdAt` is stamped by the write that creates the row and never again,
-  // so it reads as "first seen" — ISO, because it is for a person in the console.
+  // `createdAt` is set once, by the write that creates the row (ISO, for
+  // people reading the console).
   const expression = ttlSeconds
     ? "ADD audioSeconds :n SET createdAt = if_not_exists(createdAt, :now), expiresAt = if_not_exists(expiresAt, :ttl)"
     : "ADD audioSeconds :n SET createdAt = if_not_exists(createdAt, :now)";
@@ -154,12 +122,9 @@ async function addSeconds(key, seconds, ttlSeconds) {
   return Number(out.Attributes?.audioSeconds?.N ?? 0);
 }
 
-/// What a subject has spent, WITHOUT spending any more.
-///
-/// Serves `/v1/quota`, which the app asks the moment somebody pastes a licence
-/// key — the answer is the confirmation that the key worked, and it has to be
-/// available before a session has ever run. A read cannot be the same call as
-/// the increment for that reason alone.
+/// What a subject has spent, without spending any more. Serves `/v1/quota`,
+/// which the app calls right after a licence key is pasted, before any session
+/// has run.
 export async function peek(subject, tier, now = Date.now()) {
   const out = await db().send(new GetItemCommand({
     TableName: TABLE,
@@ -169,27 +134,17 @@ export async function peek(subject, tier, now = Date.now()) {
 }
 
 /// Count this request against the subject and against the day, and report both
-/// new totals.
+/// new totals. The two writes run together to save a round trip.
 ///
-/// The two writes are independent, so they go together — one round trip's
-/// latency rather than two, on the path a user is waiting on.
-/// The TTL follows the KEY, not the token's shape. A monthly row expires so
-/// the next month starts clean; a lifetime row must not, or the trial renews
-/// itself every forty days. Only a Pro licence gets the monthly row, so only a
-/// Pro licence gets the TTL — a free licence is a trial like any other, and
-/// giving it an expiring row is exactly the bug `usageKey` documents.
-/// BOTH ROWS OR NEITHER. `Promise.all` rejects on the first failure and says
-/// nothing about the other write, which had already landed — so a subject write
-/// that failed while the global one succeeded banked seconds against the whole
-/// service's day, and the caller's 503 path has no refund in it. An id longer
-/// than DynamoDB's 2048-byte partition key made that deterministic: ~1,080 such
-/// requests walked the ceiling to its limit and 429'd every paying customer,
-/// without buying a second of audio from anybody.
+/// The TTL follows the key, not the token's shape: a monthly row expires so the
+/// next month starts clean, but a lifetime trial row must not, or the trial
+/// renews. Only a Pro licence gets a monthly row, so only Pro gets a TTL.
 ///
-/// `allSettled` lets the half that landed be taken back before the failure is
-/// re-thrown. Compensation is best-effort: if it also fails, the counter is
-/// over by one chunk, which is the direction the whole file is wrong in
-/// already.
+/// Both rows or neither: `Promise.all` rejects on the first failure while the
+/// other write may already have landed, banking seconds against the service's
+/// day with no refund path. `allSettled` lets the half that landed be taken back
+/// before the failure is re-thrown. Compensation is best-effort; if it fails the
+/// counter is over by one chunk, the safe direction.
 export async function record({ subject, seconds, tier, now = Date.now() }) {
   const key = usageKey(subject, now, tier);
   const global = globalKey(now);
@@ -211,24 +166,17 @@ export async function record({ subject, seconds, tier, now = Date.now() }) {
   return { usedSeconds: subjectWrite.value, globalUsedSeconds: globalWrite.value };
 }
 
-/// Give a request's seconds back, because it bought nothing.
+/// Give a request's seconds back because it bought nothing (it was refused, or
+/// the upstream provider failed).
 ///
-/// The counter is incremented before it is judged (see `record`'s caller), so
-/// a REFUSED request has already added its seconds to both rows — and without
-/// this, refusals themselves became the weapon: a spent free token retrying in
-/// a loop added up to 40 metered seconds per attempt to the GLOBAL row, enough
-/// to walk the whole service to its daily ceiling in minutes and 429 every
-/// paying customer with requests that were never going to be transcribed.
-/// Same shape when the upstream provider 5xxs: the audio was billed and never
-/// bought, and a trial is lifetime — an outage must not eat it.
+/// The counter is incremented before the request is judged, so without this a
+/// refused request would still count against both rows and repeated refusals
+/// could walk the global row to its daily ceiling. Best-effort: the caller
+/// swallows a failed refund, and the fallback is over-counting. `ADD` of a
+/// negative is atomic like any other.
 ///
-/// Best-effort by design: the caller swallows a refund that fails, because the
-/// fallback is only the old over-counting behaviour. `ADD` of a negative is
-/// atomic like any other, so concurrent refunds cannot corrupt the row.
-///
-/// `now` IS THE RECORD'S, AND HAS NO DEFAULT. A refund that took its own clock
-/// credited the wrong row whenever the upstream answered after midnight: the
-/// new day's counters went negative and the old day's kept the charge.
+/// `now` is the original record's and has no default: a refund using its own
+/// clock lands on the wrong row when the upstream answers after midnight.
 export async function refund({ subject, seconds, tier, now }) {
   await Promise.all([
     addSeconds(usageKey(subject, now, tier), -seconds, null),
@@ -236,15 +184,14 @@ export async function refund({ subject, seconds, tier, now }) {
   ]);
 }
 
-/// Count one call against each of `keys` — daily rows, TTL'd — and return the
-/// new totals in the same order. The text routes' shape: a global day, the
-/// caller's own day, and the caller's address's day.
+/// Count one call against each of `keys` (daily, TTL'd rows) and return the new
+/// totals in the same order. The text routes use a global day, the caller's day
+/// and the caller's address's day.
 ///
-/// ALL ROWS OR NONE, for the reason `record` gives: a write that fails beside
-/// ones that landed would leave charges no refund path can reach.
+/// All rows or none, for the reason given at `record`.
 ///
-/// The stored attribute is still `audioSeconds` because it is the counter
-/// `addSeconds` maintains; here it counts REQUESTS. The row key says which.
+/// The stored attribute is still `audioSeconds`, the counter `addSeconds`
+/// maintains; here it counts requests. The row key says which.
 export async function countCalls(keys) {
   const writes = await Promise.allSettled(keys.map((k) => addSeconds(k, 1, DAILY_TTL_SECONDS)));
   const failed = writes.find((w) => w.status === "rejected");
@@ -261,12 +208,9 @@ export async function uncountCalls(keys) {
   await Promise.all(keys.map((k) => addSeconds(k, -1, null)));
 }
 
-/// ── Playground counters ─────────────────────────────────────────────────────
-///
-/// Three rows, all TTL'd like the daily global: the day's clips, the day's
-/// intent calls, and one row per issued ticket. None of them is the row the
-/// app spends, which is the entire point — a flood on the public page
-/// exhausts the public page.
+/// Playground counters, all TTL'd like the daily global: the day's clips, the
+/// day's intent calls, and one row per issued ticket. None is the row the app
+/// spends, so a flood on the public page exhausts only the public page.
 export async function recordPlaygroundClip(ticketId, { now = Date.now() } = {}) {
   const [clipsToday, ticketClips] = await Promise.all([
     addSeconds(playgroundClipKey(now), 1, DAILY_TTL_SECONDS),
@@ -304,18 +248,13 @@ export async function recordPlaygroundTicket(ipHash, { now = Date.now() } = {}) 
   return { ticketsToday };
 }
 
-/// Is this licence real, and what does it entitle its holder to?
-///
-/// Cached in the same table as the counters, because it is the same kind of
-/// fact — something the service learned that must outlive one container.
+/// Is this licence real, and what does it entitle its holder to? Cached in the
+/// same table as the counters so the verdict outlives one container.
 export async function tierFor(subject, now = Date.now()) {
   if (subject.kind !== "license") return "free";
-  // NOT SHAPED LIKE A KEY, NOT WORTH A WRITE. Anything `isPolarKey` refuses
-  // is junk and gets junk's verdict — "free", which for a licence is no
-  // allowance — without the Polar call and the verdict PutItem that rotating
-  // junk keys otherwise cost on every request. relay.mjs logs each one, so a
-  // real key of some other shape shows up in CloudWatch rather than in a
-  // refund request.
+  // Anything `isPolarKey` refuses is junk and gets "free" without a Polar call
+  // or a verdict write. relay.mjs logs each one, so a real key of another shape
+  // shows up in CloudWatch.
   if (!isPolarKey(subject.id)) return "free";
 
   const key = licenseKey(subject);
@@ -332,30 +271,21 @@ export async function tierFor(subject, now = Date.now()) {
 
   const tier = await validateWithPolar(subject.id);
 
-  // A VERDICT AND AN ERROR ARE DIFFERENT FACTS, and only the verdict may be
-  // cached for a day. Caching an error-derived "free" was the bug: one Polar
-  // timeout on one cold container wrote `tier: "free"`, and a PAYING
-  // customer spent the next 24 hours metering against the lifetime `#trial`
-  // row — 402'd for a day by a network blip, and again for a day on every
-  // future blip once those thirty minutes were gone. On an error the last
-  // real verdict stands, re-checked after five minutes rather than a day —
-  // stale-Pro during an outage is the accepted cancellation lag, not a leak.
-  //
-  // A key with NO history still meters as free during an outage (an error
-  // must never promote), and that too is written with the short window, so
-  // the recheck happens when Polar is back rather than tomorrow.
+  // A verdict and an error are different facts, and only the verdict may be
+  // cached for a day: an error-derived "free" would meter a paying customer
+  // against the lifetime trial row for 24 hours. On an error the last real
+  // verdict stands and is rechecked after five minutes (stale-Pro during an
+  // outage is the accepted cancellation lag). A key with no history meters as
+  // free during an outage, since an error must never promote, and is also
+  // rechecked on the short window.
   const verdict = tier ?? cachedTier ?? "free";
   const freshAsOf = tier !== null
     ? now
     : now - LICENSE_CACHE_MS + ERROR_RETRY_MS;
 
-  // Written even when the answer is "not valid", so a garbage key cannot be
-  // used to generate a Polar call per chunk.
-  //
-  // It expires, though — at four cache lifetimes, long after it stops being
-  // consulted. Without a TTL every distinct string anybody ever typed into the
-  // licence field left a permanent row, which is a slow storage leak with an
-  // obvious way to accelerate it.
+  // Written even when the answer is "not valid", so a garbage key cannot
+  // trigger a Polar call per chunk. It expires at four cache lifetimes so junk
+  // keys do not accumulate.
   await db().send(new PutItemCommand({
     TableName: TABLE,
     Item: {
@@ -373,15 +303,9 @@ export async function tierFor(subject, now = Date.now()) {
 
 /// Ask Polar whether a key is live: "pro", "free", or null.
 ///
-/// NULL MEANS "COULD NOT ASK", AND IT IS A THIRD ANSWER, not a synonym for
-/// "free". A timeout, a 5xx, or Polar rate-limiting us says nothing about the
-/// licence; only an answer Polar actually gave does. The caller decides what
-/// null costs — the last real verdict stands.
-///
-/// A NETWORK FAILURE STILL MUST NOT PROMOTE ANYBODY: null never becomes "pro"
-/// unless a cached "pro" verdict — a real answer from a real validation —
-/// already existed. The other direction would make an outage into a way to
-/// get Pro for nothing.
+/// Null means "could not ask" (timeout, 5xx, rate limit) and is distinct from
+/// "free": it says nothing about the licence, so the caller keeps the last real
+/// verdict. Null never promotes anybody to Pro on its own.
 async function validateWithPolar(key) {
   try {
     const response = await fetch(POLAR_VALIDATE, {
@@ -391,26 +315,21 @@ async function validateWithPolar(key) {
       signal: AbortSignal.timeout(5000),
     });
 
-    // 4xx is an answer — Polar 404s a key it has never issued, which is
-    // "that is not a key" and not an outage. 5xx and 429 are its absence.
+    // 4xx is an answer (Polar 404s a key it never issued); 5xx and 429 are its
+    // absence.
     if (!response.ok) {
       return response.status >= 500 || response.status === 429 ? null : "free";
     }
     const json = await response.json();
 
-    // Polar has exactly three statuses. `granted` is live; `revoked` is what a
-    // cancelled subscription becomes, and `disabled` is one we turned off by
-    // hand. Only the first has paid.
+    // Polar has three statuses: `granted` is live, `revoked` is a cancelled
+    // subscription and `disabled` was turned off by hand. Only `granted` has paid.
     if (json?.status !== "granted") return "free";
 
-    // Both SKUs — monthly and annual — grant the SAME licence-key benefit, and
-    // the validate response names the benefit rather than the product, so
-    // there is nothing here to tell $2.99/mo from $24.99/yr and nothing that needs
-    // to. Until the store exists there are no ids to match, and the only paid
-    // benefit is Pro's — so any live licence is Pro. A SECOND PAID TIER WOULD
-    // COME WITH ITS OWN BENEFIT, and this is the line that learns to tell them
-    // apart; leaving it unset then would sell Pro's allowance at the cheaper
-    // tier's price.
+    // Monthly and annual licences grant the same benefit, and the response names
+    // the benefit, not the product. With no DEIKO_PRO_BENEFIT_IDS set, any live
+    // licence is Pro; a second paid tier would need its own benefit id here, or
+    // it would receive Pro's allowance.
     const proBenefits = (process.env.DEIKO_PRO_BENEFIT_IDS ?? "")
       .split(",").filter(Boolean);
     if (proBenefits.length === 0) return "pro";

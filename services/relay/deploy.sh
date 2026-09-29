@@ -1,49 +1,25 @@
 #!/usr/bin/env bash
-# ─────────────────────────────────────────────────────────────────────────────
 # Deploy the relay to AWS Lambda behind a Function URL.
 #
 #   GROQ_API_KEY=… ./services/relay/deploy.sh
 #
-# Plain AWS CLI, no SAM/CDK/Terraform — the CLI is already installed, and a
-# deploy step that first needs another toolchain is a deploy step that fails on
-# the one machine nobody set up.
-#
-# IDEMPOTENT. Run it again to ship a code change; it creates what is missing and
-# updates what is not. That matters more than it sounds: the alternative is a
-# script you can only run once, which means the second deploy is done by hand
-# and differs from the first in a way nobody wrote down.
-#
-# Lambda because this service is idle most of the day BY DESIGN — nobody is
-# recording — and Lambda is the only option here that costs nothing while idle.
-# ─────────────────────────────────────────────────────────────────────────────
+# Plain AWS CLI, no SAM/CDK/Terraform. Idempotent: re-run it to ship a code
+# change; it creates what is missing and updates the rest.
 set -euo pipefail
 
-REGION="${AWS_REGION:-ap-south-1}"        # Mumbai: closest to Sarvam
-# These names changed with the rename from Fovea to Deiko. A `fovea-relay`
-# function and a `fovea-usage` table are still in the account, orphaned: this
-# script creates the `deiko-*` pair on its first run rather than migrating,
-# because the table held nothing but trial counters and there were no paying
-# users. Delete the old pair once a deploy has succeeded.
-#
-# What a rename does NOT carry over is the Lambda's function URL — a new
-# function gets a new one, and the old URL is stamped into every build already
-# handed out. Restamp with `make bundle RELAY_URL=…` after deploying.
-#
-# Change the names here and in relay.mjs/quota.mjs/usage.mjs together or not
-# at all. A PARTIAL rename is worse than either: the relay would read
-# undefined and fall back to defaults, silently reopening the daily spend
-# ceiling that DEIKO_GLOBAL_DAILY_SECONDS exists to hold shut.
+REGION="${AWS_REGION:-ap-south-1}"        # Mumbai
+# A new function gets a new function URL, so stamp it into the app after
+# deploying a differently named function: `make bundle RELAY_URL=…`.
 FUNCTION="${DEIKO_LAMBDA_NAME:-deiko-relay}"
 ROLE_NAME="${FUNCTION}-role"
-# Caps how many transcriptions can run at once. Not a quota — a blast radius.
-# The in-process rate limiter is per warm container and cannot bound spend on
-# its own, so this is the lever that actually can.
+# Caps how many requests run at once: a blast-radius limit, not a quota. The
+# in-process rate limiter is per warm container and cannot bound spend alone.
 CONCURRENCY="${DEIKO_LAMBDA_CONCURRENCY:-5}"
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 say() { printf '  %s\n' "$*"; }
 
-# ── Preflight ───────────────────────────────────────────────────────────────
+# ── Preflight ──
 
 command -v aws >/dev/null || { echo "✗ aws CLI not found"; exit 1; }
 
@@ -53,9 +29,8 @@ if ! ACCOUNT=$(aws sts get-caller-identity --query Account --output text 2>/dev/
 fi
 say "account $ACCOUNT · region $REGION"
 
-# Refuse rather than deploy a relay that answers /health and 503s every real
-# request — the failure that looks healthy and is not. The classifier and the
-# playground are part of the product too, so their keys are required as well.
+# Refuse to deploy a relay that answers /health but 503s every real request.
+# The classifier and playground keys are required as well as Groq's.
 : "${GROQ_API_KEY:?set GROQ_API_KEY (transcription AND summaries 503 without it)}"
 : "${DEIKO_PLAYGROUND_SECRET:?set DEIKO_PLAYGROUND_SECRET (every /v1/playground route 503s without it)}"
 if [ -z "${TYPESAFE_API_KEY:-}${AI_GATEWAY_API_KEY:-}${OPENROUTER_API_KEY:-}" ] \
@@ -65,37 +40,25 @@ if [ -z "${TYPESAFE_API_KEY:-}${AI_GATEWAY_API_KEY:-}${OPENROUTER_API_KEY:-}" ] 
   exit 1
 fi
 
-# LAUNCH STEP: `localhost` in DEIKO_PLAYGROUND_ORIGINS lets any page served from
-# a visitor's own machine call the playground. It is there for testing the
-# site locally; take it out of .env before the playground goes public.
+# `localhost` in DEIKO_PLAYGROUND_ORIGINS lets any page served from a visitor's
+# own machine call the playground; it is only for testing the site locally.
 case ",${DEIKO_PLAYGROUND_ORIGINS:-}," in
   *localhost*) say "⚠ DEIKO_PLAYGROUND_ORIGINS still allows localhost — remove it before launch" ;;
 esac
 
-# ── The usage table ─────────────────────────────────────────────────────────
+# ── The usage table ──
 #
-# One table holds every stateful thing the relay knows: per-subject audio
-# seconds, the cached Polar verdict, and the global daily total. See
-# services/relay/src/usage.mjs for the row shapes.
+# One table holds all of the relay's state: per-subject audio seconds, the
+# cached Polar verdict, and the global daily total. See src/usage.mjs for the
+# row shapes. The default name is mirrored there; change both.
 #
-# PROVISIONED AT 25/25, WHICH IS EXACTLY THE ALWAYS-FREE TIER — 25 write units,
-# 25 read units and 25GB, every month, permanently. On-demand is the obvious
-# choice for spiky traffic and it is the wrong one here, because the free tier
-# does not apply to it: an on-demand table bills from the first request.
+# Provisioned at 25/25 rather than on-demand, to stay inside DynamoDB's
+# always-free tier. Reserved concurrency (5) times two writes per request keeps
+# the peak near ten writes a second; raise the capacity if CONCURRENCY goes
+# past ~12.
 #
-# The bill either way is pennies — a session is usually ONE chunk, so two writes
-# and a read — but pennies and zero are different numbers, and this costs one
-# flag.
-#
-# 25 write units a second CANNOT BE EXHAUSTED BY THIS SERVICE. Reserved
-# concurrency is 5, and each request writes twice, so the ceiling is about ten
-# writes a second even if every invocation lands in the same second. The two
-# limits are set in the same script; if you ever raise CONCURRENCY past ~12,
-# raise this with it or writes will start throttling.
-#
-# TTL IS PART OF THE DESIGN, not housekeeping. Monthly rows carry an `expiresAt`
-# and vanish on their own, so the billing period rolls over with no reset job to
-# write, to schedule, or to discover has not run since March.
+# TTL is part of the design: monthly rows carry an `expiresAt` and expire on
+# their own, so the billing period rolls over with no reset job.
 
 TABLE="${DEIKO_USAGE_TABLE:-deiko-usage}"
 
@@ -108,10 +71,8 @@ if ! aws dynamodb describe-table --table-name "$TABLE" --region "$REGION" >/dev/
   aws dynamodb wait table-exists --table-name "$TABLE" --region "$REGION"
 fi
 
-# Idempotent: enabling TTL when it is already enabled on the same attribute is
-# an error, so ask first. Deliberately not gated on table creation — a table
-# made by an earlier version of this script has no TTL, and would silently keep
-# every row forever.
+# Enabling TTL when it is already enabled is an error, so ask first. Not gated
+# on table creation: a table made without TTL would otherwise keep every row.
 TTL_STATUS=$(aws dynamodb describe-time-to-live --table-name "$TABLE" --region "$REGION" \
   --query TimeToLiveDescription.TimeToLiveStatus --output text 2>/dev/null || echo "DISABLED")
 if [ "$TTL_STATUS" = "DISABLED" ]; then
@@ -120,23 +81,16 @@ if [ "$TTL_STATUS" = "DISABLED" ]; then
     --time-to-live-specification "Enabled=true,AttributeName=expiresAt" >/dev/null
 fi
 
-# ── The bundle ──────────────────────────────────────────────────────────────
+# ── The bundle ──
 #
-# The relay's own code is three files with no dependencies. The DynamoDB client
-# is the one exception and it is vendored in here rather than taken from the
-# Lambda runtime: the runtime does ship an SDK, but AWS's own guidance is to
-# bring your own so the version is yours rather than whatever the region
-# happens to have. Hand-rolling SigV4 would have kept the zip dependency-free —
-# tempting in a service with no other dependencies, and the wrong place to save,
-# because a signing bug is a security bug and this is three API calls.
+# The relay's own code has no dependencies except the DynamoDB client, which is
+# bundled rather than taken from the Lambda runtime so the SDK version is
+# pinned. SigV4 is not hand-rolled: a signing bug is a security bug.
 #
-# `npm ci` FROM THE RELAY'S OWN LOCKFILE, into a scratch directory. It used to
-# install whatever `@aws-sdk/client-dynamodb` was newest on the day, so two
-# deploys of the same commit could ship different SDKs, and neither was the one
-# the tests had run against. `package-lock.json` here pins the SDK and every
-# package under it to the versions in the repo's root lockfile — the ones
-# `npm test` exercises. Scripts are not run: nothing in the tree needs one.
-# Nothing is written into the repo, so a deploy cannot leave it dirty.
+# `npm ci` runs from the relay's own lockfile in a scratch directory, so two
+# deploys of the same commit ship the same SDK, matching the repo's root
+# lockfile (the versions the tests run against). Install scripts are skipped and
+# nothing is written into the repo.
 
 BUILD="$(mktemp -d)"
 ZIP="$BUILD/relay.zip"
@@ -152,7 +106,7 @@ say "installing @aws-sdk/client-dynamodb (locked)"
 ( cd "$PKG" && zip -qr "$ZIP" . )
 say "bundle $(du -h "$ZIP" | cut -f1)"
 
-# ── The execution role ──────────────────────────────────────────────────────
+# ── The execution role ──
 
 if ! ROLE_ARN=$(aws iam get-role --role-name "$ROLE_NAME" --query Role.Arn --output text 2>/dev/null); then
   say "creating role $ROLE_NAME"
@@ -169,17 +123,14 @@ if ! ROLE_ARN=$(aws iam get-role --role-name "$ROLE_NAME" --query Role.Arn --out
   sleep 12
 fi
 
-# The usage table, scoped to that one table and those four actions.
+# The usage-table policy, scoped to that one table and those four actions.
 #
-# OUTSIDE the role-creation branch on purpose. A role made before metering
-# existed already exists, so a policy attached only on creation would never
-# reach it — the deploy would report success and every transcription would 503
-# on AccessDenied. `put-role-policy` is idempotent, so running it every time is
-# both the fix and the check.
+# Outside the role-creation branch on purpose: a role that already exists would
+# otherwise never get it. `put-role-policy` is idempotent.
 #
-# No `dynamodb:DeleteItem` and no `Scan`: rows expire by TTL and nothing here
-# ever reads the table whole. A relay that cannot delete a usage row also
-# cannot be talked into clearing somebody's quota.
+# No `dynamodb:DeleteItem` and no `Scan`: rows expire by TTL and nothing reads
+# the table whole. A relay that cannot delete a usage row cannot be talked into
+# clearing somebody's quota.
 say "attaching the usage-table policy"
 aws iam put-role-policy --role-name "$ROLE_NAME" --policy-name "${FUNCTION}-usage" \
   --policy-document "$(cat <<JSON
@@ -191,20 +142,13 @@ aws iam put-role-policy --role-name "$ROLE_NAME" --policy-name "${FUNCTION}-usag
 JSON
 )"
 
-# ── The function ────────────────────────────────────────────────────────────
+# ── The function ──
 
-# JSON IN A FILE, NOT SHORTHAND ON THE COMMAND LINE. Three reasons, and the
-# first one is a bug this script actually had:
-#
-#   • `Variables={A=1,B=}` — a trailing EMPTY value — fails the shorthand
-#     parser with "Expected: ',', received: 'EOF'". An unset revocation list is
-#     the normal case, so the script broke on its very first run.
-#   • an API key may contain a comma or an equals sign, either of which would
-#     silently split the shorthand into the wrong pairs.
-#   • a secret passed in argv is visible in `ps` to every process on the
-#     machine, and gets echoed back verbatim by the CLI's own error messages.
-#
-# The file is created with a private umask and removed on exit.
+# The environment goes in as JSON in a file, not CLI shorthand:
+#   - a trailing empty value (`Variables={A=1,B=}`) fails the shorthand parser;
+#   - a key containing a comma or equals sign would split into the wrong pairs;
+#   - a secret in argv is visible in `ps` and echoed back in CLI error messages.
+# The file is mode 600 and removed on exit.
 ENV_FILE="$(mktemp)"
 trap 'rm -f "$ENV_FILE"' EXIT
 chmod 600 "$ENV_FILE"
@@ -224,15 +168,10 @@ DEIKO_USAGE_TABLE="$TABLE" node -e '
     "DEIKO_SUMMARIES_PER_CALLER_PER_DAY",
     "DEIKO_CLASSIFIES_PER_CALLER_PER_DAY",
     "DEIKO_TEXT_CALLS_PER_IP_PER_DAY",
-    // The classifier. Without the key /v1/classify 503s and the app renders
-    // every brief without earlier work, which is the right default until a
-    // TypeSafe account exists.
+    // The classifier. Without a key /v1/classify 503s and briefs are filed locally.
     "TYPESAFE_API_KEY",
-    // Or the same model through a gateway. Vercel is free on the Hobby plan
-    // and takes the TypeSafe request shape; Cloudflare wants a prepaid
-    // balance. All optional; the first one set wins, in this order.
-    // NO APOSTROPHES IN THIS BLOCK: it sits inside a single-quoted shell
-    // string, and one ended the script mid-comment on a real deploy.
+    // Or the same model through a gateway; the first one set wins, in this order.
+    // No apostrophes in this block: it sits inside a single-quoted shell string.
     "AI_GATEWAY_API_KEY",
     "OPENROUTER_API_KEY",
     "CLOUDFLARE_ACCOUNT_ID",
@@ -259,12 +198,11 @@ DEIKO_USAGE_TABLE="$TABLE" node -e '
 ' > "$ENV_FILE"
 
 if aws lambda get-function --function-name "$FUNCTION" --region "$REGION" >/dev/null 2>&1; then
-  # NEVER SHIP FEWER SETTINGS THAN ARE LIVE. `--environment` replaces the whole
-  # set, so a shell that is missing one variable used to strip it from the
-  # function and report success — a classifier key gone, a daily ceiling back
-  # to its default. NAMES only: the values do reach the CLI process (`keys()`
-  # is applied to the response it receives) but are never printed, stored or
-  # handed to this script. Checked before anything is changed.
+  # Never ship fewer settings than are live: `--environment` replaces the whole
+  # set, so a shell missing one variable would strip it from the function
+  # (a classifier key gone, a daily ceiling back to its default). Only names are
+  # compared; values reach the CLI process but are never printed or stored.
+  # Checked before anything is changed.
   LIVE_NAMES=$(aws lambda get-function-configuration --function-name "$FUNCTION" --region "$REGION" \
     --query 'keys(Environment.Variables || `{}`)' --output text)
   DROPPED=$(LIVE_NAMES="$LIVE_NAMES" node -e '
@@ -288,10 +226,8 @@ if aws lambda get-function --function-name "$FUNCTION" --region "$REGION" >/dev/
   aws lambda wait function-updated --function-name "$FUNCTION" --region "$REGION"
 else
   say "creating function $FUNCTION"
-  # 60s timeout: Sarvam on a 25s chunk takes ~1-2s, but a cold provider or a
-  # retry must not be cut off mid-flight — the client's own fallback is worse
-  # than waiting. 512MB is for headroom on the buffered body, not for CPU;
-  # Lambda scales CPU with memory and the work here is almost all I/O wait.
+  # 60s timeout so a cold provider or a retry is not cut off mid-flight. 512MB
+  # is headroom for the buffered body, not CPU; the work is almost all I/O wait.
   aws lambda create-function --function-name "$FUNCTION" --region "$REGION" \
     --runtime nodejs22.x --role "$ROLE_ARN" --handler lambda.handler \
     --zip-file "fileb://$ZIP" --timeout 60 --memory-size 512 \
@@ -299,13 +235,9 @@ else
   aws lambda wait function-active --function-name "$FUNCTION" --region "$REGION"
 fi
 
-# Log retention. Lambda creates the group on first invocation and leaves it on
-# "Never expire", so without this every status line the relay has ever written
-# is kept and billed forever. Thirty days outlives any support conversation.
-# The group is CREATED here first: it does not exist until the function has
-# run once, so on a first deploy the retention call used to fail quietly and
-# the group Lambda made later kept everything. `|| true` on the create because
-# it already exists on every deploy after the first.
+# Log retention. Lambda creates the log group on first invocation with "Never
+# expire". The group is created here first because it does not exist until the
+# function has run once; `|| true` because it exists on every later deploy.
 aws logs create-log-group --region "$REGION" \
   --log-group-name "/aws/lambda/$FUNCTION" >/dev/null 2>&1 || true
 if aws logs put-retention-policy --region "$REGION" \
@@ -315,13 +247,10 @@ else
   say "⚠ could not set log retention on /aws/lambda/$FUNCTION — it keeps everything until fixed"
 fi
 
-# BEST-EFFORT, deliberately. Reserving concurrency requires the account to
-# keep 10 slots unreserved, and a fresh AWS account's TOTAL limit is often
-# exactly 10 — so any reservation at all is arithmetically impossible there.
-# On such an account the account-wide cap is already doing the blast-radius
-# job this reservation exists for, so failing the whole deploy over it would
-# refuse a protection the account cannot hold in exchange for one it already
-# has. On bigger accounts the reservation still lands.
+# Best-effort: reserving concurrency requires the account to keep 10 slots
+# unreserved, and a fresh AWS account's total limit is often exactly 10, which
+# makes any reservation impossible. There the account-wide cap already bounds
+# the blast radius, so the deploy continues.
 if aws lambda put-function-concurrency --function-name "$FUNCTION" --region "$REGION" \
   --reserved-concurrent-executions "$CONCURRENCY" --output text >/dev/null 2>&1; then
   say "reserved concurrency $CONCURRENCY"
@@ -332,11 +261,10 @@ else
   say "  the account-wide limit of $ACCOUNT_LIMIT is the effective cap instead"
 fi
 
-# ── The URL ─────────────────────────────────────────────────────────────────
+# ── The URL ──
 #
-# AuthType NONE with our own bearer check inside. IAM auth would mean signing
-# every request from the app, which would mean AWS credentials on every user's
-# Mac — a far worse trade than a token that gates a proxy.
+# AuthType NONE with a bearer check inside the relay. IAM auth would need AWS
+# credentials on every user's Mac.
 
 if ! URL=$(aws lambda get-function-url-config --function-name "$FUNCTION" --region "$REGION" \
       --query FunctionUrl --output text 2>/dev/null); then
@@ -345,32 +273,24 @@ if ! URL=$(aws lambda get-function-url-config --function-name "$FUNCTION" --regi
     --auth-type NONE --query FunctionUrl --output text)
 fi
 
-# TWO STATEMENTS, AND BOTH OPEN THE URL ONLY. Since October 2025 a function
-# URL with AuthType NONE needs `lambda:InvokeFunctionUrl` AND
-# `lambda:InvokeFunction` in the resource policy — that, not a public-access
-# block, is what "direct invoke 200, URL 403" on this account was. AWS's own
-# policy for it scopes the second statement with `lambda:InvokedViaFunctionUrl`
-# (docs.aws.amazon.com/lambda/latest/dg/urls-auth.html), and so does this.
+# Two resource-policy statements, both scoped to the URL: a function URL with
+# AuthType NONE needs `lambda:InvokeFunctionUrl` and `lambda:InvokeFunction`,
+# and the second is conditioned on `lambda:InvokedViaFunctionUrl` (see
+# docs.aws.amazon.com/lambda/latest/dg/urls-auth.html). An unconditioned
+# InvokeFunction would let any AWS account invoke the function directly with a
+# hand-built event, bypassing the per-address caps. The unconditioned statement
+# (`AllowPublicInvoke`) is removed on every deploy, after its replacement is in
+# place so the URL is never without a grant.
 #
-# IT USED TO BE AN UNCONDITIONED InvokeFunction FOR *, which let any AWS
-# account invoke the function directly — with a hand-built event whose
-# `requestContext.http.sourceIp` is whatever it likes, walking straight past
-# the per-address caps, or asynchronously, which Lambda retries for hours.
-# That statement (`AllowPublicInvoke`) is removed on every deploy, AFTER its
-# replacement is in place so the URL never goes a moment without a grant.
-#
-# The replacement is (re)written only when the live policy lacks it with its
+# The replacement is rewritten only when the live policy lacks it with its
 # condition: removing and re-adding it every run would 403 the URL for that
-# instant, and the app reads a 403 as "your token was revoked" for the rest
-# of the session. Added WITHOUT `|| true`, so an AWS CLI too old to know
-# `--invoked-via-function-url` stops the deploy while the old grant still
-# stands. The first statement keeps its `|| true`: add-permission errors when
-# a statement exists, which is the normal case on a redeploy.
+# instant, and the app reads a 403 as a revoked token. It is added without
+# `|| true` so an AWS CLI too old for `--invoked-via-function-url` stops the
+# deploy. The first statement keeps `|| true` because add-permission errors when
+# a statement already exists.
 #
-# THE POLICY MUST BE READABLE. A deployer without `lambda:GetPolicy` used to
-# read as "no policy", which re-added the grant (the 403 blink above) on
-# every deploy and could verify nothing. Now "there is none" and "may not
-# look" are told apart, and the second stops the deploy with the reason.
+# The policy must be readable: `policy()` tells "there is none" apart from
+# "may not look" (missing `lambda:GetPolicy`) and stops the deploy on the latter.
 policy() {
   local err="$BUILD/get-policy.err" out
   if out=$(aws lambda get-policy --function-name "$FUNCTION" --region "$REGION" \
@@ -404,13 +324,11 @@ fi
 aws lambda remove-permission --function-name "$FUNCTION" --region "$REGION" \
   --statement-id AllowPublicInvoke >/dev/null 2>&1 || true
 
-# VERIFIED, NOT ASSUMED. The removal above swallows its errors — it fails on
-# every deploy after the first, when there is nothing to remove — so what
-# decides is the policy as it now stands: no statement may let anybody (`*`)
-# invoke the function, by `lambda:InvokeFunction` or any wildcard that
-# covers it, without the function-URL condition. Whatever put one there —
-# this script before, the console, a hand-run add-permission — the deploy
-# fails and names it.
+# Verify the result. The removal above swallows its errors (nothing to remove
+# on most deploys), so what decides is the policy as it now stands: no statement
+# may let anybody (`*`) invoke the function, by `lambda:InvokeFunction` or any
+# wildcard covering it, without the function-URL condition. Whatever put one
+# there, the deploy fails and names it.
 POLICY=$(policy) || exit 1
 OPEN=$(POLICY="$POLICY" node -e '
   const covers = (pattern) => new RegExp("^" + String(pattern)
@@ -431,19 +349,16 @@ fi
 
 URL="${URL%/}"
 
-# ── Verify the deploy, rather than asking the user to ──────────────────────
+# ── Verify the deploy ──
 #
-# A relay with no key answers ok:true happily and then 503s the route it
-# cannot serve, so EVERY route's flag must be true — transcription, summary,
-# classify and the playground — and so must `metering`. That one is a live
-# DescribeTable from inside the function, which makes it the ONLY thing here
-# that proves the table and the role's policy actually line up; both are
-# created above, and both can be created wrong. Any flag false means a route
-# that 503s by design, and the deploy FAILS rather than hand out that URL.
+# A relay with a missing key answers ok:true and then 503s the route it cannot
+# serve, so every route flag (transcription, summary, classify, playground) and
+# `metering` must be true. `metering` is a live DescribeTable from inside the
+# function, the only check that the table and the role's policy line up. Any
+# false flag fails the deploy.
 #
-# Cold start plus IAM propagation can take a while on a fresh function, and the
-# relay caches its DescribeTable answer for a minute — so a `false` seen while
-# IAM propagates stands for up to sixty seconds. Retry for ninety.
+# Cold start and IAM propagation can take a while, and the relay caches its
+# DescribeTable answer for a minute, so retry for ninety seconds.
 say "verifying /health…"
 HEALTH=""
 unhealthy() {  # the flags that are not true; nothing printed means healthy
