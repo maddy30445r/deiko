@@ -3,9 +3,10 @@
 Notable changes to Deiko. Earlier releases are on
 [deiko.app/changelog](https://deiko.app/changelog).
 
-## [Unreleased]
+## [0.5.8] — 2026-09-30
 
 ### Added
+- Deiko is open source under the MIT licence: the app, the pipeline, the memory server and the relay.
 - A Claude Code Stop hook: an agent about to finish a Deiko brief without saving its report is asked to save it first. Added with the memory server from Settings.
 
 ## [0.5.7] — 2026-09-29
@@ -49,6 +50,7 @@ Notable changes to Deiko. Earlier releases are on
 - Task notes only state what comes from confirmed briefs, and cite the brief behind each line.
 - Large boards re-read only the briefs that changed.
 
+[0.5.8]: https://github.com/maddy30445r/deiko/releases/tag/v0.5.8
 [0.5.7]: https://github.com/maddy30445r/deiko/releases/tag/v0.5.7
 [0.5.6]: https://github.com/maddy30445r/deiko/releases/tag/v0.5.6
 [0.5.5]: https://github.com/maddy30445r/deiko/releases/tag/v0.5.5
