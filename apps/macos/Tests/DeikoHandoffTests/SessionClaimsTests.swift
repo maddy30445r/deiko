@@ -166,10 +166,11 @@ func cleanSessionSaysNothing() {
 func reasonsCarryTheirAnswers() {
     let reset = "Resets 1 May (UTC)"
     let trial = SessionClaims.degradedSentence("trial", degraded: true, resetSentence: reset)
-    #expect(trial?.contains("free 30 minutes") == true)
+    #expect(trial?.contains("free hours") == true)
+    #expect(trial?.contains(reset) == true)
 
-    // A spent month is the one with a date, because that is what the user
-    // wants to know and it is the only reason that has one.
+    // A spent month, free or Pro, carries its reset date: that is what the
+    // user wants to know.
     let monthly = SessionClaims.degradedSentence("monthly", degraded: true, resetSentence: reset)
     #expect(monthly?.contains(reset) == true)
 

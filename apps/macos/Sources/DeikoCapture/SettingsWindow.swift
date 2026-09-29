@@ -70,13 +70,13 @@ final class SettingsModel: ObservableObject {
             let quota = try await License.refresh()
             self.quota = quota
             plan = quota.isPro ? "Pro" : "Free"
-            // A key that does not validate has no allowance of its own, and the sentence says so: a trial
-            // figure beside it would read as a trial that reset. Say what to do instead.
+            // A key that does not validate has no allowance of its own, and the sentence says so: a free-hours
+            // figure beside it would read as an allowance that reset. Say what to do instead.
             planDetail = quota.isPro
                 ? "\(quota.remainingSentence) this month"
                 : (License.key == nil
-                    ? "\(quota.remainingSentence) of your trial"
-                    : "that key is not active — remove it to use this Mac's trial")
+                    ? "\(quota.remainingSentence) of this month's free hours"
+                    : "that key is not active — remove it to use this Mac's free hours")
             planIsProblem = !quota.isPro && License.key != nil
         } catch License.Failure.noRelay {
             plan = "On-device"
@@ -241,7 +241,7 @@ final class SettingsModel: ObservableObject {
                 : "Add your own key below and transcription and the summary happen at Groq instead."
             return isPro
                 ? "Your narration goes to Deiko, which passes it to a transcription service and keeps nothing. \(narration.comesBackAs) \(ownKey)"
-                : "Your narration goes to Deiko, which passes it to a transcription service and keeps nothing. \(narration.comesBackAs) When your trial runs out, transcription continues on this Mac, in the offline language below. \(ownKey)"
+                : "Your narration goes to Deiko, which passes it to a transcription service and keeps nothing. \(narration.comesBackAs) When this month's free hours run out, transcription continues on this Mac, in the offline language below, until they reset. \(ownKey)"
         }
         return "Transcription runs on this Mac. Nothing is uploaded — accuracy is lower, especially for mixed-language speech."
     }
@@ -616,9 +616,7 @@ struct SettingsView: View {
                         .accessibilityElement()
                         .accessibilityLabel("Transcription minutes used")
                         .accessibilityValue(quota.usedSentence)
-                        Text(quota.isPro
-                            ? "\(quota.usedSentence) · \(License.Quota.proResetSentence)"
-                            : "\(quota.usedSentence) · one-time trial, then this Mac transcribes")
+                        Text("\(quota.usedSentence) · \(License.Quota.resetSentence)")
                             .font(.system(size: 11))
                             .foregroundStyle(DeikoStyle.ink2)
                             .fixedSize(horizontal: false, vertical: true)

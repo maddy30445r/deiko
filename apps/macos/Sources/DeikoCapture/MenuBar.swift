@@ -554,8 +554,8 @@ final class MenuBar: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 : "Pro · \(quota.remainingSentence) this month"
         }
         return quota.isSpent
-            ? "Free trial used up — transcribing on this Mac"
-            : "Free trial · \(quota.remainingSentence)"
+            ? "Free hours used up this month — transcribing on this Mac"
+            : "Free · \(quota.remainingSentence) this month"
     }
 
     /// `● Capturing · 0:43` — the dot in record red, the timer in mono.

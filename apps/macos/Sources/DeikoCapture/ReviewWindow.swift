@@ -1295,13 +1295,13 @@ struct ReviewView: View {
     /// `static` so the collapsed orb card shows the same sentence as the expanded panel.
     static func degradedSentence(_ reason: String?, degraded: Bool) -> String? {
         SessionClaims.degradedSentence(
-            reason, degraded: degraded, resetSentence: License.Quota.proResetSentence
+            reason, degraded: degraded, resetSentence: License.Quota.resetSentence
         )
     }
 
     /// One quiet line when the transcript is not what a clean session produces.
     ///
-    /// The on-device fallback is deliberate (a spent trial or an unreachable relay keeps the session
+    /// The on-device fallback is deliberate (spent free hours or an unreachable relay keeps the session
     /// working), but silent it reads as a transcript that is simply worse. Secondary styling on purpose:
     /// this is an explanation, not a problem to solve, except for `trial`, which has something to do about it.
     @ViewBuilder private func degradedRow(_ d: BriefDigest) -> some View {

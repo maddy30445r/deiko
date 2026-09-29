@@ -102,7 +102,7 @@ public enum SessionClaims {
 
     /// Why this transcript is worse than a clean one, in words that carry the
     /// answer rather than the diagnosis. Each reason has a different answer: a
-    /// spent trial wants an upgrade path, a spent month a reset date, the
+    /// spent free month wants an upgrade path and its reset date, a spent Pro month its reset date, the
     /// service ceiling "this is not about you", an unreachable relay "try
     /// later". `timing` is not a fallback to the Mac at all: the on-device clock
     /// failed and the cloud text survived.
@@ -114,8 +114,8 @@ public enum SessionClaims {
     ) -> String? {
         switch reason {
         case "trial":
-            return "Your free 30 minutes are used up — this was transcribed on your Mac, "
-                + "so accuracy may be lower."
+            return "This month's free hours are used up — transcribed on your Mac, "
+                + "so accuracy may be lower. \(resetSentence)."
         case "monthly":
             return "This month's Pro hours are used up — transcribed on your Mac. "
                 + "\(resetSentence)."

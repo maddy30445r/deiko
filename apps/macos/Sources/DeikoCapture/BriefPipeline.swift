@@ -22,7 +22,7 @@ struct BriefSummary: Codable {
     var overlapCount: Int
     var needsReviewCount: Int
     var durationMs: Double
-    /// Some or all of the words came from the on-device recogniser rather than the cloud (a spent trial,
+    /// Some or all of the words came from the on-device recogniser rather than the cloud (spent free hours,
     /// an unreachable relay, a chunk that failed). Optional because older sessions have no such key;
     /// absent reads as false, meaning "nothing told us it was degraded".
     var degraded: Bool?

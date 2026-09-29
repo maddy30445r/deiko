@@ -166,7 +166,7 @@ enum License {
         /// Mirrors `monthKey` in `services/relay/src/quota.mjs` (the UTC month);
         /// change both. UTC is named because the reset lands mid-afternoon for
         /// most of the world.
-        static var proResetSentence: String {
+        static var resetSentence: String {
             var calendar = Calendar(identifier: .gregorian)
             calendar.timeZone = TimeZone(identifier: "UTC") ?? .gmt
             guard let startOfMonth = calendar.date(
