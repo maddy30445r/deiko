@@ -7,9 +7,9 @@
 import { readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
-import { CLASSIFIER, COULD_NOT_TELL, decide, readBriefLine, saysNothing, unplaceable } from "./context.mjs";
+import { CLASSIFIER, COULD_NOT_TELL, REFERENCE, decide, readBriefLine, saysNothing, unplaceable } from "./context.mjs";
 import {
-  bm25, firm, groupTasks, readBoard, shortlist as rankTasks, stampTime, taskLabels, taskState, taskText, timeWindow,
+  bm25, cosine, firm, groupTasks, readBoard, shortlist as rankTasks, stampTime, taskLabels, taskState, taskText, timeWindow,
   titleFor, tokens,
 } from "./tasks.mjs";
 import { loadEvents } from "./session-io.mjs";
@@ -98,7 +98,12 @@ export function rankLocally({ me, summary, windowTitles, board, taskTitles }) {
   return { groups, local };
 }
 
-export function prepare({ id, me, summary, windowTitles, board, taskTitles, collections, vectors = null }) {
+/// How alike two tasks' briefs must mean (cosine of their averages) to count as
+/// look-alikes. null = off, which is what ships until the filing eval says
+/// otherwise; `DEIKO_LOOKALIKE` switches it on for a run.
+export const LOOKALIKE = process.env.DEIKO_LOOKALIKE ? Number(process.env.DEIKO_LOOKALIKE) : null;
+
+export function prepare({ id, me, summary, windowTitles, board, taskTitles, collections, vectors = null, aggregate, lookalike = LOOKALIKE }) {
   const groups = groupTasks(board);
   // A TASK'S FACE: its firm briefs only. One guessed join must never become
   // what the task is matched against — or what Jev is told it is.
@@ -113,9 +118,11 @@ export function prepare({ id, me, summary, windowTitles, board, taskTitles, coll
     // Time words seat tasks; they never reach `decide`.
     window: timeWindow([me.narration, me.summaryLine].join(" "), stampTime(id)),
     queryVec: vectors?.query ?? null,
+    aggregate,
     tasks: [...groups].map(([tid, bs]) => ({
       id: tid,
       text: taskText(titleOf(tid), faces.get(tid)),
+      texts: faces.get(tid).map((b) => taskText(titleOf(tid), [b])),
       labels: taskLabels(bs),
       times: bs.map((b) => stampTime(b.id)),
       lastActive: stampTime(bs[0].id),
@@ -175,7 +182,28 @@ export function prepare({ id, me, summary, windowTitles, board, taskTitles, coll
     version: 3,
   };
 
-  return { groups, shortlist, body };
+  // LOOK-ALIKES: for the tasks a brief could point back at (the top few),
+  // every other task whose briefs mean nearly the same — two apps' "price
+  // bug". A point-back join to one of them asks instead (`decide`). Only with
+  // vectors, and only when switched on.
+  const lookalikes = {};
+  if (vectors && lookalike) {
+    const centre = new Map([...faces].map(([tid, face]) => {
+      const vs = face.map((b) => vectors.byBrief.get(b.id)).filter(Boolean);
+      if (!vs.length) return [tid, null];
+      const c = new Float32Array(vs[0].length);
+      for (const v of vs) for (let k = 0; k < c.length; k++) c[k] += v[k] / vs.length;
+      return [tid, c];
+    }));
+    for (const t of shortlist.slice(0, REFERENCE.candidates)) {
+      const mine = centre.get(t.id);
+      if (!mine) continue;
+      const near = [...centre].filter(([other, c]) => other !== t.id && c && cosine(mine, c) >= lookalike).map(([other]) => other);
+      if (near.length) lookalikes[t.id] = near;
+    }
+  }
+
+  return { groups, shortlist, body, lookalikes };
 }
 
 export function decideLocally({ me, local, groups, collections }) {
@@ -199,7 +227,7 @@ export function decideLocally({ me, local, groups, collections }) {
   return context;
 }
 
-export function place({ answer, id, me, summary, groups, shortlist, collections, rules }) {
+export function place({ answer, id, me, summary, groups, shortlist, collections, rules, lookalikes = {} }) {
   const ids = shortlist.map((t) => t.id);
   return decide({
     answers: answer?.answers ?? {},
@@ -216,6 +244,7 @@ export function place({ answer, id, me, summary, groups, shortlist, collections,
     sessionId: id,
     title: titleFor(me),
     rules,
+    lookalikes,
   });
 }
 

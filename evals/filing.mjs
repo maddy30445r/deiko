@@ -7,6 +7,8 @@
  *     [--shortlist-only] [--relay <url>] [--pace <ms>] [--all] [--draft]
  *     [--model <key>|off] [--replay key|guessed]
  *     [--record <answers.json>] [--answers <answers.json> [--sweep]]
+ *     [--aggregate pile|best|average] [--lookalike <cosine>] [--rows <rows.json>]
+ *     [--judge-from <stamp>] [--max-calls <n>]
  *   node scripts/eval-filing.mjs --from-corrections [--write]
  *     every brief placed by hand since, proposed as new answer-key entries
  *
@@ -132,6 +134,7 @@ async function ask(body, pause = 0, stamp = null) {
     return recorded[stamp].answer;
   }
   if (pause > 0) await new Promise((r) => setTimeout(r, pause));
+  calls += 1;
   let res = await requestClassify({ url: relay, token, body });
   if (res.status >= 500) {
     await new Promise((r) => setTimeout(r, 1000));
@@ -164,13 +167,30 @@ const done = [];
 const taskTitles = new Map();
 const collections = [];
 const docs = new Map();
+// THE AGGREGATION BAKE-OFF (29 Sep): how a many-brief task is scored — "pile"
+// (shipped), "best" or "average" — and the look-alike check (a cosine, or off).
+const aggregate = value("--aggregate", undefined);
+const lookalike = value("--lookalike", undefined) != null ? Number(value("--lookalike")) : undefined;
+const rowsPath = value("--rows", null);
+// --judge-from <stamp>: earlier briefs go on the board as the key places them,
+// with no relay call — so a comparison spends only on the briefs it judges.
+const judgeFrom = value("--judge-from", null);
+const maxCalls = Number(value("--max-calls", Infinity));
+let calls = 0;
 for (const [stamp, e] of exp) {
   const { me, summary, windowTitles } = inputsOf.get(stamp);
+  if (judgeFrom && stamp < judgeFrom) {
+    done.push({ ...me, task: e.task, odds: e.want === "odds", decidedBy: "you", taskBy: "you" });
+    if (e.want === "new") taskTitles.set(e.task, titleFor(me));
+    if (model) { const vec = await model.embed(briefText(me), "doc"); if (vec) docs.set(stamp, vec); }
+    continue;
+  }
+  if (!shortlistOnly && !recorded && calls >= maxCalls) { console.error(`· stopped at --max-calls ${maxCalls}`); break; }
   const board = done.filter((b) => b.line && !b.odds && !unplaceable(b));
-  const prep = prepare({ id: stamp, me, summary, windowTitles, board, taskTitles, collections });
+  const prep = prepare({ id: stamp, me, summary, windowTitles, board, taskTitles, collections, aggregate, lookalike });
   const query = model ? await model.embed(briefText(me), "query") : null;
   const vectors = query ? { query, byBrief: docs } : null;
-  const blended = vectors ? prepare({ id: stamp, me, summary, windowTitles, board, taskTitles, collections, vectors }) : null;
+  const blended = vectors ? prepare({ id: stamp, me, summary, windowTitles, board, taskTitles, collections, vectors, aggregate, lookalike }) : null;
   const row = {
     stamp, exp: e,
     ranks: {
@@ -182,7 +202,7 @@ for (const [stamp, e] of exp) {
     const why = unplaceable(me);
     const use = blended ?? prep;
     try {
-      const args = why ? null : { answer: await ask(use.body, paceMs, stamp), id: stamp, me, summary, groups: use.groups, shortlist: use.shortlist, collections: [...collections] };
+      const args = why ? null : { answer: await ask(use.body, paceMs, stamp), id: stamp, me, summary, groups: use.groups, shortlist: use.shortlist, collections: [...collections], lookalikes: use.lookalikes ?? {} };
       const decision = why
         ? decideLocally({ me, ...rankLocally({ me, summary, windowTitles, board, taskTitles }), collections })
         : place(args);
@@ -220,6 +240,10 @@ for (const [stamp, e] of exp) {
     done.push({ ...me, task: e.task, odds: e.want === "odds", decidedBy: "you", taskBy: "you" });
     if (e.want === "new") taskTitles.set(e.task, titleFor(me));
   }
+}
+if (rowsPath) {
+  writeAtomic(home(rowsPath), JSON.stringify(rows.map(({ args, ...r }) => ({ ...r, why: r.jev?.why ?? null, back: r.jev?.back ?? null })), null, 1) + "\n");
+  console.error(`· ${rows.length} rows saved to ${rowsPath}`);
 }
 if (recordPath) {
   writeAtomic(recordPath, JSON.stringify(answers) + "\n");

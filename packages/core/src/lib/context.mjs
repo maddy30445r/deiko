@@ -209,7 +209,7 @@ const otherTicket = (a, b) => {
 export function decide({
   answers = {}, second = {}, collections = [], keys = {}, apps = [],
   shortlist = [], taskKeys = {}, newest = {}, now = 0,
-  taskCollections = {}, sessionId = null, title = null, rules = RULES,
+  taskCollections = {}, sessionId = null, title = null, rules = RULES, lookalikes = {},
 } = {}) {
   // AN UNREADABLE GATE IS A MISSING ONE, as the relay reads it (`finalists`):
   // `Number(null)` is 0, so coercing first would send a real brief to odds.
@@ -289,7 +289,13 @@ export function decide({
     const r2 = refs[1]?.[1] ?? 0;
     jev.back = back;
     jev.refs = Object.fromEntries(refs);
-    if (top && r1 >= refRules.join && r1 - r2 >= refRules.gap) {
+    if (top && r1 >= refRules.join && r1 - r2 >= refRules.gap && lookalikes[top]?.length) {
+      // Two look-alikes (two apps' "price bug"): a vague point back could mean
+      // either, so ask — the likeliest first — rather than guess.
+      candidates = [top, ...lookalikes[top]].slice(0, MAX_CANDIDATES);
+      related = null;
+      why = "ask-lookalike";
+    } else if (top && r1 >= refRules.join && r1 - r2 >= refRules.gap) {
       task = top;
       refScore = r1;
       why = "join-reference";

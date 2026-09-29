@@ -315,10 +315,33 @@ export function taskLabels(briefs) {
  * closest firm brief. Recency only breaks ties; the project gives nothing. A
  * seat is a chance to be checked, never a join.
  */
-export function shortlist({ query, queryKeys = {}, window = null, queryVec = null, tasks, limit = SHORTLIST }) {
+/// HOW A TASK OF MANY BRIEFS IS SCORED against a new one. "pile" (words over
+/// all its briefs at once, meaning by its closest brief) is what shipped; the
+/// filing eval compares "best" (each brief alone, the best one counts) and
+/// "average" (each brief alone, averaged) before any change of default.
+export const TASK_AGGREGATE = process.env.DEIKO_TASK_AGGREGATE ?? "pile";
+
+export function shortlist({ query, queryKeys = {}, window = null, queryVec = null, tasks, limit = SHORTLIST, aggregate = TASK_AGGREGATE }) {
   if (!tasks.length) return [];
-  const grams = bm25(terms(query), tasks.map((t) => terms(t.text)));
-  const meaning = tasks.map((t) => (queryVec && t.vecs?.length ? Math.max(...t.vecs.map((v) => cosine(queryVec, v))) : null));
+  const q = terms(query);
+  const mean = (xs) => xs.reduce((a, b) => a + b, 0) / xs.length;
+  let grams;
+  if (aggregate === "pile" || !tasks.every((t) => t.texts?.length)) {
+    grams = bm25(q, tasks.map((t) => terms(t.text)));
+  } else {
+    // EACH BRIEF SCORED ON ITS OWN, against one corpus of every brief, then
+    // combined per task: its best brief, or the average of them all.
+    const all = tasks.flatMap((t, i) => t.texts.map((x) => [i, terms(x)]));
+    const s = bm25(q, all.map(([, t]) => t));
+    const per = tasks.map(() => []);
+    all.forEach(([i], n) => per[i].push(s[n]));
+    grams = per.map((xs) => (aggregate === "average" ? mean(xs) : Math.max(...xs)));
+  }
+  const meaning = tasks.map((t) => {
+    if (!queryVec || !t.vecs?.length) return null;
+    const c = t.vecs.map((v) => cosine(queryVec, v));
+    return aggregate === "average" ? mean(c) : Math.max(...c);
+  });
   // Blended by score, as search is (`blendScores`), with words weighing a
   // little more: a whole brief carries far more real words than a search.
   const fused = blendScores(grams, meaning, FILING_MEANING_WEIGHT);
