@@ -18,7 +18,7 @@ function transcript(dir, entries) {
   return path;
 }
 
-test("the latest brief in a transcript is found, in string or block content", () => {
+test("the brief this turn answers is found, in string or block content", () => {
   const t = [
     { type: "user", timestamp: "2026-09-29T10:00:00Z", message: { role: "user", content: brief("20260929-100000", "/b/20260929-100000/outcome.md") } },
     { type: "assistant", message: { content: [{ type: "text", text: "done" }] } },
@@ -66,4 +66,15 @@ test("run as a hook, it prints the block JSON and always exits 0", () => {
   const bad = spawnSync(process.execPath, [script], { input: "not json", encoding: "utf8" });
   assert.equal(bad.status, 0);
   assert.equal(bad.stdout, "");
+});
+
+test("a brief pasted earlier and then talked about does not nag later turns", () => {
+  const brief1 = { type: "user", timestamp: "2026-09-29T10:00:00Z", message: { content: brief("20260929-100000", "/b/20260929-100000/outcome.md") } };
+  const later = { type: "user", timestamp: "2026-09-29T12:00:00Z", message: { content: [{ type: "text", text: "why did that not join the pricing task?" }] } };
+  const toolResult = { type: "user", message: { content: [{ type: "tool_result", content: "ok" }] } };
+  const meta = { type: "user", isMeta: true, message: { content: "<system-reminder>…</system-reminder>" } };
+  const feedback = { type: "user", message: { content: "Stop hook feedback: Before you finish…" } };
+  const t = (...entries) => entries.map((e) => JSON.stringify(e)).join("\n");
+  assert.equal(latestBrief(t(brief1, later)), null, "a later prompt means this turn is not the brief");
+  assert.equal(latestBrief(t(brief1, toolResult, meta, feedback)).id, "20260929-100000", "tool results, meta and hook feedback are not prompts");
 });

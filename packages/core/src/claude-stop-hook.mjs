@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Claude Code Stop hook: before the agent finishes a Deiko brief, make sure it
-// saved its report. Reads the hook's JSON on stdin and, when the latest brief
-// in the transcript has no outcome written since it arrived, blocks the stop
-// once with a reason that asks for one. Any failure lets the agent stop.
+// saved its report. Reads the hook's JSON on stdin and, when the prompt this
+// turn answers is a brief with no outcome written since it arrived, blocks the
+// stop once with a reason that asks for one. Any failure lets the agent stop.
 import { readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,18 +15,25 @@ function text(content) {
   return content.filter((b) => b?.type === "text").map((b) => b.text).join("\n");
 }
 
-/** The latest Deiko brief the user sent in this transcript: its id, outcome path and time. */
+/**
+ * The Deiko brief this turn answers: the latest prompt the person sent, when
+ * that prompt is a brief. A brief pasted earlier, then talked about, is not
+ * this turn's work, so later turns are left alone. Tool results, meta entries
+ * and the hook's own feedback are not prompts.
+ */
 export function latestBrief(transcript) {
-  let found = null;
+  let latest = null;
   for (const line of transcript.split("\n")) {
-    if (!line.includes("save_outcome tool if it is connected")) continue;
+    if (!line.includes('"user"')) continue;
     let entry;
     try { entry = JSON.parse(line); } catch { continue; }
-    if (entry.type !== "user") continue;
-    const m = MARKER.exec(text(entry.message?.content));
-    if (m) found = { id: m[1], outcome: m[2], at: Date.parse(entry.timestamp) || 0 };
+    if (entry.type !== "user" || entry.isMeta) continue;
+    const body = text(entry.message?.content);
+    if (!body || body.startsWith("Stop hook feedback")) continue;
+    const m = MARKER.exec(body);
+    latest = m ? { id: m[1], outcome: m[2], at: Date.parse(entry.timestamp) || 0 } : null;
   }
-  return found;
+  return latest;
 }
 
 /** The hook's answer for one Stop event, or null to let the agent stop. */
