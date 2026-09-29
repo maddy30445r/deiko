@@ -2,11 +2,8 @@ import Testing
 import Foundation
 @testable import DeikoHandoff
 
-// The two functions on `FlingReport` worth guaranteeing. Everything else on it
-// is data the caller fills in; these two decide whether a fling proceeds, and
-// what a user pastes into a group chat.
-
-// ── treeIsReady ─────────────────────────────────────────────────────────────
+// The two functions on `FlingReport` worth guaranteeing: one decides whether a
+// fling proceeds, the other is what a user pastes into a group chat.
 
 @Test("a focused element belonging to the target is what readiness means")
 func readyOnlyForTheTarget() {
@@ -15,10 +12,9 @@ func readyOnlyForTheTarget() {
 
 @Test("focus owned by another app is a stale read, not readiness")
 func notReadyForSomebodyElse() {
-    // The reason this is a pid comparison and not `focusedElement() != nil`:
-    // activation has already been polled to completion by the time this is
-    // asked, so focus sitting on a different app means the reading has not
-    // caught up — and a bare non-nil check would accept it and click anyway.
+    // A pid comparison rather than `focusedElement() != nil`: activation has
+    // already been polled to completion, so focus on a different app means the
+    // reading is stale, and a bare non-nil check would accept it.
     #expect(!FlingReport.treeIsReady(focusedPid: 501, targetPid: 500))
 }
 
@@ -30,8 +26,6 @@ func notReadyForNothing() {
     #expect(!FlingReport.treeIsReady(focusedPid: 0, targetPid: 500))
 }
 
-// ── diagnosticLine ──────────────────────────────────────────────────────────
-
 @Test("every outcome names itself first")
 func outcomeLeadsTheLine() {
     for outcome in [FlingReport.Outcome.delivered, .refused, .cancelled, .notArmed] {
@@ -42,10 +36,9 @@ func outcomeLeadsTheLine() {
 
 @Test("the line carries no session path and no timestamp")
 func linesCarryNothingFromASession() {
-    // THE POINT OF THE WHOLE TYPE. A refusal's user-facing message names the
-    // session's prompt.txt so the developer can find their work; this line goes
-    // into the diagnostics block people paste into group chats, and a session id
-    // is a timestamp — a record of when somebody was working.
+    // A refusal's user-facing message names the session's prompt.txt, and this
+    // line goes into diagnostics people paste into group chats, where a session
+    // id (a timestamp) records when somebody was working.
     let line = FlingReport(
         outcome: .refused,
         appName: "Code",
@@ -67,8 +60,7 @@ func linesCarryNothingFromASession() {
 @Test("a silent tree is said out loud, not left blank")
 func silentTreeIsNamed() {
     // nil means the tree never answered within the deadline and the fling went
-    // ahead blind — the single most useful fact in a refusal, and the one a
-    // blank would hide.
+    // ahead blind; a blank would hide that.
     let silent = FlingReport(outcome: .refused, treeAnsweredMs: nil, elapsedMs: 2500).diagnosticLine
     #expect(silent.contains("silent"))
     let answered = FlingReport(outcome: .delivered, treeAnsweredMs: 340, elapsedMs: 900).diagnosticLine
@@ -78,7 +70,7 @@ func silentTreeIsNamed() {
 @Test("a reused poke is distinguishable from an issued one")
 func pokeProvenanceSurvives() {
     // A slow Electron tree and a stale poke record look identical in the field;
-    // this is the only thing that tells them apart after the fact.
+    // this tells them apart.
     #expect(FlingReport(outcome: .delivered, pokeIssued: true, elapsedMs: 1).diagnosticLine.contains("poke issued"))
     #expect(FlingReport(outcome: .delivered, pokeIssued: false, elapsedMs: 1).diagnosticLine.contains("poke reused"))
 }

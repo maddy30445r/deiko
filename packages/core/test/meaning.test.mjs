@@ -113,7 +113,7 @@ test("a write that fails is reported, and leaves no partial file", async () => {
   const spec = { files: [{ path: "ro/a.onnx", bytes: a.length, sha256: createHash("sha256").update(a).digest("hex") }] };
   const site = await serve({ "/full/ro/a.onnx": a });
   // A folder the write cannot open stands in for a full disk: the same
-  // write-stream 'error', which used to kill the process unhandled.
+  // write-stream 'error', which must not go unhandled.
   const ro = join(process.env.DEIKO_MODEL_DIR, "full", "ro");
   mkdirSync(ro, { recursive: true });
   chmodSync(ro, 0o555);

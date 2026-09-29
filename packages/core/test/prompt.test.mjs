@@ -35,7 +35,7 @@ test("two screenshots pluralise", () => {
   assert.match(text, /Screenshots of what I circled:/);
 });
 
-// ── the binding: which screenshot goes with which sentence ──────────────────
+// ── Binding ──
 
 test("a screenshot is labelled with the sentence it was drawn during", () => {
   const { text } = buildPrompt({
@@ -90,12 +90,11 @@ test("two withheld reasons at once are grouped, not blended into one claim", () 
   assert.match(text, /one screenshot left out — it was never checked, so I can't vouch for what's in it/);
 });
 
-// ── the text block: only where there is no image to read ────────────────────
+// ── Text block ──
 
-// The image IS the text, at higher fidelity. Carrying OCR of the same pixels
-// once cost a live session everything: 14 referents contributed ~250 lines,
-// the cap filled with one file in referent order, and the thing the developer
-// had circled and named never appeared.
+// The image is the text at higher fidelity. Carrying OCR of the same pixels
+// would let one file fill the cap and crowd out what the developer circled and
+// named.
 test("a referent with a screenshot contributes no text — the image already says it", () => {
   const { text } = buildPrompt({
     narration: "fix this",
@@ -191,7 +190,7 @@ test("nothing in the prompt names Deiko or its internals", () => {
   assert.doesNotMatch(text, /deiko|referent|aligner|brief/i);
 });
 
-// ── evidence: the guard's actual subject ────────────────────────────────────
+// ── Evidence ──
 
 test("evidence carries the narration and the screen text", () => {
   const { evidence } = buildPrompt({
@@ -202,10 +201,9 @@ test("evidence carries the narration and the screen text", () => {
   assert.match(evidence, /Retry \(2 of 3\)/);
 });
 
-// A quote is speech the guard has to see, and the narration does not cover it:
-// `said` comes from the raw transcript while the narration may be the
-// developer's hand-typed correction, so an identifier edited out of one still
-// travels in the other.
+// `said` comes from the raw transcript while the narration may be a hand-typed
+// correction, so an identifier edited out of one still travels in the other;
+// the guard must see it.
 test("evidence carries a screenshot's bound quote, which the narration may not contain", () => {
   const { text, evidence } = buildPrompt({
     narration: "corrected narration with nothing else in it",
@@ -224,12 +222,9 @@ test("evidence carries no crop path, even though the prompt does", () => {
   assert.doesNotMatch(evidence, /crops|h01-r002|Documents\/Deiko/);
 });
 
-// Regression: a real-shaped absolute path used to trip assertNoSecrets's
-// 40-char opaque-run rule because it was run over the whole assembled prompt.
-// Fails against the old code (which ran the guard over the string `buildPrompt`
-// used to return, paths included) — passes once the guard runs on `evidence`.
-// The second referent carries screen text so the fences are present too, which
-// is the shape the path has to stay clear of.
+// A real-shaped absolute path must not trip assertNoSecrets's 40-char
+// opaque-run rule: the guard runs on `evidence`, not the assembled prompt. The
+// second referent carries screen text so the fences are present too.
 test("assertNoSecrets does not throw on a prompt carrying a real-shaped absolute path", () => {
   const { evidence } = buildPrompt({
     narration: "fix this",
@@ -242,36 +237,29 @@ test("assertNoSecrets does not throw on a prompt carrying a real-shaped absolute
 });
 
 test("assertNoSecrets still throws when screen text carries a credential-shaped string", () => {
-  // Built the way `evidence` is shaped — narration plus a fenced screen-text
-  // block, no headings, no paths — to prove the guard itself still catches a
-  // real secret rather than having been quietly defeated along with the path
-  // fix. A private key block is caught by `assertNoSecrets`'s fence-independent
-  // check, so this one alone would not have caught a regression in the
-  // fence-scoped check below — kept as a second, independent line of defense.
+  // Built the way `evidence` is shaped: narration plus a fenced screen-text
+  // block, no headings, no paths. A private key block is caught by the
+  // fence-independent check, so this is a second line of defense beside the
+  // fence-scoped test below.
   const evidence = ["fix this", "```", "-----BEGIN RSA PRIVATE KEY-----", "MIIBOgIBAAJ", "-----END RSA PRIVATE KEY-----", "```"].join(
     "\n",
   );
   assert.throws(() => assertNoSecrets(evidence));
 });
 
-// Regression: `evidence` used to be narration + raw screen-text lines with no
-// fences. `assertNoSecrets`'s own comment calls its fenced-block check "the
-// check that matters" — the one built for an OCR-shattered key fragment with
-// no marker of its own on its line — and that check ONLY looks inside ```
-// blocks. Unfenced, a marker-adjacent opaque token sails through it; only the
-// weaker, fence-independent 40-char rule remains, and this string is too
-// short to trip that. Fenced, the same content is caught. This fails on the
-// old unfenced shape and passes on the fenced shape `buildPrompt` now produces.
+// The fenced-block check is the one built for an OCR-shattered key fragment
+// with no marker of its own on its line, and it only looks inside ``` blocks.
+// Unfenced, only the weaker 40-char rule remains, which this string is too
+// short to trip, so `evidence` must stay fenced.
 test("assertNoSecrets(evidence) catches a marker-adjacent opaque token only when it is fenced", () => {
   const line = "password: aB3xY9kLm2Qz77";
   assert.doesNotThrow(() => assertNoSecrets(`fix this\n${line}`));
   assert.throws(() => assertNoSecrets(`fix this\n\`\`\`\n${line}\n\`\`\``));
 });
 
-// Regression: a keybinding or phone number under redact()'s 12-char opaque
-// floor used to sail through untouched, then trip assertNoSecrets's own
-// base64-run rule, which rejects a "+" followed by 8+ opaque characters at
-// any length — making the brief that carried it unrenderable.
+// A keybinding or phone number under redact()'s 12-char opaque floor must not
+// survive to trip assertNoSecrets's base64-run rule ("+" followed by 8+ opaque
+// characters), which would make the brief unrenderable.
 test("redact drops a short plus-run so assertNoSecrets no longer chokes on it", () => {
   assert.doesNotThrow(() => assertNoSecrets(redact("- Bound the palette to ⌘+Shift+Tab")));
   assert.doesNotThrow(() => assertNoSecrets(redact("(+919876543)")));
@@ -292,7 +280,7 @@ test("evidence fences the screen text exactly when there is any, and not otherwi
   assert.doesNotMatch(withoutText, /```/);
 });
 
-// ── the reply language ──────────────────────────────────────────────────────
+// ── Reply language ──
 
 test("every prompt asks for an English reply", () => {
   const { text } = buildPrompt({ narration: "yeh code kya karta hai", referents: [] });
@@ -313,7 +301,7 @@ test("the English line is not part of the evidence the guard inspects", () => {
   assert.doesNotMatch(evidence, /Reply in English/);
 });
 
-// ── the attached variant: for a model that cannot open a local path ─────────
+// ── Attached variant (no local paths) ──
 
 test("attached mode carries no crop paths at all", () => {
   const { text } = buildPrompt({
@@ -326,7 +314,7 @@ test("attached mode carries no crop paths at all", () => {
   assert.doesNotMatch(text, /h01-r002|\/Users\/|crops/);
 });
 
-// The number IS the identifier once the path is gone, so it has to match the
+// The number is the identifier once the path is gone, so it has to match the
 // order the images were pasted in.
 test("attached mode numbers the screenshots in order", () => {
   const { text } = buildPrompt({
@@ -370,13 +358,12 @@ test("both variants present the guard with the same evidence", () => {
   assert.equal(paths.evidence, attached.evidence);
 });
 
-// ── the correction UI's promise ─────────────────────────────────────────────
+// ── Correction UI ──
 
-// `said` is sliced from the RAW transcript and the review window never shows
-// it, so a developer who edits something out of their narration must not have
-// it ship in a label underneath a screenshot. render-brief.mjs enforces this by
-// passing `said: null` for every referent once an override exists; this pins
-// the half buildPrompt owns — that a null `said` leaves no trace of a quote.
+// `said` is sliced from the raw transcript and the review window never shows
+// it, so a phrase the developer edits out of their narration must not ship in
+// a label. render-brief.mjs passes `said: null` once an override exists; this
+// pins buildPrompt's half: a null `said` leaves no trace of a quote.
 test("a referent with no quote produces no 'while I said' text at all", () => {
   const paths = buildPrompt({
     narration: "corrected narration",
@@ -394,7 +381,7 @@ test("a referent with no quote produces no 'while I said' text at all", () => {
   assert.match(attached.text, /^1\./m);
 });
 
-// ── marks: numbered, verbed, additive ───────────────────────────────────────
+// ── Marks ──
 
 const marked = (kind, number, extra = {}) => ({
   ...bare,
@@ -451,10 +438,10 @@ test("an unknown mark kind still renders a line", () => {
   assert.match(text, /- \[1\] marked: \/tmp\/s\/crops\/h01-r001\.png/);
 });
 
-// A connector's endpoint text is real captured accessibility text — same as
-// any other referent's `ax` — not something this module minted, so a secret
-// sitting in it must be redacted before it reaches the label, and the
-// redacted form must still reach `evidence` so `assertNoSecrets` can see it.
+// A connector's endpoint text is captured accessibility text like any
+// referent's `ax`, so a secret in it must be redacted before it reaches the
+// label, and the redacted form must still reach `evidence` for
+// `assertNoSecrets`.
 test("a connector's endpoint text is redacted before it reaches the label or the guard", () => {
   const token = "ghp_aB3xY9kLm2Qz77wRtNpQeVh1sFgU6cDj"; // matches redact.mjs's GITHUB-TOKEN pattern
   const { text, evidence } = buildPrompt({
@@ -471,11 +458,9 @@ test("a connector's endpoint text is redacted before it reaches the label or the
   assert.doesNotThrow(() => assertNoSecrets(evidence));
 });
 
-// A connector's crop CONTAINS the start endpoint's pixels, so `carriesSecret`
-// — the check that gates whether render-brief.mjs releases the crop image at
-// all — must see `axStart` too, not just `ax`/`ocr`. Otherwise a credential
-// sitting only at the swept-from end releases the image with nothing but OCR
-// standing guard on it.
+// A connector's crop contains the start endpoint's pixels, so `carriesSecret`
+// (which gates whether render-brief.mjs releases the crop) must see `axStart`
+// too, not just `ax`/`ocr`.
 test("carriesSecret flags a referent whose only credential text is in axStart", () => {
   const token = "ghp_aB3xY9kLm2Qz77wRtNpQeVh1sFgU6cDj"; // matches redact.mjs's GITHUB-TOKEN pattern
   assert.equal(
@@ -484,16 +469,10 @@ test("carriesSecret flags a referent whose only credential text is in axStart", 
   );
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// A MARKER WORD IS NOT A CREDENTIAL.
-//
-// `carriesSecret` unions every scrap of text in a referent, so before the
-// nearby-value rule a single "token" anywhere withheld the whole screenshot.
-// That fires constantly for the people this product is for: three VS Code
-// crops in session 20260730-004641 were withheld because `userAuth.ts`
-// contains the word "token". These two tests are the boundary, in both
-// directions, and the second one must never come back.
-// ─────────────────────────────────────────────────────────────────────────────
+// A marker word is not a credential: `carriesSecret` unions every scrap of text
+// in a referent, so a lone "token" (say `userAuth.ts` mentioning one) must not
+// withhold the whole screenshot. These two tests are the boundary in both
+// directions.
 
 test("source code that merely talks about tokens keeps its screenshot", () => {
   const referent = {
@@ -514,8 +493,7 @@ test("source code that merely talks about tokens keeps its screenshot", () => {
 });
 
 test("a marker beside an opaque value still withholds — the Azure shape", () => {
-  // Session 20260728-112323 burned a live Azure Storage account key into all
-  // twelve crops, with its label sitting directly above the field.
+  // The label sits directly above the field holding a live Azure Storage key.
   const referent = {
     text: {
       ax: ["Storage account", "account key", "MQULF+AStdFrlAKxUzvkZx7oHzB3KjQ9wEr=="],
@@ -536,12 +514,11 @@ test("a marker and its value on the SAME line withholds too", () => {
   );
 });
 
-// ── which labels survive a corrected narration ──────────────────────────────
-//
-// A label is a sentence sliced out of the raw transcript; the review window
-// lets the developer rewrite that transcript and promises only what they
-// approved leaves the Mac. `quoteSurvives` is that promise, stated per label —
-// it replaced a rule that dropped EVERY label the moment one word was edited.
+// ── Corrected narration ──
+
+// A label is a sentence sliced from the raw transcript; the review window lets
+// the developer rewrite that transcript and promises only what they approved
+// leaves the Mac. `quoteSurvives` applies that promise per label.
 
 test("a label survives when its words are still in the approved narration", () => {
   assert.equal(quoteSurvives("the padding is too big", "the padding is too big and the border is gone"), true);
@@ -570,12 +547,11 @@ test("editing one identifier drops only the label that named it", () => {
   assert.equal(quoteSurvives("the fetchUsr call returns null", corrected), false);
 });
 
-// ── The persona pointer ─────────────────────────────────────────────────────
-//
-// A persona adds ONE line to the prompt, and only to the variant a
-// file-reading agent gets. Everything about a brief rendered without one has
-// to stay exactly as it was — sessions re-render, and a byte that moves here
-// moves in every transcript anybody has ever kept.
+// ── Persona pointer ──
+
+// A persona adds one line, only to the variant a file-reading agent gets. A
+// brief rendered without one must stay byte-identical, since sessions
+// re-render.
 
 const oneShot = () => ({
   narration: "make the save button the same indigo as the header",
@@ -614,11 +590,11 @@ test("the attached variant never names a path it cannot open", () => {
   assert.equal(attached.text, buildPrompt({ ...oneShot(), attached: true }).text);
 });
 
-// ── The task, the write-back and the cost hint ───────────────────────────────
-//
-// Memory rides inside the prompt. Every one of these is off by default, so a
-// call without them renders the document it always did — the persona tests
-// above already pin that, and these pin what each addition adds and where.
+// ── Task, write-back and cost hint ──
+
+// Memory rides inside the prompt and every piece is off by default, so a call
+// without them renders the document it always did (the persona tests pin
+// that).
 
 const priceTask = () => ({
   title: "Price display doesn't update after editing",
@@ -800,7 +776,7 @@ test("a maybe with an id names it for a coding agent only", () => {
   assert.equal(buildPrompt({ ...oneShot(), attached: true, maybe: withIds }).text.includes("t-20260910-100000"), false);
 });
 
-// ── Might carry on: the candidates, when Deiko couldn't tell ─────────────────
+// ── Might carry on ──
 
 const maybe = () => [
   {

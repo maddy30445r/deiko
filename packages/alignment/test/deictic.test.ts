@@ -4,9 +4,9 @@ import { test } from "node:test";
 import { isDeictic, joinWords, normalizeWord } from "../src/deictic.js";
 
 test("Mandarin pointing words are deictic in the forms Whisper emits", () => {
-  // Measured: whisper-large-v3 returned `这个` as one timed token, then the
-  // noun after it one character at a time — so the bare demonstrative and the
-  // two-character form both have to count.
+  // whisper-large-v3 returns `这个` as one timed token, then the noun after it
+  // one character at a time, so the bare demonstrative and the two-character
+  // form both have to count.
   for (const word of ["这个", "这", "那个", "那", "这里", "那儿", "这边"]) {
     assert.ok(isDeictic(word), `${word} should point`);
   }

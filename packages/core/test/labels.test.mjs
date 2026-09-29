@@ -11,7 +11,6 @@ test("a title loses its count and splits on any separator", () => {
 });
 
 test("Chrome's own tail and the profile suffix come off a window title", () => {
-  // Real titles from the owner's board.
   assert.equal(browserTitle("Signups — build - Google Chrome – Sam (example.com)"), "Signups — build");
   assert.equal(browserTitle("Pricing — build - Google Chrome – Alex"), "Pricing — build");
   assert.equal(browserTitle("localhost:8801/Cliento Landing.dc.html - Google Chrome"), "localhost:8801/Cliento Landing.dc.html");
@@ -97,17 +96,16 @@ test("a secret in a title never becomes a label", () => {
 });
 
 test("a long mixed-case name redact() opaques never becomes a shared '<REDACTED>' label", () => {
-  // These are exactly what `redact` turns into "<REDACTED>" — a real name,
-  // not a secret, but a placeholder shared across unrelated briefs is worse
-  // than no label at all.
+  // `redact` turns these into "<REDACTED>": a real name, not a secret, but a
+  // placeholder shared across unrelated briefs is worse than no label.
   assert.equal(normaliseLabel("UserProfileSettingsV2.tsx", "file"), "<REDACTED>", "redact still runs");
   const keys = briefKeys({ referents: [
     { app: { name: "Code" }, window: "UserProfileSettingsV2.tsx — acme-portal", text: { ax: [], ocr: [] } },
     { app: { name: "Code" }, window: "console-2026-09-18T23-26-49-693Z.log — acme-portal", text: { ax: [], ocr: [] } },
   ] });
   assert.deepEqual(keys.files, [], "neither long mixed-case name is shared as the placeholder");
-  // A redacted URL PATH SEGMENT is kept: it is a deliberate wildcard, the
-  // same as an id segment already is.
+  // A redacted URL path segment is kept: it is a deliberate wildcard, like an
+  // id segment.
   assert.deepEqual(
     briefKeys({ referents: [{ app: {}, page: { url: "https://x.dev/reset/AbCdEf1234567890GhIjKlMnOpQr" } }] }).urls,
     ["x.dev/reset/*"],
@@ -116,8 +114,7 @@ test("a long mixed-case name redact() opaques never becomes a shared '<REDACTED>
 
 test("a mis-paired app still yields the window's own browser title", () => {
   // The candidate's app and the probe's window title pair asynchronously
-  // (session.ts) — an app that lost the race can carry a window that is
-  // plainly a browser's, tail and all.
+  // (session.ts), so a losing app can carry a plainly browser window title.
   const keys = briefKeys({ referents: [
     { app: { name: "MongoDB Compass" }, window: "Signups — build - Google Chrome – Alex", text: { ax: [], ocr: [] } },
   ] });

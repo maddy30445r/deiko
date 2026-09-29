@@ -11,7 +11,7 @@ import {
 import { EMPTY_KEYS } from "../src/lib/labels.mjs";
 import { stampTime } from "../src/lib/tasks.mjs";
 
-// ── Names and dates ─────────────────────────────────────────────────────────
+// ── Names and dates ──
 
 test("a collection id is a slug of its name", () => {
   assert.equal(slug("Deiko"), "deiko");
@@ -38,7 +38,7 @@ test("a gap reads in plain words", () => {
   assert.equal(relativeAge(90 * 24 * h), "3 months ago");
 });
 
-// ── Decisions ───────────────────────────────────────────────────────────────
+// ── Decisions ──
 
 const [A, B, C] = ["t-20260918-100000", "t-20260918-110000", "t-20260918-120000"];
 const NOW = stampTime("20260920-100000");
@@ -54,7 +54,7 @@ const r2 = (id, p, relation = "same") => ({
 const keys = (over = {}) => ({ ...EMPTY_KEYS, ...over });
 const tk = (over = {}) => ({ pages: [], files: [], tickets: [], ...over });
 
-test("the values are the ones calibrated on the owner's board", () => {
+test("the filing thresholds keep their calibrated values", () => {
   assert.equal(CLASSIFIER, "v3.0");
   assert.equal(GATE, 0.5);
   assert.deepEqual(JOIN, { first: 0.6, second: 0.4, gap: 0.2, recent: 0.5, recentMs: 30 * 60e3 });
@@ -91,8 +91,8 @@ test("a missing gate reads as a real request, and so does a garbled one", () => 
 });
 
 test("a join needs the second look to say 'same', round one ≥ 0.6 and 0.2 ahead", () => {
-  // The shape measured on real joins: round one 0.62–0.82, the pairwise look
-  // shy (0.43–0.88) but calling it the same work.
+  // Round one 0.62–0.82, the pairwise look shy (0.43–0.88) but calling it the
+  // same work.
   const out = decide({ ...base, answers: r1({ [A]: 0.72, [B]: 0.4 }), second: { ...r2(A, 0.46), ...r2(B, 0.6, "related") } });
   assert.equal(out.task, A);
   assert.equal(out.newTask, null);
@@ -203,7 +203,6 @@ test("the strongest label names the project: code project, website, document, ap
 });
 
 test("a tool or a holding folder never names a project", () => {
-  // What was on screen → what it named before.
   for (const [k, v] of [["sites", "GitHub"], ["sites", "Jira"], ["sites", "Google Search"], ["sites", "Google Docs"],
     ["sites", "Figma"], ["sites", "Gmail"], ["repo", "Downloads"], ["repo", "personal"], ["docs", "Notion"]]) {
     assert.equal(projectFromKeys({ keys: keys({ [k]: [v] }) }), null, v);
@@ -234,14 +233,13 @@ test("the tier is the most likely level, or the rounded score without probabilit
 });
 
 test("score probabilities may arrive as an object keyed by level, as Vercel sends them", () => {
-  // Measured on a live call: score 1.13, mass split 0.21 / 0.45 / 0.34 / 0.
   const out = decide({ answers: { tier: {
     score: 1.13, confidence: 0.44,
     probabilities: { "0": 0.21, "1": 0.45, "2": 0.34, "3": 0 },
   } } });
   assert.equal(out.tier, "medium");
   assert.equal(out.confidence.tier, 0.44);
-  // And the array form from TypeSafe's own docs still works.
+  // The array form still works.
   assert.equal(decide({ answers: { tier: { probabilities: [0.1, 0.1, 0.7, 0.1] } } }).tier, "complex");
 });
 
@@ -261,7 +259,7 @@ test("the cost hint needs the toggle, a quick tier and a confident one", () => {
   assert.equal(wantsQuickHint(null, true), false);
 });
 
-// ── Reading a sibling ───────────────────────────────────────────────────────
+// ── Reading a sibling ──
 
 test("a sibling is read with its summary line, task, windows, terms and outcome", () => {
   const root = mkdtempSync(join(tmpdir(), "deiko-context-"));
@@ -307,8 +305,8 @@ test("an old brief's repo-hint fallback is redacted too, not just a fresh one", 
   const root = mkdtempSync(join(tmpdir(), "deiko-keys-"));
   const dir = join(root, "20260918-120000");
   mkdirSync(dir);
-  // A pre-labels brief with an AWS-key-shaped repo hint (however it got
-  // there) and one with a space, which is never a repo name at all.
+  // A pre-labels brief with an AWS-key-shaped repo hint, and one with a space,
+  // which is never a repo name.
   writeFileSync(join(dir, "brief.json"), JSON.stringify({ summary: { repoHints: ["AKIAIOSFODNN7EXAMPLE", "acme portal"] } }));
   const { keys } = readBriefLine(dir);
   assert.deepEqual(keys.repo, ["<REDACTED-AWS-KEY-ID>"], "redacted, not the raw hint, and the spaced one is dropped");
@@ -368,13 +366,12 @@ test("decide takes other numbers only when handed them (the eval's --sweep)", as
   assert.deepEqual(RULES, { gate: 0.5, join: RULES.join, ask: 0.35, reference: RULES.reference, local: RULES.local });
 });
 
-// ── Pointing back ("in that task", "do you remember the fix we did… now…") ──
+// ── Pointing back ("in that task") ──
 
 const back = (p, refs = {}) => ({ refers_back: { noul: p }, ...Object.fromEntries(Object.entries(refs).map(([id, r]) => [`ref_${id}`, { noul: r }])) });
 
 test("a brief that points back clearly at one task joins it, though Jev calls the goal new", () => {
-  // The real miss (29 Sep): same_ 0.13 for the pricing task, because a pink
-  // background is a new goal; the brief said "in that task".
+  // Jev rates the goal as new (same_ 0.13), but the brief says "in that task".
   const out = decide({ ...base, answers: { ...r1({ [A]: 0.13, [B]: 0.15 }), ...back(0.9, { [A]: 0.85, [B]: 0.2, [C]: 0.1 }) } });
   assert.equal(out.task, A);
   assert.equal(out.why, "join-reference");
@@ -423,7 +420,7 @@ test("a brief reads every summary line for matching, and its first for a title",
 
 const RULES_FOR_TEST = () => ({ gate: GATE, join: JOIN, ask: ASK, reference: REFERENCE });
 
-// ── The Mac is sure, Jev isn't ──────────────────────────────────────────────
+// ── The Mac is sure, Jev isn't ──
 
 const local = (...rows) => rows.map(([id, score, seat = "score"]) => ({ id, score, seat }));
 

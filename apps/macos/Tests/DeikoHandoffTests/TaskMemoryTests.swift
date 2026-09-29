@@ -41,8 +41,6 @@ func ownOutcomeAndNoPrompt() throws {
     #expect(!TaskMemory.isStale(sessionDir: unrendered, mates: [done]))
 }
 
-// ── the sorting switch ──────────────────────────────────────────────────────
-
 @Test("sorting off gives the classifier no relay, not even the transcription one")
 func sortingOffHasNoClassifyVars() {
     let base = ["PATH": "/usr/bin", "DEIKO_RELAY_URL": "https://relay.example",

@@ -1,10 +1,8 @@
 import Testing
 @testable import DeikoGesture
 
-// Right Option is the product's entire session control, and it cannot be tested
-// by hand except by performing gestures. Every case below is one a user can
-// actually do; the previous version of this logic shipped a bug that none of
-// them would have survived.
+// Each case is a gesture a user can actually perform; the CGEvent tap that
+// feeds it cannot be driven by tests.
 
 @Test("a single tap does nothing — it only arms")
 func singleTapDoesNothing() {
@@ -27,8 +25,7 @@ func slowSecondTapDoesNotStart() {
     #expect(g.press(at: 0) == .none)
     #expect(g.press(at: 900) == .none)
     #expect(!g.isCapturing)
-    // Re-armed from the LAST tap, so a prompt third one still pairs. Discarding
-    // instead would make a slow-then-fast triple tap do nothing at all.
+    // Re-armed from the last tap, so a prompt third one still pairs.
     #expect(g.press(at: 1100) == .start)
 }
 
@@ -36,8 +33,8 @@ func slowSecondTapDoesNotStart() {
 func heldFirstTapDoesNotPair() {
     var g = SessionGesture()
     #expect(g.press(at: 0) == .none)
-    // Key held down for two seconds, then tapped again promptly. Press-to-press
-    // is 2100ms, so this is two unrelated taps, not a double-tap.
+    // Held for two seconds, then tapped again promptly: press-to-press is
+    // 2100ms, so these are two unrelated taps.
     #expect(g.press(at: 2100) == .none)
     #expect(!g.isCapturing)
 }
@@ -84,8 +81,7 @@ func stopClearsTheArmedWindow() {
     _ = g.press(at: 200)
     _ = g.press(at: 5000)                    // stop, clearing the window
 
-    // If the stop had left `armedAt` set, this lone tap would start a session
-    // the user never asked for.
+    // A lone tap must not start a session because the stop left `armedAt` set.
     #expect(g.press(at: 5100) == .none)
     #expect(!g.isCapturing)
 }
@@ -97,9 +93,8 @@ func externalStopResets() {
     _ = g.press(at: 200)
     #expect(g.isCapturing)
 
-    // The silence watchdog fired. Without this, the next tap would be spent
-    // "stopping" a session that already ended — and Hotkey would go on
-    // swallowing Option-drags with nothing recording.
+    // The silence watchdog fired. The next tap must not be spent stopping a
+    // session that already ended.
     g.sessionEndedExternally()
     #expect(!g.isCapturing)
 
@@ -111,15 +106,12 @@ func externalStopResets() {
 func externalStartStopsOnOneTap() {
     var g = SessionGesture()
 
-    // "Forgot something?" reopened a finished session and began another hold.
-    // Nobody tapped anything, so without being told, the gesture still believes
-    // it is idle.
+    // Reopened from a button: nobody tapped, so the gesture must be told.
     g.sessionStartedExternally()
     #expect(g.isCapturing)
 
-    // The tap the user makes to stop must STOP. Read as idle, this would arm the
-    // first half of a double-tap instead, and the microphone would stay live on
-    // a session they believe they just closed.
+    // The tap made to stop must stop. Read as idle it would arm a double-tap
+    // and leave the microphone live.
     #expect(g.press(at: 1000) == .stopNow)
     #expect(!g.isCapturing)
 }
@@ -128,10 +120,8 @@ func externalStartStopsOnOneTap() {
 func externalStartDiscardsArmedTap() {
     var g = SessionGesture()
 
-    // One tap lands — the user reaching for the hotkey — and then they press the
-    // button instead. The stale armed tap must not survive: paired with their
-    // stop tap it would read as a double-tap to start, restarting capture on a
-    // session that was being closed.
+    // One tap lands, then the button is pressed instead. The stale armed tap
+    // must not pair with the stop tap into a double-tap to start.
     _ = g.press(at: 0)
     g.sessionStartedExternally()
 

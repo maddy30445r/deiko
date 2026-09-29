@@ -2,14 +2,11 @@ import Foundation
 import Testing
 @testable import DeikoHandoff
 
-// A persona is a prompt that ships beside somebody's brief, so these tests are
-// about one property above all others: whatever the form says, the rendered
-// file still tells the agent to use only what was said and shown. Everything
-// else here is about the form actually reaching the page.
+// Whatever the form says, the rendered file must still tell the agent to use
+// only what was said and shown; everything else here is about the form
+// reaching the page.
 
 private let evidence = "Use only what I said and what the screenshots show"
-
-// ── The floor ───────────────────────────────────────────────────────────────
 
 @Test("every built-in renders, and every one of them carries the evidence rule")
 func builtInsCarryTheRule() {
@@ -30,8 +27,6 @@ func overrideWinsOutright() {
     // appended, reordered or helpfully corrected behind the author's back.
     #expect(p.markdown() == "# Mine\n\nJust do what I say.\n")
 }
-
-// ── The form reaches the page ───────────────────────────────────────────────
 
 @Test("turning a section off removes it, and leaves the others alone")
 func sectionsFollowTheirToggles() {
@@ -98,8 +93,6 @@ func voiceReachesTheOpening() {
     #expect(text.contains("short and flat"))
 }
 
-// ── Values and identity ─────────────────────────────────────────────────────
-
 @Test("an option nobody set falls back to the field's own default")
 func unsetOptionsFallBack() {
     // A persona stored by an older build has none of a newly added field's
@@ -132,13 +125,8 @@ func codableRoundTrip() throws {
     #expect(back.markdown() == p.markdown())
 }
 
-// ── What a browser chat gets ────────────────────────────────────────────────
-//
-// Measured, not assumed: Gemini pastes 839, 4,010 and 20,000 characters into
-// the composer as text and never folds any of them into a tile. So the browser
-// form has to be short by construction, and it still has to carry the rule
+// The browser form must be short by construction, and still carry the rule
 // that keeps a persona an instruction about shape.
-
 @Test("the browser form is short, and still says use only what was said")
 func browserFormIsShortAndHonest() {
     for persona in Persona.builtIns {
@@ -172,14 +160,10 @@ func handWrittenHasNoSummary() {
     #expect(p.summary() == nil)
 }
 
-// ── Where it goes ───────────────────────────────────────────────────────────
-//
-// The wording turns on one thing: whether this Mac can already reach the tool.
-// Connected, it is an instruction. Not connected, it is conditional — never a
-// flat "write it in the chat", because a browser chat's connectors are
-// server-side and invisible from here, and somebody whose Claude.ai has
-// Atlassian should still get their ticket filed.
-
+// The wording turns on whether this Mac can already reach the tool. Connected,
+// it is an instruction; not connected, it is conditional, never a flat "write
+// it in the chat", because a browser chat's connectors are server-side and
+// invisible from here.
 private func filing(_ tracker: String, connected: Set<Tracker> = [], detail: (String, String)? = nil) -> String {
     var p = Persona(id: "qa-ticket", name: "QA ticket", base: .qaTicket)
     p.options["tracker"] = tracker
@@ -236,25 +220,21 @@ func browserFormCarriesDestination() {
     p.options["jira_project"] = "ABC"
     let summary = try! #require(p.summary(connected: [.jira]))
     #expect(summary.contains("Jira issue in project ABC"))
-    // No setup commands — a browser cannot run one, and its connectors are
-    // invisible from here anyway. (Backticks are fine: the Jira markup line
-    // has carried them since the form first had a tracker.)
+    // No setup commands: a browser cannot run one. (Backticks are fine: the
+    // Jira markup line carries them.)
     #expect(!summary.contains("claude mcp add"))
     #expect(!summary.contains("codex mcp add"))
     #expect(!summary.contains("mcp.atlassian.com"))
     #expect(summary.contains("not stated"))
 }
 
-// ── In your own words ───────────────────────────────────────────────────────
-
 @Test("notes are carried exactly as typed")
 func notesAreVerbatim() {
     var p = Persona(id: "qa-ticket", name: "QA ticket", base: .qaTicket)
     #expect(!p.markdown().contains("## In your own words"))
 
-    // Two lines, leading and trailing space: trimmed at the ends, untouched in
-    // the middle. Nothing is reflowed and no markdown is stripped — it is the
-    // author's sentence, not ours.
+    // Two lines with leading and trailing space: trimmed at the ends,
+    // untouched in the middle. It is the author's sentence, not ours.
     p.options["notes"] = "  Never touch billing.\nLink the Figma. "
     let text = p.markdown()
     #expect(text.contains("## In your own words\n\nNever touch billing.\nLink the Figma."))
@@ -269,8 +249,6 @@ func everyBaseHasNotes() {
     }
 }
 
-// ── Conditional fields ──────────────────────────────────────────────────────
-
 @Test("a tracker's detail field appears only for that tracker")
 func detailFieldsAreConditional() {
     var p = Persona(id: "qa-ticket", name: "QA ticket", base: .qaTicket)
@@ -282,21 +260,19 @@ func detailFieldsAreConditional() {
     #expect(p.shows(jiraProject))
     #expect(!p.shows(linearTeam))
 
-    // The VALUE survives switching away and back: hiding a control is a
-    // question about the screen, not about storage.
+    // The value survives switching away and back: hiding a control is about
+    // the screen, not storage.
     p.options["jira_project"] = "ABC"
     p.options["tracker"] = "linear"
     #expect(!p.shows(jiraProject))
     #expect(p.value("jira_project") == "ABC")
 }
 
-// ── The cut base ────────────────────────────────────────────────────────────
-
 @Test("a persona saved as a bug report still decodes, and can be deleted")
 func bugReportPersonasSurvive() {
-    // The danger this guards: `Personas.stored()` decodes the whole list with
-    // `try?` and falls back to the built-ins when ANY element fails, so an
-    // unknown base would have silently deleted every persona somebody wrote.
+    // `Personas.stored()` decodes the whole list with `try?` and falls back to
+    // the built-ins when any element fails, so an unknown base would silently
+    // delete every persona somebody wrote.
     let json = """
     [{"id":"bug-report","name":"Bug report","base":"bugReport","options":{"f_actual":"1"}},
      {"id":"mine","name":"Mine","base":"qaTicket","options":{}}]

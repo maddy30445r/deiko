@@ -1,10 +1,9 @@
-// The public playground is the easiest thing in this repo to point a script
-// at: no install, no licence, and it spends the Groq key. These are the checks
-// that stand between a stranger and that bill, and between a prompt-injected
-// transcript and the page.
+// The public playground is the easiest thing to point a script at: no install,
+// no licence, and it spends the Groq key. These checks stand between a stranger
+// and that bill, and between a prompt-injected transcript and the page.
 //
-// Pure where it can be: the ticket is HMAC arithmetic and the patch validator
-// is a pure function, so neither needs AWS. The routes that touch DynamoDB are
+// Pure where it can be: the ticket is HMAC arithmetic and the patch validator is
+// a pure function, so neither needs AWS. The routes that touch DynamoDB are
 // exercised only up to the point where they would.
 
 import { test } from "node:test";
@@ -25,10 +24,10 @@ const call = (path, o = {}) => handle({
   body: o.body ?? null,
 });
 
-// Mint a ticket the way the relay does, rather than through the route.
-// Issuing one now counts against a per-caller daily cap, which needs the usage
-// table — and these tests deliberately run without AWS. The signature is the
-// contract being tested here; the counter is tested by the route.
+// Mint a ticket the way the relay does, rather than through the route: issuing
+// one counts against a per-caller daily cap that needs the usage table, and these
+// tests run without AWS. The signature is the contract tested here; the counter
+// is tested by the route.
 const { createHmac } = await import("node:crypto");
 const mintTicket = (ttlMs = 15 * 60 * 1000, id = "testticket") => {
   const expiresAt = Date.now() + ttlMs;
@@ -40,16 +39,16 @@ const newTicket = async () => mintTicket();
 
 test("issuing a ticket needs the usage table, and fails CLOSED without it", async () => {
   // The per-caller daily cap is the only thing stopping a script from minting
-  // tickets in a loop, so a ticket must not be handed out when that counter
-  // cannot be read. No AWS here, so this is the unreachable case.
+  // tickets in a loop, so none may be handed out when that counter cannot be
+  // read. There is no AWS here, so this is the unreachable case.
   const res = await call("/v1/playground/ticket", { origin: "https://deiko.app" });
   assert.equal(res.status, 503);
 });
 
 test("only a listed page may ask for a ticket, and a script with no Origin may not", async () => {
   // CORS stops another site reading the answer, not its visitors' browsers
-  // sending the request — so the check is on the request itself, and it comes
-  // before the usage table is touched (a 503 here would mean it had not).
+  // sending the request, so the check is on the request itself and comes before
+  // the usage table is touched (a 503 here would mean it had not).
   for (const origin of ["https://evil.example", "", "https://deiko.app.evil.example"]) {
     const res = await call("/v1/playground/ticket", { origin });
     assert.equal(res.status, 403, `${origin || "no origin"} must be refused`);
@@ -87,11 +86,10 @@ test("a clip has a hard byte ceiling, because browser audio cannot be metered by
   assert.match(JSON.parse(res.body).error, /twenty seconds/);
 });
 
-// A SPENT TICKET AND A CLOSED PLAYGROUND ARE DIFFERENT ANSWERS. The page
-// holds a ticket across reloads, so when one runs out of goes it has to know
-// to fetch another rather than keep presenting the dead one. `spent` is that
-// signal, and the daily ceilings must never carry it — retrying there would
-// just burn the caller's remaining tickets against a wall.
+// A spent ticket and a closed playground are different answers. The page holds
+// a ticket across reloads, so when one runs out of goes it must know to fetch
+// another. `spent` is that signal, and the daily ceilings must never carry it:
+// retrying there would burn the caller's remaining tickets against a wall.
 test("only a used-up ticket is marked spent, never a daily ceiling", async () => {
   const src = await (await import("node:fs")).promises.readFile(
     new URL("../src/relay.mjs", import.meta.url), "utf8");
@@ -113,11 +111,10 @@ test("only a used-up ticket is marked spent, never a daily ceiling", async () =>
   }
 });
 
-// THE CLIP ROUTE FORWARDS RAW MULTIPART, so the only thing stopping a caller
+// The clip route forwards raw multipart, so the only thing stopping a caller
 // naming a pricier model is a check on those bytes. It has to be strict about
-// abuse and permissive about what a browser actually sends — the first cut was
-// neither: an unanchored `name="` matched inside `filename="narration.webm"`
-// and rejected every real upload.
+// abuse and permissive about what a browser sends (an unanchored `name="` would
+// match inside `filename="narration.webm"` and reject every real upload).
 const clip = (parts, { filename = true } = {}) => {
   const b = "----WebKitFormBoundaryAbC123";
   const body = parts.map(([k, v]) =>
@@ -132,16 +129,15 @@ const postClip = async (parts, opts) => {
 };
 
 test("a real browser upload is not mistaken for an abusive one", async () => {
-  // Gets past every check on the upload (no usage table here, so anything
-  // but 400 proves it) rather than being refused as a malformed field list.
-  // The clip has to BE audio now — WebM's first four bytes, here.
+  // Gets past every check on the upload (no usage table here, so anything but 400
+  // proves it). The clip has to be audio: WebM's first four bytes, here.
   const res = await postClip([["file", "\x1a\x45\xdf\xa3" + "\0".repeat(16)], ["model", "whisper-large-v3"]]);
   assert.notEqual(res.status, 400, "the page's own upload shape must be accepted");
 });
 
 test("a field named after an Object property is refused, not a crash", async () => {
-  // `TRANSCRIBE_FIELDS[name]` found Object's own `constructor`, whose `.ok`
-  // was undefined, and threw — a 500 carrying a stack trace.
+  // `TRANSCRIBE_FIELDS[name]` must not find Object's own `constructor`, whose
+  // `.ok` is undefined and would throw a 500.
   for (const name of ["constructor", "__proto__", "toString", "hasOwnProperty"]) {
     const b = "----X";
     const res = await handle({
@@ -168,9 +164,8 @@ test("the caller cannot choose the model or smuggle billed fields", async () => 
 
 test("the file's own bytes cannot forge a field", async () => {
   // The caller picks the audio, so a scan of the whole request reads whatever
-  // they write into it. This exact payload passed an earlier version of the
-  // guard: an approved-looking model line hidden in the clip, with a real,
-  // pricier model part beside it.
+  // they write into it: here, an approved-looking model line hidden in the clip
+  // with a real, pricier model part beside it.
   const b = "----X";
   const raw =
     `--${b}\r\nContent-Disposition: form-data; name="file"; filename="a.webm"\r\n\r\n` +
@@ -184,9 +179,8 @@ test("the file's own bytes cannot forge a field", async () => {
 });
 
 test("a part after the last delimiter is still a part", async () => {
-  // `slice(1, -1)` assumed the body ends with `--boundary--`. Without one the
-  // final part was dropped from validation and forwarded anyway, which is
-  // where a billed `prompt` field went to hide.
+  // A body that does not end with `--boundary--` must not drop its final part
+  // from validation, or a billed `prompt` field could hide there.
   const b = "----X";
   const raw =
     `--${b}\r\nContent-Disposition: form-data; name="file"; filename="a.webm"\r\n\r\nAUDIO\r\n` +
@@ -200,7 +194,7 @@ test("a part after the last delimiter is still a part", async () => {
 });
 
 test("the intent route has a body ceiling of its own", async () => {
-  // The shared cap lives below the playground block, so it never applied here.
+  // The shared cap lives below the playground block, so the route needs its own.
   const huge = Buffer.from(JSON.stringify({ said: "x", pointed: Array(400000).fill("cardcardcard") }));
   assert.ok(huge.length > 2 * 1024 * 1024);
   const res = await call("/v1/playground/intent", { token: mintTicket(), body: huge });
@@ -231,8 +225,8 @@ test("with no secret configured the playground is closed, not open", async () =>
 });
 
 // The app's own routes must be unreachable through the playground and
-// unaffected by it — the playground exists so that a flood exhausts the
-// playground, never transcription for somebody who paid.
+// unaffected by it: a flood should exhaust the playground, never transcription
+// for somebody who paid.
 test("the app's routes still demand a real bearer", async () => {
   const ticket = mintTicket();
   const quota = await handle({
@@ -246,15 +240,12 @@ test("the app's routes still demand a real bearer", async () => {
   assert.equal(subjectFrom(ticket), null, "a ticket must not parse as an app subject");
 });
 
-// ── The patch validator ─────────────────────────────────────────────────────
+// ── The patch validator ──
 //
-// This is the only thing standing between whatever a model returns — or
-// whatever a prompt-injected transcript talks it into returning — and the
-// page. Exercised directly, because the route it lives in needs DynamoDB.
-//
-// The multiplier case is not hypothetical: asked in Hinglish to make a button
-// "thoda bada", the model answered `size: 1.2`, meaning 20% bigger. Rounded,
-// that is a one-pixel font.
+// The only thing between whatever a model returns (or a prompt-injected
+// transcript talks it into returning) and the page. Exercised directly because
+// the route it lives in needs DynamoDB. A multiplier such as `size: 1.2` must be
+// dropped: rounded, it would be a one-pixel font.
 const cleanPatch = await (async () => {
   const { readFileSync } = await import("node:fs");
   const src = readFileSync(new URL("../src/relay.mjs", import.meta.url), "utf8");
@@ -289,11 +280,11 @@ test("nothing unbounded reaches the page", () => {
   assert.equal(cleanPatch([{ target: "nameField", op: "text", value: "x".repeat(500) }])[0].value.length, 60);
 });
 
-// ── CORS ────────────────────────────────────────────────────────────────────
+// ── CORS ──
 //
-// Only the playground is called from a browser, so only the playground carries
-// these. An allowlist rather than `*`: `*` would let any page on the internet
-// spend the ticket budget out of a visitor's browser.
+// Only the playground is called from a browser, so only it carries these. An
+// allowlist rather than `*`, which would let any page spend the ticket budget
+// from a visitor's browser.
 test("an allowed origin is echoed back, an unknown one is not", async () => {
   process.env.DEIKO_PLAYGROUND_ORIGINS = "https://deiko.app,localhost";
   // CORS headers ride on every answer, including the fail-closed one.

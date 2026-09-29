@@ -1,7 +1,6 @@
-// THE TWO TASK SCRIPTS, RUN AS THE APP RUNS THEM: `render-brief.mjs` and
-// `classify.mjs` as child processes over synthetic sessions in a temp root.
-// Both are top-level scripts, so their wiring — which briefs a render reads,
-// what classify sends and writes — is only reachable this way.
+// Runs `render-brief.mjs` and `classify.mjs` as child processes over synthetic
+// sessions in a temp root, the way the app runs them. Both are top-level
+// scripts, so this is the only way to reach their wiring.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -46,7 +45,7 @@ const render = (dir) => run(process.execPath, [join(scripts, "render-brief.mjs")
 });
 const prompt = (dir, name = "prompt.txt") => readFileSync(join(dir, name), "utf8");
 
-// ── render-brief ────────────────────────────────────────────────────────────
+// ── render-brief ──
 
 test("a screenshot of a credential is deleted, and stays withheld on a re-render", async () => {
   const root = mkdtempSync(join(tmpdir(), "deiko-render-"));
@@ -99,8 +98,8 @@ test("a re-rendered brief carries on only from briefs older than itself", async 
     "titled from the oldest brief, counting only earlier ones, with no line repeating the title");
   assert.doesNotMatch(prompt(b), /cart total/, "a later brief never reaches an earlier one's prompt");
   assert.match(prompt(c), /\(2 briefs so far\)\.\nRecent briefs:\n- Sep 18: Fix the price display after saving\.\nThe full history is in /);
-  // b's own join was only ever set by hand in the test, never decided by Jev
-  // or a person — so it is not firm, and never dresses up as c's history.
+  // b's join was set by hand in the test, not decided by Jev or a person, so it
+  // is not firm and never appears as c's history.
   assert.doesNotMatch(prompt(c), /old price too/, "a guessed join never appears as history");
   assert.equal(prompt(c, "prompt-attached.txt").includes("t-20260918-100000"), false, "a browser never gets the id");
 });
@@ -112,7 +111,7 @@ test("where a task stands comes from its firm briefs, not a guessed join's outco
     said: "the price still shows 99 after I save", summary: "Fix the price display after saving.",
     outcome: "## Did\nSynced the price.\n## Open\nThe listing page still caches the old price.\n",
   });
-  // An old 0.5.0 guess, worked on by an agent about something else.
+  // An old guess, worked on by an agent about something else.
   session(root, "20260918-110000", {
     said: "why does the signup chart drop in week 32", summary: "Explain the week-32 drop.",
     context: { task, decidedBy: "jev", confidence: { task: 0.9 } },
@@ -179,7 +178,7 @@ test("a render writes the brief's labels beside its summary", async () => {
   assert.deepEqual(keys.tickets, ["ENG-142"]);
 });
 
-// ── classify ────────────────────────────────────────────────────────────────
+// ── classify ──
 
 /** A sibling as `render-brief.mjs` leaves it: `brief.json`, and whatever else it has. */
 function filed(root, id, { narration, summary, windows = [], repoHints = [], screenTerms = [], keys, context, outcome } = {}) {
@@ -655,7 +654,7 @@ test("a brief that can't be filed is queued, counted, and settled once it files"
   assert.equal(pending(offline), null);
   assert.equal(existsSync(join(offline, "context.json")), true);
 
-  // Placed by hand WHILE the request was out: the failure doesn't re-queue it.
+  // Placed by hand while the request was out: the failure doesn't re-queue it.
   const racing = filed(root, "20260918-093000", { narration: "and the listing page too" });
   const handMidFlight = await relay(() => {
     writeFileSync(join(racing, "context.json"), JSON.stringify({ task: "t-20260918-090000", decidedBy: "you", taskBy: "you" }));
@@ -726,7 +725,7 @@ test("an answer that lands after a newer request for the same brief went out is 
   assert.match(stderr, /asked again since/);
 });
 
-// ── the sorting switch, and decisions that land while one is being made ─────
+// ── Sorting switch and late decisions ──
 
 test("with sorting off nothing is sent, whichever relay is named, and what needs none is still decided", async () => {
   const root = mkdtempSync(join(tmpdir(), "deiko-classify-"));

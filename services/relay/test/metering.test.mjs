@@ -1,15 +1,12 @@
-// THE MONEY PATH, END TO END, WITH NO AWS ACCOUNT.
+// The money path end to end, with no AWS account: a real `handle()` call must
+// count the right seconds against the right row, refuse at the right threshold,
+// and never reach the upstream once it has refused. `quota.test.mjs` checks the
+// arithmetic; this checks the wiring.
 //
-// `quota.test.mjs` checks the arithmetic. This checks the thing that arithmetic
-// is wired into: that a real `handle()` call counts the right number of seconds
-// against the right row, refuses at the right threshold, and never reaches
-// the upstream when it has refused.
-//
-// DynamoDB is a fake HTTP server rather than DynamoDB Local, which would need
-// Java or Docker — a test that needs a container is a test that stops being run.
-// The SDK talks to it because v3 honours `AWS_ENDPOINT_URL_DYNAMODB`, so the
-// code under test is byte-for-byte the code that ships: no injected client, no
-// test-only branch, no interface that exists only to be mocked.
+// DynamoDB is a fake HTTP server rather than DynamoDB Local, which needs Java or
+// Docker. The SDK talks to it because v3 honours `AWS_ENDPOINT_URL_DYNAMODB`, so
+// the code under test is the code that ships: no injected client and no
+// test-only branch.
 
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
@@ -35,12 +32,12 @@ import {
   summaryKey,
 } from "../src/quota.mjs";
 
-// ── A DynamoDB that lives in a Map ──────────────────────────────────────────
+// ── A DynamoDB that lives in a Map ──
 
 const rows = new Map();
-/// Keys whose UpdateItem the fake refuses with a ValidationException — the
-/// exact response an over-long partition key draws from the real service, and
-/// the way to make one half of a two-row write fail while the other lands.
+/// Keys whose UpdateItem the fake refuses with a ValidationException, the
+/// response an over-long partition key draws from the real service. It lets one
+/// half of a two-row write fail while the other lands.
 const failWritesTo = new Set();
 /// Every UpdateItem and PutItem, so a test can say a refusal cost no write.
 let writes = 0;
@@ -62,10 +59,8 @@ function ddb(target, body) {
     const add = Number(body.ExpressionAttributeValues[":n"].N);
     const row = rows.get(key) ?? {};
     row.audioSeconds = (row.audioSeconds ?? 0) + add;
-    // The `SET expiresAt = if_not_exists(...)` half of the expression. The
-    // fake used to ignore it, which made "a lifetime row must carry no TTL"
-    // pass no matter what record() actually wrote — the regression it guards
-    // (the trial renewing itself every forty days) was invisible to the suite.
+    // The `SET expiresAt = if_not_exists(...)` half of the expression, so that
+    // "a lifetime row must carry no TTL" can actually fail.
     const ttl = body.ExpressionAttributeValues[":ttl"]?.N;
     if (body.UpdateExpression?.includes("expiresAt") && ttl != null) {
       row.expiresAt ??= Number(ttl);
@@ -76,9 +71,8 @@ function ddb(target, body) {
   if (target.endsWith("GetItem")) {
     const row = rows.get(key);
     if (!row) return {};
-    // Return every attribute the row actually has. This used to return only the
-    // licence-cache fields, which made `peek` — a GetItem on a *usage* row —
-    // read every counter as zero. The code was right; the double was lying.
+    // Return every attribute the row has, so `peek` (a GetItem on a usage row)
+    // reads real counters.
     const Item = { subject: { S: key } };
     if (row.audioSeconds != null) Item.audioSeconds = { N: String(row.audioSeconds) };
     if (row.tier != null) Item.tier = { S: row.tier };
@@ -86,10 +80,9 @@ function ddb(target, body) {
     return { Item };
   }
   if (target.endsWith("PutItem")) {
-    // REPLACES the whole item, exactly as the real PutItem does. The fake
-    // used to merge into the existing row, which hid the one bug class the
-    // `#trial` usage-key suffix exists to prevent: a verdict PutItem wiping
-    // a usage counter that shared its key.
+    // Replaces the whole item, exactly as the real PutItem does, so a verdict
+    // PutItem wiping a usage counter that shared its key is visible (the reason
+    // for the `#trial` suffix).
     rows.set(key, {
       tier: body.Item.tier.S,
       checkedAt: Number(body.Item.checkedAt.N),
@@ -99,7 +92,7 @@ function ddb(target, body) {
   throw new Error(`unexpected DynamoDB call: ${target}`);
 }
 
-// ── What the relay tried to call ────────────────────────────────────────────
+// ── What the relay tried to call ──
 
 let upstream = [];
 let upstreamBodies = [];
@@ -115,9 +108,9 @@ function stubFetch() {
   globalThis.fetch = async (url, init) => {
     const href = String(url);
     upstream.push(href);
-    // The body matters as well as the destination: the summarize route is
-    // supposed to REBUILD what it sends rather than forward what it was given,
-    // and only the body can show that.
+    // The body matters as well as the destination: the summarize route rebuilds
+    // what it sends rather than forwarding what it was given, and only the body
+    // can show that.
     upstreamBodies.push(Buffer.isBuffer(init?.body) ? init.body.toString("latin1")
       : typeof init?.body === "string" ? init.body : "");
     upstreamTypes.push(init?.headers?.["content-type"] ?? "");
@@ -270,11 +263,10 @@ const parts = (body, contentType) => {
 
 /// One request carrying `seconds` of 16kHz mono 16-bit audio.
 ///
-/// Capped at 25 seconds because that is what the client actually sends —
-/// `transcribe.mjs` splits there, and 25s of this format is 0.76MB against a
-/// 2MB body limit. Building a 31-minute body to simulate a used-up trial gets
-/// a perfectly correct 413 from the size guard, several checks before metering
-/// is reached; ask for that and the test is measuring the wrong refusal.
+/// Capped at 25 seconds because that is what the client sends (`transcribe.mjs`
+/// splits there; 25s of this format is 0.76MB against a 2MB body limit). A body
+/// long enough to simulate a used-up trial would draw a correct 413 from the size
+/// guard before metering is reached, measuring the wrong refusal.
 const post = (token, seconds, { query = "", fields, file, ip } = {}) => {
   assert.ok(seconds <= 25, `chunks are 25s or less — seed the counter instead of sending ${seconds}s`);
   const f = form(file ?? wav(seconds), fields);
@@ -297,7 +289,7 @@ const monthRow = (id) => `lic:${id}#${monthKey(Date.now())}`;
 /// Where a licence that is NOT Pro accumulates: a lifetime row, like a device.
 const trialRow = (id) => `lic:${id}#trial`;
 
-// ── Tests ───────────────────────────────────────────────────────────────────
+// ── Tests ──
 
 test("health reports metering by actually describing the table", async () => {
   const r = await handle({ method: "GET", path: "/health" });
@@ -401,15 +393,10 @@ test("an invalid licence is metered as free, and its verdict is cached too", asy
 });
 
 test("a forged licence key gets no allowance at all, not a fresh trial", async () => {
-  // THE FORGERY THIS CLOSES, IN THREE ACTS. A `lic_` subject first landed in a
-  // MONTHLY row carrying the FREE cap, so junk got thirty minutes every
-  // calendar month, self-resetting. The `#trial` suffix fixed the renewal and
-  // left the rest: a LIFETIME trial keyed on whatever string was typed, so
-  // thirty minutes could still be minted by typing `ee`, then `ff`, for ever.
-  // Found by typing `ee` into Settings and watching the bar refill.
-  //
-  // The trial belongs to the machine — that is what the derived device token is
-  // for — so a licence the store does not recognise is worth nothing.
+  // A `lic_` subject with a junk key must not get a fresh trial. The trial
+  // belongs to the machine (that is what the derived device token is for), so a
+  // licence the store does not recognise is worth nothing; otherwise anybody
+  // could mint thirty minutes by typing a new string.
   licenseValid = false;
   const r = await post("lic_forged", 20);
   assert.equal(r.status, 402, "no allowance, so the very first chunk is refused");
@@ -423,8 +410,8 @@ test("a forged licence key gets no allowance at all, not a fresh trial", async (
 });
 
 test("a second forged key is worth no more than the first", async () => {
-  // The whole point: junk is not a fresh identity. There are infinitely many
-  // strings and each used to be worth half an hour.
+  // Junk is not a fresh identity: there are infinitely many strings, and none may
+  // be worth a trial.
   licenseValid = false;
   for (const key of ["lic_ee", "lic_ff", "lic_gg"]) {
     const r = await post(key, 20);
@@ -435,9 +422,9 @@ test("a second forged key is worth no more than the first", async () => {
 });
 
 test("the device keeps its own trial while a bad key is pasted over it", async () => {
-  // What the user saw and reported as "it reset my trial": the bar refilled
-  // because the BEARER changed, not because any counter moved. Removing the key
-  // must return them to their own trial with whatever was left of it.
+  // The bar must not refill when a bad key is pasted: the bearer changes, not any
+  // counter. Removing the key returns the user to their own trial with whatever
+  // was left of it.
   seed("dev:mine", 600);
   licenseValid = false;
   await post("lic_junk", 20);
@@ -479,11 +466,10 @@ test("a summary IS counted, so a flood cannot stay invisible", async () => {
 });
 
 test("a flood of summaries cannot close transcription for a paying customer", async () => {
-  // THE ATTACK THIS PINS. /v1/summarize takes any bearer string and the burst
-  // limiter is keyed by token, so a caller rotating tokens sends as many as it
-  // likes. While these were charged five nominal seconds against the AUDIO
-  // ceiling, ~8,600 cheap text calls closed transcription for everybody —
-  // paying customers included — until UTC midnight, for about a dollar.
+  // /v1/summarize takes any bearer string and the burst limiter is keyed by
+  // token, so a caller rotating tokens can send as many as it likes. Charged
+  // against the audio ceiling, cheap text calls could close transcription for
+  // everybody, paying customers included, until UTC midnight.
   const audioDay = `global#${new Date().toISOString().slice(0, 10)}`;
   for (let i = 0; i < 50; i += 1) await summarize(`dev_flood${i}`);
   assert.equal(rows.get(audioDay)?.audioSeconds ?? 0, 0,
@@ -493,11 +479,10 @@ test("a flood of summaries cannot close transcription for a paying customer", as
 });
 
 test("the caller does not get to choose the model, the token budget or the prompt", async () => {
-  // This route spends Deiko's Groq key and accepts any bearer string. Before
-  // the body was rebuilt server-side, that made it an open LLM proxy: name an
-  // expensive model and a large completion, and bill it here. Before the
-  // system prompt moved here too, it was still one — bring your own
-  // instructions and the relay answered them.
+  // This route spends Deiko's Groq key and accepts any bearer string, so it must
+  // rebuild the body server-side or it is an open LLM proxy: name an expensive
+  // model and a large completion, or bring your own system prompt, and bill it
+  // here.
   await summarize("dev_greedy", {
     model: "some-expensive-model",
     max_completion_tokens: 100_000,
@@ -527,8 +512,8 @@ test("the narration picks one of OUR two prompts, exactly as the client's settin
   const native = JSON.parse(upstreamBodies.at(-1));
   assert.match(native.messages[0].content, /Answer in the same language as the transcript\./);
 
-  // A released build on "Same as I speak" sends the native prompt itself;
-  // it is recognised, not obeyed, and the same pinned prompt answers.
+  // An older build on "Same as I speak" sends the native prompt itself; it is
+  // recognised, not obeyed, and the same pinned prompt answers.
   await summarize("dev_oldnative", { messages: [
     { role: "system", content: "…Answer in the same language as the transcript.…" },
     { role: "user", content: "<transcript>\n把这个改成蓝色\n</transcript>" },
@@ -539,7 +524,7 @@ test("the narration picks one of OUR two prompts, exactly as the client's settin
   assert.equal(empty.status, 400, "nothing to summarise is refused before it is counted");
 });
 
-// ── Classification ──────────────────────────────────────────────────────────
+// ── Classification ──
 
 const classify = (token, body) => handle({
   method: "POST", path: "/v1/classify", token,
@@ -558,9 +543,9 @@ test("a classification is counted on its own row and never on the audio ceiling"
     "nor the summary's");
 });
 
-// A body with no `version` (or one below 3) is what every 0.5.0 app still
-// sends. It must keep working exactly as it does today: one request, the
-// old "which task" Choice, and the old response shape untouched.
+// A body with no `version` (or one below 3) is what older apps send. It must
+// keep working as before: one request, the old "which task" Choice, and the old
+// response shape untouched.
 
 test("a legacy body (no version) still gets today's request: pinned model, pinned questions", async () => {
   const tasks = Array.from({ length: 10 }, (_, i) => ({
@@ -609,8 +594,8 @@ test("a legacy body never gets a second look, and its answer passes straight thr
   assert.deepEqual(JSON.parse(r.body), { model: "jev-1.13.0", answers: legacyAnswers }, "the old response shape, untouched");
 });
 
-// A body with `version: 3` gets round 1 (every question in one request) and,
-// for the ≤ 2 finalists, round 2 (the brief and that task, alone).
+// A body with `version: 3` gets round 1 (every question in one request) and, for
+// the at most two finalists, round 2 (the brief and that task, alone).
 
 const tasksOf = (n) => Array.from({ length: n }, (_, i) => ({
   id: `t-202609${String(i + 10).padStart(2, "0")}-100000`, title: `task ${i}`, now: "where it stands",
@@ -736,9 +721,9 @@ test("a second look the gateway drops once is asked again", async () => {
 });
 
 test("a present but unreadable gate does not stop the second look", async () => {
-  // An unreadable `noul` (null, here) must read as MISSING, not as a
-  // confident 0 — `Number(null)` is itself finite, so a naive coercion would
-  // gate every task out on a garbled answer rather than none.
+  // An unreadable `noul` (null, here) must read as missing, not as a confident 0:
+  // `Number(null)` is finite, so naive coercion would gate every task out on a
+  // garbled answer.
   jevReply = (sent) => (sent.questions.is_work_brief
     ? { model: "jev-1.13.0", answers: { is_work_brief: { noul: null }, [`same_${A}`]: { noul: 0.9 } } }
     : { model: "jev-1.13.0", answers: { same_task: { noul: 0.9 }, relation: { score: 2 } } });
@@ -746,11 +731,9 @@ test("a present but unreadable gate does not stop the second look", async () => 
   assert.deepEqual(Object.keys(JSON.parse(r.body).second), [A]);
 });
 
-// GATE, SECOND_LOOK.min and RELATION_RUBRIC are hand-tuned thresholds
-// MIRRORED in packages/core/src/lib/context.mjs as GATE, ASK and RELATIONS (comments on
-// both sides say "change both"). Nothing enforced that beyond the comment, so
-// one side could be retuned on the eval and the other left behind with no
-// test failing. This gives the mirror a job.
+// GATE, SECOND_LOOK.min and RELATION_RUBRIC are hand-tuned thresholds mirrored
+// in packages/core/src/lib/context.mjs as GATE, ASK and RELATIONS. Nothing else
+// enforces "change both", so this test does.
 test("the relay's thresholds stay in step with packages/core/src/lib/context.mjs's mirrors", () => {
   assert.equal(GATE, CLIENT_GATE, "relay.mjs GATE and context.mjs GATE must be the same cutoff");
   assert.ok(SECOND_LOOK.min <= CLIENT_ASK,
@@ -857,8 +840,8 @@ test("an upstream failure refunds a v3 classification too", async () => {
 });
 
 test("Cloudflare serves the same model, and the caller cannot tell", async () => {
-  // TypeSafe paused signups; the same model on Workers AI is the way in for
-  // anybody without a key. The app must see one shape either way.
+  // The same model on Workers AI serves callers without a TypeSafe key. The app
+  // must see one shape either way.
   const key = process.env.TYPESAFE_API_KEY;
   delete process.env.TYPESAFE_API_KEY;
   process.env.CLOUDFLARE_ACCOUNT_ID = "acct";
@@ -989,10 +972,8 @@ test("an oversized summary body is refused before it is parsed", async () => {
 });
 
 test("a token can be revoked by the fingerprint that appears in the logs", async () => {
-  // Before, the log carried the token's own first eight characters — for
-  // `dev_xxxx` that is four usable hex digits, and the wrong string anyway,
-  // because DEIKO_REVOKED_TOKENS needs the value in full. You could see an
-  // abusive install and still have no way to stop it.
+  // The log carries a fingerprint, and DEIKO_REVOKED_TOKENS must accept that same
+  // string: an abusive install found in the logs has to be stoppable.
   const line = logLine({ method: "POST", path: "/v1/transcribe", status: 200, ms: 5, token: "dev_abuser" });
   const printed = line.split("tok:")[1];
   assert.ok(printed && printed.length === 12, "the log carries a fingerprint, not a token");
@@ -1009,9 +990,9 @@ test("a token can be revoked by the fingerprint that appears in the logs", async
 
 test("the quota route is rate limited too", async () => {
   // It reads DynamoDB, writes a verdict row, and for an unseen licence calls
-  // Polar — all of which sat ABOVE the limiter, making it the cheapest
-  // way to amplify writes against a 25-WCU table. Throttling there does not
-  // fail the attacker's request; it fails transcription for whoever is paying.
+  // Polar, so it must sit behind the limiter or it is the cheapest way to amplify
+  // writes against a small table. Throttling there fails transcription for
+  // whoever is paying.
   let last = 0;
   for (let i = 0; i < 35; i++) {
     last = (await handle({ method: "GET", path: "/v1/quota", token: "dev_loop" })).status;
@@ -1031,7 +1012,7 @@ test("when the usage table is unreachable the relay fails CLOSED", async () => {
   await new Promise((r) => saved.listen(port, r));
 });
 
-// ── Refunds: a refusal or an outage must not spend anybody's seconds ────────
+// ── Refunds: a refusal or an outage must not spend anybody's seconds ──
 
 test("a refused request gives its seconds back — refusals cannot drain the day", async () => {
   seed("dev:spent", FREE_TRIAL_SECONDS);        // trial exactly used up
@@ -1039,9 +1020,8 @@ test("a refused request gives its seconds back — refusals cannot drain the day
   const second = await post("dev_spent", 25);
   assert.equal(first.status, 402);
   assert.equal(second.status, 402);
-  // The counter is incremented before it is judged, so without the refund
-  // these two refusals would have left 50 phantom seconds on BOTH rows —
-  // and 30 refusals a minute walk the global ceiling shut in twelve minutes.
+  // The counter is incremented before it is judged, so without the refund these
+  // two refusals would leave 50 phantom seconds on both rows.
   assert.equal(rows.get("dev:spent").audioSeconds, FREE_TRIAL_SECONDS);
   const global = [...rows.keys()].find((k) => k.startsWith("global#"));
   assert.equal(rows.get(global)?.audioSeconds ?? 0, 0);
@@ -1054,8 +1034,7 @@ test("a transcription outage does not eat the lifetime trial", async () => {
     throw new Error(`unexpected upstream: ${url}`);
   };
   const r = await post("dev_unlucky", 20);
-  // Was a pass-through 503. Now every provider failure is one fixed 502 —
-  // which the app's taxonomy reads exactly as it read the 503: unavailable.
+  // Every provider failure is one fixed 502, which the app reads as "unavailable".
   assert.equal(r.status, 502, "the provider's failure is ours to report, not theirs");
   assert.equal(rows.get("dev:unlucky")?.audioSeconds ?? 0, 0,
     "audio that was never transcribed must not stay billed — the trial is once, ever");
@@ -1070,7 +1049,7 @@ test("a refused summary gives its count back", async () => {
     "refused summaries must not keep climbing the ceiling that is refusing them");
 });
 
-// ── The Polar verdict: an error is not an answer ────────────────────
+// ── The Polar verdict: an error is not an answer ──
 
 test("one Polar failure does not demote a paying customer for a day", async () => {
   // A real "pro" verdict exists but is stale, so revalidation is due.
@@ -1096,12 +1075,9 @@ test("an error-derived free verdict is rechecked in minutes, not tomorrow", asyn
     throw new Error(`unexpected upstream: ${url}`);
   };
   const r = await post(`lic_${NEWKEY}`, 20);
-  // THE ACCEPTED COST OF THE FORGERY FIX. This used to be a 200: an
-  // unvalidatable key fell back to the free trial and transcribed. It cannot
-  // any more, because that allowance was what junk keys were minting. A real
-  // customer meets this only with a BRAND-NEW key during a Polar outage —
-  // anyone who has validated once has a cached verdict, and the short retry
-  // below is what makes the window minutes rather than a day.
+  // An unvalidatable key buys nothing. A real customer meets this only with a
+  // brand-new key during a Polar outage: anyone who has validated once has a
+  // cached verdict, and the short retry makes the window minutes, not a day.
   assert.equal(r.status, 402, "an unknown key buys nothing — and is never promoted either");
   const verdict = rows.get(`lic:${NEWKEY}`);
   assert.equal(verdict.tier, "free");
@@ -1109,11 +1085,11 @@ test("an error-derived free verdict is rechecked in minutes, not tomorrow", asyn
     "written already-stale, so the recheck happens when Polar is back, not in 24h");
 });
 
-// ── The summarize envelope count is pinned like everything else ─────────────
+// ── The summarize envelope count is pinned like everything else ──
 
 test("twenty thousand empty messages do not reach the model", async () => {
-  // Each envelope bills Groq its per-message overhead. The relay now sends
-  // exactly two, whatever arrived.
+  // Each envelope bills Groq its per-message overhead; the relay sends exactly
+  // two, whatever arrived.
   const flood = [...Array.from({ length: 20_000 }, () => ({})), { role: "user", content: "hi" }];
   const r = await summarize("dev_flood", { messages: flood });
   assert.equal(r.status, 200);
@@ -1122,12 +1098,11 @@ test("twenty thousand empty messages do not reach the model", async () => {
     `the caller chose 20,001 envelopes; the relay chooses two (sent ${sent.messages.length})`);
 });
 
-// ── The id is a security boundary, end to end ───────────────────────────────
+// ── The id is a security boundary, end to end ──
 
 test("a crafted licence id cannot reset a paying customer's month", async () => {
-  // Before the charset rule, `lic_<key>#<month>` reached tierFor, whose
-  // PutItem replaced the real key's MONTHLY usage row with a verdict object —
-  // the counter gone, for the price of one GET.
+  // `lic_<key>#<month>` must not reach tierFor, whose PutItem would replace the
+  // real key's monthly usage row with a verdict object and wipe the counter.
   const key = "DEIKO-REAL-KEY";
   rows.set(`lic:${key}`, { tier: "pro", checkedAt: Date.now() });
   seed(monthRow(key), 30_000);
@@ -1143,9 +1118,9 @@ test("a crafted licence id cannot reset a paying customer's month", async () => 
 });
 
 test("a partial write banks nothing — the global row is taken back when the subject write fails", async () => {
-  // The exact failure an over-long id produced at DynamoDB: the subject write
-  // rejects, the global write beside it lands. Without compensation those
-  // seconds sat on the day's row with no refund path able to reach them.
+  // The failure an over-long id produces at DynamoDB: the subject write rejects
+  // while the global write beside it lands. Without compensation those seconds
+  // would sit on the day's row with no refund path able to reach them.
   failWritesTo.add("dev:half");
   const r = await post("dev_half", 20);
   assert.equal(r.status, 503, "fail closed, as before");
@@ -1155,9 +1130,9 @@ test("a partial write banks nothing — the global row is taken back when the su
 });
 
 test("an upstream that throws is a 502 that refunds, and says nothing about why", async () => {
-  // A timeout or a DNS failure rejects the fetch. Uncaught, that left handle()
-  // before either `status >= 500` refund — a provider stall ate a lifetime
-  // trial — and carried the message into a public body via the adapter.
+  // A timeout or DNS failure rejects the fetch. Uncaught, it would leave handle()
+  // before either refund (a provider stall eating a lifetime trial) and carry the
+  // message into a public body via the adapter.
   globalThis.fetch = async (url) => {
     upstream.push(String(url));
     if (String(url).includes("/audio/translations")) throw new Error("getaddrinfo ENOTFOUND api.groq.com");
@@ -1170,23 +1145,23 @@ test("an upstream that throws is a 502 that refunds, and says nothing about why"
   assert.equal(rows.get(globalKey(Date.now())).audioSeconds, 0, "on the day's row too");
 });
 
-// ── The cheapest request has a price ────────────────────────────────────────
+// ── The cheapest request has a price ──
 
 test("a tiny body still costs the floor — compressed audio cannot buy thirty seconds for one", async () => {
-  // 16 KB: the byte rule says half a second. A caller sending 8 kbps MP3
-  // would get ~15 s of Groq for it; the floor is what bounds how many times
-  // a day that trade can be made.
+  // 16 KB: the byte rule says half a second, but a caller sending 8 kbps MP3
+  // would get ~15 s of Groq for it. The floor bounds how many times a day that
+  // trade can be made.
   const r = await post("dev_tiny", 0.5);
   assert.equal(r.status, 200);
   assert.equal(rows.get("dev:tiny").audioSeconds, MIN_SECONDS_PER_REQUEST);
   assert.equal(rows.get(globalKey(Date.now())).audioSeconds, MIN_SECONDS_PER_REQUEST);
 });
 
-// ── The upload is the app's, or it is nothing ───────────────────────────────
+// ── The upload is the app's, or it is nothing ──
 
 test("an upload naming a `url` is refused before anything is counted", async () => {
-  // Groq fetches a `url` itself: audio of any length, off our meter, and a
-  // URL that drips its bytes held a container for the whole upstream timeout.
+  // Groq fetches a `url` itself: audio of any length, off our meter, and a URL
+  // that drips its bytes would hold a container for the whole upstream timeout.
   const r = await post("dev_url", 10, { fields: [...APP_FIELDS, ["url", "https://example.com/ten-hours.wav"]] });
   assert.equal(r.status, 400);
   assert.equal(writes, 0, "refused before metering");
@@ -1243,11 +1218,11 @@ test("a valid upload reaches Groq as exactly the fields the app sent, rebuilt", 
   assert.equal(rows.get("dev:ok").audioSeconds, MIN_SECONDS_PER_REQUEST, "and metered as before");
 });
 
-// ── A provider's failure is ours to report ──────────────────────────────────
+// ── A provider's failure is ours to report ──
 
 test("a provider 401 is a fixed 502 that refunds — never the app's 'fix your Settings'", async () => {
   // Our key rotating is not the caller's token being rejected; passed through,
-  // the app read it as exactly that and told the user to fix Settings.
+  // the app would read it as that and tell the user to fix Settings.
   globalThis.fetch = async (url) => {
     upstream.push(String(url));
     return new Response(JSON.stringify({ error: { message: "Invalid API Key", code: "invalid_api_key" } }), { status: 401 });
@@ -1288,8 +1263,8 @@ test("summary and classifier failures are masked and refunded too", async () => 
 });
 
 test("a response that dies halfway is a 502 that refunds, not a crash", async () => {
-  // `text()` sat outside the guard, so a reset mid-body threw past handle():
-  // no refund, and a 500 from the adapter's catch-all.
+  // A reset mid-body must not throw past handle(): that would skip the refund and
+  // yield a 500 from the adapter's catch-all.
   globalThis.fetch = async (url) => {
     upstream.push(String(url));
     return new Response(new ReadableStream({
@@ -1305,7 +1280,7 @@ test("a response that dies halfway is a 502 that refunds, not a crash", async ()
   assert.equal(rows.get("dev:reset").audioSeconds, 0);
 });
 
-// ── A refund lands on the day it was charged to ─────────────────────────────
+// ── A refund lands on the day it was charged to ──
 
 test("a refund after midnight credits the day it was charged to", async () => {
   const realNow = Date.now;
@@ -1326,7 +1301,7 @@ test("a refund after midnight credits the day it was charged to", async () => {
   assert.equal(rows.get(globalKey(afterMidnight)), undefined, "and the next day is never touched");
 });
 
-// ── A refusal that is already known costs no write ──────────────────────────
+// ── A refusal that is already known costs no write ──
 
 test("once the day's summaries are spent, the next refusal costs no write", async () => {
   seed(summaryKey(Date.now()), SUMMARIES_PER_DAY);
@@ -1365,8 +1340,8 @@ test("a full audio ceiling refuses free callers without a write, and never a pay
 });
 
 test("a junk licence key is refused without asking Polar or writing a row", async () => {
-  // Every distinct junk string used to cost a Polar call, a verdict PutItem,
-  // and a record-and-refund — four writes a request for a rotating script.
+  // A junk key must cost no Polar call, no verdict PutItem and no
+  // record-and-refund, or a rotating script gets four writes a request.
   const r = await post("lic_ee", 20);
   assert.equal(r.status, 402);
   assert.match(JSON.parse(r.body).error, /remove it/);
@@ -1385,7 +1360,7 @@ test("a key Polar has refused costs its verdict once, then nothing", async () =>
   assert.equal(writes, 1);
 });
 
-// ── One caller cannot spend everybody's day ─────────────────────────────────
+// ── One caller cannot spend everybody's day ──
 
 test("one install cannot spend the day's summaries: its own cap refuses it first", async () => {
   seed(callerKey("summary", "dev:greedy", Date.now()), SUMMARIES_PER_CALLER_PER_DAY);
@@ -1424,7 +1399,7 @@ test("rotating bearers from one address does not reset the address's cap, and th
       "another address is not");
   }));
 
-// ── /health ─────────────────────────────────────────────────────────────────
+// ── /health ──
 
 test("/health says what is configured, not where it lives, and asks DynamoDB at most once a minute", async () => {
   const before = describes;
@@ -1436,7 +1411,7 @@ test("/health says what is configured, not where it lives, and asks DynamoDB at 
   assert.equal(first.playground, false, "no secret here, so the playground reports shut");
 });
 
-// ── The playground, with a table behind it ──────────────────────────────────
+// ── The playground, with a table behind it ──
 
 const pgTicket = (ip, origin = "https://deiko.app") =>
   handle({ method: "POST", path: "/v1/playground/ticket", origin, ip });
@@ -1484,9 +1459,9 @@ test("a playground clip whose answer dies halfway keeps its CORS headers and its
   }));
 
 test("the upload the app's own FormData encodes is accepted, in both modes", async () => {
-  // `sttForm` in packages/core/src/transcribe.mjs, field for field, through the same
-  // encoder Node's fetch uses — so a relay that refuses what the app actually
-  // sends fails here, not on somebody's first session.
+  // `sttForm` in packages/core/src/transcribe.mjs, field for field, through the
+  // same encoder Node's fetch uses, so a relay that refuses what the app sends
+  // fails here, not on somebody's first session.
   for (const native of [false, true]) {
     const fd = new FormData();
     fd.append("file", new Blob([wav(4)], { type: "audio/wav" }), "audio.wav");
@@ -1507,7 +1482,7 @@ test("the upload the app's own FormData encodes is accepted, in both modes", asy
   }
 });
 
-// ── The playground's clip is rebuilt too ────────────────────────────────────
+// ── The playground's clip is rebuilt too ──
 
 const pgClip = (contentType, body, ticketId = "clipticket") => handle({
   method: "POST", path: "/v1/playground/transcribe", token: mintTicket(ticketId), origin: "https://deiko.app",
@@ -1517,8 +1492,8 @@ const WEBM = "\x1a\x45\xdf\xa3" + "\x00".repeat(64);
 
 test("a header line that is not Content-Disposition cannot name a part", () =>
   withPlayground(async () => {
-    // The reviewer's probe: the relay read `name="file"` off a dummy header,
-    // Groq read the Content-Disposition, and a `url` went through as audio.
+    // The relay must not read `name="file"` off a dummy header while Groq reads
+    // the Content-Disposition, or a `url` goes through as audio.
     const b = "----pg";
     const r = await pgClip(`multipart/form-data; boundary=${b}`,
       `--${b}\r\nX-Dummy: name="file"\r\nContent-Disposition: form-data; name="url"\r\n\r\nhttps://example.com/slow.wav\r\n` +
@@ -1530,8 +1505,8 @@ test("a header line that is not Content-Disposition cannot name a part", () =>
 
 test("a second boundary hidden in another parameter cannot split the body two ways", () =>
   withPlayground(async () => {
-    // `xboundary=AAA` made the relay split on AAA while Groq split on BBB,
-    // hiding a `url` part inside what the relay took to be the file.
+    // `xboundary=AAA` must not make the relay split on AAA while Groq splits on
+    // BBB, hiding a `url` part inside what the relay took to be the file.
     const hidden =
       `--BBB\r\nContent-Disposition: form-data; name="url"\r\n\r\nhttps://example.com/slow.wav\r\n` +
       `--BBB\r\nContent-Disposition: form-data; name="model"\r\n\r\nwhisper-large-v3\r\n--BBB--\r\n`;
@@ -1577,8 +1552,8 @@ test("a clip that is not audio is refused before it is counted", () =>
   }));
 
 test("audio longer than one request may count for is refused, not under-billed", async () => {
-  // The meter clamps at 40 s, so a two-minute WAV used to be heard in full
-  // and billed as forty seconds.
+  // The meter clamps at 40 s, so a two-minute WAV must be refused rather than
+  // heard in full and billed as forty seconds.
   const r = await post("dev_long", 5, { file: wav(41) });
   assert.equal(r.status, 400);
   assert.match(JSON.parse(r.body).error, /longer than 40 seconds/);
@@ -1587,9 +1562,9 @@ test("audio longer than one request may count for is refused, not under-billed",
 });
 
 test("a row seen full is refused on sight for a minute, then looked at again", async () => {
-  // Concurrent requests being refused and refunded can make a row read full
-  // for an instant. Remembered until midnight, that instant shut a container
-  // for the day; for a minute, it costs a minute.
+  // Concurrent requests being refused and refunded can make a row read full for
+  // an instant. Remembered for a minute that costs a minute; remembered until
+  // midnight it would shut a container for the day.
   const realNow = Date.now;
   const t0 = Date.UTC(2026, 8, 24, 12);
   try {
@@ -1624,9 +1599,9 @@ test("a licence key the shape gate refuses is logged by fingerprint, never by va
 });
 
 test("an upload two parsers could read differently is refused, not guessed at", async () => {
-  // Each of these read as a valid upload to the old parser while a standard
-  // one saw something else. Rebuilding means Groq never sees the difference,
-  // but what is rebuilt must be what the caller's body actually says.
+  // Each of these could read as a valid upload to a lax parser while a standard
+  // one sees something else. Rebuilding means Groq never sees the difference, but
+  // what is rebuilt must be what the caller's body actually says.
   const audio = wav(3).toString("latin1");
   const model = (b) => `--${b}\r\nContent-Disposition: form-data; name="model"\r\n\r\nwhisper-large-v3\r\n`;
   const file = (b, header = `Content-Disposition: form-data; name="file"`) => `--${b}\r\n${header}\r\n\r\n${audio}\r\n`;

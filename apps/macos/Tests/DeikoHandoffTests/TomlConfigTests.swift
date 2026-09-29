@@ -1,13 +1,13 @@
 import Testing
 @testable import DeikoHandoff
 
-// `~/.codex/config.toml` is a file its owner writes BY HAND. It holds their
-// model, approval policy, sandbox settings and profiles, usually with comments
-// explaining why. Every test here is really the same assertion from a different
-// angle: removing our one table touches nothing else.
+// `~/.codex/config.toml` is written by hand and holds the user's model,
+// approval policy, sandbox settings and profiles, often with comments. Every
+// test is the same assertion from a different angle: removing our one table
+// touches nothing else.
 
-/// A config in the shape a real one takes — comments, blank lines, other
-/// tables, and a table AFTER ours so the range logic has something to stop at.
+/// A config in the shape a real one takes: comments, blank lines, other
+/// tables, and a table after ours so the range logic has something to stop at.
 private func realistic() -> String {
     """
     # my codex setup
@@ -26,9 +26,7 @@ private func realistic() -> String {
     """
 }
 
-/// `realistic()` with our table appended, as an earlier Fovea would have left
-/// it — mirroring the shape `TomlConfig.merge` used to produce, back when this
-/// file also had a `merge`.
+/// `realistic()` with our table appended, as an earlier build wrote it.
 private func withFoveaRegistered() -> String {
     realistic() + "\n\n" + """
     [mcp_servers.fovea]
@@ -58,10 +56,10 @@ func removeAbsent() {
 
 @Test("a sub-table of ours is swept up with it, not orphaned")
 func subTableGoesToo() {
-    // Codex allows `[mcp_servers.fovea.env]`. Fovea never writes one, but a
-    // user might have added it by hand — and leaving it behind would strand a
-    // table whose parent no longer exists, which Codex reads as a server with
-    // no command.
+    // Codex allows `[mcp_servers.fovea.env]`. We never write one, but a user
+    // might have added it by hand, and leaving it behind would strand a table
+    // whose parent no longer exists, which Codex reads as a server with no
+    // command.
     let withEnv = """
         [mcp_servers.fovea]
         command = "/opt/node"
@@ -78,8 +76,6 @@ func subTableGoesToo() {
     #expect(!(after ?? "").contains("mcp_servers.fovea"))
     #expect((after ?? "").contains("[profiles.review]"))
 }
-
-// ── Adding `deiko-memory` (restored from 4494afa, now returning nil to refuse) ──
 
 private let key = "deiko-memory"
 

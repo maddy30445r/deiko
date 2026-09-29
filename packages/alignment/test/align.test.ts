@@ -6,9 +6,7 @@ import type { Candidate, Word } from "../src/types.js";
 
 /**
  * These encode the design claims, so a later "simplification" that breaks one
- * fails loudly. The real gate is measured on hand-labelled recordings; this
- * suite is what makes those measurements interpretable — if the binder is
- * broken here, a bad score on real data tells you nothing about the mechanic.
+ * fails loudly.
  */
 
 let nextId = 0;
@@ -45,12 +43,12 @@ test("a deictic word binds to the pointing act that preceded it", () => {
 });
 
 test("the window is bounded on both sides, and speak-then-point is allowed", () => {
-  // Cursor stops 1.2s BEFORE the word — within lookBack (1500ms).
+  // Cursor stops 1.2s before the word, within lookBack (1500ms).
   const before = align([candidate(800)], say("this", 2000)).bindings;
   assert.equal(before.length, 1, "a point 1.2s before the word should bind");
 
-  // Cursor stops 1.4s AFTER the word — the real-session case ("usko" spoken
-  // 1.4s before settling on the CBSE cell it named). Within lookAhead (2000ms).
+  // Cursor stops 1.4s after the word: speaking first and pointing later is
+  // common. Within lookAhead (2000ms).
   const speakThenPoint = align([candidate(3400)], say("this", 2000)).bindings;
   assert.equal(
     speakThenPoint.find((b) => b.reason === "deictic")?.deicticWord,
@@ -58,7 +56,7 @@ test("the window is bounded on both sides, and speak-then-point is allowed", () 
     "speaking first and pointing 1.4s later must bind — observed in real data",
   );
 
-  // Cursor stops 2.5s AFTER the word — outside lookAhead.
+  // Cursor stops 2.5s after the word, outside lookAhead.
   const after = align([candidate(4500)], say("this", 2000)).bindings;
   assert.equal(
     after.find((b) => b.reason === "deictic"),
@@ -68,8 +66,7 @@ test("the window is bounded on both sides, and speak-then-point is allowed", () 
 });
 
 test("Hinglish points as well as English", () => {
-  // "ismein" and "Issko" are verbatim from a live session's Sarvam output —
-  // oblique forms and ASR spellings the lexicon originally missed.
+  // Oblique forms and ASR spellings the lexicon must cover.
   for (const word of ["yeh", "isko", "wahan", "woh", "ismein", "Issko", "usmein"]) {
     const { bindings } = align([candidate(1000)], say(word, 1300));
     assert.equal(
@@ -81,7 +78,7 @@ test("Hinglish points as well as English", () => {
 });
 
 test("Devanagari points too — the script depends on the recogniser, not the speaker", () => {
-  // Verbatim deictics from a real recorded session's Sarvam codemix output.
+  // Devanagari forms as a code-mixing recogniser returns them.
   for (const word of ["यह", "इसमें", "उसको", "यहां"]) {
     const { bindings } = align([candidate(1000)], say(word, 1300));
     assert.equal(
@@ -185,8 +182,8 @@ test("speech overlapping a dwell binds without a deictic word, but weakly", () =
 });
 
 test("an utterance never spans a hold boundary", () => {
-  // Two holds whose words happen to sit close together on the session clock.
-  // Releasing the hotkey ended the first sentence; they must not merge.
+  // Two holds whose words sit close together on the session clock: releasing
+  // the hotkey ended the first sentence, so they must not merge.
   const words: Word[] = [
     ...say("expose this field", 1000).map((w) => ({ ...w, hold: 1 })),
     ...say("refactor karo", 1900).map((w) => ({ ...w, hold: 2 })),
@@ -215,16 +212,12 @@ test("two deictic words claim two different candidates", () => {
   assert.notEqual(deictic[0]!.candidateId, deictic[1]!.candidateId);
 });
 
-// ── What deserves a human's attention ───────────────────────────────────────
-//
-// `needsReview` exists because a raw confidence threshold flagged 22 of 30
-// bindings in a real session and therefore said nothing. These pin the
-// distinction so it cannot quietly revert to "confidence < 0.5".
+// `needsReview` is not `confidence < 0.5`; these tests pin the distinction.
 
 test("an overlap binding is never flagged for review", () => {
   // 0.45 with at most a x1.1 and a x1.05 lift cannot reach 0.5, so a threshold
-  // test marks EVERY overlap binding. Overlap being weaker is a fact about the
-  // class, said once — not an alarm on each row.
+  // test would mark every overlap binding. Overlap being weaker is a fact about
+  // the class, not an alarm on each row.
   const c = candidate(1000, { features: { dwellMs: 400, approachSpeed: 0 } });
   const { bindings } = align([c], say("the padding looks wrong", 800));
   const bound = bindings.find((b) => b.reason === "overlap")!;
@@ -255,8 +248,8 @@ test("a confident deictic binding is not flagged", () => {
 });
 
 test("timing provenance is carried through, and absent when unknown", () => {
-  // Reported, never scored — see `anchoredTiming` in types.ts. A transcript
-  // written before `anchored` existed must leave the field ABSENT rather than
+  // Reported, never scored (see `anchoredTiming` in types.ts). A transcript
+  // written before `anchored` existed must leave the field absent rather than
   // claim the timing was interpolated.
   const words = say("expose this key", 1400);
   const withAnchor = words.map((w, i) => (i === 1 ? { ...w, anchored: true } : w));

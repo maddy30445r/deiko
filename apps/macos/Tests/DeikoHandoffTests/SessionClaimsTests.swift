@@ -1,11 +1,9 @@
 import Testing
 @testable import DeikoHandoff
 
-// These two sentences are claims a user is invited to check, so the tests are
-// about TRUTH rather than wording — each one pins something that would be a
-// false statement about somebody's data if it flipped.
-
-// ── what left this Mac ──────────────────────────────────────────────────────
+// These sentences are claims a user is invited to check, so the tests pin truth
+// rather than wording: each would be a false statement about somebody's data if
+// it flipped.
 
 @Test("a session with no cloud anything says nothing left")
 func nothingLeft() {
@@ -18,14 +16,10 @@ func nothingLeft() {
 
 @Test("A REFUSED SESSION STILL SENT AUDIO, and must not claim otherwise")
 func refusalDoesNotMeanNothingWasSent() {
-    // THE REGRESSION THIS FILE EXISTS FOR.
-    //
-    // `relayTranscriber` short-circuits only once it has ALREADY been refused,
-    // so the first chunk of a spent trial is uploaded in full and the relay
-    // receives the whole body before metering it. The first draft of this
-    // function treated "refused" as "never sent" and printed "Nothing left this
-    // Mac" for a session whose audio had demonstrably left it — a false
-    // statement in the one line the product cannot afford one in.
+    // A refused session still sent audio. `relayTranscriber` short-circuits
+    // only once already refused, so the first chunk of a spent trial is
+    // uploaded in full and the relay receives the whole body before metering
+    // it. Claiming "Nothing left this Mac" here would be false.
     for reason in ["trial", "monthly", "ceiling", "rejected"] {
         let line = SessionClaims.trustLine(
             transcriber: "deiko", degradedReason: reason,
@@ -72,10 +66,10 @@ func summaryThroughRelay() {
 
 @Test("a brief the classifier sent to the relay says so, on top of whatever else left")
 func filedAddsTheSortingClaim() {
-    // `filed` means the request WENT OUT, not that an answer came back or a
-    // task was assigned — `context.json` can be absent or unplaced and this
-    // still be true. See `ClassifyRequest.sentSummary` (DeikoCapture) for
-    // where the caller actually gets this boolean, and `filedSummary`, from.
+    // `filed` means the request went out, not that an answer came back or a
+    // task was assigned; `context.json` can be absent or unplaced and this is
+    // still true. See `ClassifyRequest.sentSummary` (DeikoCapture) for where
+    // the caller gets this and `filedSummary`.
     let line = SessionClaims.trustLine(
         transcriber: "deiko", degradedReason: nil,
         seconds: 30, uploadedChunks: 2, hasSummary: true, ownGroqKey: false, filed: true, filedSummary: true
@@ -98,10 +92,9 @@ func filedWithoutSummaryNamesNoSummary() {
 
 @Test("an own-key session that was still sent to the classifier names both — Groq for the words, Deiko for sorting")
 func ownKeySessionCanStillBeFiled() {
-    // The owner's decision this task implements: bringing your own key keeps
-    // audio and the summary off Deiko, but the brief is still sorted through
-    // the relay, so the line must say so without claiming Deiko transcribed
-    // anything.
+    // Bringing your own key keeps audio and the summary off Deiko, but the
+    // brief is still sorted through the relay, so the line must say so without
+    // claiming Deiko transcribed anything.
     let line = SessionClaims.trustLine(
         transcriber: "groq:whisper-large-v3", degradedReason: nil,
         seconds: 12, uploadedChunks: 1, hasSummary: true, ownGroqKey: true, filed: true, filedSummary: true
@@ -133,11 +126,11 @@ func sortingOffNeverClaimsFiling() {
 
 @Test("nothing in the line ever names screen content, for a brief that was never filed")
 func screenContentIsNeverClaimedToLeave() {
-    // The product's central claim: screenshots, OCR and accessibility text
-    // have no code path off the device, ever. Window titles are the one
-    // exception — the classifier sends them to place a filed brief, which is
-    // exactly what `filed: true` now says — so this holds `filed: false` fixed
-    // and checks every OTHER combination of inputs stays silent about them.
+    // The product's central claim: screenshots, OCR and accessibility text have
+    // no code path off the device. Window titles are the exception (the
+    // classifier sends them to place a filed brief, which `filed: true` says),
+    // so this holds `filed: false` and checks that every other combination
+    // stays silent about them.
     for transcriber in ["sarvam", "deiko", "on-device", nil] {
         for reason in [nil, "trial", "monthly", "ceiling", "unavailable", "timing", "rejected"] {
             for hasSummary in [true, false] {
@@ -164,8 +157,6 @@ func unknownTranscriberClaimsNothing() {
     #expect(line.contains("Nothing left"))
 }
 
-// ── why the transcript is worse ─────────────────────────────────────────────
-
 @Test("a clean session gets no sentence at all")
 func cleanSessionSaysNothing() {
     #expect(SessionClaims.degradedSentence(nil, degraded: false, resetSentence: "Resets 1 May") == nil)
@@ -182,8 +173,8 @@ func reasonsCarryTheirAnswers() {
     let monthly = SessionClaims.degradedSentence("monthly", degraded: true, resetSentence: reset)
     #expect(monthly?.contains(reset) == true)
 
-    // The service's ceiling is OUR problem. A paying customer must not read it
-    // as a fault of their plan and go looking for something to buy.
+    // The service's ceiling is Deiko's problem; a paying user must not
+    // read it as a fault of their plan.
     let ceiling = SessionClaims.degradedSentence("ceiling", degraded: true, resetSentence: reset)
     #expect(ceiling?.lowercased().contains("nothing is wrong with your plan") == true)
 }
@@ -197,9 +188,8 @@ func unavailableIsPartial() {
 
 @Test("`timing` is the OPPOSITE degradation and must not claim a local transcript")
 func timingIsNotAFallbackToTheMac() {
-    // The on-device CLOCK failed and the CLOUD text survived. The generic
-    // sentence — "transcribed on your Mac" — states the reverse of what
-    // happened, which is how this reason came to need its own case.
+    // The on-device clock failed and the cloud text survived. The generic
+    // sentence ("transcribed on your Mac") states the reverse of what happened.
     let line = SessionClaims.degradedSentence("timing", degraded: true, resetSentence: "")
     #expect(line?.contains("transcribed on your Mac") == false)
     #expect(line?.contains("timings") == true)
@@ -209,20 +199,18 @@ func timingIsNotAFallbackToTheMac() {
 func degradedWithoutAReasonStillExplains() {
     let line = SessionClaims.degradedSentence(nil, degraded: true, resetSentence: "")
     #expect(line != nil)
-    // And an unrecognised reason from a NEWER renderer degrades to the same
-    // generic line rather than falling silent.
+    // An unrecognised reason from a newer renderer degrades to the same generic
+    // line rather than falling silent.
     #expect(SessionClaims.degradedSentence("something-new", degraded: true, resetSentence: "") != nil)
 }
 
 @Test("a session whose audio never reached the network claims nothing")
 func nothingUploadedClaimsNothing() {
-    // Two ways to land here, and both are real. A DNS failure never opens a
-    // socket, so `transcriber` reads "deiko" while zero bytes left. And
-    // reopening an OLD session re-runs the pipeline entirely from the
-    // transcript cache — every hold a cache hit, nothing uploaded — which used
-    // to restamp the transcriber from today's config and announce an upload
-    // that had never happened, about a session recorded on a build with no
-    // relay at all.
+    // Two ways to land here. A DNS failure never opens a socket, so
+    // `transcriber` reads "deiko" while nothing left. And reopening an old
+    // session re-runs the pipeline from the transcript cache (every hold a
+    // cache hit, nothing uploaded), which must not announce an upload that
+    // never happened.
     let line = SessionClaims.trustLine(
         transcriber: "deiko", degradedReason: "unavailable",
         seconds: 62, uploadedChunks: 0, hasSummary: false, ownGroqKey: false, filed: false, filedSummary: false
@@ -240,16 +228,13 @@ func rejectedKeyIsActionable() {
     #expect(line?.contains("licence key") == true)
 }
 
-// ── the build-mistake degradation ───────────────────────────────────────────
-
 @Test("a relay-less build names the build, not a plan")
 func onDeviceNamesTheBuild() {
     let sentence = SessionClaims.degradedSentence("on-device", degraded: true, resetSentence: "")
     #expect(sentence != nil)
-    // The failure this guards: a build that silently lost its relay produced a
-    // day of on-device transcripts, and the wording that would send somebody to
-    // check their subscription is exactly the wrong advice — the fix is a
-    // rebuild, and nobody would ever find it by looking at their plan.
+    // A build that silently loses its relay produces on-device transcripts,
+    // and wording that sends somebody to check their subscription is the wrong
+    // advice: the fix is a rebuild.
     #expect(sentence?.contains("build") == true)
     #expect(sentence?.contains("used up") != true)
     #expect(sentence?.contains("free") != true)
@@ -263,9 +248,8 @@ func onDeviceIsNotTrial() {
 
 @Test("on-device never makes the trust line claim an upload")
 func onDeviceStaysLocal() {
-    // `trustLine` is untouched by the new reason and must stay untouched: a
-    // session that uploaded nothing did not reach the network, whatever the
-    // degradation is called.
+    // `trustLine` must not change for this reason: a session that uploaded
+    // nothing did not reach the network, whatever the degradation is called.
     let line = SessionClaims.trustLine(
         transcriber: "on-device", degradedReason: "on-device",
         seconds: 80, uploadedChunks: 0, hasSummary: false, ownGroqKey: false, filed: false, filedSummary: false

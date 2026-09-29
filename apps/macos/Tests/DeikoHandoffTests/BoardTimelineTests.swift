@@ -7,7 +7,7 @@ private var utc: Calendar {
     c.timeZone = TimeZone(identifier: "UTC")!
     return c
 }
-// Fri 25 Sep 2026, 15:00 UTC.
+// A fixed instant (a Friday, 15:00 UTC), so headings do not depend on the clock.
 private let now = Date(timeIntervalSince1970: 1_790_348_400)
 private func ago(_ days: Double) -> Date { now.addingTimeInterval(-days * 86_400) }
 
@@ -160,7 +160,7 @@ func workNames() {
 
 @Test("an open tab the ask never mentions does not name the work")
 func workNamesStrayFile() {
-    // "analytics.html" was the editor's open tab while the pricing page was asked about.
+    // The editor's open tab ("analytics.html") is not what a pricing question is about.
     #expect(name("Add a dark gradient background to the pricing section", files: ["analytics.html"]) != "Analytics")
     // Mentioned in the ask, or open for several briefs: it names the work.
     #expect(name("Fix the sitemap lastmod dates", files: ["sitemap.xml"]) == "Sitemap")
@@ -203,7 +203,7 @@ func taskIndexMatchesTheWalk() {
         }
         let index = BoardTimeline.TaskIndex(briefs)
         for task in tasks + ["t-none"] {
-            // The old code, verbatim in spirit: filter the whole board each time.
+            // The naive answer: filter the whole board each time.
             let walked = briefs.filter { $0.task == task && !$0.odds }.min { $0.date < $1.date }?.title
             #expect(index.firstTitle(ofTask: task) == walked)
             for id in briefs.map(\.id) + ["b-none"] {

@@ -1,7 +1,6 @@
-// The decisions that stand between a stranger and our Sarvam bill, checked
-// without an AWS account. Everything here is pure: `usage.mjs` moves the
-// numbers, `quota.mjs` says what they mean, and only the second one can be
-// wrong in a way that costs money quietly.
+// The decisions that stand between a stranger and the transcription bill,
+// checked without an AWS account. Everything here is pure: `usage.mjs` moves the
+// numbers and `quota.mjs` says what they mean.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -26,7 +25,7 @@ import {
   isPolarKey,
 } from "../src/quota.mjs";
 
-// ── Who is calling ──────────────────────────────────────────────────────────
+// ── Who is calling ──
 
 test("a prefixed licence and a prefixed device token are told apart", () => {
   assert.deepEqual(subjectFrom("lic_ABC-123"), { kind: "license", id: "ABC-123" });
@@ -39,9 +38,8 @@ test("an unprefixed token is a device — every build up to 0.3.0 sends one", ()
 });
 
 test("a licence key and a device token are indistinguishable WITHOUT the prefix", () => {
-  // Both are v4-shaped UUIDs. This is why the prefix exists at all, and the
-  // assertion is here so that removing it fails loudly rather than silently
-  // metering every paying customer as a free trial.
+  // Both are v4-shaped UUIDs, which is why the prefix exists; removing it must
+  // fail loudly rather than meter every paying customer as a free trial.
   const uuid = "7C6C4E1A-58F9-4E2E-9E1B-2F0A3B4C5D6E";
   assert.equal(subjectFrom(uuid).kind, "device");
   assert.equal(subjectFrom(`lic_${uuid}`).kind, "license");
@@ -53,7 +51,7 @@ test("nothing, an empty string, or a bare prefix is not a subject", () => {
   }
 });
 
-// ── Where the numbers live ──────────────────────────────────────────────────
+// ── Where the numbers live ──
 
 const AUG = Date.UTC(2026, 7, 10, 12, 0, 0);
 const SEP = Date.UTC(2026, 8, 1, 0, 0, 0);
@@ -71,9 +69,8 @@ test("a PRO licence meters per calendar month, so the key rolls over on its own"
 });
 
 test("a licence that is NOT Pro gets a lifetime row, like any other trial", () => {
-  // Typing junk into the licence field used to be strictly better than being
-  // honest: it bought the monthly row while keeping the free cap, so the
-  // once-ever trial renewed itself every calendar month, forever.
+  // A junk licence string must not buy the monthly row, or the once-ever trial
+  // would renew every calendar month.
   const licence = subjectFrom("lic_junk");
   assert.equal(usageKey(licence, AUG, "free"), "lic:junk#trial");
   assert.equal(
@@ -87,9 +84,9 @@ test("a licence's cached verdict is a different row from its usage, on either ti
   const licence = subjectFrom("lic_xyz");
   assert.equal(licenseKey(licence), "lic:xyz");
   assert.notEqual(licenseKey(licence), usageKey(licence, AUG, "pro"));
-  // The free case is the one that could collide: `tierFor` writes the verdict
-  // row with PutItem, which replaces the whole item — a trial counter sharing
-  // that key would be wiped clean on every revalidation.
+  // The free case is the one that could collide: `tierFor` writes the verdict row
+  // with PutItem, which replaces the whole item, so a trial counter sharing that
+  // key would be wiped on every revalidation.
   assert.notEqual(licenseKey(licence), usageKey(licence, AUG, "free"));
 });
 
@@ -106,7 +103,7 @@ test("the last instant of a month and the first of the next differ", () => {
   assert.equal(monthKey(Date.UTC(2026, 8, 1, 0, 0, 0)), "2026-09");
 });
 
-// ── Seconds from bytes, without touching the audio ──────────────────────────
+// ── Seconds from bytes, without touching the audio ──
 
 test("audio seconds come from the body's length, never from its contents", () => {
   assert.equal(audioSeconds(BYTES_PER_SECOND), 1);
@@ -117,10 +114,9 @@ test("audio seconds come from the body's length, never from its contents", () =>
 });
 
 test("no single request may count as more than one oversized chunk", () => {
-  // The counter is incremented before it is judged, so without a clamp a
-  // handful of maximum-size junk bodies could spend the whole service's daily
-  // ceiling and lock out everybody paying. An honest chunk is 25s and never
-  // approaches this.
+  // The counter is incremented before it is judged, so without a clamp a few
+  // maximum-size junk bodies could spend the day's ceiling. An honest chunk is
+  // 25s and never approaches this.
   assert.equal(audioSeconds(BYTES_PER_SECOND * 10_000), MAX_SECONDS_PER_REQUEST);
   assert.ok(MAX_SECONDS_PER_REQUEST > 25, "but an honest 25s chunk must count in full");
 });
@@ -132,7 +128,7 @@ test("multipart overhead over-counts, which is the safe direction for a limit", 
   assert.ok(seconds < 25.02, `overhead should be well under 1%, got ${seconds}`);
 });
 
-// ── The decision ────────────────────────────────────────────────────────────
+// ── The decision ──
 
 const under = { tier: "free", usedSeconds: 60, globalUsedSeconds: 60 };
 
@@ -178,11 +174,11 @@ test("the global ceiling stops everybody, including pro", () => {
 });
 
 test("forged free tokens cannot spend the half of the day reserved for Pro", () => {
-  // A device token is DERIVED FROM THE MACHINE and therefore forgeable — a VM
-  // or a patched client mints as many as it likes, each with a fresh trial. If
-  // free traffic could reach the whole ceiling, two dozen of them would 429
-  // every paying customer until UTC midnight. A licence cannot be forged, so
-  // the top half of the day belongs to licences.
+  // A device token is derived from the machine and therefore forgeable: a VM or a
+  // patched client mints as many as it likes, each with a fresh trial. If free
+  // traffic could reach the whole ceiling, a few dozen of them would 429 every
+  // paying customer until UTC midnight. A licence cannot be forged, so the top
+  // half of the day belongs to licences.
   const justOverTheFreeShare = Math.floor(GLOBAL_DAILY_SECONDS * 0.5) + 1;
   assert.equal(
     decide({ tier: "free", usedSeconds: 60, globalUsedSeconds: justOverTheFreeShare }).allowed,
@@ -198,9 +194,9 @@ test("the global ceiling is reported as ours, not as the caller's fault", () => 
     usedSeconds: PRO_MONTHLY_SECONDS + 1,
     globalUsedSeconds: GLOBAL_DAILY_SECONDS + 1,
   });
-  // Both limits are blown. The service's own ceiling wins the explanation,
-  // because telling a paying customer they are out of quota when the service
-  // is would send them to support instead of to a retry.
+  // Both limits are blown. The service's own ceiling wins the explanation: telling
+  // a paying customer they are out of quota when the service is would send them to
+  // support instead of to a retry.
   assert.match(v.error, /daily ceiling/);
 });
 
@@ -211,12 +207,12 @@ test("a refusal always reports zero remaining, never a negative number", () => {
   }
 });
 
-// ── The id is a security boundary ───────────────────────────────────────────
+// ── The id is a security boundary ──
 
 test("an id carrying '#' is refused — it would spell another subject's usage row", () => {
-  // `lic_<key>#2026-09` made the VERDICT row key equal the real key's MONTHLY
-  // usage row, and tierFor's PutItem replaced the whole item: a paying
-  // customer's month reset to zero for the price of one GET /v1/quota.
+  // `lic_<key>#YYYY-MM` would make the verdict row key equal the real key's
+  // monthly usage row, and tierFor's PutItem would replace the whole item,
+  // resetting a paying customer's month.
   const month = monthKey(Date.now());
   assert.equal(subjectFrom(`lic_DEIKO-REAL-KEY#${month}`), null);
   assert.equal(subjectFrom("lic_DEIKO-REAL-KEY#trial"), null);
@@ -226,9 +222,8 @@ test("an id carrying '#' is refused — it would spell another subject's usage r
 });
 
 test("an over-long id is refused before it can reach a 2048-byte partition key", () => {
-  // Past DynamoDB's limit the SUBJECT write throws while the global write
-  // beside it lands — seconds banked against the whole day, nothing to refund
-  // them against, and no Sarvam call to show for them.
+  // Past DynamoDB's limit the subject write throws while the global write beside
+  // it lands, banking seconds with nothing to refund them against.
   assert.equal(subjectFrom(`dev_${"a".repeat(129)}`), null);
   assert.equal(subjectFrom(`lic_${"A".repeat(2100)}`), null);
   assert.equal(subjectFrom("a".repeat(129)), null, "unprefixed too");
@@ -246,7 +241,7 @@ test("every real issuer's shape still passes, and nothing else does", () => {
   assert.equal(subjectFrom("lic_a/b"), null, "nor a path separator");
 });
 
-// ── The cheapest request has a price ────────────────────────────────────────
+// ── The cheapest request has a price ──
 
 test("the byte rule alone is fooled by compressed audio, which is why a floor exists", () => {
   // Thirty seconds of 8 kbps MP3 is ~30 KB, priced by bytes at under a second.
@@ -255,11 +250,11 @@ test("the byte rule alone is fooled by compressed audio, which is why a floor ex
   assert.ok(MIN_SECONDS_PER_REQUEST < 25, "an honest 25s chunk must never meet it");
 });
 
-// ── What counts as one address ──────────────────────────────────────────────
+// ── What counts as one address ──
 
 test("an IPv6 caller is its /64, however the address is written", () => {
-  // One subscriber is handed a whole /64. Keyed on the full address, a
-  // single home line minted a fresh identity per request.
+  // One subscriber is handed a whole /64; keyed on the full address, a single
+  // line would mint a fresh identity per request.
   const home = ipBucket("2001:db8:abcd:12::1");
   assert.equal(home, "2001:db8:abcd:12::/64");
   for (const same of ["2001:db8:abcd:12:ffff:1:2:3", "2001:0DB8:ABCD:0012::9", "2001:db8:abcd:12:0:0:0:0"]) {
@@ -275,8 +270,8 @@ test("an IPv4 caller is its address, and a dual-stack socket's mapped form is th
 });
 
 test("an IPv4-mapped address is its IPv4 however it is spelled, and ::1 is nobody else", () => {
-  // All of these sat in one `0:0:0:0::/64` bucket, so every IPv4 caller a
-  // dual-stack socket reported in hex shared a single allowance.
+  // Bucketed like other IPv6 addresses, every IPv4 caller a dual-stack socket
+  // reported in hex would share one allowance.
   for (const spelling of [
     "::ffff:203.0.113.7", "::FFFF:203.0.113.7", "::ffff:cb00:7107",
     "0:0:0:0:0:ffff:cb00:7107", "0000:0000:0000:0000:0000:FFFF:CB00:7107",

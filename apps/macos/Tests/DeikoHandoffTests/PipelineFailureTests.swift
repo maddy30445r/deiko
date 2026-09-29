@@ -1,24 +1,17 @@
 import Testing
 @testable import DeikoHandoff
 
-// Each fixture below is the text a script ACTUALLY prints, copied from
-// packages/core/src/transcribe.mjs, packages/core/src/render-brief.mjs and packages/core/src/lib/redact.mjs.
-// A taxonomy tested against invented strings would pass while classifying
-// nothing a user will ever see.
-
-// THE MISSING-KEY CASE IS GONE, and its deletion is the finding.
+// Each fixture is text a script actually prints (packages/core/src/transcribe.mjs,
+// render-brief.mjs and lib/redact.mjs); a taxonomy tested against invented
+// strings would classify nothing a user will ever see.
 //
-// `pipeline-contract.test.mjs` had listed "sarvam_api_key is not set" for
-// releases as a branch no script can reach any more: `selectTranscriber` falls
-// through to the relay and then to on-device words, so a keyless install
-// transcribes rather than failing. The branch stayed, telling anybody unlucky
-// enough to reach it that Deiko needs a key it does not need. Classifying a
-// failure that cannot happen is not free — it was the first thing `classify`
-// checked, and it was the wrong sentence.
+// There is deliberately no missing-key case: `selectTranscriber` falls through
+// to the relay and then to on-device words, so a keyless install transcribes
+// rather than failing.
 
 @Test("this month's Pro hours are not a bug report")
 func monthlyCapSpent() {
-    // services/relay/src/quota.mjs:200, wrapped by transcribe.mjs's relay error.
+    // services/relay/src/quota.mjs, wrapped by transcribe.mjs's relay error.
     let failure = PipelineFailure.classify(
         stage: "Transcribing",
         output: #"Deiko relay 429: {"error":"this month's fair-use limit is used up"}"#
@@ -27,18 +20,18 @@ func monthlyCapSpent() {
     #expect(failure.kind == .quotaExhausted)
     #expect(failure.message.contains("Pro hours"))
     #expect(failure.message.contains("resets"))
-    // A paying customer who has spent their month has no key to fix and
-    // nothing to report; both would send them somewhere useless.
+    // A user who has spent their month has no key to fix and nothing to
+    // report; both would send them somewhere useless.
     #expect(!failure.opensSettings)
     #expect(!failure.message.contains("bug report"))
-    // They have no relationship with Sarvam.
+    // The user has no relationship with the vendor, so it is not named.
     #expect(!failure.message.lowercased().contains("sarvam"))
 }
 
 @Test("the service's own ceiling says the plan is fine")
 func serviceCeiling() {
-    // quota.mjs:190 — checked before any per-subject cap, precisely so a paying
-    // customer is never told THEY are out when the service is.
+    // quota.mjs: checked before any per-subject cap, so a paying user is
+    // never told they are out when the service is.
     let failure = PipelineFailure.classify(
         stage: "Transcribing",
         output: #"Deiko relay 429: {"error":"the service is at its daily ceiling — try again tomorrow"}"#
@@ -51,7 +44,7 @@ func serviceCeiling() {
 
 @Test("a metering outage reads as temporary, not as a fault of theirs")
 func meteringUnavailable() {
-    // relay.mjs:223/249 — the relay fails closed when DynamoDB is unreachable.
+    // relay.mjs: the relay fails closed when DynamoDB is unreachable.
     let failure = PipelineFailure.classify(
         stage: "Transcribing",
         output: #"Deiko relay 503: {"error":"usage service unavailable: timeout"}"#
@@ -65,8 +58,8 @@ func meteringUnavailable() {
 
 @Test("the relay's own rate limiter does not blame a vendor the user never chose")
 func relayRateLimitNamesNoVendor() {
-    // relay.mjs:203. This lands in the `rate limit` branch, which used to say
-    // "Sarvam is rate-limiting" about Deiko's own per-container limiter.
+    // relay.mjs. Lands in the `rate limit` branch, which must not blame a
+    // vendor for Deiko's own per-container limiter.
     let failure = PipelineFailure.classify(
         stage: "Transcribing",
         output: #"Deiko relay 429: {"error":"rate limit exceeded"}"#
@@ -160,8 +153,8 @@ func caseInsensitive() {
 @Test("a stage that never finished names the quarantine fix, not the timeout")
 func timedOut() {
     // BriefPipeline's watchdog writes this after 180s. The commonest cause is
-    // a quarantined Node runtime: macOS refuses the spawned binary, nothing
-    // ever comes back, and the orb used to sit at "Transcribing…" forever.
+    // a quarantined Node runtime: macOS refuses the spawned binary and nothing
+    // ever comes back.
     let real = "timed out after 180s\n"
     let failure = PipelineFailure.classify(stage: "Transcribing", output: real)
 

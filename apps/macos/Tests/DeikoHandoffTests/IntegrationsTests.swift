@@ -3,12 +3,9 @@ import Testing
 @testable import DeikoHandoff
 
 // Reading other applications' config files, which are hand-maintained and
-// spelled four different ways. These fixtures are shaped like the real thing:
-// unrelated servers sit beside the ones we are looking for, because the test
-// that matters is not "does it find Jira" but "does it leave everything else
-// alone and never trap on a file somebody is midway through editing".
-
-// ── The URL, which is the reliable signal ───────────────────────────────────
+// spelled four different ways. Fixtures put unrelated servers beside the ones
+// we look for, because the point is to leave everything else alone and never
+// trap on a file somebody is midway through editing.
 
 @Test("a hosted server is recognised by the host the vendor mints")
 func hostedServersMatch() {
@@ -23,8 +20,8 @@ func hostedServersMatch() {
 
 @Test("one Atlassian connector reaches both Jira and Confluence")
 func atlassianCoversBoth() {
-    // Not a quirk of the matcher — it is one server, and a persona may file to
-    // either, so connecting it once has to light up both destinations.
+    // One server, and a persona may file to either, so connecting it once must
+    // light up both destinations.
     let found = Integrations.trackers(inServers: [
         "atlassian": ["url": "https://mcp.atlassian.com/v2/mcp"],
     ])
@@ -45,8 +42,6 @@ func everyHost() {
                 "\(url) should read as \(expected)")
     }
 }
-
-// ── Claude Code keeps servers in two places ─────────────────────────────────
 
 @Test("Claude Code's per-project servers count too")
 func claudeProjectScope() {
@@ -71,8 +66,6 @@ func claudeEmpty() {
     #expect(Integrations.trackers(inClaudeConfig: ["oauthAccount": ["x": 1]]).isEmpty)
     #expect(Integrations.trackers(inClaudeConfig: nil).isEmpty)
 }
-
-// ── The other spellings ─────────────────────────────────────────────────────
 
 @Test("Gemini's httpUrl is a url by another name")
 func geminiHttpUrl() {
@@ -103,8 +96,6 @@ func nameFallback() {
     #expect(Integrations.trackers(inServers: ["playwright": ["command": "npx"]]).isEmpty)
 }
 
-// ── Codex keeps TOML ────────────────────────────────────────────────────────
-
 @Test("a codex table is read, and the next table ends it")
 func codexTOML() {
     let toml = """
@@ -131,8 +122,6 @@ func codexEmpty() {
     #expect(Integrations.trackers(inCodexTOML: nil).isEmpty)
 }
 
-// ── Other people's files are allowed to be broken ───────────────────────────
-
 @Test("a malformed config yields nothing rather than trapping")
 func malformedShapes() {
     // These are files other applications own, edited by hand. A half-written
@@ -143,8 +132,6 @@ func malformedShapes() {
     #expect(Integrations.trackers(inClaudeConfig: ["projects": "nope"]).isEmpty)
     #expect(Integrations.trackers(inServers: ["srv": ["url": 7]]).isEmpty)
 }
-
-// ── What a destination is allowed to be ─────────────────────────────────────
 
 @Test("only sensible destinations are offered for each kind of persona")
 func allowedDestinations() {

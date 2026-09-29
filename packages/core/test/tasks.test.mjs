@@ -14,7 +14,7 @@ const brief = (id, line, extra = {}) => ({
   collection: null, task: null, apps: [], windows: [], screenTerms: [], outcome: null, ...extra,
 });
 
-// The three real Sep 18 price-bug briefs, by their Groq summaries.
+// Three price-bug briefs, by their Groq summaries.
 const price = [
   brief("20260918-155836", "Price display doesn't update after editing – toast shows new value but UI stays old.",
     { apps: ["Chrome"], windows: ["Products — acme-portal"], screenTerms: ["$99", "price", "save"] }),
@@ -136,9 +136,9 @@ test("a Last asked line that only repeats the title is dropped", () => {
   assert.deepEqual(taskState([first], "Renamed by hand").now, [`Last asked: ${first.line}`]);
 });
 
-// ── The shortlist ───────────────────────────────────────────────────────────
+// ── The shortlist ──
 
-test("the starting values are the ones the owner agreed", () => {
+test("the task defaults keep their agreed starting values", () => {
   assert.equal(SHORTLIST, 20);
   assert.equal(TIME_SEATS, 5);
   assert.equal(COMMON_LABEL, 5);
@@ -284,7 +284,7 @@ test("a decision a later brief retires no longer shows as current, and the note 
   assert.match(note, /Refetch after save instead\./);
   assert.doesNotMatch(note, /clear it on save\.$/m);
   assert.match(note, /- 1 earlier decision was retired by a later brief \(still in its outcome\.md\)/);
-  // A decision made AFTER the retirement stands.
+  // A decision made after the retirement stands.
   const mon = brief("20260921-100000", "back again", { taskBy: "you", outcome: parseOutcome("## Decided\n- It's the cache; clear it on save.\n") });
   assert.match(renderTaskNote({ id: "t-20260915-100000", title: "Stale price", briefs: [mon, fri, tue] }), /20260921-100000\): It's the cache/);
 });
@@ -320,7 +320,7 @@ test("sameDecision: loose about prefixes and punctuation, never about short word
 
 test("a brief guessed into a task is listed but never says where the task stands", () => {
   const tue = brief("20260915-100000", "the price is stale", { outcome: parseOutcome("## Decided\n- Refetch after save.\n## Open\n- The listing page.\n") });
-  // Filed before v3, never confirmed: a mic check that landed here by mistake.
+  // Filed by Jev and never confirmed: a mic check that landed here by mistake.
   const guessed = brief("20260916-100000", "testing my mic one two", { task: "t-20260915-100000", decidedBy: "jev", classifier: "jev",
     outcome: parseOutcome("## Decided\n- Use the USB mic.\n## Open\n- Buy a pop filter.\n") });
   const v3 = brief("20260917-100000", "still stale on the listing", { task: "t-20260915-100000", classifier: "v3", confidence: { task: 0.8 },
@@ -557,7 +557,7 @@ test("a hand-off never copies a screenshot that is a link to somewhere else", as
 test("search blends scores, so one weak word hit can't beat a strong meaning match", async () => {
   const { blendScores } = await import("../src/lib/tasks.mjs");
   // Brief 0: a stray word on its screen, meaning far off. Brief 1: no word,
-  // meaning close. Rank fusion put brief 0 first (a 1st place in words).
+  // meaning close. Rank fusion would rank brief 0 first (1st place in words).
   const words = [0.4, 0, 0];
   const meaning = [0.30, 0.62, 0.28];
   const blended = blendScores(words, meaning);

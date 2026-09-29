@@ -1,21 +1,12 @@
-// PINS THE PIPELINE HALF OF INK-ON-EVIDENCE END TO END.
+// Pipeline half of ink-on-evidence, end to end: a synthesized `events.jsonl`
+// (one probe per mark kind, plus a plain settle with no mark) goes through
+// loadSession and buildPrompt, the entry points a real recorded session uses.
 //
-// Tasks 1-6 taught Swift to mint a numbered `mark` on every modifier stroke
-// and the Node pipeline (loadSession, then buildPrompt) to turn those into
-// `[n]` verb lines. This is the half of Task 7 that needs no app: a
-// synthesized `events.jsonl` — one probe per gesture kind, plus a plain
-// settle that carries no mark at all — fed through the REAL entry points a
-// recorded session goes through. The live half (drawing on an actual screen,
-// checking crops on disk) is the user's, done by hand.
-//
-// The events below are shaped exactly like what the recorder writes: probes
-// for the five marks arrive with no paired `candidate` (a drag is explicit,
-// and a tap-turned-point is demoted by the recorder itself — see
-// packages/alignment/src/referents/session.ts's doc comment), so they take
-// the "probe with no candidate" path. The settle is the ordinary case: a
-// `candidate` carrying the noise features, paired with its `probe` by time
-// (<1000ms) and position (<12px) — see PAIRING_WINDOW_MS / PAIRING_RADIUS_PX
-// in the same file.
+// Mark probes arrive with no paired `candidate`: a drag is explicit, and the
+// recorder demotes a tap-turned-point itself (see
+// packages/alignment/src/referents/session.ts). The settle is the ordinary
+// case: a `candidate` paired with its `probe` by time (<1000ms) and position
+// (<12px), per PAIRING_WINDOW_MS / PAIRING_RADIUS_PX in that file.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -23,11 +14,8 @@ import assert from "node:assert/strict";
 import { loadSession } from "@deiko/alignment/session";
 import { buildPrompt } from "../src/lib/prompt.mjs";
 
-/** Every probe needs a crop that was actually OCR'd — `ocrElapsedMs` present
- *  is what render-brief.mjs's release rule reads as "we looked at this" (see
- *  its `cropWasRead`). Not exercised by this test directly (buildPrompt is
- *  called on loadSession's referents, not through render-brief's release
- *  gate), but a shape any real probe carries, so the marks get it too. */
+/** Every probe needs a crop that was actually OCR'd: `ocrElapsedMs` is what
+ *  render-brief.mjs's release rule (`cropWasRead`) reads as "looked at". */
 function crop(path) {
   return {
     path,
@@ -150,9 +138,9 @@ const events = [
     crop: crop("/tmp/e2e/h01-r005.png"),
   },
 
-  // A plain settle: candidate + its paired probe, no mark. Probe lands 10ms
-  // after the candidate, 2.8px away — inside the 1000ms / 12px pairing
-  // window — and carries no crop path, the way an unmarked settle does.
+  // A plain settle: candidate + its paired probe, no mark. The probe lands 10ms
+  // after the candidate, 2.8px away (inside the pairing window), with no crop
+  // path.
   {
     type: "candidate",
     t: 650,
@@ -194,9 +182,8 @@ test("loadSession yields six referents, five badged 1-5, the settle bare", () =>
   assert.equal(settle.mark, undefined);
   assert.equal(settle.cropPath, null);
 
-  // [1]'s `t` is its measured span's midpoint (106), not the probe's own
-  // emission time (110) — the probe resolves asynchronously, 50-300ms after
-  // the tap actually happened, and the span is what the recorder measured.
+  // [1]'s `t` is its measured span's midpoint (106), not the probe's emission
+  // time (110): the probe resolves asynchronously, after the tap happened.
   const tap = marked.find((r) => r.mark.kind === "point");
   assert.equal(tap.t, 106);
 });
@@ -204,12 +191,9 @@ test("loadSession yields six referents, five badged 1-5, the settle bare", () =>
 test("buildPrompt renders the five marks with their verbs and withholds nothing about the settle", () => {
   const referents = loadSession(events).all();
 
-  // `said` is not something loadSession produces — it is bound later, by the
-  // aligner, and named onto the referent by render-brief.mjs's `released`
-  // mapping (see its doc comment: "said is what makes a screenshot mean
-  // something"). buildPrompt only ever reads `r.said`, never `r.utterance`,
-  // so this test does the same minimal mapping render-brief does, stubbing
-  // it onto two referents rather than wiring up the full aligner.
+  // `said` is bound later by the aligner and mapped onto the referent by
+  // render-brief.mjs's `released`. buildPrompt only reads `r.said`, so this
+  // stubs it onto two referents instead of wiring up the aligner.
   const prepared = referents.map((r) => ({ ...r, cropWithheld: null, said: null }));
   const lasso = prepared.find((r) => r.mark?.kind === "lasso");
   lasso.said = "and this list of users here";
@@ -233,12 +217,10 @@ test("buildPrompt renders the five marks with their verbs and withholds nothing 
     /- \[3\] swept from "fetchUser\(\)" to "OrderList": \/tmp\/e2e\/h01-r003\.png — while I said "this feeds that"/,
   );
 
-  // Every shot carries a mark, so the heading is the "marked" variant, not
-  // the pre-mark "circled" copy.
+  // Every shot carries a mark, so the heading is the "marked" variant.
   assert.match(text, /Screenshots of what I marked \(badge numbers match\):/);
 
-  // The settle contributed no shot line at all: exactly five `- ` bullets,
-  // one per mark, none for the settle's null crop path.
+  // The settle adds no shot line: five bullets, one per mark.
   const bullets = text.split("\n").filter((l) => l.startsWith("- "));
   assert.equal(bullets.length, 5);
 });

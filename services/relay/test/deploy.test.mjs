@@ -1,13 +1,9 @@
-// THE DEPLOY SCRIPT, RUN AGAINST A FAKE AWS.
-//
-// `deploy.sh` decides who may invoke the function, what the function's
-// environment becomes and whether a deploy counts as healthy — and until now
-// nothing checked any of it short of a real deploy. Here `aws`, `curl`, `npm`
-// and `sleep` are stubs on PATH that log what they were asked and answer from
-// the test's script, so the script's own logic runs with no account, no
-// network and no keys. The environment is built from nothing: every value in
-// it is a placeholder, and AWS's own credential lookups are switched off in
-// case a stub were ever bypassed.
+// Runs `deploy.sh` against a fake AWS: `aws`, `curl`, `npm` and `sleep` are
+// stubs on PATH that log what they were asked and answer from the test's script,
+// so the script's logic (who may invoke the function, what the environment
+// becomes, what counts as healthy) runs with no account, network or keys. The
+// environment is built from nothing, and AWS's credential lookups are switched
+// off in case a stub is ever bypassed.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -71,7 +67,7 @@ function deploy(env = {}) {
   const run = spawnSync("bash", [script], {
     encoding: "utf8",
     env: {
-      // Stubs FIRST, so `aws` can only ever resolve to the fake one.
+      // Stubs first, so `aws` can only resolve to the fake one.
       PATH: `${bin}:${dirname(process.execPath)}:/usr/bin:/bin`,
       HOME: dir,
       TMPDIR: dir,

@@ -103,7 +103,7 @@ test("a draft answer key follows the board's current placement", () => {
   });
 });
 
-// ── the runner, end to end, over a tiny board it must not touch ─────────────
+// ── The runner, end to end, over a tiny board it must not touch ──
 
 function fixtureBoard() {
   const board = mkdtempSync(join(tmpdir(), "deiko-eval-board-"));

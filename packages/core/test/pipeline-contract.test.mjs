@@ -1,22 +1,9 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// THE CONTRACT BETWEEN TWO LANGUAGES THAT NEVER CALL EACH OTHER.
-//
-// `PipelineFailure.classify` (Swift) decides what the orb says when a stage
-// fails, and it decides it by matching substrings that the Node scripts print
-// to stderr. Nothing links the two: reword one `console.error` and the Swift
-// side silently stops recognising it, the helpful sentence becomes the generic
-// "<stage> failed", and every test on both sides still passes.
-//
-// The same exposure exists for the two withhold reasons `render-brief.mjs`
-// writes into `brief.json`, which `ReviewWindow` branches on to decide whether
-// to tell somebody a credential was visible on their screen.
-//
-// So this reads both sides as TEXT and checks the strings still meet. It needs
-// no Swift toolchain, which is the point — it runs in `npm test`, where the
-// person rewording a log line already is.
-//
-// The same approach as `docs.test.mjs`: source as data, not as code.
-// ─────────────────────────────────────────────────────────────────────────────
+// Contract between the Swift app and the Node scripts, which never call each
+// other. `PipelineFailure.classify` (Swift) picks the orb's message by matching
+// substrings the scripts print to stderr, and `ReviewWindow` branches on the
+// withhold reasons `render-brief.mjs` writes to `brief.json`. Rewording either
+// side would break the other silently, so this test reads both as text and
+// checks that the strings still meet. It needs no Swift toolchain.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -38,28 +25,22 @@ const scripts = [
   "packages/core/src/lib/prompt.mjs",
 ].map(read).join("\n");
 
-/// Every literal the Swift taxonomy matches on, and where it comes from.
-///
-/// `text.contains("…")` is the only form `classify` uses, so the list is
-/// extracted rather than hand-maintained — a new branch is covered the day it
-/// is written, without anybody remembering to add it here.
+// Every literal the Swift taxonomy matches on. `text.contains("…")` is the only
+// form `classify` uses, so the list is extracted rather than hand-maintained.
 const matched = [...swift.matchAll(/text\.contains\("([^"]+)"\)/g)].map((m) => m[1]);
 
 test("the Swift failure taxonomy matches on strings that still exist", () => {
   assert.ok(matched.length >= 10, `expected a real taxonomy, found ${matched.length} branches`);
 
-  // Not printed literally by any script, for three different reasons — and
-  // the third category is a finding, not an exemption.
+  // Not printed literally by any script, for the reasons below.
   const notOurs = new Set([
     // 1. Written by the Swift side itself.
     "timed out after",          // BriefPipeline's watchdog
     "could not find node",      // BriefPipelineError.nodeNotFound's description
 
-    // 2. Arrives from somewhere else at runtime, so no source contains it.
-    //    `transcribe.mjs` throws `Groq ${status}: …`, and the provider's own
-    //    body supplies the rest. The `sarvam` spellings stay matched because a
-    //    session recorded before the switch can be re-rendered after it, and
-    //    its cached failure text still names the old vendor.
+    // 2. Arrives from elsewhere at runtime. `transcribe.mjs` throws
+    //    `Groq ${status}: …` and the provider's body supplies the rest. The
+    //    `sarvam` spellings stay matched for cached failures of older sessions.
     "groq 401",
     "groq 403",
     "groq 429",
@@ -75,25 +56,15 @@ test("the Swift failure taxonomy matches on strings that still exist", () => {
     "etimedout",
     "node: command not found",  // the shell
 
-    //    The relay's own refusals. `transcribe.mjs` throws
-    //    `Deiko relay ${status}: ${body}`, and the body is written by
-    //    services/relay/{quota,relay}.mjs — a different deployable, which is
-    //    why nothing under scripts/ contains them. The status-and-body →
-    //    reason mapping lives in packages/core/src/lib/cloud.mjs and is tested in
-    //    cloud.test.mjs; these are what the Swift taxonomy matches on when one
-    //    of them fails a stage outright rather than merely degrading it.
-    "fair-use limit",            // quota.mjs:200 — a Pro month is spent
-    "daily ceiling",             // quota.mjs:190 — the SERVICE is spent, not the user
-    "usage service unavailable", // relay.mjs:223/249 — metering down, failing closed
+    // The relay's own refusals. `transcribe.mjs` throws
+    // `Deiko relay ${status}: ${body}` and the body comes from
+    // services/relay/{quota,relay}.mjs, a different deployable. The
+    // status-and-body → reason mapping is in packages/core/src/lib/cloud.mjs
+    // (tested in cloud.test.mjs).
+    "fair-use limit",            // quota.mjs: the monthly allowance is spent
+    "daily ceiling",             // quota.mjs: the service is spent, not the user
+    "usage service unavailable", // relay.mjs: metering down, failing closed
   ]);
-
-  // Category 3 held "sarvam_api_key is not set" / "is missing", marked ALREADY
-  // UNREACHABLE: a keyless install transcribes via the relay and then
-  // on-device, so the `.noAPIKey` branch could not fire. This test said the fix
-  // was a judgement call about the taxonomy rather than about the test. That
-  // call has now been made — the branch and its enum case are deleted — so the
-  // exemption goes with them. If either string reappears in `classify`, this
-  // test fails again, which is right: nothing prints them.
 
   const haystack = scripts.toLowerCase();
   const missing = matched
@@ -109,10 +80,9 @@ test("the Swift failure taxonomy matches on strings that still exist", () => {
 });
 
 test("the provider status prefix the taxonomy relies on is still constructed", () => {
-  // `classify` matches "groq 401" and friends, which no source contains —
-  // `transcribe.mjs` builds them from the status at runtime. So the thing to
-  // pin is the template, because rewording THAT is what would break them all
-  // at once, silently.
+  // `classify` matches "groq 401" and friends, which no source contains:
+  // `transcribe.mjs` builds them from the status at runtime. Pin the template,
+  // since rewording it would break them all silently.
   assert.match(
     read("packages/core/src/transcribe.mjs"),
     /`Groq \$\{response\.status\}/,
@@ -133,8 +103,8 @@ test("the watchdog's timeout marker is what the Swift side looks for", () => {
 
 test("the two withhold reasons are the ones the review window branches on", () => {
   // `ReviewWindow.withheldSentence` picks between "a credential was visible"
-  // and "couldn't read them to check" by looking for these words. Reword the
-  // renderer and a first-run user gets told a credential was on their screen.
+  // and "couldn't read them to check" by looking for these words. Rewording the
+  // renderer would tell a first-run user a credential was on their screen.
   const renderer = read("packages/core/src/render-brief.mjs");
   const review = read("apps/macos/Sources/DeikoCapture/ReviewWindow.swift");
 
@@ -160,10 +130,8 @@ test("the degraded flag the review window reads is the one the renderer writes",
 });
 
 test("every summary key the review window reads is one the renderer writes", () => {
-  // Same contract as `degraded` above, for the keys added when the window
-  // learned to explain itself. Each pair is a JSON key crossing from a Node
-  // script into a Swift `Codable` with no shared type between them, so the
-  // only thing holding them together is this test.
+  // Same contract as `degraded`. Each key crosses from a Node script into a
+  // Swift `Codable` with no shared type, so only this test holds them together.
   const renderer = read("packages/core/src/render-brief.mjs");
   const pipeline = read("apps/macos/Sources/DeikoCapture/BriefPipeline.swift");
 
@@ -173,9 +141,8 @@ test("every summary key the review window reads is one the renderer writes", () 
     ["labelsDropped", /var labelsDropped: Int\?/],
     ["cropsRemoved", /var cropsRemoved: Int\?/],
   ]) {
-    // Either spelling of an object entry: the shorthand `key,` or an explicit
-    // `key: <expr>,`. Which one a key uses is a detail of the renderer; that
-    // the key reaches `brief.json` at all is the contract.
+    // Either the shorthand `key,` or an explicit `key: <expr>,`; that the key
+    // reaches `brief.json` is the contract.
     assert.match(
       renderer,
       new RegExp(`^\\s*${key}(,|:)`, "m"),
@@ -186,9 +153,9 @@ test("every summary key the review window reads is one the renderer writes", () 
 });
 
 test("the renderer reads the exclusion file the app writes", () => {
-  // The × on a thumbnail writes this; the renderer is the only reader. A
-  // rename on either side silently un-removes every screenshot somebody chose
-  // to hold back, which is the one failure this feature cannot have.
+  // The × on a thumbnail writes this and the renderer is the only reader. A
+  // rename on either side would silently un-remove every screenshot the
+  // developer held back.
   const renderer = read("packages/core/src/render-brief.mjs");
   const pipeline = read("apps/macos/Sources/DeikoCapture/BriefPipeline.swift");
 
@@ -197,10 +164,10 @@ test("the renderer reads the exclusion file the app writes", () => {
 });
 
 test("an excluded screenshot's referent is dropped, not just its path", () => {
-  // `lib/prompt.mjs` ships a referent's screen text exactly when it has NO
-  // crop and speech was bound to it. So nulling `cropPath` the way a withheld
-  // crop does would send the TEXT of the image the developer removed. The
-  // filter has to run before `released` is built.
+  // `lib/prompt.mjs` ships a referent's screen text exactly when it has no crop
+  // and speech was bound to it, so nulling `cropPath` would send the text of
+  // the image the developer removed. The filter must run before `released` is
+  // built.
   const renderer = read("packages/core/src/render-brief.mjs");
   assert.match(
     renderer,
@@ -215,12 +182,9 @@ test("an excluded screenshot's referent is dropped, not just its path", () => {
 });
 
 test("the transcript's `cloud` block is written from the transcriber's own state", () => {
-  // `transcribe.mjs` is a script with top-level `main()`, so it cannot be
-  // imported and this seam cannot be driven without real audio and a Speech
-  // grant. What can be checked is that the three pieces still line up:
-  // `relayTranscriber` records a reason, `chunkedTranscriber` carries the
-  // state object out, and `main` writes it. Break any one and the review
-  // window silently goes back to explaining nothing.
+  // `transcribe.mjs` runs `main()` at top level, so it cannot be imported and
+  // driven without real audio. Check instead that `relayTranscriber` records a
+  // reason, `chunkedTranscriber` carries the state out, and `main` writes it.
   const transcribe = read("packages/core/src/transcribe.mjs");
 
   assert.match(
@@ -244,10 +208,8 @@ test("the transcript's `cloud` block is written from the transcriber's own state
 });
 
 test("only account-level refusals end the session's uploads", () => {
-  // The distinction `REFUSAL_IS_FINAL` encodes, asserted where it is USED: a
-  // transient 429 must fall through to the throw, so the next chunk retries.
-  // Short-circuiting it would drop every word after the first blip on a long
-  // recording, which is the failure this shape exists to avoid.
+  // A transient 429 must fall through to the throw so the next chunk retries;
+  // short-circuiting it would drop every word after the first blip.
   const transcribe = read("packages/core/src/transcribe.mjs");
   assert.match(
     transcribe,
@@ -257,9 +219,9 @@ test("only account-level refusals end the session's uploads", () => {
 });
 
 test("the trust line's upload count survives from transcriber to Swift", () => {
-  // `uploaded` is what stops the review panel claiming an upload that never
-  // happened — a relay that was never reached, or an old session reopened
-  // entirely from the transcript cache. Three files, no shared type.
+  // `uploaded` stops the review panel claiming an upload that never happened (a
+  // relay never reached, or an old session reopened from the transcript cache).
+  // Three files, no shared type.
   const transcribe = read("packages/core/src/transcribe.mjs");
   const renderer = read("packages/core/src/render-brief.mjs");
   const pipeline = read("apps/macos/Sources/DeikoCapture/BriefPipeline.swift");
@@ -270,10 +232,9 @@ test("the trust line's upload count survives from transcriber to Swift", () => {
 });
 
 test("a re-render over a cached session cannot restamp what happened to it", () => {
-  // Reopening an old session re-runs transcribe.mjs with every hold served
-  // from the cache. Rewriting `cloud` from the CURRENT environment would make
-  // the panel announce an upload for a session recorded on a build that had no
-  // relay at all.
+  // Reopening an old session re-runs transcribe.mjs with every hold served from
+  // the cache. Rewriting `cloud` from the current environment would announce an
+  // upload for a session that never had one.
   const transcribe = read("packages/core/src/transcribe.mjs");
   assert.match(
     transcribe,
@@ -283,12 +244,10 @@ test("a re-render over a cached session cannot restamp what happened to it", () 
 });
 
 test("an edited narration still suppresses screen text from crop-less referents", () => {
-  // `said` gates two different things, and only one of them is a caption. On a
-  // referent with no screenshot it decides whether that referent's ACCESSIBILITY
-  // TEXT reaches the prompt — and overlap bindings are often one to three words
-  // ("this one", "here"), which survive a correction by coincidence. Per-quote
-  // survival alone would therefore ship the contents of a window the developer
-  // had just edited themselves out of.
+  // `said` gates screen text on a referent with no screenshot, and overlap
+  // bindings are often one to three words ("this one", "here") that survive a
+  // correction by coincidence. Per-quote survival alone would ship the text of
+  // a window the developer had just edited themselves out of.
   const renderer = read("packages/core/src/render-brief.mjs");
   assert.match(
     renderer,
@@ -297,14 +256,11 @@ test("an edited narration still suppresses screen text from crop-less referents"
   );
 });
 
-// ── every degradation Node can name, Swift can say ──────────────────────────
+// ── Degradation reasons ──
 
 test("each reason degradedReason returns has a sentence in SessionClaims", () => {
-  // GENERALISED ON PURPOSE, rather than pinning one more string pair by hand.
-  // `degradedReason` is the only thing that mints these names and
-  // `degradedSentence` is the only thing that renders them, so a reason added
-  // on the Node side with no Swift case is a session that degrades silently —
-  // which is the exact bug this whole change exists to fix, in miniature.
+  // `degradedReason` mints these names and `degradedSentence` renders them, so
+  // a reason with no Swift case would degrade silently.
   const cloud = read("packages/core/src/lib/cloud.mjs");
   const claims = read("apps/macos/Sources/DeikoHandoff/SessionClaims.swift");
 
@@ -318,25 +274,23 @@ test("each reason degradedReason returns has a sentence in SessionClaims", () =>
       `degradedReason can return "${reason}" and SessionClaims has no case for it`,
     );
   }
-  // Direction matters: Node ⊆ Swift. Swift also switches on transcriber names
-  // in trustLine, so the reverse check would fail on strings that are not
-  // reasons at all.
+  // Node ⊆ Swift only: Swift also switches on transcriber names in trustLine,
+  // so the reverse check would fail on strings that are not reasons.
 });
 
 test("the transcriber's name reaches the cloud block degradedReason reads", () => {
-  // `degradedReason` now classifies on `cloud.transcriber`. If cloudBlock stops
-  // writing it, every relay-less session goes back to claiming it is fine.
+  // `degradedReason` classifies on `cloud.transcriber`; if cloudBlock stops
+  // writing it, relay-less sessions claim they are fine.
   const transcribe = read("packages/core/src/transcribe.mjs");
   const block = transcribe.slice(transcribe.indexOf("function cloudBlock"));
   assert.match(block.slice(0, 900), /transcriber:/, "cloudBlock must carry the transcriber's name");
 });
 
-// ── the build stamps what it was told, and a release says so out loud ───────
+// ── Build stamps ──
 
 test("the four stamped values default from .env", () => {
-  // The bug: `make install RELAY_URL=…` produced a correct app, and the next
-  // plain `make install` stamped all four EMPTY over it. Deleting either half
-  // of the fix — the helper or a default — brings that back.
+  // A plain `make install` must not stamp the four values empty: each defaults
+  // from .env via the helper.
   const mk = read("Makefile");
   assert.match(mk, /^env-default = /m, "the .env reader is gone");
   for (const name of ["RELAY_URL", "SITE_URL", "BUY_URL", "SUPPORT_EMAIL"]) {
@@ -349,9 +303,8 @@ test("the four stamped values default from .env", () => {
 });
 
 test("a release refuses to inherit a URL from somebody's .env", () => {
-  // `-n` stopped proving intent the moment .env could supply a value, and a
-  // release is the one build whose URLs are baked into a plist that can never
-  // be corrected remotely.
+  // A release bakes its URLs into a plist that cannot be corrected remotely, so
+  // they must come from the command line, never from .env.
   const mk = read("Makefile");
   for (const name of ["RELAY_URL", "SITE_URL"]) {
     assert.match(
@@ -362,7 +315,7 @@ test("a release refuses to inherit a URL from somebody's .env", () => {
   }
 });
 
-// ── On-device timings, recognised while the upload runs ─────────────────────
+// ── On-device timings ──
 
 test("the app's done marker is the one the script waits on, and the script is told to wait", () => {
   const pipeline = read("apps/macos/Sources/DeikoCapture/BriefPipeline.swift");

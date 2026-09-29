@@ -34,11 +34,8 @@ test("ids are global and chronological, so returning to an app just works", () =
 
 
 test("loads the real recorded session into an ordered stack", () => {
-  // Four levels up, not three: this file RUNS from dist/test/, one directory
-  // deeper than it is written. The three-level path resolved to
-  // packages/sessions/… (which never exists), so the catch below turned the
-  // whole test into a silent no-op that still reported ok — and the pairing
-  // bug it would have caught shipped.
+  // Four levels up: this file runs from dist/test/, one directory deeper than
+  // it is written.
   const path = new URL(
     "../../../../sessions/20260727-220359/events.jsonl",
     import.meta.url,
@@ -65,10 +62,9 @@ test("loads the real recorded session into an ordered stack", () => {
   const stack = loadSession(events);
   const all = stack.all();
 
-  // 5 settled candidates + 4 regions + 1 flick-demoted point probe. The tenth
-  // is the `CBSE` probe: it has no candidate (its lasso was demoted to a point
-  // by the recorder), and the old time-only pairing let it steal a nearby
-  // settle's slot — a real grounded referent fell off the stack entirely.
+  // 5 settled candidates + 4 regions + 1 flick-demoted point probe. The last is
+  // the `CBSE` probe: no candidate (its lasso was demoted to a point by the
+  // recorder), and time-only pairing would let it steal a nearby settle's slot.
   assert.equal(all.length, 10, "5 paired candidates + 4 lassos + 1 bare probe");
   assert.ok(
     all.every((r, i) => i === 0 || all[i - 1]!.t <= r.t),

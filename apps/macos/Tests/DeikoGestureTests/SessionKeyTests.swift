@@ -1,16 +1,13 @@
 import Testing
 @testable import DeikoGesture
 
-// The table itself is the thing worth pinning. Every value here is consumed by
-// a CGEvent tap that no test can drive, so a wrong keycode or mask shows up
-// only as "the hotkey does nothing" on somebody's machine — the exact failure
-// the app already had to grow a menu line to explain.
+// The table is what is pinned: a wrong keycode or mask shows up only as "the
+// hotkey does nothing" on somebody's machine, since no test can drive the
+// CGEvent tap.
 
 @Test("each key carries the keycode and device bit for its own physical key")
 func keyTable() {
-    // Virtual keycodes, and the `NX_DEVICER*KEYMASK` bits from IOKit. Right
-    // Option's pair (61 / 0x40) is the one the shipped app already used, so it
-    // is the anchor the other three were read against.
+    // Virtual keycodes, and the `NX_DEVICER*KEYMASK` bits from IOKit.
     #expect(SessionKey.rightOption.keyCode == 61)
     #expect(SessionKey.rightOption.deviceMask == 0x40)
     #expect(SessionKey.rightControl.keyCode == 62)
@@ -19,18 +16,18 @@ func keyTable() {
 
 @Test("no key that takes part in ordinary typing is offered")
 func noTypingKeysAreOffered() {
-    // Right Command (54 / 0x10) and Right Shift (60 / 0x04) were offered once
-    // and are traps: `SessionGesture.press` stops a live session on ANY press
-    // of the chosen key, so a capital letter or a ⌘C would end a recording
-    // mid-demonstration. Anything added here must survive that question.
+    // Right Command (54 / 0x10) and Right Shift (60 / 0x04) are traps:
+    // `SessionGesture.press` stops a live session on any press of the key, so a
+    // capital letter or a ⌘C would end a recording. Anything added here must
+    // survive that question.
     #expect(!SessionKey.allCases.contains { $0.keyCode == 54 })   // Right Command
     #expect(!SessionKey.allCases.contains { $0.keyCode == 60 })   // Right Shift
 }
 
 @Test("no two keys share a keycode or a device bit")
 func keysAreDistinct() {
-    // A duplicate here means two menu entries that do the same thing, or worse,
-    // one that silently answers to the other's key.
+    // A duplicate means two entries that do the same thing, or one that answers
+    // to the other's key.
     let codes = Set(SessionKey.allCases.map(\.keyCode))
     let masks = Set(SessionKey.allCases.map(\.deviceMask))
     #expect(codes.count == SessionKey.allCases.count)
@@ -56,9 +53,8 @@ func labelsAreUsable() {
 
 @Test("the raw values round-trip, because they are what gets stored")
 func rawValuesRoundTrip() {
-    // These strings live in UserDefaults. Renaming a case without a migration
-    // would silently reset everybody to the default — which is the AltGr key
-    // this setting exists to escape.
+    // These strings live in UserDefaults; renaming a case without a migration
+    // would reset everybody to the default.
     for key in SessionKey.allCases {
         #expect(SessionKey(rawValue: key.rawValue) == key)
     }

@@ -13,9 +13,8 @@ import { DEFAULT_MODEL, isReady } from "../src/lib/meaning.mjs";
 
 const script = fileURLToPath(new URL("../src/memory-mcp.mjs", import.meta.url));
 const FAKE_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
-// Chosen with no word or 3-gram in common with anything else on this fixture
-// board, so a match can only come from the removed crop's own text, never
-// from an incidental trigram overlap with unrelated (kept) words elsewhere.
+// Shares no word or 3-gram with anything else on the fixture board, so a match
+// can only come from the removed crop's own text.
 const REMOVED_WORDS = "PURGED-VANISHED-GONE";
 
 function board() {
@@ -100,9 +99,8 @@ test("the memory helper speaks MCP and hands back only what a brief already shar
     assert.equal(found.value.find((r) => r.brief === "20260918-110000")?.project, "Shop", "each result names its project");
     assert.equal(found.value.find((r) => r.brief === "20260918-100000")?.project, "Unsorted");
 
-    // A REMOVED SCREENSHOT IS INVISIBLE TO SEARCH TOO — not only to answers.
-    // A match alone would tell the agent something about a screenshot the
-    // developer chose to hide, so its words must not surface the brief at all.
+    // A removed screenshot is invisible to search too, not only to answers: a
+    // bare match would tell the agent about a screenshot the developer hid.
     const hidden = await s.tool("search_briefs", { query: REMOVED_WORDS });
     assert.equal(hidden.value.some((r) => r.brief === "20260918-100000"), false, "a removed screenshot's words must not surface its brief");
 
@@ -135,8 +133,8 @@ test("the memory helper speaks MCP and hands back only what a brief already shar
 test("get_task always compiles its note from the live board, never a stale tasks/<id>.md", async () => {
   const root = board();
   mkdirSync(join(root, "tasks"), { recursive: true });
-  // A note left over from before a brief was deleted from the board — it must
-  // never be read, let alone quoted back to the agent.
+  // A note left over from a deleted brief must never be read, let alone quoted
+  // back to the agent.
   writeFileSync(join(root, "tasks", "t-20260918-100000.md"), "# STALE TITLE FROM A DELETED BRIEF\nSTALE-SECRET-LINE\n");
   const s = await session(root);
   try {

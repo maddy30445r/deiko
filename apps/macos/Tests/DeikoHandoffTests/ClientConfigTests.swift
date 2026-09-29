@@ -2,10 +2,10 @@ import Foundation
 import Testing
 @testable import DeikoHandoff
 
-// These tests are about ONE property: Fovea edits a file it does not own, and
-// everything it was not asked to change must survive. The realistic fixture
-// below is shaped like a real `~/.claude.json` — the keys that would hurt to
-// lose are named explicitly so a regression names them too.
+// One property: Deiko edits a file it does not own, so everything it was not
+// asked to change must survive. The fixture is shaped like a real
+// `~/.claude.json`, with the keys that would hurt to lose named explicitly so
+// a regression names them too.
 
 private func claudeConfig() -> [String: Any] {
     [
@@ -22,8 +22,6 @@ private func claudeConfig() -> [String: Any] {
         ],
     ]
 }
-
-// ── Disconnecting ───────────────────────────────────────────────────────────
 
 @Test("removing Fovea leaves the rest of the config exactly as it was")
 func removeTouchesOnlyOurKey() throws {
@@ -49,8 +47,7 @@ func removeLeavesOtherServers() throws {
 
 @Test("removing what is not there reports nothing to do")
 func removeWhenAbsentIsNil() {
-    // nil, not an unchanged copy: the caller skips the write entirely rather
-    // than rewriting a file it did not change.
+    // nil, not an unchanged copy, so the caller skips the write.
     #expect(ClientConfig.remove(from: ["mcpServers": ["playwright": ["command": "npx"]]], serverKey: "fovea") == nil)
     #expect(ClientConfig.remove(from: nil, serverKey: "fovea") == nil)
     #expect(ClientConfig.remove(from: [:], serverKey: "fovea") == nil)
@@ -61,21 +58,19 @@ func removeKeepsTheContainer() throws {
     let only: [String: Any] = ["mcpServers": ["fovea": ["command": "npx"]]]
     let after = try #require(ClientConfig.remove(from: only, serverKey: "fovea"))
 
-    // Present and empty, not absent. Those mean different things to whoever
-    // wrote the file, and we do not get to decide which they meant.
+    // Present and empty, not absent: those mean different things to whoever
+    // wrote the file.
     let servers = try #require(after["mcpServers"] as? [String: Any])
     #expect(servers.isEmpty)
 }
 
 @Test("an mcpServers of the wrong shape is left alone, not crashed on or coerced")
 func removeRefusesWrongShape() {
-    // Something else wrote a string here instead of an object. `LegacyMCP`
-    // depends on this reading as "nothing to remove" rather than trapping —
-    // it runs against configs it has never seen the shape of.
+    // Something else wrote a string here instead of an object. `LegacyMCP` runs
+    // against configs of unknown shape, so this must read as "nothing to
+    // remove" rather than trap.
     #expect(ClientConfig.remove(from: ["mcpServers": "not an object"], serverKey: "fovea") == nil)
 }
-
-// ── The container key is a parameter, not a constant ────────────────────────
 
 @Test("VS Code's own MCP config uses `servers`, not `mcpServers`")
 func containerKeyIsConfigurable() throws {
@@ -89,19 +84,8 @@ func containerKeyIsConfigurable() throws {
     #expect(after["mcpServers"] == nil, "must not invent the other spelling")
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// RESTORED FROM GIT HISTORY (git show 1fcd01e^) — `merge`, `isRegistered` and
-// `stdioEntry` were deleted when Fovea's bridge went away; Task 12 brings them
-// back so `MemoryHelper` can register `deiko-memory` the same tested way. Only
-// Fovea → Deiko in prose, the `@testable import` and the `Fovea.app` fixture
-// path changed; the tests are otherwise as they were. Where a name here would
-// collide with one already above, the restored one below is the one renamed
-// (the fixture and tests above are unchanged) so both keep running.
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// A second realistic fixture, for the merge tests: no `fovea` entry yet,
-/// unlike `claudeConfig()` above (which models a stale one already there to
-/// remove).
+/// A second realistic fixture, for the merge tests: no legacy entry yet, unlike
+/// `claudeConfig()` above, which models a stale one to remove.
 private func mergeFixtureConfig() -> [String: Any] {
     [
         "oauthAccount": ["accountUuid": "abc-123", "emailAddress": "dev@example.com"],
@@ -119,16 +103,13 @@ private func mergeFixtureConfig() -> [String: Any] {
 
 private let nodePath = "/Applications/Deiko.app/Contents/Resources/node"
 
-/// A function, not a global `let`: `[String: Any]` is not Sendable, and a
-/// shared mutable global is exactly what strict concurrency is there to stop.
+/// A function, not a global `let`: `[String: Any]` is not Sendable.
 private func foveaEntry() -> [String: Any] {
     ClientConfig.stdioEntry(
         command: nodePath,
         arguments: ["/Applications/Deiko.app/Contents/Resources/apps/bridge/src/server.mjs"]
     )
 }
-
-// ── The property that matters ───────────────────────────────────────────────
 
 @Test("everything Deiko was not asked to change survives the merge")
 func mergePreservesEverythingElse() throws {
@@ -173,8 +154,6 @@ func mergeReplacesStaleEntry() throws {
     #expect(fovea["command"] as? String == "/Applications/Deiko.app/Contents/Resources/node")
 }
 
-// ── Starting from nothing ───────────────────────────────────────────────────
-
 @Test("a machine with no config yet gets a valid one")
 func mergeIntoNothing() throws {
     let after = try ClientConfig.merge(into: nil, serverKey: "fovea", entry: foveaEntry())
@@ -190,27 +169,23 @@ func mergeIntoConfigWithoutServers() throws {
     #expect((after["mcpServers"] as? [String: Any])?["fovea"] != nil)
 }
 
-// ── Refusing to guess ───────────────────────────────────────────────────────
-
 @Test("an mcpServers of the wrong shape is refused, not overwritten")
 func mergeRefusesWrongShape() {
     // Something else wrote a value here. Replacing it would destroy whatever
-    // that was, and we cannot know what it meant.
+    // that was.
     #expect(throws: ClientConfig.MergeError.mcpServersNotAnObject) {
         try ClientConfig.merge(into: ["mcpServers": "not an object"], serverKey: "fovea", entry: foveaEntry())
     }
 }
-
-// ── Knowing whether we are connected ────────────────────────────────────────
 
 @Test("registration is judged by value, so a stale path reads as disconnected")
 func staleEntryIsNotRegistered() throws {
     let stale = ClientConfig.stdioEntry(command: "/moved/node", arguments: ["/moved/server.mjs"])
     let config = try ClientConfig.merge(into: mergeFixtureConfig(), serverKey: "fovea", entry: stale)
 
-    // Present, but pointing somewhere that no longer exists. Reporting this as
-    // connected would leave the client failing to spawn a server forever, with
-    // the error surfacing inside Claude Code rather than in Deiko.
+    // Present but pointing somewhere that no longer exists. Reporting this as
+    // connected would leave the client failing to spawn a server, with the
+    // error surfacing in Claude Code rather than in Deiko.
     #expect(!ClientConfig.isRegistered(in: config, serverKey: "fovea", matching: foveaEntry()))
     #expect(ClientConfig.isRegistered(in: config, serverKey: "fovea", matching: stale))
 }
@@ -222,17 +197,13 @@ func absentReadsAsDisconnected() {
     #expect(!ClientConfig.isRegistered(in: ["mcpServers": [:]], serverKey: "fovea", matching: foveaEntry()))
 }
 
-// ── Disconnecting, after a merge (renamed: the file above already covers
-//    disconnecting from a config where the entry was placed by hand) ────────
-
 @Test("removing Deiko leaves the rest of the config exactly as it was")
 func removeAfterMergeTouchesOnlyOurKey() throws {
     let before = mergeFixtureConfig()
     let connected = try ClientConfig.merge(into: before, serverKey: "fovea", entry: foveaEntry())
     let after = try #require(ClientConfig.remove(from: connected, serverKey: "fovea"))
 
-    // Back to the original, key for key — disconnecting must be as if we had
-    // never written.
+    // Back to the original, key for key.
     #expect(NSDictionary(dictionary: after).isEqual(to: before))
 }
 
@@ -248,8 +219,7 @@ func removeAfterMergeLeavesOtherServers() throws {
 
 @Test("removing what was never merged in reports nothing to do")
 func removeWhenNeverMergedIsNil() {
-    // nil, not an unchanged copy: the caller skips the write entirely rather
-    // than rewriting a file it did not change.
+    // nil, not an unchanged copy, so the caller skips the write.
     #expect(ClientConfig.remove(from: mergeFixtureConfig(), serverKey: "fovea") == nil)
     #expect(ClientConfig.remove(from: nil, serverKey: "fovea") == nil)
     #expect(ClientConfig.remove(from: [:], serverKey: "fovea") == nil)
@@ -260,8 +230,8 @@ func removeAfterMergeKeepsTheContainer() throws {
     let only = try ClientConfig.merge(into: [:], serverKey: "fovea", entry: foveaEntry())
     let after = try #require(ClientConfig.remove(from: only, serverKey: "fovea"))
 
-    // Present and empty, not absent. Those mean different things to whoever
-    // wrote the file, and we do not get to decide which they meant.
+    // Present and empty, not absent: those mean different things to whoever
+    // wrote the file.
     let servers = try #require(after["mcpServers"] as? [String: Any])
     #expect(servers.isEmpty)
 }

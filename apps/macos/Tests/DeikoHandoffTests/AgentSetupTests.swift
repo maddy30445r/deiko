@@ -2,8 +2,8 @@ import Foundation
 import Testing
 @testable import DeikoHandoff
 
-// The whole connect / disconnect path, against a throwaway HOME. Never the
-// owner's real configs: every path below lives under a fresh temp directory.
+// The whole connect / disconnect path, against a throwaway HOME: every path
+// below lives under a fresh temp directory, never a real config.
 
 private let node = "/opt/deiko/node"
 private let script = "/Users/dev/personal /Deiko/packages/core/src/memory-mcp.mjs"
@@ -31,8 +31,8 @@ private struct Home {
     func targets() -> [AgentTarget] { AgentSetup.detect(home: root, environment: [:], applications: apps) }
 }
 
-/// A Mac with every supported agent on it, each config holding something
-/// of the owner's that must survive.
+/// A Mac with every supported agent on it, each config holding something that
+/// must survive.
 private func everyAgent() throws -> Home {
     let home = try Home()
     try home.write(".claude.json", #"{"oauthAccount":{"id":"a"},"mcpServers":{"playwright":{"command":"npx"}}}"#)
@@ -47,7 +47,7 @@ private func everyAgent() throws -> Home {
 @Test("nothing installed, nothing found")
 func detectsNothing() throws {
     let home = try Home()
-    // What an old Fovea build left behind is not Antigravity.
+    // A leftover `~/.gemini/config` does not mean Antigravity is installed.
     try home.write(".gemini/config/mcp_config.json", #"{"mcpServers":{}}"#)
     #expect(home.targets().isEmpty)
 }

@@ -1,8 +1,8 @@
 import Testing
 @testable import DeikoHandoff
 
-// The fling is the approval step — a wrong decision here sends a brief to the
-// wrong app, or sends nothing while looking like it did. Every case below is a
+// The fling is the approval step: a wrong decision here sends a brief to the
+// wrong app, or sends nothing while looking like it did. Every case is a
 // gesture a user can actually make with the orb.
 
 private let iterm = HandoffTarget(pid: 100, appName: "iTerm2")
@@ -11,8 +11,6 @@ private let code = HandoffTarget(pid: 200, appName: "Code")
 private func armed() -> FlingGesture {
     FlingGesture(isArmed: true)
 }
-
-// ── Click vs fling ──────────────────────────────────────────────────────────
 
 @Test("press and release without travel opens the options")
 func clickOpensOptions() {
@@ -37,8 +35,6 @@ func longTravelIsAFling() {
     #expect(g.release() == .commit(iterm))
 }
 
-// ── While the pipeline is still working ─────────────────────────────────────
-
 @Test("an unarmed orb ignores the whole gesture — there is no brief to send yet")
 func unarmedPressDoesNothing() {
     var g = FlingGesture(isArmed: false)
@@ -46,8 +42,6 @@ func unarmedPressDoesNothing() {
     #expect(g.drag(distance: 100, overOrb: false, target: iterm) == .none)
     #expect(g.release() == .none)
 }
-
-// ── Aiming ──────────────────────────────────────────────────────────────────
 
 @Test("aiming tracks the target under the cursor, and the last one wins")
 func aimingTracksTheTarget() {
@@ -71,8 +65,8 @@ func releaseOverTheOrbCancels() {
     var g = armed()
     _ = g.press()
     _ = g.drag(distance: 40, overOrb: false, target: iterm)
-    // Dragged out and brought back home. The window underneath the orb is NOT
-    // what the user meant — the orb is always covering something.
+    // Dragged out and brought back home. The window underneath the orb is not
+    // what the user meant: the orb is always covering something.
     #expect(g.drag(distance: 5, overOrb: true, target: code) == .aiming(nil))
     #expect(g.release() == .cancelled)
 }
@@ -87,8 +81,6 @@ func flingThatWandersHomeStaysAFling() {
     #expect(g.isFlinging)
     #expect(g.release() == .cancelled)
 }
-
-// ── Escape ──────────────────────────────────────────────────────────────────
 
 @Test("escape cancels a fling, and the next press starts fresh")
 func escapeCancels() {
@@ -107,8 +99,6 @@ func escapeWhenIdleIsSilent() {
     var g = armed()
     #expect(g.cancel() == .none)
 }
-
-// ── Target resolution ───────────────────────────────────────────────────────
 
 @Test("Deiko itself is never a target")
 func resolveRefusesDeiko() {
@@ -130,8 +120,6 @@ func resolveAcceptsAnyOtherNamedApp() {
     )
 }
 
-// ── The drop point ──────────────────────────────────────────────────────────
-
 @Test("a target carries no drop point until one is pinned to it")
 func targetsStartWithoutADropPoint() {
     #expect(HandoffTarget.resolve(pid: 7, appName: "Code", ownPid: 1)?.dropPoint == nil)
@@ -143,8 +131,7 @@ func droppedKeepsIdentity() {
     let pinned = named.dropped(atX: 120, y: 340)
 
     // The pid is what `deliver` activates and what the pre-click re-resolve
-    // compares against — pinning a point must not disturb either, or the
-    // guard would be checking a different app than the one on the label.
+    // compares against, so pinning a point must not disturb it.
     #expect(pinned.pid == named.pid)
     #expect(pinned.appName == named.appName)
     #expect(pinned.dropPoint?.x == 120)
