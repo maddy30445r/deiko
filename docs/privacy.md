@@ -16,7 +16,7 @@ of the screen for as long as one is. Clicking it stops the session.
 
 | What | Where | When |
 |---|---|---|
-| Your voice recording | Groq (Whisper), directly with your key or through the relay | Transcription; offline or past the free minutes, Apple's on-device recogniser is used instead and nothing is sent |
+| Your voice recording | Groq (Whisper), directly with your key or through the relay | Transcription; offline or past the month's free hours, Apple's on-device recogniser is used instead and nothing is sent |
 | Your transcript | Groq, directly with your key or through the relay | Writing the brief's summary |
 | What you said, its summary, window and page titles, web addresses (host and path only), open document names, and notes on your earlier work | Jev (via OpenRouter), through the relay | Filing the brief into a task |
 

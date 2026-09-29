@@ -129,11 +129,11 @@ The relay's code is in this repository, so you can check it, or
 
 ## Pricing
 
-Deiko is free and open source. Everything, Pro included, is free until
-**24 October 2026**. After that, Pro is **$7.99 a month, $79 a year or $159
-once**, and adds ten hours a month of Deiko's hosted transcription. Without Pro,
-Deiko stays free to use: 30 minutes of hosted transcription, then Apple's
-on-device recogniser, or your own Groq key with no limit.
+Deiko is free and open source. Every Mac gets two hours of Deiko's hosted
+transcription a month, with summaries and task filing included; past that it
+transcribes on-device until the month resets, and your own Groq key works with
+no limit. **Pro** is **$6.99 a month, $69 a year or $169 once**, and raises the
+hosted transcription to ten hours a month.
 
 ## Build from source
 
