@@ -3,6 +3,11 @@
 Notable changes to Deiko. Earlier releases are on
 [deiko.app/changelog](https://deiko.app/changelog).
 
+## [0.5.10] — 2026-09-30
+
+### Fixed
+- The Claude Code report-back hook asks only at the end of the turn a brief arrived in. A brief pasted into a chat earlier, to talk about, no longer asks for a report on later turns.
+
 ## [0.5.9] — 2026-09-30
 
 ### Changed
@@ -55,6 +60,7 @@ Notable changes to Deiko. Earlier releases are on
 - Task notes only state what comes from confirmed briefs, and cite the brief behind each line.
 - Large boards re-read only the briefs that changed.
 
+[0.5.10]: https://github.com/maddy30445r/deiko/releases/tag/v0.5.10
 [0.5.9]: https://github.com/maddy30445r/deiko/releases/tag/v0.5.9
 [0.5.8]: https://github.com/maddy30445r/deiko/releases/tag/v0.5.8
 [0.5.7]: https://github.com/maddy30445r/deiko/releases/tag/v0.5.7
