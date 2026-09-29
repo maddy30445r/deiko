@@ -4,19 +4,10 @@ Deiko has three parts: a macOS app that captures what you point at and say, a
 Node pipeline that turns a capture into a brief and files it, and an optional
 relay that runs the cloud models so nobody needs their own API keys.
 
-```mermaid
-flowchart LR
-    subgraph Mac["Your Mac"]
-        A["Capture<br/>apps/macos"] -->|session folder| B["Pipeline<br/>packages/core"]
-        B --> C[("Board<br/>~/Library/Application Support/Deiko")]
-        C --> D["Memory server<br/>MCP"]
-        B -->|brief| E["Your agent<br/>Claude Code · Cursor · Codex"]
-        D <-->|search · save_outcome| E
-    end
-    B <-->|audio · text| R["Relay<br/>services/relay"]
-    R --> G["Groq<br/>transcription · summaries"]
-    R --> J["Jev via OpenRouter<br/>filing"]
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.png">
+  <img src="assets/architecture-light.png" alt="How Deiko works: capture, brief, filing, board and memory server on your Mac; the brief goes to your agent; an optional relay handles transcription and filing">
+</picture>
 
 ## Capture (`apps/macos`)
 

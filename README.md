@@ -65,15 +65,10 @@ disk image, updating and uninstalling, see [docs/install.md](docs/install.md).
 3. **Tap Right Option** to stop. A coin appears with Deiko's reading of what you said.
 4. **Drag the coin onto your agent.** The brief is pasted into that chat and sent.
 
-```mermaid
-flowchart LR
-    A["You point and talk"] --> B["Capture<br/>crops · labels · voice"]
-    B --> C["Brief<br/>words lined up with what you pointed at"]
-    C --> D["Filing<br/>which task does this continue?"]
-    D --> E["Your agent<br/>brief + the task's history"]
-    E -.->|"save_outcome"| F[("Task memory<br/>on your Mac")]
-    F -.-> D
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-dark.png">
+  <img src="docs/assets/architecture-light.png" alt="How Deiko works: capture, brief, filing, board and memory server on your Mac; the brief goes to your agent; an optional relay handles transcription and filing">
+</picture>
 
 Speech is transcribed by Whisper (through Deiko's relay, or your own Groq key)
 or by Apple's on-device recogniser, and mixed-language speech such as
