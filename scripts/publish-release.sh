@@ -128,9 +128,12 @@ s3 cp "$TMP" "s3://$BUCKET/download/version.json" \
 # is baked into the shipped plist and can never be corrected remotely). One
 # HEAD request closes the only silent-after-ship failure this script can make.
 # Retried briefly because CloudFront invalidations take a moment to settle.
-say "verifying $SITE_ORIGIN/download/version.json"
+# VERIFY_ORIGIN: the same Pages project through another of its hosts, for a
+# network that intercepts $SITE_ORIGIN's TLS. What ships still says $SITE_ORIGIN.
+VERIFY="${VERIFY_ORIGIN:-$SITE_ORIGIN}"
+say "verifying $VERIFY/download/version.json"
 for attempt in 1 2 3 4 5; do
-  if curl -fsI --max-time 10 "$SITE_ORIGIN/download/version.json" >/dev/null 2>&1; then
+  if curl -fsI --max-time 10 "$VERIFY/download/version.json" >/dev/null 2>&1; then
     verified=1; break
   fi
   sleep 5

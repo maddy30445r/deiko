@@ -390,7 +390,10 @@ release: guard-clean
 	@# as soon as it launches; if the upload there was forgotten, every one of
 	@# them fails the same way forever, on every launch. The file list comes
 	@# from `MODELS` itself, so this can never drift from what the app asks for.
-	@for url in $$(node -e "import('./scripts/lib/meaning.mjs').then(({ MODELS, DEFAULT_MODEL, MODEL_BASE_URL }) => { for (const f of MODELS[DEFAULT_MODEL].files) console.log(MODEL_BASE_URL.replace(/\/+$$/, '') + '/' + DEFAULT_MODEL + '/' + f.path); } )"); do \
+	@# VERIFY_ORIGIN checks the same Pages project through another of its hosts
+	@# (deiko-site.pages.dev) when a network intercepts deiko.app's TLS; what
+	@# ships still points at MODEL_BASE_URL.
+	@for url in $$(node -e "import('./scripts/lib/meaning.mjs').then(({ MODELS, DEFAULT_MODEL, MODEL_BASE_URL }) => { const base = process.env.VERIFY_ORIGIN ? process.env.VERIFY_ORIGIN.replace(/\/+$$/, '') + '/download/models' : MODEL_BASE_URL; for (const f of MODELS[DEFAULT_MODEL].files) console.log(base.replace(/\/+$$/, '') + '/' + DEFAULT_MODEL + '/' + f.path); } )"); do \
 		curl -fsI "$$url" >/dev/null || { echo "✗ model mirror is missing $$url — upload it before releasing"; exit 1; }; \
 	done
 	@echo "  model mirror: all files present"
