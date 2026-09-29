@@ -465,7 +465,7 @@ struct SettingsView: View {
                     .tip("For any agent that takes MCP servers: copies the helper's command and a ready JSON entry.")
                 }
                 captionLine(helperMessage ?? Self.found(helper))
-                captionLine("A small helper that runs only on this Mac. Your agent can search past briefs and open a task's history. It hands back only what your briefs already share: prompts, outcome notes, task notes and the screenshots you kept — never ones you removed. Using another agent? Copy setup gives you what to paste into its MCP settings.")
+                captionLine("A small helper that runs only on this Mac. Your agent can search past briefs and open a task's history. It hands back only what your briefs already share: prompts, outcome notes, task notes and the screenshots you kept — never ones you removed. In Claude Code it also adds a hook that reminds the agent to save its report before it finishes a brief. Using another agent? Copy setup gives you what to paste into its MCP settings.")
             }
             .padding(14)
         }

@@ -99,7 +99,8 @@ reported back, and the next brief on that work carries it.
   Settings connects it to Claude Code, Codex, Cursor, Gemini CLI, VS Code and
   Antigravity.
 - **Agents report back.** When an agent finishes a brief it saves what it did,
-  decided and left open, so the next chat starts there, in any agent.
+  decided and left open, so the next chat starts there, in any agent. In
+  Claude Code a Stop hook makes sure it does.
 
 See [docs/memory.md](docs/memory.md).
 

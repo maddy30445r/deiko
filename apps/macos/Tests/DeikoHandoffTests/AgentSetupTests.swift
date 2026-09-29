@@ -161,3 +161,35 @@ func copySetupText() throws {
     #expect(entry?["command"] as? String == node)
     #expect(entry?["args"] as? [String] == [script])
 }
+
+@Test("Claude Code gets the report-back Stop hook with its memory, and loses both on disconnect")
+func claudeCodeStopHook() throws {
+    let home = try Home()
+    try home.write(".claude.json", #"{"mcpServers":{}}"#)
+    try home.write(".claude/settings.json", #"{"model":"opus","hooks":{"Stop":[{"hooks":[{"type":"command","command":"say done"}]}]}}"#)
+    let targets = home.targets()
+
+    #expect(AgentSetup.connect(targets, command: node, arguments: [script]).done == ["Claude Code"])
+    let stop = ((home.json(".claude/settings.json")["hooks"] as? [String: Any])?["Stop"] as? [[String: Any]]) ?? []
+    let commands = stop.flatMap { ($0["hooks"] as? [[String: Any]] ?? []).compactMap { $0["command"] as? String } }
+    #expect(commands == ["say done", "/opt/deiko/node '/Users/dev/personal /Deiko/packages/core/src/claude-stop-hook.mjs'"])
+    #expect(home.json(".claude/settings.json")["model"] as? String == "opus")
+    #expect(AgentSetup.isRegistered(targets[0], command: node, arguments: [script]))
+
+    _ = AgentSetup.disconnect(targets)
+    #expect(!home.read(".claude/settings.json").contains("claude-stop-hook"))
+    #expect(home.read(".claude/settings.json").contains("say done"))
+    #expect(!AgentSetup.isRegistered(targets[0], command: node, arguments: [script]))
+}
+
+@Test("a memory server set up before the hook existed reads as not set up until connected again")
+func olderSetupNeedsTheHook() throws {
+    let home = try Home()
+    try home.write(".claude.json", #"{"mcpServers":{}}"#)
+    let targets = home.targets()
+    _ = AgentSetup.connect(targets, command: node, arguments: [script])
+    try FileManager.default.removeItem(at: home.url(".claude/settings.json"))
+    #expect(!AgentSetup.isRegistered(targets[0], command: node, arguments: [script]))
+    #expect(AgentSetup.connect(targets, command: node, arguments: [script]).done == ["Claude Code"])
+    #expect(AgentSetup.isRegistered(targets[0], command: node, arguments: [script]))
+}

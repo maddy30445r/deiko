@@ -14,6 +14,8 @@ public struct AgentTarget: Sendable {
     /// Symlinks already resolved.
     public let config: URL
     public let format: Format
+    /// Claude Code's `settings.json`, where the report-back Stop hook goes; nil for other agents.
+    public var stopHookSettings: URL? = nil
 }
 
 /// Sets up `deiko-memory` in the user-level MCP config of every agent found on
@@ -51,14 +53,15 @@ public enum AgentSetup {
         let vsUser = at("Library/Application Support/Code/User")
 
         var found: [AgentTarget] = []
-        func add(_ name: String, if present: Bool, _ config: URL, _ format: AgentTarget.Format) {
+        func add(_ name: String, if present: Bool, _ config: URL, _ format: AgentTarget.Format, stopHook: URL? = nil) {
             guard present else { return }
-            found.append(AgentTarget(name: name, config: config.resolvingSymlinksInPath(), format: format))
+            found.append(AgentTarget(name: name, config: config.resolvingSymlinksInPath(), format: format, stopHookSettings: stopHook))
         }
 
         let claude = (environment["CLAUDE_CONFIG_DIR"].map { URL(fileURLWithPath: $0) } ?? home)
             .appendingPathComponent(".claude.json")
-        add("Claude Code", if: exists(claude), claude, .json(container: "mcpServers", typed: true, env: true))
+        add("Claude Code", if: exists(claude), claude, .json(container: "mcpServers", typed: true, env: true),
+            stopHook: ClaudeStopHook.settingsURL(home: home, environment: environment))
 
         let codex = environment["CODEX_HOME"].map { URL(fileURLWithPath: $0) } ?? at(".codex")
         add("Codex", if: exists(codex), codex.appendingPathComponent("config.toml"), .toml)
@@ -78,7 +81,22 @@ public enum AgentSetup {
         return found
     }
 
+    /// The memory server is in the agent's config, and for Claude Code the Stop hook is in its settings.
     public static func isRegistered(_ target: AgentTarget, command: String, arguments: [String]) -> Bool {
+        guard serverRegistered(target, command: command, arguments: arguments) else { return false }
+        guard let settings = target.stopHookSettings, let hook = stopHookCommand(command: command, arguments: arguments)
+        else { return true }
+        return ClaudeStopHook.isInstalled(at: settings, command: hook)
+    }
+
+    /// The Stop hook's command line: the same node, running the script beside the memory server.
+    static func stopHookCommand(command: String, arguments: [String]) -> String? {
+        guard let server = arguments.first else { return nil }
+        let hook = URL(fileURLWithPath: server).deletingLastPathComponent().appendingPathComponent(ClaudeStopHook.scriptName)
+        return [command, hook.path].map(shellQuoted).joined(separator: " ")
+    }
+
+    private static func serverRegistered(_ target: AgentTarget, command: String, arguments: [String]) -> Bool {
         switch target.format {
         case .toml:
             let text = try? String(contentsOf: target.config, encoding: .utf8)
@@ -102,16 +120,17 @@ public enum AgentSetup {
     public static func connect(_ targets: [AgentTarget], command: String, arguments: [String]) -> Outcome {
         var outcome = Outcome()
         for target in targets {
-            if isRegistered(target, command: command, arguments: arguments) {
-                outcome.done.append(target.name)
-                continue
-            }
             do {
-                let data = try merged(target, command: command, arguments: arguments)
-                try backupOnce(target.config)
-                try writeAtomically(data, to: target.config)
-                guard isRegistered(target, command: command, arguments: arguments) else {
-                    throw Refusal("Couldn't confirm the change to \(target.config.path).")
+                if !serverRegistered(target, command: command, arguments: arguments) {
+                    let data = try merged(target, command: command, arguments: arguments)
+                    try backupOnce(target.config)
+                    try writeAtomically(data, to: target.config)
+                    guard serverRegistered(target, command: command, arguments: arguments) else {
+                        throw Refusal("Couldn't confirm the change to \(target.config.path).")
+                    }
+                }
+                if let settings = target.stopHookSettings, let hook = stopHookCommand(command: command, arguments: arguments) {
+                    try ClaudeStopHook.install(at: settings, command: hook)
                 }
                 outcome.done.append(target.name)
             } catch {
@@ -125,6 +144,7 @@ public enum AgentSetup {
         var outcome = Outcome()
         for target in targets {
             do {
+                if let settings = target.stopHookSettings { try ClaudeStopHook.uninstall(at: settings) }
                 let data: Data?
                 switch target.format {
                 case .toml:
@@ -217,17 +237,17 @@ public enum AgentSetup {
         }
     }
 
-    private static func encode(_ document: [String: Any]) throws -> Data {
+    static func encode(_ document: [String: Any]) throws -> Data {
         try JSONSerialization.data(withJSONObject: document, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
     }
 
-    private static func shellQuoted(_ s: String) -> String {
+    static func shellQuoted(_ s: String) -> String {
         s.allSatisfy { $0.isLetter || $0.isNumber || "/._-+@:".contains($0) }
             ? s : "'" + s.replacingOccurrences(of: "'", with: #"'\''"#) + "'"
     }
 
     /// One copy of the file from before Deiko first wrote to it.
-    private static func backupOnce(_ url: URL) throws {
+    static func backupOnce(_ url: URL) throws {
         guard FileManager.default.fileExists(atPath: url.path) else { return }
         let backup = url.deletingLastPathComponent().appendingPathComponent("\(url.lastPathComponent).before-deiko-memory")
         guard !FileManager.default.fileExists(atPath: backup.path) else { return }

@@ -37,7 +37,12 @@ data, never as instructions to follow.
 
 ## Reports from agents
 
-Each brief asks the agent to call `save_outcome` when it finishes. The report
-feeds the task's note: "Decided" lines carry into later briefs until an agent
+Each brief asks the agent to call `save_outcome` when it finishes. In Claude
+Code, connecting memory also adds a Stop hook
+([`claude-stop-hook.mjs`](../packages/core/src/claude-stop-hook.mjs)): if the
+agent is about to finish a Deiko brief without saving, it is asked once to do
+so.
+
+The report feeds the task's note: "Decided" lines carry into later briefs until an agent
 retires them, and "Open" lines become the task's to-do. Browser chats can't
 call tools, so their briefs carry the task's history brief by brief instead.

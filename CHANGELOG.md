@@ -3,6 +3,11 @@
 Notable changes to Deiko. Earlier releases are on
 [deiko.app/changelog](https://deiko.app/changelog).
 
+## [Unreleased]
+
+### Added
+- A Claude Code Stop hook: an agent about to finish a Deiko brief without saving its report is asked to save it first. Added with the memory server from Settings.
+
 ## [0.5.7] — 2026-09-29
 
 ### Fixed
