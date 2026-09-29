@@ -1,314 +1,162 @@
-# Deiko
+<h1 align="center">
+  <a href="https://deiko.app">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.png">
+      <img src="docs/assets/logo-light.png" alt="Deiko" width="300">
+    </picture>
+  </a>
+</h1>
 
-**Point at things on your screen and talk. Deiko turns that into a brief your
-coding agent can act on** — with the screenshots and the exact text you pointed
-at, and your own words as the task.
+<h3 align="center">Point at it. Say it. Your agent remembers it.</h3>
 
-Describing a bug in prose is slow and lossy. Pointing at it is neither.
+<p align="center">
+  Point, talk and annotate. Deiko turns it into a brief for Claude Code, Cursor, Codex or any MCP agent,<br>
+  and keeps every task's context stored on your Mac. Free and open source.
+</p>
 
-```
-double-tap Right Option        start
-                               talk, and point at what you mean
-hold Left Option + move        lasso a region (no mouse button)
-tap Right Option               stop
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-4a5bac" alt="MIT licence"></a>
+  <a href="https://github.com/maddy30445r/deiko/releases"><img src="https://img.shields.io/github/v/release/maddy30445r/deiko?color=4a5bac&label=release" alt="Latest release"></a>
+  <img src="https://img.shields.io/badge/macOS-14%2B-161618?logo=apple&logoColor=white" alt="macOS 14 or later">
+  <a href="https://github.com/maddy30445r/deiko/actions/workflows/ci.yml"><img src="https://github.com/maddy30445r/deiko/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/MCP-memory%20server-4a5bac" alt="MCP memory server">
+</p>
 
-                               → a small orb appears with what Deiko heard
-drag the coin onto your        → your prompt is pasted into that live session
-Claude Code window               and submitted for you
-```
+<p align="center">
+  <img src="docs/assets/demo.gif" alt="The same bug reported two ways: typed out, and shown with Deiko" width="460">
+</p>
+
+<p align="center">
+  <a href="#install">Install</a> •
+  <a href="#how-it-works">How it works</a> •
+  <a href="#task-memory">Task memory</a> •
+  <a href="#privacy">Privacy</a> •
+  <a href="docs/architecture.md">Architecture</a> •
+  <a href="docs/self-hosting.md">Self-hosting</a> •
+  <a href="CONTRIBUTING.md">Contributing</a>
+</p>
 
 ---
 
-## Install
+Describing a bug in prose is slow and lossy: you type a paragraph, take a
+screenshot, attach it, then explain which part of the screenshot you meant.
+With Deiko you point at the thing and say what's wrong. Your agent gets a brief
+with the crop, the exact text under your cursor and your words, lined up so it
+knows which "this" you meant. And because Deiko files every brief into the
+piece of work it continues, Friday's agent already knows what Tuesday's agent
+tried.
 
-Requires macOS 14 or later.
+## Install
 
 ```sh
 curl -fsSL https://deiko.app/install.sh | sh
 ```
 
-That fetches the latest release, copies it to `/Applications`, clears the
-download quarantine and launches it. [Read it first](scripts/install.sh) — it is
-short, and piping a stranger's script into `sh` deserves a look.
+Needs macOS 14 or later on Apple silicon. The script installs the latest
+release to `/Applications` and launches it ([read it first](scripts/install.sh)).
+A first-run window asks for four permissions and explains each one. For the
+disk image, updating and uninstalling, see [docs/install.md](docs/install.md).
 
-**This is the route that avoids the Gatekeeper dialog entirely**, and not by
-defeating anything: `com.apple.quarantine` is set by the app that downloads a
-file, and `curl` does not set it. Nothing to dismiss, nothing to clear.
+## How it works
 
-Prefer the disk image? It is at the URL `version.json` names, and installs by
-hand:
+1. **Double-tap Right Option** to start. A red bar shows while Deiko listens.
+2. **Point and talk.** Rest the cursor on what you mean, or hold Left Option and
+   draw around it. Say what should change.
+3. **Tap Right Option** to stop. A coin appears with Deiko's reading of what you said.
+4. **Drag the coin onto your agent.** The brief is pasted into that chat and sent.
 
-### By hand
+```mermaid
+flowchart LR
+    A["You point and talk"] --> B["Capture<br/>crops · labels · voice"]
+    B --> C["Brief<br/>words lined up with what you pointed at"]
+    C --> D["Filing<br/>which task does this continue?"]
+    D --> E["Your agent<br/>brief + the task's history"]
+    E -.->|"save_outcome"| F[("Task memory<br/>on your Mac")]
+    F -.-> D
+```
 
-1. Open the DMG and drag **Deiko** to Applications.
-2. **Before launching**, clear the quarantine:
-   ```sh
-   xattr -dr com.apple.quarantine /Applications/Deiko.app
-   ```
-3. Launch it. A first-run window walks you through four permissions, and
-   you're done — the gesture above is all it takes from there.
+Speech is transcribed by Whisper (through Deiko's relay, or your own Groq key)
+or by Apple's on-device recogniser, and mixed-language speech such as
+Hinglish works. Secrets on screen are redacted before anything is written; a
+screenshot that shows a credential is withheld. More in
+[docs/architecture.md](docs/architecture.md).
 
-### Why step 2, and why that way round
+## Task memory
 
-Deiko is signed with a **self-signed certificate**, not an Apple Developer ID.
-Anything downloaded without one is quarantined, and macOS says *"Deiko can't be
-opened because the developer cannot be verified."*
+Every brief is filed into the piece of work it continues, or starts a new one.
+Each task keeps a note of where it stands, what was decided and what each agent
+reported back, and the next brief on that work carries it.
 
-The GUI route — **System Settings → Privacy & Security → Open Anyway** — does
-let the app start, and it is fine if you prefer clicking. But quarantine is set
-on **every file** in the download, and Deiko ships its own Node runtime inside
-the bundle to transcribe your sessions. Clearing the app you launched does not
-obviously clear a nested binary the app later spawns, and the failure shows up
-much later as a session stuck at *"Transcribing…"*. `xattr -dr` clears the whole
-tree in one go, which is why it leads.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/board-dark.png">
+  <img src="docs/assets/board-light.png" alt="The Deiko board: briefs grouped into tasks, each with what happened">
+</picture>
 
-Right-click → Open is **not** enough on current macOS.
+- **The board** shows every task. Move briefs, answer "Same work?", edit or
+  forget any note, and pin project rules every brief should carry.
+- **The memory server** gives MCP agents five tools: `search_briefs`,
+  `list_tasks`, `get_task`, `get_brief` and `save_outcome`. One click in
+  Settings connects it to Claude Code, Codex, Cursor, Gemini CLI, VS Code and
+  Antigravity.
+- **Agents report back.** When an agent finishes a brief it saves what it did,
+  decided and left open, so the next chat starts there, in any agent.
 
-Being straight about what this means: you are choosing to run an app Apple has
-not vetted, on the basis that you trust whoever handed you the DMG. That is a
-real decision. Only the $99/yr Developer Program removes this wall.
+See [docs/memory.md](docs/memory.md).
 
-## The four permissions
+## Works with
 
-Each is used for exactly one thing, and nothing is captured unless you start a
-session.
+**Any agent you can type to.** Drop the coin on its window and the brief is
+pasted and sent: Claude Code in a terminal or an IDE, Cursor, Codex, or ChatGPT
+and Claude.ai in the browser. Browser chats can't call tools, so their briefs
+carry the task's history inline.
+
+**Task memory over MCP** connects in one click to Claude Code, Codex, Cursor,
+Gemini CLI, VS Code and Antigravity, and any other MCP client can run the
+server directly.
+
+## Privacy
 
 | | |
 |---|---|
-| **Accessibility** | reads the label under your cursor, and watches for the hotkey |
-| **Screen Recording** | crops a screenshot of what you point at |
-| **Microphone** | records your narration while you point |
-| **Speech Recognition** | turns your words into text, on this Mac |
+| **Stored** | Only on your Mac, in `~/Library/Application Support/Deiko`. Recordings are deleted once the brief is made. |
+| **Sent for processing** | Your voice to Whisper (Groq), the transcript for a summary, and titles and summaries for filing (Jev via OpenRouter). Nothing is kept. |
+| **Never sent** | Screenshots, OCR and accessibility text, except inside the brief you hand to your own agent. |
 
-**Screen Recording needs a relaunch** before it takes effect. Deiko offers you
-the button when that moment arrives.
+The relay's code is in this repository, so you can check it, or
+[run your own](docs/self-hosting.md). Full details: [docs/privacy.md](docs/privacy.md).
 
-If a permission is missing, the menu-bar mark wears an orange `!` — the hotkey
-does nothing without all four, and an app that looked ready while silently
-ignoring you would be worse.
+## Pricing
 
-## What leaves your Mac
+Deiko is free and open source. Everything, Pro included, is free until
+**24 October 2026**. After that, Pro is **$7.99 a month, $79 a year or $159
+once**, and adds ten hours a month of Deiko's hosted transcription. Without Pro,
+Deiko stays free to use: 30 minutes of hosted transcription, then Apple's
+on-device recogniser, or your own Groq key with no limit.
 
-**Your narration audio, and nothing else.** Screenshots, OCR text, window
-titles and accessibility text have never left the device and there is no
-setting that makes them.
-
-- **The recording is deleted the moment your brief is made.** It has one use
-  and no reader after that.
-- A red bar sits at the top of the screen for the whole time a session is
-  capturing. It does not fade or auto-hide, and clicking it stops the session.
-- If a credential is visible in a screenshot, that screenshot is **withheld**
-  and the brief says so rather than sending it.
-
-Transcription picks the first of these that is available:
-
-1. **your own Groq API key** — your key, your bill, and Deiko's servers never
-   see the audio. Part of Pro; a checkout using a `.env` is never gated.
-2. **Deiko's service**, which forwards the audio to a transcription provider and
-   keeps nothing. Free installs get **30 minutes of it, once**; Pro gets ten
-   hours a month.
-3. **this Mac alone** — no upload at all, using Apple's on-device recogniser.
-   Accuracy is lower, especially for mixed-language speech.
-
-**Running out is not an error.** When the free 30 minutes are gone, sessions keep
-working on option 3 — the brief still renders, from Apple's words. Nothing breaks
-and nothing stops; the accuracy is just the accuracy Apple gives you.
-
-## Plans
-
-| | |
-|---|---|
-| **Free** | The whole app. 30 minutes of Deiko's transcription, once, then on-device forever. |
-| **Pro — $3.99/mo or $29.99/yr** | Ten hours of transcription a month, or bring your own Groq key and use none of ours. |
-
-A licence key is pasted into Settings. **There is no account** — no email, no
-password, no profile, nothing to sign into and nothing of yours to breach. The
-key is the whole thing.
-
-The free trial is counted against your Mac using a one-way hash of its hardware
-id. We never see or store the id itself, and it identifies a machine rather than
-a person — but it is a stable pseudonym that survives reinstalling, and it would
-be dishonest to say otherwise.
-
-## Using it
-
-**Talk while you point.** The narration *is* the task — Deiko deliberately
-does not write a summary of it for the agent, because you already said what you
-wanted out loud.
-
-Pointing only counts while you are speaking. A cursor that comes to rest while
-you are silent is not recorded, which is what keeps a session from filling up
-with everything you happened to scroll past.
-
-When you stop, the orb appears with Deiko's reading of what it heard. Then:
-
-- **drag the coin** onto the window running your agent — the app is brought
-  forward, and your prompt is pasted in and submitted;
-- **click the coin** to review — the transcript is editable there, and it is
-  the one thing worth correcting, because a mis-heard identifier does more
-  damage than anything else in the document;
-- **double-tap Right Option again** while the orb is up to add more to the same
-  session;
-- **× or Escape** puts it away. The session stays on disk.
-
-## Building from source
+## Build from source
 
 ```sh
-make setup      # node deps
-make bundle     # build/Deiko.app
-make install    # …and put it in /Applications, restarted
-make dmg        # build/Deiko-<version>.dmg
-make test
+make setup           # Node dependencies
+make signing-setup   # once, so macOS permissions survive rebuilds
+make install         # build, sign, install and launch
+make test            # Swift and Node test suites
 ```
 
-Use `make install` rather than copying by hand. `cp -R build/Deiko.app
-/Applications/` merges into the existing bundle instead of replacing it, and
-rewrites the app underneath Finder, which then caches whatever half-state it
-saw — a prohibited-sign or blank icon on an app that is running fine and
-correctly signed. `make install` quits, replaces wholesale, re-registers with
-LaunchServices and relaunches.
+Requires Xcode 16 and Node 22. See [CONTRIBUTING.md](CONTRIBUTING.md) for the
+repository layout and conventions.
 
-`make signing-setup` creates the local certificate once. Without it the app is
-ad-hoc signed and **macOS drops all four permissions on every rebuild**.
+## Contributing
 
-## Shipping a new version to the team
+Issues and pull requests are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md);
+report security issues privately as described in [SECURITY.md](SECURITY.md).
 
-```sh
-# 1. bump the version — one file, everything else reads it
-echo 0.2.0 > VERSION
+## License
 
-# 2. commit; the release refuses to run on a dirty tree
-git commit -am "…"
+[MIT](LICENSE). Bundled third-party components keep their own licences; see
+[apps/macos/licenses](apps/macos/licenses).
 
-# 3. build, tag, and publish the DMG in one step
-make release \
-  RELAY_URL=https://<your-relay>.lambda-url.ap-south-1.on.aws \
-  SITE_URL=https://deiko.app \
-  BUY_URL=https://buy.polar.sh/polar_cl_zzHzJtHnGwaUZhsQMEQX5CJ6rvrHytww5AaUx4J6WjF \
-  SUPPORT_EMAIL=support@deiko.app
-```
-
-**Pass all four.** `make release` refuses without `RELAY_URL` or `SITE_URL`, but
-it only *warns* about the other two — and a build missing them ships with the
-"Get Pro…" and "Send feedback…" affordances silently hidden, which looks like a
-finished app that simply cannot be paid or written to. The one Polar link above
-carries **both** SKUs, annual first, so the checkout opens on $29.99/yr with a
-switcher down to $3.99/mo.
-
-`make release` refuses a dirty tree or an existing tag — in either spelling,
-`v0.4.1` or `0.4.1` — because a release whose contents do not match a commit is
-worse than no release. It stamps the version, the relay URL, the site URL, the
-checkout link and the support address into the bundle, builds the DMG, and
-hands it to `scripts/publish-release.sh`,
-which uploads the disk image to S3, writes the `version.json` the app's update
-check reads, and publishes `install.sh` stamped with the host serving it. Then
-it tags the commit here.
-
-It does **not** create a GitHub Release; that was true once and the Makefile
-explains at length why it no longer is — an asset behind repo access returns a
-bare 404 to a stranger, which reads as a broken link rather than a permission
-problem.
-
-**Always pass `RELAY_URL`.** It is not remembered between releases — a build
-made without it silently falls back to on-device words, which is a quieter
-failure than a relay that is down. Confirm it landed before sharing the link:
-
-```sh
-/Applications/Deiko.app/Contents/MacOS/deiko-capture diagnostics | grep relay
-```
-
-That must print the URL, not `none — this build has no relay`.
-
-Check `relay configured:`, **not** `transcription:`. The second line says which
-transcriber would run, and your own Groq key outranks the relay — so on your
-machine it reads "your own Groq key" whether the URL was stamped or not. It
-cannot fail, which makes it the worse kind of check: the trusted kind.
-
-**Builds go to the site, not to this repo.** `make release SITE_URL=…` puts the
-DMG and a `version.json` under `/download` on the landing site, and tags *this*
-repo, which stays private — the site holds the binary, this repo holds the
-commit that produced it. "Who may read the code" and "who may download the app"
-are separate questions; they were the same answer only because releases used to
-be cut here, and an asset on a private repo returns a bare **404** to a
-stranger, which reads like a broken link rather than a permission problem.
-
-`make release` refuses when `SITE_URL` is empty. A build nobody can reach is
-not a release.
-
-**What somebody does to update:** re-run the install command — it replaces the
-existing install and clears quarantine again. The four permissions survive,
-because the app keeps the same signing identity. Anyone who pasted their own
-Groq key gets one login-password prompt on their first session after updating
-— see below.
-
-Deiko checks for a newer release once at launch and, if there is one, grows an
-**"Update to …"** item in its menu. It never installs anything by itself.
-
-**Check that the site actually serves the file, every release.** The update
-check fails *silently* by design — no site, no network, a 404 or a malformed
-file all mean "carry on", because an app that interrupts a developer to report
-it could not check for updates has made their day worse for nothing. The cost of
-that design is that a broken publish is invisible from the app, and it has been
-broken: 0.4.2 shipped stamped with a `DeikoSiteURL` whose
-`download/version.json` returns 404, so every install of it checks and silently
-learns nothing. One command says whether the release landed:
-
-```sh
-curl -fsS "$SITE_URL/download/version.json" && curl -fsSI "$SITE_URL/install.sh" >/dev/null \
-  && echo "✓ the site is serving this release"
-```
-
-`make release` cannot do this for you — the upload finishes before the CDN has
-the file — so it belongs in the announcement step, before the link is shared.
-
-### The one rough edge in updates
-
-macOS guards a keychain item with an ACL pinned to one exact binary, and every
-update is a new binary, so the first read after an update asks for the login
-password. "Always Allow" quiets it until the next update.
-
-Deiko keeps this as small as it can: everything that only needs to know
-*whether* a key is set uses an attributes-only query that never prompts, and
-the relay device token was moved out of the keychain entirely because it is an
-identifier rather than a secret. What remains is the API keys themselves, so
-**only teammates using their own Groq key ever see the prompt.**
-Anyone on the default relay path never does.
-
-Removing it completely needs an Apple Developer ID ($99/yr), which changes the
-ACL from "this exact binary" to "this team" and therefore survives updates.
-
-## Uninstall
-
-Dragging the app to the Trash leaves five things behind, because macOS keeps
-them outside the bundle. In rough order of how much space they take:
-
-```sh
-# 1. Your sessions — briefs and screenshots. The recordings were already
-#    deleted, one per brief, as each was made.
-rm -rf ~/Documents/Deiko
-
-# 2. Logs.
-rm -rf ~/Library/Logs/Deiko
-
-# 3. Preferences: licence key, cached plan, session key, first-run flag.
-defaults delete com.deiko.capture
-
-# 4. Any API keys you pasted in Settings.
-security delete-generic-password -s com.deiko.capture -a GROQ_API_KEY
-security delete-generic-password -s com.deiko.capture -a GROQ_API_KEY
-
-# 5. The four permission grants.
-tccutil reset All com.deiko.capture
-```
-
-Turn off **Open Deiko at login** in Settings before you delete the app, or the
-login item outlives it and macOS reports a missing application at every boot.
-
-Reinstalling does **not** restore your free trial. It is counted against a
-one-way hash of the Mac's hardware id, which is the same after a reinstall —
-see [Plans](#plans) above, where that trade-off is stated in full.
-
-## Licence
-
-Not yet chosen. Every third-party dependency is permissively licensed (MIT,
-ISC, BSD, Apache-2.0); there is no copyleft anywhere in the tree.
+<p align="center">
+  <a href="https://deiko.app">deiko.app</a> •
+  <a href="CHANGELOG.md">Changelog</a> •
+  <a href="https://github.com/maddy30445r/deiko/issues">Issues</a>
+</p>
