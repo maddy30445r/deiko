@@ -6,7 +6,7 @@ larger than a small fix, open an issue first so we can agree on the approach.
 ## Requirements
 
 - macOS 14 or later on Apple silicon
-- Xcode 16 or later (Swift 6)
+- Xcode 26 or later (Swift 6.2)
 - Node.js 22 or later
 
 ## Getting started

@@ -143,7 +143,7 @@ make install         # build, sign, install and launch
 make test            # Swift and Node test suites
 ```
 
-Requires Xcode 16 and Node 22. See [CONTRIBUTING.md](CONTRIBUTING.md) for the
+Requires Xcode 26 and Node 22. See [CONTRIBUTING.md](CONTRIBUTING.md) for the
 repository layout and conventions.
 
 ## Contributing
