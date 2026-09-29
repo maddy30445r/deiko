@@ -150,7 +150,7 @@ const NOT_A_REPO =
 /**
  * Guess repo names from window titles. Editors render `App.tsx — acme-portal`
  * (EM dash, U+2014); browsers render `Pull requests — acme-api-service —
- * Bitbucket - Google Chrome – Alex`, where the trailing en dash is the Chrome
+ * Bitbucket - Google Chrome – Sam`, where the trailing en dash is the Chrome
  * profile. So: split on em dashes, drop segments naming an app, take what's left.
  * (Moved here unchanged from render-brief.mjs.)
  */
