@@ -365,7 +365,7 @@ test("decide takes other numbers only when handed them (the eval's --sweep)", as
   };
   assert.notEqual(decide(input).task, "t-20260918-100000", "today's numbers: 0.55 is short of a join");
   assert.equal(decide({ ...input, rules: { ...RULES, join: { ...RULES.join, first: 0.5 } } }).task, "t-20260918-100000");
-  assert.deepEqual(RULES, { gate: 0.5, join: RULES.join, ask: 0.35, reference: RULES.reference });
+  assert.deepEqual(RULES, { gate: 0.5, join: RULES.join, ask: 0.35, reference: RULES.reference, local: RULES.local });
 });
 
 // ── Pointing back ("in that task", "do you remember the fix we did… now…") ──
@@ -419,4 +419,29 @@ test("a brief reads every summary line for matching, and its first for a title",
   assert.equal(me.summaryLine, "Default to annual on load.");
   assert.equal(me.line, "Default to annual on load.");
   assert.equal(me.summaryText, "Default to annual on load.; Fix the yearly total from $180 to $192.; Highlight the Growth pack button.");
+});
+
+const RULES_FOR_TEST = () => ({ gate: GATE, join: JOIN, ask: ASK, reference: REFERENCE });
+
+// ── The Mac is sure, Jev isn't ──────────────────────────────────────────────
+
+const local = (...rows) => rows.map(([id, score, seat = "score"]) => ({ id, score, seat }));
+
+test("a short follow-up local search puts clearly first asks 'Same work?' instead of starting fresh", () => {
+  // "add undo, five minutes after applying": Jev unsure, local search's clear #1.
+  const out = decide({ ...base, answers: r1({ [A]: 0.16, [B]: 0.05 }), local: local([A, 0.9], [B, 0.4], [C, 0.3]) });
+  assert.equal(out.why, "ask-local");
+  assert.deepEqual(out.candidates, [A]);
+  assert.equal(out.task, OWN, "asked, never joined");
+});
+
+test("sharing the page alone, a close race, or Jev's flat no: no ask", () => {
+  const seat = decide({ ...base, answers: r1({ [A]: 0.2 }), local: local([A, 0.5, "label"], [B, 0.48]) });
+  assert.equal(seat.why, "new", "new work on the same page shares it too");
+  const close = decide({ ...base, answers: r1({ [A]: 0.3 }), local: local([A, 0.6], [B, 0.55]) });
+  assert.equal(close.why, "new");
+  const no = decide({ ...base, answers: r1({ [A]: 0.02 }), local: local([A, 0.9], [B, 0.1]) });
+  assert.equal(no.why, "new", "Jev's flat no still wins");
+  const off = decide({ ...base, answers: r1({ [A]: 0.3 }), local: local([A, 0.9], [B, 0.1]), rules: { ...RULES_FOR_TEST(), local: null } });
+  assert.equal(off.why, "new");
 });

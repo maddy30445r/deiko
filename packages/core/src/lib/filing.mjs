@@ -136,6 +136,10 @@ export function prepare({ id, me, summary, windowTitles, board, taskTitles, coll
     const title = titleOf(s.id);
     return {
       id: s.id,
+      // Local search's own score and seat, for `decide`; stripped before the
+      // body goes to the relay (below), which never sees them.
+      score: s.score,
+      seat: s.seat,
       title: redact(title),
       // The newest ask is dropped here, unlike a prompt: the relay describes
       // a task by this field, and the newest brief is the one most likely
@@ -175,7 +179,7 @@ export function prepare({ id, me, summary, windowTitles, board, taskTitles, coll
       id: c.id, name: c.name, hint: c.hint ?? "",
       labels: topLabels(board.filter((b) => b.collection === c.id).map((b) => [...(b.keys?.repo ?? []), ...(b.keys?.sites ?? []), ...(b.keys?.pages ?? [])]), 5),
     })),
-    tasks: shortlist,
+    tasks: shortlist.map(({ score, seat, ...t }) => t),
     // NEVER screenTerms — they scored the shortlist above and stay here.
     // ROUTES THE RELAY TO THE V3 PATH — see services/relay/relay.mjs. A body
     // with no version (or below 3) reads as an unupdated 0.5.0 app.
@@ -245,6 +249,8 @@ export function place({ answer, id, me, summary, groups, shortlist, collections,
     title: titleFor(me),
     rules,
     lookalikes,
+    // Local search's own view, best first: what "the Mac is sure" means.
+    local: shortlist.map((t) => ({ id: t.id, score: t.score, seat: t.seat })),
   });
 }
 

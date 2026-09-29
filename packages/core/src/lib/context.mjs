@@ -142,7 +142,14 @@ export const ASK = 0.35;
 /// ponytail: starting values, measured on the filing eval and the
 /// back-reference set (scripts/eval-memory/references.mjs).
 export const REFERENCE = { back: 0.6, join: 0.6, gap: 0.25, candidates: 5 };
-export const RULES = { gate: GATE, join: JOIN, ask: ASK, reference: REFERENCE };
+/// WHEN LOCAL SEARCH IS SURE (its #1 leads the next by `lead` on the blended
+/// score) and Jev gave it at least `floor`, a brief that would start a new
+/// task asks "Same work?" instead. null turns it off. Sharing the page or file
+/// alone is NOT enough: new work on the same page shares it too (Jev 0.05-0.12).
+/// Set on the realistic scenario (29 Sep, 40 new briefs): 4 of 8 missed
+/// follow-ups asked about the right task, one about a wrong one, none on new work.
+export const LOCAL_ASK = { floor: 0.15, lead: 0.15 };
+export const RULES = { gate: GATE, join: JOIN, ask: ASK, reference: REFERENCE, local: LOCAL_ASK };
 /// The relation levels, in order. MIRRORS `RELATION_RUBRIC` in the relay.
 export const RELATIONS = ["different", "related", "same"];
 
@@ -209,7 +216,7 @@ const otherTicket = (a, b) => {
 export function decide({
   answers = {}, second = {}, collections = [], keys = {}, apps = [],
   shortlist = [], taskKeys = {}, newest = {}, now = 0,
-  taskCollections = {}, sessionId = null, title = null, rules = RULES, lookalikes = {},
+  taskCollections = {}, sessionId = null, title = null, rules = RULES, lookalikes = {}, local = [],
 } = {}) {
   // AN UNREADABLE GATE IS A MISSING ONE, as the relay reads it (`finalists`):
   // `Number(null)` is 0, so coercing first would send a real brief to odds.
@@ -305,6 +312,23 @@ export function decide({
       candidates = refs.filter(([, r]) => r >= rules.ask).map(([id]) => id).slice(0, MAX_CANDIDATES);
       related = null;
       why = "ask-reference";
+    }
+  }
+
+  // THE MAC IS SURE, JEV ISN'T. A short follow-up ("add undo, five minutes")
+  // leans on the screen, so Jev scores it low though local search puts its
+  // task clearly first. Ask "Same work?" rather than start fresh: a tap,
+  // never a wrong join.
+  const lr = rules.local === undefined ? LOCAL_ASK : rules.local;
+  // Local search's top two, logged for tuning the rule below.
+  if (local.length) jev.local = local.slice(0, 2).map((l) => [l.id, Math.round((l.score ?? 0) * 1000) / 1000, l.seat]);
+  if (!task && why === "new" && lr && local.length) {
+    const [a, b] = local;
+    const lead = (a.score ?? 0) - (b?.score ?? 0);
+    if (open.includes(a.id) && p(a.id) >= lr.floor && lead >= lr.lead) {
+      candidates = [a.id];
+      why = "ask-local";
+      jev.lead = lead;
     }
   }
 

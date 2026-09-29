@@ -414,7 +414,7 @@ export const RELATION_RUBRIC = [
 ];
 
 const GATE_QUESTION = "The current brief is a real request: the speaker asks for something to be built, fixed, changed, checked or explained. Microphone checks (\"testing, testing\", \"can you hear me\"), greetings, thank-yous, and filler with no request in it are not real requests.";
-const REFERS_BACK = "The brief explicitly says it continues or builds on specific earlier work the developer did (for example \"in that task\", \"the fix we did yesterday\", \"do you remember when we … now let's …\"). Only asking about the past (\"what did we decide?\"), or a brand-new request, is not this.";
+const REFERS_BACK = "The brief says, in whatever language or mix of languages the developer speaks, that it carries on or adds to specific earlier work they already did, and then asks for something on it. For example: \"in that task\", \"circling back to the login fix from yesterday…\", \"picking up where we left off on the invoice export…\", \"the report page we built for Rahul, he now wants…\", \"same screen as before, also…\", \"lo del checkout de ayer, ahora…\", \"bei dem Export von gestern noch…\", \"jo humne kal kiya tha, usi mein…\". Only asking about the past (\"what did we decide?\"), or a brand-new request with no pointer to earlier work, is not this.";
 /// Local search's top few, asked which one a back-reference points at: five, so
 /// two look-alikes (two apps' "price bug") both get compared. MIRRORED
 /// by `REFERENCE.candidates` in scripts/lib/context.mjs.

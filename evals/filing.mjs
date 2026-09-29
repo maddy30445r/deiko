@@ -175,6 +175,10 @@ const rowsPath = value("--rows", null);
 // --judge-from <stamp>: earlier briefs go on the board as the key places them,
 // with no relay call — so a comparison spends only on the briefs it judges.
 const judgeFrom = value("--judge-from", null);
+// --local-ask floor,lead | off: try the "Same work?" rule's numbers on a run.
+const localArg = value("--local-ask", null);
+const runRules = localArg == null ? undefined
+  : { ...RULES, local: localArg === "off" ? null : (([floor, lead]) => ({ floor: Number(floor), lead: Number(lead) }))(localArg.split(",")) };
 const maxCalls = Number(value("--max-calls", Infinity));
 let calls = 0;
 for (const [stamp, e] of exp) {
@@ -202,7 +206,7 @@ for (const [stamp, e] of exp) {
     const why = unplaceable(me);
     const use = blended ?? prep;
     try {
-      const args = why ? null : { answer: await ask(use.body, paceMs, stamp), id: stamp, me, summary, groups: use.groups, shortlist: use.shortlist, collections: [...collections], lookalikes: use.lookalikes ?? {} };
+      const args = why ? null : { answer: await ask(use.body, paceMs, stamp), id: stamp, me, summary, groups: use.groups, shortlist: use.shortlist, collections: [...collections], lookalikes: use.lookalikes ?? {}, rules: runRules };
       const decision = why
         ? decideLocally({ me, ...rankLocally({ me, summary, windowTitles, board, taskTitles }), collections })
         : place(args);
