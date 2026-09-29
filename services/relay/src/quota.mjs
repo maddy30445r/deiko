@@ -115,7 +115,7 @@ export function audioSeconds(byteLength) {
 /// What an id may contain: a security boundary, not tidiness.
 ///
 /// The id is interpolated into row keys (`lic:<id>`, `lic:<id>#<month>`,
-/// `lic:<id>#trial`, `dev:<id>`), so any character meaningful in that grammar
+/// `lic:<id>#trial`, `dev:<id>#YYYY-MM`), so any character meaningful in that grammar
 /// lets one row be spelled two ways. A crafted id could make `licenseKey()`
 /// return a real key's monthly usage row, which `tierFor` then overwrites with
 /// `PutItem` (it replaces the whole item), resetting that customer's month.
