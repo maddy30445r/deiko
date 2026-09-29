@@ -1,11 +1,8 @@
 import type { Referent } from "./types.js";
 
 /**
- * Adapt referents into the shape the alignment engine scores.
- *
- * Lives here rather than in each consumer because there are now two — the T0.2
- * gate harness and the brief renderer — and the region-timing rule below is
- * subtle enough that a second copy would drift silently.
+ * Adapt referents into the shape the alignment engine scores. Shared by every
+ * consumer so the region-timing rule below has a single copy.
  */
 export interface AlignerCandidate {
   id: string;
@@ -29,11 +26,10 @@ export function toCandidates(referents: readonly Referent[]): AlignerCandidate[]
     return {
       id: r.id,
       hold: r.hold,
-      // Regions anchor at the drag's END with a dwell equal to the full span, so
+      // Regions anchor at the drag's end with a dwell equal to the full span, so
       // the overlap window is exactly [dragStart, dragEnd]. Anchoring at the
-      // midpoint shifted the window a half-span EARLY: it covered the silence
-      // before the lasso and missed the drag's whole second half — which is
-      // where the narration actually is.
+      // midpoint would shift the window early and miss the drag's second half,
+      // where the narration is.
       t: r.span ? r.span.end : r.t,
       features: r.capture ?? {
         // A deliberate drag needs no defence against being mistaken for a
@@ -51,7 +47,7 @@ export function toCandidates(referents: readonly Referent[]): AlignerCandidate[]
   });
 }
 
-/** One-line description for reporting. AX first — it is the exact string. */
+/** One-line description for reporting. AX first, since it is the exact string. */
 export function candidateText(r: Referent): string | undefined {
   if (r.text.ax.length > 0) return r.text.ax.join(" · ").slice(0, 90);
   if (r.text.ocr.length > 0) return `[ocr] ${r.text.ocr.join(" ").slice(0, 90)}`;

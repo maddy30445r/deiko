@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Three lines saying what a session was about — FOR THE DEVELOPER'S SCREEN ONLY.
+ * Three lines saying what a session was about, for the developer's screen only.
  *
  *   node packages/core/src/summarize.mjs ~/Library/Application\ Support/Deiko/<id>
  *
@@ -8,16 +8,15 @@
  * whether the thing you are about to send is the thing you meant to record. It
  * is a confidence check, not a plan.
  *
- * IT MUST NEVER REACH THE CODING AGENT. Deiko's whole posture is that the
- * renderer emits evidence and the agent states its own reading back — the one
- * hand-written brief that phrased a task as imperatives presumed work that
- * already existed. So this is written to `review-summary.txt`, a file
- * `prompt.txt` (the drop pastes only that) does not copy. That is a structural
- * guarantee rather than a promise: putting the text in `brief.json` would ship
- * it, and no comment would stop that.
+ * It must never reach the coding agent: the renderer emits evidence and the
+ * agent states its own reading back. So this is written to
+ * `review-summary.txt`, a file `prompt.txt` (the only thing the drop pastes)
+ * does not copy. That is a structural guarantee rather than a promise: putting
+ * the text in `brief.json` would ship it.
  *
- * Failure is not fatal, ever. No key, no network, a bad response — the file is
- * simply absent and the window shows no summary. Nothing downstream waits on it.
+ * Failure is never fatal: with no key, no network or a bad response the file
+ * is simply absent and the window shows no summary. Nothing downstream waits
+ * on it.
  */
 
 import { readFileSync, rmSync } from "node:fs";
@@ -27,24 +26,21 @@ import { homedir } from "node:os";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
-// Hinglish is the hard part, not the length. The narration is Latin-script Hindi
-// braided through English technical terms ("isko humko class one se class two
-// mein convert karna hai") — a weak model reads the English and loses the verbs.
-//
-// `llama-3.3-70b-versatile` was the pick until Groq retired it (discovered
-// live on 2026-08-30: every relay summary was 404ing on model_not_found).
-// gpt-oss-20b was verified against a Hinglish narration before being pinned —
-// verbs survive — and MIRRORS `SUMMARY_MODEL` in services/relay/src/relay.mjs;
-// change both or the relay path and the BYO-key path drift apart.
+// Hinglish is the hard part, not the length: the narration is Latin-script
+// Hindi braided through English technical terms ("isko humko class one se
+// class two mein convert karna hai"), and a weak model reads the English and
+// loses the verbs. gpt-oss-20b keeps them. Mirrors `SUMMARY_MODEL` in
+// services/relay/src/relay.mjs; change both or the relay path and the BYO-key
+// path drift apart.
 const MODEL = "openai/gpt-oss-20b";
 
 /// "Same as I speak" (Settings → Brief language) or the default, Hinglish read
-/// into English. The relay is told WHICH, never given the prompt itself.
+/// into English. The relay is told which, never given the prompt itself.
 const MODE = process.env.DEIKO_NARRATION === "native" ? "native" : "hinglish";
 
 // Sent only with the developer's own key. Deiko's relay holds a copy of each
-// variant and picks one by `mode` — `summarySystem` in
-// services/relay/src/relay.mjs MIRRORS this, so change both.
+// variant and picks one by `mode`; `summarySystem` in
+// services/relay/src/relay.mjs mirrors this, so change both.
 const SYSTEM = [
   "You summarise a developer's spoken description of a coding task.",
   "",
@@ -109,24 +105,17 @@ async function main() {
     return;
   }
 
-  // ── THE ONLY THING THAT LEAVES THIS MACHINE ─────────────────────────────
+  // The only thing that leaves this machine is one string: what the developer
+  // said out loud. Not referent text, OCR, window titles, crops or file paths.
+  // The narration already goes to the transcription service, so sending it here
+  // adds no new class of exposure; screen content has never left the device and
+  // must not start now, since a crop can hold a connection string. Build the
+  // body from `narration` and nothing else, even to give the model more
+  // context.
   //
-  // One string: what the developer said out loud. Not referent text, not OCR,
-  // not window titles, not crops, not file paths.
-  //
-  // The distinction is the product's privacy posture, not fastidiousness. The
-  // narration already goes to Sarvam to be transcribed, so sending it here adds
-  // no new class of exposure. SCREEN CONTENT HAS NEVER LEFT THE DEVICE and must
-  // not start now — a crop can hold a connection string, and referent text is
-  // whatever happened to be on screen.
-  //
-  // If you are here to give the model "a bit more context" so the summary reads
-  // better: that is the change this comment exists to stop. Build the body from
-  // `narration` and nothing else.
-  //
-  // THE RELAY GETS NO PROMPT. It spends Deiko's key for any bearer, so it
-  // pins the model, the budget and the system prompt itself — a relay that
-  // took a prompt from its caller was a free chat endpoint. It is told the
+  // The relay gets no prompt: it spends Deiko's key for any bearer, so it pins
+  // the model, the budget and the system prompt itself (a relay that took a
+  // prompt from its caller would be a free chat endpoint). It is told the
   // narration and which of its two prompts to use.
   const body = apiKey
     ? {
@@ -135,18 +124,17 @@ async function main() {
           { role: "system", content: SYSTEM },
           { role: "user", content: `<transcript>\n${narration}\n</transcript>` },
         ],
-        // Low, not zero. Zero is not more accurate here, just more repetitive.
+        // Low, not zero: zero is not more accurate here, just more repetitive.
         temperature: 0.2,
-        // Low effort and room: at 200 the model spent it all thinking and
-        // wrote nothing (see SUMMARY_MAX_COMPLETION_TOKENS in the relay).
+        // Low effort and room: a small budget is spent entirely on thinking and
+        // writes nothing (see `SUMMARY_MAX_COMPLETION_TOKENS` in the relay).
         reasoning_effort: "low",
         max_completion_tokens: 600,
       }
     : { narration, mode: MODE };
 
-  // ONE RETRY, AND A NOTE WHEN IT STILL FAILS. A failure used to leave
-  // nothing behind: a third of real briefs had no summary and nobody could say
-  // why (29 Sep). `summary.skipped` says why; a later success removes it.
+  // One retry, and a note when it still fails: `summary.skipped` says why there
+  // is no summary, and a later success removes it.
   const attempt = async () => {
     try {
       // A slow summary is worth less than a fast window. If Groq is having a bad

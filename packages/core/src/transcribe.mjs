@@ -1,20 +1,17 @@
 #!/usr/bin/env node
 /**
- * Transcribe a recorded session's narration into words on the SESSION CLOCK.
+ * Transcribe a recorded session's narration into words on the session clock.
  *
  *   node packages/core/src/transcribe.mjs sessions/<id>
  *
- * The important step is the last one. An ASR returns word times as offsets into
- * an audio file; the aligner needs them on the same monotonic clock as the
- * cursor samples. So every word is shifted by that hold's `audioT0` — the
- * moment the first audio buffer actually arrived, which we measured at a
- * consistent ~255ms after the hotkey went down. Skip the shift and every word
- * sits a quarter-second early, uniformly, and alignment fails in a way that
- * looks like the mechanic not working rather than a clock bug.
+ * An ASR returns word times as offsets into an audio file; the aligner needs
+ * them on the same monotonic clock as the cursor samples, so every word is
+ * shifted by that hold's `audioT0`, the moment the first audio buffer actually
+ * arrived. Skip the shift and every word sits a quarter-second early, and
+ * alignment fails in a way that looks like the mechanic not working.
  *
- * The cloud recogniser is behind a one-method interface because PRD §14 lists
- * the dependency as a real risk. That earned itself: it was Sarvam, it is now
- * Whisper, and the aligner never noticed the swap.
+ * The cloud recogniser is behind a one-method interface, so a provider can be
+ * swapped without the aligner noticing.
  */
 
 import { readFileSync, existsSync, rmSync, statSync } from "node:fs";
@@ -31,16 +28,11 @@ import { awaitPrecomputed, loadEvents, writeAtomic } from "./lib/session-io.mjs"
 import { refusalReason, REFUSAL_IS_FINAL, withOneRetry } from "./lib/cloud.mjs";
 
 
-// ── Stage timing ────────────────────────────────────────────────────────────
+// ── Stage timing ──
 //
-// The cost of this pipeline is not where it looks. Recognition runs on the
-// FINISHED file at roughly realtime, so for any session worth recording it
-// dominates everything else put together — and nothing in the output said so
-// until this printed it.
-//
-// Kept after the fact deliberately: it is the regression check. Any change that
-// claims to make transcription faster has to move these numbers, and any change
-// that quietly makes it slower shows up here instead of in a user's patience.
+// Recognition runs on the finished file at roughly realtime, so for a long
+// session it dominates everything else. Timings are printed so a change that
+// claims to speed transcription up has to move these numbers.
 const stages = new Map();
 
 async function timed(name, fn) {
@@ -61,62 +53,50 @@ function timingReport(totalMs) {
   return `  timing: ${parts.join(" · ")}  |  total ${secs(totalMs)}`;
 }
 
-// ── The interface ───────────────────────────────────────────────────────────
+// ── The interface ──
 
 /**
  * @typedef {{ name: string, transcribe: (wavPath: string, opts: {language?: string}) => Promise<{text: string}> }} Transcriber
  */
 
 /**
- * Long holds are split here. Sarvam's REST endpoint refused anything over 30
- * seconds outright; Groq's limit is generous by comparison, but the chunking
- * stays because it is what makes the uploads concurrent — and because a failed
- * chunk then costs its own stretch of sentence rather than the whole hold.
- *
- * These chunks upload CONCURRENTLY, and the whole cloud call runs alongside
- * on-device recognition rather than after it, so it costs nothing on the clock —
- * about 2s hidden inside recognition's 12s on a 77s session.
- *
- * This comment used to say a streaming WebSocket API was the shipping path and
- * this was only a gate harness. It is the shipping path. Streaming would remove
- * the last chunk's round trip; it is not where the latency was.
+ * Long holds are split into chunks that upload concurrently, and the whole
+ * cloud call runs alongside on-device recognition rather than after it, so it
+ * costs nothing on the clock. Chunking also means a failed chunk costs its own
+ * stretch of sentence rather than the whole hold.
  */
 const CHUNK_SECONDS = 25;
 const SAMPLE_RATE = 16000;
 const BYTES_PER_SAMPLE = 2;
 
-/// How many chunks may be in flight at once.
-///
-/// Four, because the relay's Lambda reserves five concurrent executions
-/// (`services/relay/deploy.sh`). A long session split into two dozen
-/// chunks and fired all at once throttles against that reservation, and one
-/// throttled chunk used to lose the whole session's cloud text. Staying under
-/// the reservation is what makes the fallback rare rather than routine.
+/// How many chunks may be in flight at once. Four, because the relay's Lambda
+/// reserves five concurrent executions (`services/relay/deploy.sh`): a long
+/// session fired all at once throttles against that reservation, and one
+/// throttled chunk would lose the whole session's cloud text. Staying under it
+/// makes the fallback rare rather than routine.
 const UPLOAD_CONCURRENCY = 4;
 
 /// "Same as I speak" (Settings → Brief language). Whisper writes down what it
-/// heard, in that language, with its OWN word timestamps — and those times are
-/// the timeline, not Apple's English recogniser's. The default translates to
-/// English and matches against Apple's timeline, which is the original design
-/// and still the right one for Hinglish (see `mergeWords`).
+/// heard, in that language, with its own word timestamps, and those times are
+/// the timeline instead of Apple's English recogniser's. The default translates
+/// to English and matches against Apple's timeline, which is the right design
+/// for Hinglish (see `mergeWords`).
 const NATIVE = process.env.DEIKO_NARRATION === "native";
 
 /// A stalled upload should cost one chunk, not the session. Without a signal
-/// `fetch` falls through to undici's ~300s default, which is five minutes of
-/// an orb reading "Transcribing…" with nothing to show for it. Sixty seconds
-/// matches the relay's own Lambda timeout — past that there is nothing coming.
+/// `fetch` falls through to undici's ~300s default, which is five minutes of an
+/// orb reading "Transcribing…". Sixty seconds matches the relay's own Lambda
+/// timeout: past that there is nothing coming.
 const UPLOAD_TIMEOUT_MS = 60_000;
 
 /**
- * The chunking half, shared by every network transcriber.
- *
- * Splitting long audio at silence and uploading the pieces concurrently is the
- * same problem whoever is on the other end, so `uploadOne` is the only thing
- * that differs between talking to Sarvam directly and talking to Deiko's relay.
+ * The chunking half, shared by every network transcriber: splitting long audio
+ * at silence and uploading the pieces concurrently is the same problem whoever
+ * is on the other end, so `uploadOne` is the only part that differs.
  *
  * `state` is the transcriber's own scratchpad, shared with `uploadOne` and read
- * back by the caller once every hold is done — today it carries WHY the relay
- * refused, which is a fact about the session rather than about any one chunk.
+ * back by the caller once every hold is done. Today it carries why the relay
+ * refused, a fact about the session rather than any one chunk.
  *
  * @returns {Transcriber}
  */
@@ -137,19 +117,12 @@ function chunkedTranscriber(name, uploadOne, state = {}) {
       const chunks = splitAtSilence(pcm, CHUNK_SECONDS);
       process.stderr.write(`(${totalSeconds.toFixed(0)}s → ${chunks.length} chunks) `);
 
-      // Concurrently, but IN SLICES, and never all at once. The chunks are
-      // independent uploads of a recording that already exists, so waiting for
-      // each round trip before starting the next spends latency for nothing —
-      // but firing all of them spends something worse. A ten-minute session is
-      // twenty-four uploads against a relay whose reserved concurrency is five;
-      // Lambda throttles the excess, and under a plain `Promise.all` one
-      // throttled chunk rejected the whole session and dropped every word to
-      // the on-device fallback. Four at a time stays under the reservation.
-      //
-      // `allSettled` per slice is the other half: a chunk that still fails
-      // costs its own stretch of sentence and nothing else. The failures are
-      // reported so the brief can say it is missing something rather than
-      // quietly reading short.
+      // Concurrently, but in slices, never all at once: firing every chunk at
+      // once throttles against the relay's reserved concurrency (see
+      // `UPLOAD_CONCURRENCY`), and under a plain `Promise.all` one throttled
+      // chunk would reject the whole session. `allSettled` per slice is the
+      // other half: a chunk that still fails costs its own stretch of sentence,
+      // and the failures are reported so the brief can say it reads short.
       const parts = [];
       const failures = [];
       await timed(name, async () => {
@@ -174,8 +147,8 @@ function chunkedTranscriber(name, uploadOne, state = {}) {
         process.stderr.write(
           `· ${failures.length}/${chunks.length} chunks failed — the transcript is missing some words `);
       }
-      // Each chunk's times start at ITS OWN zero. Walk the chunk lengths to
-      // put them on the hold's clock before anything downstream sees them.
+      // Each chunk's times start at its own zero. Walk the chunk lengths to put
+      // them on the hold's clock before anything downstream sees them.
       let offsetMs = 0;
       const shifted = parts.map((p, i) => {
         const at = offsetMs;
@@ -198,33 +171,24 @@ function chunkedTranscriber(name, uploadOne, state = {}) {
 
 /// The multipart body both Groq and the relay accept.
 ///
-/// TRANSLATION, NOT TRANSCRIPTION, and the endpoint is the decision rather than
-/// a detail. `/audio/translations` always answers in English; `/transcriptions`
-/// answers in whatever it heard. Measured over two real Hinglish sessions
-/// (`mddocs/spikes/2026-09-12-transcription-bakeoff.md`), transcription with a
-/// `hi` hint returned Devanagari and anchored **0/31 and 8/57** words against
-/// the on-device timeline — Devanagari tokens cannot match Latin ones, so the
-/// merge had nothing to bind screenshots with. Translation anchored **16/31 and
-/// 21/42**, matching and then beating Sarvam's 16/31 and 25/59, at a third of
-/// its price and twice its speed.
+/// Translation, not transcription: `/audio/translations` always answers in
+/// English, while `/transcriptions` on Hinglish returns Devanagari, which
+/// cannot match the Latin tokens of the on-device timeline, so the merge would
+/// have nothing to bind screenshots with. A user who speaks English gets plain
+/// transcription (there is nothing to translate); one who code-switches gets
+/// clean English. The review window says so where the narration is shown.
 ///
-/// So English out, for everybody. A user who speaks English gets plain
-/// transcription — there is nothing to translate — and a user who code-switches
-/// gets clean English rather than the garbage on-device recognition makes of
-/// them. The review window says so where the narration is shown, because that
-/// is where somebody checks their words before sending them.
-///
-/// `language` is deliberately unused: the translation endpoint takes no
-/// language hint, which is the property being bought. The parameter stays in
-/// the signature because `chunkedTranscriber` passes it to every uploader.
+/// `language` is sent only in "Same as I speak" mode, because the translation
+/// endpoint takes no language hint; it stays in the signature because
+/// `chunkedTranscriber` passes it to every uploader.
 function sttForm(pcm, language) {
   const form = new FormData();
   form.append("file", new Blob([wrapWav(pcm)], { type: "audio/wav" }), "audio.wav");
-  // large-v3, not turbo: turbo is $0.04/hr against $0.111 but CANNOT translate,
-  // and translation is the whole point of the endpoint below.
+  // large-v3, not turbo: turbo is cheaper but cannot translate, and
+  // translation is the whole point of the endpoint below.
   form.append("model", "whisper-large-v3");
-  // `verbose_json` carries the segments with their times on BOTH endpoints,
-  // and the words on transcription. Same price; the answer is a little longer.
+  // `verbose_json` carries the segments with their times on both endpoints, and
+  // the words on transcription.
   form.append("response_format", "verbose_json");
   if (NATIVE) {
     form.append("timestamp_granularities[]", "word");
@@ -235,14 +199,11 @@ function sttForm(pcm, language) {
 }
 
 /// The developer's own Groq key: their key, their bill, nothing in between.
+/// One key covers both the audio and the summary, which is what makes the
+/// promise in Settings true: bringing it takes Deiko's servers out of the path.
 ///
-/// ONE KEY NOW, and that is what makes the promise in Settings true. It used to
-/// take two — Sarvam for the audio, Groq for the summary — and "Deiko's servers
-/// never see it" was false for anybody who brought only the first. The same key
-/// now covers both, so bringing it really does take us out of the path.
-///
-/// `translate` is the shipped behaviour and `false` exists for `bakeoff.mjs`,
-/// which measures the alternative rather than assuming it.
+/// `translate` is the shipped behaviour; `false` is for comparing the
+/// alternative.
 function groqTranscriber(apiKey, model = "whisper-large-v3", { translate = !NATIVE } = {}) {
   return chunkedTranscriber(`groq:${model}${translate ? ":translate" : ""}`, async (pcm, language) => {
     const form = new FormData();
@@ -284,12 +245,9 @@ function groqTranscriber(apiKey, model = "whisper-large-v3", { translate = !NATI
 
 /**
  * Deiko's relay: the default, so a new user transcribes without holding an
- * account anywhere.
- *
- * The audio goes to Deiko's server, which forwards it and keeps nothing. That
- * is a materially different promise from "only to Groq", and the app says so
- * where people can read it before they start. Anyone who would rather not is
- * one Settings field away from their own key, which skips this entirely.
+ * account anywhere. The audio goes to Deiko's server, which forwards it and
+ * keeps nothing: a materially different promise from "only to Groq", which the
+ * app states before people start. Their own key skips this entirely.
  */
 function relayTranscriber(endpoint, token) {
   // The relay picks the Groq endpoint from this query, not from a form field:
@@ -299,26 +257,19 @@ function relayTranscriber(endpoint, token) {
   // granularities and the language.
   const url = `${endpoint.replace(/\/+$/, "")}/v1/transcribe${NATIVE ? "?task=transcribe" : ""}`;
 
-  // SOME REFUSALS ANSWER FOR THE WHOLE SESSION, AND SOME ARE WORTH RETRYING.
+  // Some refusals answer for the whole session, and some are worth retrying.
+  // A spent trial, a spent month and the daily ceiling are facts about the
+  // account or the day, so every later chunk would hear the same thing: stop
+  // uploading, ride on Apple's on-device words (the fallback quota.mjs
+  // documents), and do not count it as a failure. A rate limit or a 503 is not
+  // such a fact: the relay's limiter allows 30 requests a minute per token
+  // (services/relay/src/relay.mjs), so a burst 429 partway through a long
+  // recording is plausible and temporary. It throws like any other chunk
+  // failure and the next chunk tries again. `REFUSAL_IS_FINAL` is where that
+  // distinction lives.
   //
-  // A spent trial, a spent month and the service's daily ceiling are facts
-  // about the account or the day — every later chunk would hear the same
-  // thing, and uploading them anyway spends bandwidth and relay requests to be
-  // told what is already known. A refused stretch rides on Apple's on-device
-  // words, exactly the fallback quota.mjs documents, and is not counted as a
-  // failure: the session is degraded, not broken.
-  //
-  // A rate limit or a 503 is NOT such a fact. The relay's in-memory limiter
-  // allows 30 requests a minute per token (services/relay/src/relay.mjs:104) and a
-  // twelve-minute session is ~29 chunks plus quota calls, so a burst 429 on
-  // chunk 7 of a long recording is both plausible and temporary. It throws
-  // like any other chunk failure — costing its own stretch of sentence and
-  // nothing else — and the next chunk tries again. `REFUSAL_IS_FINAL` is where
-  // that distinction lives.
-  //
-  // `state.refused` is remembered either way, and the FIRST reason wins: it is
-  // what the review window shows, and "your trial is used up" outranks the
-  // rate limit that followed it.
+  // `state.refused` is remembered either way, and the first reason wins: "your
+  // trial is used up" outranks the rate limit that followed it.
   const state = { refused: null, uploaded: 0 };
   return chunkedTranscriber("deiko", async (pcm, language, { last = true } = {}) => {
     if (state.refused && REFUSAL_IS_FINAL.has(state.refused)) {
@@ -328,11 +279,11 @@ function relayTranscriber(endpoint, token) {
     let response;
     let bodyText;
     try {
-      // Counted BEFORE the await, because the bytes are on the wire either
-      // way: what the review window has to be able to say is whether audio
-      // left this Mac, and a request that was sent and then refused still
-      // left it. A DNS failure that never opened a socket does not reach
-      // here, which is exactly the distinction the trust line needs.
+      // Counted before the await, because the bytes are on the wire either way:
+      // the review window has to be able to say whether audio left this Mac,
+      // and a request that was sent and then refused still left it. A DNS
+      // failure that never opened a socket does not reach here, which is the
+      // distinction the trust line needs.
       state.uploaded += 1;
       response = await fetch(url, {
         method: "POST",
@@ -375,12 +326,12 @@ const REFUSAL_NOTE = {
 };
 
 /**
- * Nobody on the other end — and that is a supported way to run.
+ * Nobody on the other end, which is a supported way to run.
  *
- * Returning empty text rather than throwing is what makes this a configuration
- * rather than a branch: the merge step below already handles "no cloud words,
- * keep the on-device ones", because that is what it does when Sarvam fails.
- * The words and their timings both come from Apple, and the session is intact.
+ * Returning empty text rather than throwing makes this a configuration rather
+ * than a branch: the merge step below already handles "no cloud words, keep
+ * the on-device ones". The words and their timings both come from Apple, and
+ * the session is intact.
  */
 function onDeviceOnlyTranscriber() {
   return { name: "on-device", async transcribe() { return { text: "" }; } };
@@ -390,7 +341,7 @@ function onDeviceOnlyTranscriber() {
  * Who transcribes, most specific first.
  *
  * 1. the developer's own Groq key — an explicit choice, so it wins, and one
- *    key now covers both the words and the summary;
+ *    key covers both the words and the summary;
  * 2. Deiko's relay — the default, and the reason a new install needs no key;
  * 3. on-device only — offline, or nothing configured. Degraded, not broken.
  */
@@ -403,11 +354,9 @@ function selectTranscriber() {
 }
 
 /**
- * Split PCM into chunks at the QUIETEST point near each boundary rather than at
- * a fixed offset. A fixed cut lands mid-word roughly as often as not, and a
- * word sliced in half is either dropped or mis-transcribed at every boundary —
- * which would show up in the gate as an alignment failure rather than as an
- * audio-handling one.
+ * Split PCM into chunks at the quietest point near each boundary rather than at
+ * a fixed offset: a fixed cut lands mid-word roughly as often as not, and a
+ * word sliced in half is dropped or mis-transcribed at every boundary.
  */
 function splitAtSilence(pcm, chunkSeconds) {
   const bytesPerChunk = chunkSeconds * SAMPLE_RATE * BYTES_PER_SAMPLE;
@@ -469,7 +418,7 @@ function wrapWav(pcm) {
 
 /// What a Whisper answer contributes, in one shape for both endpoints and both
 /// response formats. Times come back in seconds from the start of the audio
-/// that was SENT — a chunk, not the hold — and leave here in milliseconds;
+/// that was sent — a chunk, not the hold — and leave here in milliseconds;
 /// `chunkedTranscriber` shifts them onto the hold.
 function extractResult(raw) {
   const ms = (v) => Math.round(Number(v ?? 0) * 1000);
@@ -509,31 +458,25 @@ function timeFromCloud(cloud, audioDurationMs) {
   return spreadEvenly(cloud.text, audioDurationMs);
 }
 
-// ── The anchor merge ────────────────────────────────────────────────────────
+// ── The anchor merge ──
 
 /**
  * Put the cloud's words (right text, no times) onto Apple's timeline (wrong
  * text, real times).
  *
- * Why this works: both recognisers heard the SAME audio, so their token
- * sequences are two noisy views of one utterance, monotonic in time. The
- * tokens they agree on — in this session: taxonomy, CBSE, Telangana, tenant,
- * Yeh, Yahan — become anchors via longest-common-subsequence (monotonic by
- * construction, so anchors can never cross). Cloud tokens between two anchors
- * are spread evenly across the gap.
+ * Both recognisers heard the same audio, so their token sequences are two noisy
+ * views of one utterance, monotonic in time. The tokens they agree on become
+ * anchors via longest-common-subsequence (so anchors can never cross), and
+ * cloud tokens between two anchors are spread evenly across the gap. The
+ * binding window is ±1.5s, so that is good enough.
  *
- * THE ANCHOR COUNT IS HOW THIS IS JUDGED, and `make bakeoff` reports it per
- * engine. Whisper asked to transcribe Hinglish returns Devanagari and anchors
- * almost nothing — Devanagari tokens cannot match Latin ones — which is why the
- * shipped path translates instead.
- *
- * The binding window is ±1.5s, so evenly-spread is genuinely good enough: a
- * word only needs to land within a second or so of when it was said, not on
- * the exact syllable.
+ * The anchor count is how this is judged: Whisper asked to transcribe Hinglish
+ * returns Devanagari and anchors almost nothing, which is why the shipped path
+ * translates instead.
  */
 function mergeWords(cloudText, appleWords, audioDurationMs) {
   // Apple's own segments are measurements, so they are anchored by definition.
-  // Labelling them keeps `anchored` meaning the same thing on every path — an
+  // Labelling them keeps `anchored` meaning the same thing on every path: an
   // absent field would be indistinguishable from "not anchored".
   const asAnchored = (ws) => ws.map((w) => ({ ...w, anchored: true }));
 
@@ -597,16 +540,11 @@ function mergeWords(cloudText, appleWords, audioDurationMs) {
     prevT = b.t;
   }
 
-  // Which words carry a REAL timing and which were interpolated between two.
-  // The merge already knows; it used to throw the answer away, and that made a
-  // whole class of question unanswerable after the fact — when anchors came out
-  // at 37/223 on good audio there was no way to tell from the transcript whether
-  // they were spread evenly or bunched at one end.
-  //
-  // It is also the confidence signal the aligner is missing. A binding resting
-  // on an anchored word is standing on a measurement; one resting on an
-  // interpolated word is standing on a straight line drawn between two distant
-  // measurements, and those are not equally trustworthy.
+  // Which words carry a real timing and which were interpolated between two.
+  // It is also the confidence signal the aligner needs: a binding resting on an
+  // anchored word stands on a measurement, one resting on an interpolated word
+  // stands on a straight line between two distant measurements, and those are
+  // not equally trustworthy.
   const anchoredAt = new Set(anchors.map((a) => a.idx));
 
   const words = sTokens.map((text, i) => ({
@@ -625,13 +563,10 @@ function wavDurationMs(wavPath) {
 }
 
 /**
- * Words spread evenly across a duration, none of them anchored.
- *
- * The fallback when on-device recognition produced nothing to anchor against.
- * Every word is explicitly `anchored: false`, which is the honest claim: these
- * positions are a straight line through the hold, not measurements. The aligner
- * already treats anchored and interpolated words differently, so saying so is
- * enough — a binding built on these is weak and is scored as such.
+ * Words spread evenly across a duration, none of them anchored: the fallback
+ * when on-device recognition produced nothing to anchor against. `anchored:
+ * false` is the honest claim, since these positions are a straight line
+ * through the hold, and a binding built on them is scored as weak.
  */
 function spreadEvenly(text, audioDurationMs) {
   const tokens = text.split(/\s+/).filter(Boolean);
@@ -646,31 +581,26 @@ function spreadEvenly(text, audioDurationMs) {
   }));
 }
 
-// ── On-device word timings ──────────────────────────────────────────────────
+// ── On-device word timings ──
 
 /**
- * Apple's Speech framework, via the app bundle, for WORD TIMINGS.
+ * Apple's Speech framework, via the app bundle, for word timings.
  *
- * The cloud gives far better text but no usable word timings. So the two split
- * the work: the cloud says WHAT was said, Apple says WHEN, and the aligner runs
- * on Apple's clock. (Whisper can return segment timestamps; they are spans, not
- * words, and the merge below needs words.)
+ * The cloud gives better text but no usable word timings, so the cloud says
+ * what was said, Apple says when, and the aligner runs on Apple's clock.
  *
  * Launched with `open -n` rather than executed directly, because TCC blames the
- * RESPONSIBLE process: a binary exec'd from a terminal inherits that terminal's
- * identity (inside an IDE, that is Electron), whose Info.plist has no speech
- * usage description — and the request is killed with SIGABRT before our own
- * plist is ever read. Going through LaunchServices makes the app answer for
- * itself. `-n` forces a new instance; without it `open` silently hands the
- * request to an already-running process.
+ * responsible process: a binary exec'd from a terminal inherits that terminal's
+ * identity (inside an IDE, Electron), whose Info.plist has no speech usage
+ * description, and the request is killed with SIGABRT. Going through
+ * LaunchServices makes the app answer for itself. `-n` forces a new instance;
+ * without it `open` silently hands the request to an already-running process.
  */
 async function appleTimings(wavPath, { locale = "en-IN", timeoutMs, contextFile } = {}) {
-  // TOLD, not derived. A shipped app runs this script from
+  // Told, not derived: a shipped app runs this script from
   // `Deiko.app/Contents/Resources/scripts/`, where `REPO_ROOT` is `Resources`
-  // and `Resources/build/Deiko.app` does not exist — so the guess below threw
-  // on every session of every install that was not a developer's checkout, and
-  // the whole product came apart at the first stage. The app knows exactly
-  // where it is; it passes that in.
+  // and `Resources/build/Deiko.app` does not exist. The app knows where it is
+  // and passes it in.
   const app = process.env.DEIKO_APP_PATH || resolve(REPO_ROOT, "build/Deiko.app");
   if (!existsSync(app)) {
     throw new Error(
@@ -680,29 +610,21 @@ async function appleTimings(wavPath, { locale = "en-IN", timeoutMs, contextFile 
     );
   }
 
-  // Scaled by the recording, not fixed. A flat 90s worked for every session
-  // until one ran 77 seconds: on-device recognition is roughly realtime, it
-  // finished at about 100s, and the script had already given up on a result that
-  // was perfectly good (55 words, 70.6s span). Four times realtime plus 30s of
-  // model load leaves room on the slowest machine without waiting forever on a
-  // hang — and it scales with the 20-minute session ceiling instead of silently
-  // capping how long a session may usefully be.
+  // Scaled by the recording, not fixed: on-device recognition is roughly
+  // realtime, so a flat timeout gives up on long sessions. Four times realtime
+  // plus 30s of model load leaves room on the slowest machine without waiting
+  // forever on a hang, and scales with the 20-minute session ceiling.
   const audioMs = wavDurationMs(wavPath);
   timeoutMs ??= Math.max(90_000, audioMs * 4 + 30_000);
 
   const out = `${wavPath}.timing.json`;
 
-  // THE APP IS ON IT. When the app itself drives this pipeline it recognises
-  // the holds in-process — it is the process that holds the Speech grant, so
-  // the LaunchServices dance below buys nothing there and costs a whole app
-  // launch per hold. It does that WHILE this uploads: waiting for it first put
-  // the whole on-device pass in front of the upload, seconds at p90. So wait
-  // for the file here, beside the upload; a hold the app finished without
-  // falls through to launching, as before.
-  //
-  // Note the ORDER: this has to come before the `rmSync` that follows, which
-  // exists to clear a stale file from a previous run and would cheerfully
-  // delete a freshly precomputed one.
+  // When the app itself drives this pipeline it recognises the holds
+  // in-process (it holds the Speech grant) while this uploads, so wait for its
+  // file here instead of launching a second copy of the app; a hold it
+  // finished without falls through to launching. This has to come before the
+  // `rmSync` below, which clears a stale file and would delete a freshly
+  // precomputed one.
   if (process.env.DEIKO_TIMINGS_PENDING === "1") {
     const ready = await timed("apple:precomputed", () => awaitPrecomputed(out, { deadline: Date.now() + timeoutMs }));
     if (ready) {
@@ -716,17 +638,15 @@ async function appleTimings(wavPath, { locale = "en-IN", timeoutMs, contextFile 
   if (existsSync(out)) rmSync(out);
 
   // Timed apart from the recognition itself: launching a second copy of the app
-  // through LaunchServices is pure overhead that disappears the moment timings
-  // are produced during capture, and it should not be able to hide inside the
-  // recognition number it is not part of.
+  // through LaunchServices is pure overhead that disappears once timings are
+  // produced during capture, and it should not hide inside the recognition
+  // number.
   await timed("apple:launch", async () =>
     execFileSync("open", [
       "-n", "-a", app, "--args",
       "timing", "--wav", wavPath, "--locale", locale, "--out", out,
-      // Vocabulary hints, only when the caller has some. `bakeoff.mjs` uses it
-      // to measure the same audio with and without the identifiers that were
-      // on screen; the pipeline passes nothing until that measurement says it
-      // is worth the wiring.
+      // Vocabulary hints, only when the caller has some; the pipeline passes
+      // none.
       ...(contextFile ? ["--context", contextFile] : []),
     ]));
 
@@ -736,8 +656,8 @@ async function appleTimings(wavPath, { locale = "en-IN", timeoutMs, contextFile 
 /**
  * Wait for the app to drop its timing file, and clean up if it never does.
  *
- * Split out of `appleTimings` so the wait — which IS the recognition, running at
- * roughly realtime on the finished file — can be measured on its own, apart from
+ * Split out of `appleTimings` so the wait, which is the recognition itself
+ * running at roughly realtime on the finished file, can be measured apart from
  * the app launch that precedes it.
  */
 async function awaitTimingFile(out, { timeoutMs, audioMs }) {
@@ -749,9 +669,8 @@ async function awaitTimingFile(out, { timeoutMs, audioMs }) {
       try {
         result = JSON.parse(readFileSync(out, "utf8"));
       } catch {
-        // The writer is atomic now, but belt-and-braces: a half-visible file
-        // is "not ready yet", not "this hold is lost". One thrown parse here
-        // used to discard the hold's audio entirely.
+        // The writer is atomic, but a half-visible file is "not ready yet", not
+        // "this hold is lost".
         await sleep(200);
         continue;
       }
@@ -765,11 +684,11 @@ async function awaitTimingFile(out, { timeoutMs, audioMs }) {
     // thousands of times.
     await sleep(Date.now() - startedAt < 5_000 ? 100 : 500);
   }
-  // The app may still write the file AFTER we stop waiting, so a single check
-  // here cannot do the job — and it didn't: a timed-out run left a verbatim
-  // transcript of the user's narration sitting in their session directory, which
-  // is exactly what this cleanup exists to prevent. Keep sweeping for a while
-  // after giving up, and say so plainly if it still appears.
+  // The app may still write the file after this script stops waiting, so a single check
+  // here cannot do the job, and a timed-out run would leave a verbatim
+  // transcript of the user's narration in their session directory. Keep
+  // sweeping for a while after giving up, and say so plainly if it still
+  // appears.
   for (let i = 0; i < 60; i++) {
     if (existsSync(out)) {
       rmSync(out);
@@ -788,7 +707,7 @@ async function awaitTimingFile(out, { timeoutMs, audioMs }) {
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-// ── Session driver ──────────────────────────────────────────────────────────
+// ── Session driver ──
 
 
 async function main() {
@@ -799,15 +718,10 @@ async function main() {
     process.exit(2);
   }
 
-  // NO KEY IS NOT AN ERROR. It used to exit(1) here, which meant a new install
-  // produced nothing at all — while the machinery for a keyless session was
-  // already present and working three hundred lines below, in the path that
-  // keeps Apple's words when the cloud fails. `selectTranscriber` decides who
-  // transcribes; every outcome, including nobody, renders a brief.
+  // No key is not an error: `selectTranscriber` decides who transcribes, and
+  // every outcome, including nobody, renders a brief.
 
-  // Accepts both `--language hi-IN` and `--language=hi-IN`. The indexOf form
-  // alone silently ignored the `=` spelling — Sarvam then got
-  // `language_code=unknown` with nothing to say the flag was dropped.
+  // Accepts both `--language hi-IN` and `--language=hi-IN`.
   const flag = (name, fallback) => {
     const eq = process.argv.find((a) => a.startsWith(`${name}=`));
     if (eq) return eq.slice(name.length + 1);
@@ -815,8 +729,8 @@ async function main() {
     return i > -1 ? process.argv[i + 1] : fallback;
   };
   const language = flag("--language", "unknown");
-  // Settings → offline recogniser, via the app's environment; `en-IN` is what
-  // it always was before there was a setting.
+  // Settings → offline recogniser, via the app's environment; `en-IN` when
+  // unset.
   const args = { locale: flag("--locale", process.env.DEIKO_SPEECH_LOCALE || "en-IN") };
 
   const dir = resolve(sessionDir);
@@ -864,14 +778,12 @@ async function main() {
   /// reads short rather than leaving it to look like bad recognition.
   let failedChunks = 0;
 
-  // Per-hold cache, so extending a session costs only the new audio.
-  //
-  // "Forgot something?" adds a hold and re-runs this script. Without a cache
-  // that re-recognises hold 1 — whose WAV has not changed and cannot change —
-  // paying its full recognition time again for an identical answer, and paying
-  // Sarvam for it too. Keyed on the file's byte length, which is what changes
-  // when audio does.
-  // Read before this run can overwrite it — see `cloudBlock`.
+  // Per-hold cache, so extending a session costs only the new audio:
+  // "Forgot something?" adds a hold and re-runs this script, and hold 1's WAV
+  // cannot have changed, so re-recognising it would pay its full recognition
+  // time again for an identical answer. Keyed on the file's byte length, which
+  // is what changes when audio does. Read before this run can overwrite it (see
+  // `cloudBlock`).
   let priorCloud = null;
   try {
     priorCloud = JSON.parse(readFileSync(join(dir, "transcript.json"), "utf8")).cloud ?? null;
@@ -900,18 +812,12 @@ async function main() {
       if (existsSync(inSession)) wav = inSession;
     }
 
-    // A DELETED RECORDING IS A CACHE HIT, NOT A MISS.
-    //
-    // The app removes each session's WAVs the moment the brief exists — the
-    // recording of somebody's voice should not outlive its one use. But the
-    // cache is keyed on the file's byte size, so a deleted WAV reads as 0,
-    // misses, and sends this loop off to transcribe a file that is not there.
-    // That would break "Point at more", which re-runs the whole pipeline over
-    // every hold including the ones already done.
-    //
-    // The size check is there to notice a CHANGED recording. A deleted one can
-    // never be re-transcribed, so the cached words are the only record there
-    // will ever be, and they are exactly right.
+    // A deleted recording is a cache hit, not a miss. The app removes each
+    // session's WAVs once the brief exists, but the cache is keyed on file
+    // size, so a deleted WAV would read as 0, miss, and send this loop off to
+    // transcribe a file that is not there (breaking "Point at more", which
+    // re-runs every hold). A deleted recording can never be re-transcribed, so
+    // the cached words are the only record.
     const present = existsSync(wav);
     const bytes = present ? statSync(wav).size : 0;
     const cached = cache[hold];
@@ -923,7 +829,7 @@ async function main() {
     const usable = cached?.words?.length
       && (!present || (cached.bytes === bytes && !cached.partial));
     if (usable) {
-      // Cached words are stored on the AUDIO clock, before the shift, so the
+      // Cached words are stored on the audio clock, before the shift, so the
       // shift below applies identically whether they were just recognised or
       // read back. Storing them shifted would bake in an `audioT0` that a
       // re-render is entitled to recompute.
@@ -949,15 +855,10 @@ async function main() {
       continue;
     }
 
-    // Both recognisers at once. They read the same file and never read each
-    // other — one is on-device, the other is a network upload — so running them
-    // in sequence spent Sarvam's whole round trip waiting for work that had
-    // already finished. Started together, Sarvam hides entirely inside Apple's
-    // recognition.
-    //
-    // `allSettled`, not `all`: timings are fatal for the hold (nothing to align
-    // without them) while a missing Sarvam transcript merely falls back to
-    // Apple's own words. `all` would collapse that distinction into one failure.
+    // Both recognisers at once: they read the same file and never read each
+    // other, so the upload hides inside Apple's recognition. `allSettled`, not
+    // `all`: timings are fatal for the hold (nothing to align without them)
+    // while a missing cloud transcript merely falls back to Apple's own words.
     process.stderr.write(`  hold ${hold} → on-device timings + ${transcriber.name} text … `);
     const [timingOutcome, textOutcome] = await Promise.allSettled([
       appleTimings(wav, { locale: args.locale }),
@@ -965,29 +866,20 @@ async function main() {
     ]);
 
     // A rejected hold is one lost stretch of audio, same as a rejected chunk
-    // inside a long one — the short-audio path returns `uploadOne`'s object
+    // inside a long one: the short-audio path returns `uploadOne`'s object
     // directly, so a single-chunk hold that threw shows up here and nowhere
     // else. Counted before anything below can `continue` past it.
     failedChunks += textOutcome.status === "rejected"
       ? 1
       : (textOutcome.value?.failedChunks ?? 0);
 
-    // ON-DEVICE TIMINGS FAILING IS NOT THE END OF THE HOLD.
-    //
-    // It used to be: this `continue`d, and the hold was discarded whole —
-    // including a Sarvam transcript that had arrived perfectly. Measured on
-    // session 20260801-183429: 9.8s of quiet speech (RMS -39 dBFS, recorded
-    // with the system input at 27%). Apple's en-IN recogniser returned "No
-    // speech detected"; Sarvam returned the full Hinglish sentence. Deiko threw
-    // it away and reported "no words transcribed".
-    //
-    // That made a recogniser STATE.md already documents as hearing ~25% of
-    // Hinglish into a hard gate on the entire session. The narration is the
-    // most valuable thing a session produces — the brief says so — and losing
-    // it because a SECONDARY signal failed is the wrong trade. So: keep the
-    // words, spread them evenly across the hold, and mark every one unanchored.
-    // Referent binding degrades (it has nothing measured to bind against) and
-    // is honest about it, rather than the session evaporating.
+    // On-device timings failing is not the end of the hold. Discarding it whole
+    // would throw away a cloud transcript that arrived perfectly (Apple's
+    // recogniser can return "No speech detected" for quiet speech the cloud
+    // transcribes fine), and the narration is the most valuable thing a session
+    // produces. So keep the words, spread them evenly across the hold, and mark
+    // every one unanchored: referent binding degrades, honestly, rather than
+    // the session evaporating.
     let timing;
     let degraded = false;
     if (timingOutcome.status === "rejected") {
@@ -996,10 +888,10 @@ async function main() {
         console.error(`FAILED\n    ${timingOutcome.reason.message}`);
         continue;
       }
-      // Whether the words are still timed depends on whether the CLOUD timed
+      // Whether the words are still timed depends on whether the cloud timed
       // them. With "Same as I speak" Whisper sends word timestamps, and an
       // Apple failure costs nothing but the fallback; without them the words
-      // are placed by segment or spread evenly, and that IS degraded.
+      // are placed by segment or spread evenly, and that is degraded.
       const cloud = textOutcome.value;
       const measured = (cloud.words?.length ?? 0) > 0;
       console.error(
@@ -1030,22 +922,18 @@ async function main() {
     // the hold falls back to Apple's words, which mishear Hindi function words
     // but still bind English sessions fine.
     //
-    // Labelled anchored HERE rather than only inside `mergeWords`. These are
-    // the recogniser's own measured segments — the most anchored words that
-    // exist — and every path that keeps them unmerged (no cloud text at all,
-    // or a merge that found no anchors) used to hand them on with the field
-    // absent, which reads as `anchored: false`. A keyless session therefore
-    // reported "0 of 5 words carry a measured time" about five words whose
-    // times were all measured, and the brief tells the agent to trust referent
-    // binding less on exactly that signal.
+    // Labelled anchored here rather than only inside `mergeWords`: these are
+    // the recogniser's own measured segments, and every path that keeps them
+    // unmerged would otherwise hand them on with the field absent, which reads
+    // as `anchored: false` and makes the brief tell the agent to trust
+    // referent binding less than it should.
     let holdWords = timing.words.map((w) => ({ ...w, anchored: true }));
 
-    // Nothing to merge against. These words ARE the transcriber's text already,
+    // Nothing to merge against. These words are the transcriber's text already,
     // laid out on a line; running the merge would compare that text with itself
-    // and — worse — `mergeWords` labels its input anchored BY DEFINITION,
-    // because its input is normally a measurement. That would restore the exact
-    // lie this path exists to avoid: a session reporting "32/32 words carry a
-    // measured time" when not one of them does.
+    // and, worse, `mergeWords` labels its input anchored by definition, because
+    // its input is normally a measurement. That would report "32/32 words carry
+    // a measured time" when not one of them does.
     if (degraded) {
       holdTexts.push({ hold, text: timing.transcript });
       console.error(`  hold ${hold} → ${holdWords.length} words, times ${holdWords.some((w) => w.source === "segment") ? "from the cloud's segments" : "estimated across the hold"}`);
@@ -1063,12 +951,11 @@ async function main() {
     const cloud = textOutcome.status === "fulfilled" ? textOutcome.value : null;
 
     if (NATIVE && cloud?.words?.length) {
-      // "SAME AS I SPEAK": Whisper's words on Whisper's clock, and no merge.
-      // There is nothing for Apple's recogniser to anchor — a Chinese
-      // transcript shares no token with an English timeline — and there is no
-      // need: word timestamps came back with the text (measured, 这个 at
-      // 0.00–0.18s on the first Mandarin clip). Apple's words stay the
-      // fallback for the holds the cloud did not answer.
+      // "Same as I speak": Whisper's words on Whisper's clock, and no merge.
+      // There is nothing for Apple's recogniser to anchor (a Chinese transcript
+      // shares no token with an English timeline) and no need: word timestamps
+      // come back with the text. Apple's words stay the fallback for the holds
+      // the cloud did not answer.
       holdWords = timeFromCloud(cloud, wavDurationMs(wav));
       holdTexts.push({ hold, text: cloud.text });
       console.error(
@@ -1087,13 +974,11 @@ async function main() {
           holdWords = merged.words;
           console.error(`merged ${merged.total} words (anchors ${merged.anchors}/${merged.total})`);
         } else {
-          // NOTHING AGREED — KEEP THE CLOUD'S WORDS ANYWAY. This used to keep
-          // Apple's, on the reasoning that agreeing on nothing meant the cloud
-          // text could not be placed. But the cloud text is still the RIGHT
-          // text: the first Mandarin-speaking user's brief was Apple's English
-          // recogniser mishearing Chinese, because the translation shared no
-          // token with it and lost. Whisper's own segment times place the
-          // words to within a second or two, inside the ±1.5s binding window.
+          // Nothing agreed: keep the cloud's words anyway. The cloud text is
+          // still the right text (Apple's English recogniser mishears Chinese,
+          // and the translation shares no token with it), and Whisper's own
+          // segment times place the words to within a second or two, inside the
+          // ±1.5s binding window.
           holdWords = timeFromCloud(cloud, wavDurationMs(wav));
           if (!cloud.segments?.length) degradedHolds.push(hold);
           console.error(
@@ -1110,22 +995,14 @@ async function main() {
     }
     }
 
-    // Cached before the shift, for the same reason the shift is applied after:
-    // these are offsets into this hold's audio, which is the only form that
-    // stays true if the session is re-rendered later.
+    // Cached before the shift: these are offsets into this hold's audio, the
+    // only form that stays true if the session is re-rendered later.
     //
-    // A PARTIAL RESULT IS CACHED, AND MARKED. This used to skip the cache
-    // after a failed or refused chunk, so that a 402 mid-session would not pin
-    // degraded words forever and a network blip could heal on re-render. The
-    // reasoning was sound and the outcome was data loss: the app deletes every
-    // WAV the moment the brief renders, on the stated invariant that "a
-    // missing WAV with cached words is a hit" — and a refused hold had no
-    // cached words. Re-render after the free trial ran out mid-session and
-    // that hold's on-device words were gone from the brief, at exactly the
-    // moment a new user meets the trial's end. The words that exist are kept;
-    // `partial` tells the read side below to try again ONLY while the audio
-    // is still there to try with. A complete result is cached even when empty:
-    // silence is a fact, a refusal is a circumstance.
+    // A partial result is cached, and marked. The app deletes every WAV once
+    // the brief renders, so a refused hold with no cached words would lose its
+    // on-device words on re-render. `partial` tells the read side to retry only
+    // while the audio is still there. A complete result is cached even when
+    // empty: silence is a fact, a refusal is a circumstance.
     const partial = textOutcome.status === "rejected"
       || (textOutcome.value?.failedChunks ?? 0) > 0
       || textOutcome.value?.refused === true;
@@ -1136,7 +1013,7 @@ async function main() {
       ...(partial ? { partial: true } : {}),
     };
 
-    // THE SHIFT. Offsets into the wav become session-clock times, so words and
+    // The shift. Offsets into the wav become session-clock times, so words and
     // cursor events share one timeline.
     allWords.push(...holdWords.map((w) => ({
       text: w.text,
@@ -1152,30 +1029,19 @@ async function main() {
   allWords.sort((a, b) => a.start - b.start);
 
   if (allWords.length === 0) {
-    // Never write an empty transcript and call it success — the next step would
-    // report "alignment found nothing" for what is actually a transcription
-    // failure, and the gate would be measuring the wrong thing.
+    // Never write an empty transcript and call it success: the next step would
+    // report "alignment found nothing" for what is a transcription failure.
     console.error("\n✗ no words transcribed — not writing transcript.json");
     process.exit(1);
   }
 
-  /// WHAT HAPPENED TO THIS SESSION'S AUDIO — not what would happen if it ran now.
-  ///
-  /// STICKY, and that is the whole point. Re-running this script over a
-  /// finished session is routine — "Recent sessions" reopens one, and every
-  /// hold is then served from `transcript.cache.json` because the WAVs were
-  /// deleted when the brief was first made. Not one byte is uploaded on that
-  /// pass. Restamping `transcriber` from the CURRENT environment would then
-  /// rewrite history: open a session recorded on a keyless build from a
-  /// relay-stamped one and the review panel would announce "Left this Mac:
-  /// ~62s of audio to Deiko's transcription" about a session that never left
-  /// the machine — a false claim, produced by the feature that exists to
-  /// answer that exact question.
-  ///
-  /// So: if nothing was uploaded this run and a previous answer is on disk,
-  /// that answer stands. `uploaded` is what tells the two apart, and it also
-  /// keeps the trust line honest about a relay that was never reached at all
-  /// (a DNS failure never opens a socket, so it never increments).
+  // What happened to this session's audio, not what would happen if it ran
+  // now. Re-running this script over a finished session is routine, and every
+  // hold is then served from `transcript.cache.json`, so nothing is uploaded;
+  // restamping `transcriber` from the current environment would rewrite
+  // history (e.g. claim audio went to the relay for a session that never left
+  // the machine). So if nothing was uploaded this run and a previous answer is
+  // on disk, that answer stands. `uploaded` tells the two apart.
   function cloudBlock() {
     const uploaded = transcriber.state?.uploaded ?? 0;
     if (uploaded === 0 && priorCloud) return priorCloud;
@@ -1193,23 +1059,20 @@ async function main() {
       out,
       JSON.stringify(
         // Carried into the file, not just printed: the renderer and the orb
-        // both need to be able to say that a session's word times are a
-        // straight line rather than measurements, and stderr is not a channel
-        // either of them can read.
+        // both need to say that a session's word times are a straight line
+        // rather than measurements, and stderr is not a channel either can read.
         {
           words: allWords,
           holdTexts,
-          // WHO PRODUCED THESE WORDS. On-device only is a real, supported way
-          // to run and a materially worse transcript, so the renderer can say
-          // which one the agent is reading — the same reason `degradedHolds`
-          // travels rather than staying in stderr nobody reads.
+          // Who produced these words. On-device only is a supported way to run
+          // and a materially worse transcript, so the renderer can say which one
+          // the agent is reading.
           transcriber: transcriber.name,
-          // WHY the transcript is what it is, for the one screen that has to
+          // Why the transcript is what it is, for the one screen that has to
           // explain it. `refused` is the relay's own answer mapped to something
-          // a user can act on (packages/core/src/lib/cloud.mjs); `failedChunks` says the
-          // words read short. The renderer turns this into one sentence — see
-          // `degradedReason` — and without it a spent trial and a dead relay
-          // were indistinguishable from bad recognition.
+          // a user can act on (packages/core/src/lib/cloud.mjs); `failedChunks`
+          // says the words read short. The renderer turns this into one
+          // sentence (see `degradedReason`).
           cloud: cloudBlock(),
           ...(degradedHolds.length ? { degradedHolds } : {}),
         },
@@ -1225,9 +1088,7 @@ async function main() {
 
   const anchored = allWords.filter((w) => w.anchored).length;
   console.error(`\n✓ ${allWords.length} words on the session clock → ${out}`);
-  // Anchored share, printed where the run happens. It was previously only
-  // discoverable by reading the JSON, which is why a session sat at 37/223 for
-  // a day without anyone noticing.
+  // Anchored share, printed where the run happens.
   console.error(`  anchored: ${anchored}/${allWords.length} words carry a measured time`);
   if (degradedHolds.length) {
     console.error(
@@ -1238,12 +1099,8 @@ async function main() {
   console.error(timingReport(performance.now() - startedAt));
 }
 
-/// RUN ONLY WHEN RUN, so this file can also be imported.
-///
-/// `bakeoff.mjs` needs the three recognisers — Apple at a given locale, Sarvam,
-/// Whisper — over identical audio, and rebuilding the chunker beside them would
-/// compare how the audio was cut as much as the models. A bare `main()` call
-/// made importing it transcribe a session as a side effect.
+/// Run only when run, so this file can also be imported: a bare `main()` call
+/// would make importing it transcribe a session as a side effect.
 const invokedDirectly = process.argv[1]
   && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 

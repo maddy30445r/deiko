@@ -1,6 +1,6 @@
 /**
- * FILING — the steps from a brief to where it goes, shared by `classify.mjs`,
- * which writes the answer, and `evals/filing.mjs`, which only scores it. Pure,
+ * The steps from a brief to where it goes, shared by `classify.mjs`, which
+ * writes the answer, and `evals/filing.mjs`, which only scores it. Pure,
  * except `readCollections` and `sessionInputs`, which read.
  */
 
@@ -21,14 +21,8 @@ export const MAX_TITLES = 30;
 
 /// When a short brief's best local match is clear enough to join without
 /// asking: at least `min`, at least `ratio` times the runner-up, and on a
-/// window that task's briefs already had.
-/// ponytail: eyeballed on one real 38-brief board, each brief scored with its
-/// words dropped: min/ratio alone joined 3 of 16 briefs that opened a new
-/// page to an older task in the same app, and no setting stopped that without
-/// losing true joins; the shared window stopped all 3 and kept 13 of 14.
-/// Tuned when the score still carried +2 for the same repo and +2/+1 for
-/// recency; v3 dropped both, so the same numbers now ask a little more.
-/// Upgrade: tune on real filing misses once odds and ends has some.
+/// window that task's briefs already had. The shared window is what stops a
+/// brief that opens a new page in the same app from joining an older task.
 export const SHORT_JOIN = { min: 8, ratio: 2 };
 
 /** Most frequent first; ties keep first-seen order, newest first for a task's briefs. */
@@ -88,7 +82,7 @@ const queryOf = (me, summary, windowTitles) =>
   [me.summaryText ?? me.summaryLine, me.narration, ...windowTitles, ...(summary.repoHints ?? []), ...me.screenTerms].join(" ");
 const titler = (groups, taskTitles) => (tid) => taskTitles.get(tid) ?? titleFor(groups.get(tid).at(-1));
 
-/** THE SHORT-BRIEF PATH: word BM25 over every member of every task, best first. */
+/** The short-brief path: word BM25 over every member of every task, best first. */
 export function rankLocally({ me, summary, windowTitles, board, taskTitles }) {
   const groups = groupTasks(board);
   const titleOf = titler(groups, taskTitles);
@@ -99,14 +93,13 @@ export function rankLocally({ me, summary, windowTitles, board, taskTitles }) {
 }
 
 /// How alike two tasks' briefs must mean (cosine of their averages) to count as
-/// look-alikes. null = off, which is what ships until the filing eval says
-/// otherwise; `DEIKO_LOOKALIKE` switches it on for a run.
+/// look-alikes. null = off; `DEIKO_LOOKALIKE` switches it on for a run.
 export const LOOKALIKE = process.env.DEIKO_LOOKALIKE ? Number(process.env.DEIKO_LOOKALIKE) : null;
 
 export function prepare({ id, me, summary, windowTitles, board, taskTitles, collections, vectors = null, aggregate, lookalike = LOOKALIKE }) {
   const groups = groupTasks(board);
-  // A TASK'S FACE: its firm briefs only. One guessed join must never become
-  // what the task is matched against — or what Jev is told it is.
+  // A task's face: its firm briefs only. One guessed join must never become
+  // what the task is matched against, or what Jev is told it is.
   const faces = new Map([...groups].map(([tid, bs]) => {
     const f = bs.filter((b) => firm(b, tid));
     return [tid, f.length ? f : [bs.at(-1)]];
@@ -143,9 +136,9 @@ export function prepare({ id, me, summary, windowTitles, board, taskTitles, coll
       title: redact(title),
       // The newest ask is dropped here, unlike a prompt: the relay describes
       // a task by this field, and the newest brief is the one most likely
-      // filed here by mistake. What is open, or was done, says what the task is.
-      // CUT TO THE RELAY'S OWN LIMITS (`CLASSIFY_LIMITS` there): it checks the
-      // body's size before it cuts, so a board of long outcome lines 413s.
+      // filed here by mistake. What is open, or was done, says what the task
+      // is. Cut to the relay's own limits (`CLASSIFY_LIMITS` there): it checks
+      // the body's size before it cuts, so a board of long outcome lines 413s.
       now: taskState(face, title).now.filter((l) => !l.startsWith("Last asked: ")).join("\n").slice(0, 400),
       decided: face.flatMap((b) => redactNote(b.outcome?.decided ?? [])).slice(0, 5).join("\n").slice(0, 300),
       // Its face's windows, not every member's: one brief filed here by
@@ -155,10 +148,9 @@ export function prepare({ id, me, summary, windowTitles, board, taskTitles, coll
       files: [...new Set(face.flatMap((b) => b.outcome?.files ?? []))].slice(0, 5).map(redact),
       outcome: last ? redact([...last.did, ...last.open].join(" ")).slice(0, 300) : "",
       keys: Object.fromEntries(["pages", "sites", "files", "tickets"].map((k) => [k, topLabels(face.map((b) => b.keys?.[k] ?? []), 3)])),
-      // WHAT ITS FIRM BRIEFS ASKED, newest first. A board without agent
+      // What its firm briefs asked, newest first. A board without agent
       // outcomes has nothing else to say what a task became after its first
-      // brief: measured, a QA task whose follow-ups were all about the price
-      // display scored 0.2 against a price brief without these, 0.75 with.
+      // brief.
       recent: face.slice(0, 3).map((b) => redact(b.summaryText || b.narration || "").slice(0, 400)).filter(Boolean),
     };
   });
@@ -167,28 +159,28 @@ export function prepare({ id, me, summary, windowTitles, board, taskTitles, coll
   const body = {
     narration: redact(narration),
     summary: me.summaryText ? redact(me.summaryText) : "",
-    // REDACTED LIKE THE TITLES THEY COME FROM. `repoHints` is built by
-    // splitting window titles (`render-brief.mjs`), so sending it raw put the
-    // same screen-read string on the wire twice — once cleaned, once not.
+    // Redacted like the titles they come from: `repoHints` is built by
+    // splitting window titles (`render-brief.mjs`), so sending it raw would put
+    // the same screen-read string on the wire twice, once cleaned, once not.
     apps: (summary.apps ?? []).map(redact),
     repoHints: (summary.repoHints ?? []).map(redact),
     titles: windowTitles,
-    // NEVER `components` or `errors` — see labels.mjs.
+    // Never `components` or `errors` (see labels.mjs).
     keys: Object.fromEntries(SENT_KEYS.map((k) => [k, (me.keys?.[k] ?? []).slice(0, 10).map(redact)])),
     collections: collections.map((c) => ({
       id: c.id, name: c.name, hint: c.hint ?? "",
       labels: topLabels(board.filter((b) => b.collection === c.id).map((b) => [...(b.keys?.repo ?? []), ...(b.keys?.sites ?? []), ...(b.keys?.pages ?? [])]), 5),
     })),
     tasks: shortlist.map(({ score, seat, ...t }) => t),
-    // NEVER screenTerms — they scored the shortlist above and stay here.
-    // ROUTES THE RELAY TO THE V3 PATH — see services/relay/src/relay.mjs. A body
-    // with no version (or below 3) reads as an unupdated 0.5.0 app.
+    // Never screenTerms: they scored the shortlist above and stay here.
+    // Routes the relay to the v3 path (services/relay/src/relay.mjs); a body
+    // with no version, or below 3, reads as an old app.
     version: 3,
   };
 
-  // LOOK-ALIKES: for the tasks a brief could point back at (the top few),
-  // every other task whose briefs mean nearly the same — two apps' "price
-  // bug". A point-back join to one of them asks instead (`decide`). Only with
+  // Look-alikes: for the tasks a brief could point back at (the top few),
+  // every other task whose briefs mean nearly the same (two apps' "price
+  // bug"). A point-back join to one of them asks instead (`decide`). Only with
   // vectors, and only when switched on.
   const lookalikes = {};
   if (vectors && lookalike) {

@@ -1,18 +1,16 @@
 /**
- * MEANING — a small embedding model on this Mac, so "the graph thing" finds
- * the chart work and "the drag thing" finds "moving cards". Run through
- * onnxruntime-node and @huggingface/tokenizers directly: not transformers.js,
- * which pulls in sharp/libvips and every platform's binaries, and not
- * node-llama-cpp, which lacks last-token pooling. Both shipped models pool
- * inside their ONNX graph and return `sentence_embedding`.
+ * A small embedding model on this Mac, so "the graph thing" finds the chart
+ * work and "the drag thing" finds "moving cards". Run through onnxruntime-node
+ * and @huggingface/tokenizers directly: not transformers.js, which pulls in
+ * sharp/libvips and every platform's binaries, and not node-llama-cpp, which
+ * lacks last-token pooling. Both models pool inside their ONNX graph and
+ * return `sentence_embedding`.
  *
- * FAILS SOFT, EVERYWHERE. No model, no runtime, a bad file, a throw inside
- * the runtime — `loadModel` answers null or `embed` answers null, and Deiko
- * matches on words. Vectors never leave this Mac.
+ * Fails soft, everywhere: with no model, no runtime, a bad file or a throw
+ * inside the runtime, `loadModel` or `embed` answers null and Deiko matches
+ * on words. Vectors never leave this Mac.
  *
- * ponytail: the model loads per process (~0.7 s, ~13 ms per short text on
- * an Apple Silicon Mac).
- * Keep a resident process if that is ever felt.
+ * The model loads per process; a resident process if load time is ever felt.
  */
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
@@ -53,12 +51,9 @@ export const MODELS = {
     ],
   },
 };
-/// EmbeddingGemma since 0.5.4: on 100 realistic search queries against the
-/// owner's board it found the right work first 88 times to harrier's 75 (with
-/// the score blend in `blendScores`), at the same size and twice the speed;
-/// filing's shortlist was 10/10 with either. `evals/search.mjs` reruns it.
+/// The default model; `evals/search.mjs` compares models on real search queries.
 export const DEFAULT_MODEL = "embeddinggemma-300m";
-/// Our own storage: the controller mirrors each model's files here, same paths.
+/// Deiko's own storage: the controller mirrors each model's files here, same paths.
 export const MODEL_BASE_URL = "https://deiko.app/download/models";
 const MAX_TOKENS = 512;
 
@@ -198,7 +193,7 @@ export async function download({
     if (!res.ok || !res.body) throw new Error(`${f.path}: HTTP ${res.status}`);
     const part = `${dest}.part`;
     const hash = createHash("sha256");
-    // A PIPELINE, so a write that fails (a full disk) rejects here and is
+    // A pipeline, so a write that fails (a full disk) rejects here and is
     // reported, never an unhandled 'error' event that kills the process with
     // a ~200 MB `.part` left behind.
     try {

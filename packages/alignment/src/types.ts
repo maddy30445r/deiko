@@ -1,37 +1,30 @@
 /**
  * Inputs and outputs of the alignment engine.
  *
- * Timing convention, which everything here depends on: all times are
- * milliseconds on the capture session's MONOTONIC clock. Transcript words
- * arrive from the ASR as offsets into an audio file, so the loader adds that
- * hold's `audioT0` before they get here. Skip that step and every word sits
- * ~255ms early — the measured mic spin-up — which is enough to bind referents
- * to the wrong utterance without anything looking broken.
+ * All times are milliseconds on the capture session's monotonic clock.
+ * Transcript words arrive as offsets into an audio file, so the loader adds
+ * that hold's `audioT0` first; skipping it puts every word early and binds
+ * referents to the wrong utterance without anything looking broken.
  */
 
 export interface Word {
   text: string;
-  /** Session-clock milliseconds, NOT an offset into the audio file. */
+  /** Session-clock milliseconds, not an offset into the audio file. */
   start: number;
   end: number;
   /**
-   * Which hotkey hold this word was spoken in. A hold boundary is a HARD
-   * utterance boundary — the user released the key and stopped talking — so
-   * words from different holds must never be joined into one utterance, no
-   * matter how close their timestamps are.
+   * Which hotkey hold this word was spoken in. A hold boundary is a hard
+   * utterance boundary (the key was released), so words from different holds
+   * are never joined into one utterance.
    */
   hold?: number;
   /**
-   * Whether `start` is a MEASUREMENT or a guess.
+   * Whether `start` is measured or interpolated. Word times merge the ASR text
+   * with on-device timings: tokens both engines heard become anchors and the
+   * words between them are spread evenly.
    *
-   * Word times come from merging Sarvam's text with Apple's on-device timings:
-   * tokens both engines heard become anchors, and everything between them is
-   * spread evenly along a straight line. An anchored word sits where it was
-   * heard; an interpolated one sits where arithmetic put it, and on a session
-   * that anchored 37 of 223 words that is most of them.
-   *
-   * Optional because transcripts written before this existed do not carry it,
-   * and absent must not silently read as "interpolated".
+   * Optional because older transcripts lack it, and absent must not read as
+   * "interpolated".
    */
   anchored?: boolean;
 }
@@ -41,8 +34,7 @@ export interface Candidate {
   id: string;
   t: number;
   /** Which hotkey hold produced this candidate. Same hard-boundary rule as
-   *  `Word.hold`: a word and a candidate from different holds must never
-   *  bind, however close their timestamps sit across the release. */
+   *  `Word.hold`. */
   hold?: number;
   features: {
     dwellMs: number;
@@ -68,55 +60,44 @@ export interface Binding {
   utteranceStart: number;
   /** 0-1. Driven mostly by the margin over the runner-up — see `align.ts`. */
   confidence: number;
-  /** Why this binding was made, for the review UI and for debugging the gate. */
+  /** Why this binding was made, for the review UI and for debugging. */
   reason: "deictic" | "overlap" | "unbound";
   /**
-   * Whether a human should look at this one — NOT the same as "low confidence".
-   *
+   * Whether a human should look at this one; not the same as low confidence.
    * Every overlap binding scores below 0.5 by construction, so a raw threshold
-   * flagged 22 of 30 rows in a real session and meant nothing. Overlap being
-   * weaker than deictic is a fact about the class, worth saying once; what
-   * deserves a per-row mark is the aligner having been genuinely torn — a
-   * deictic word that could have named two different things.
+   * would flag them all. What deserves a per-row mark is the aligner having
+   * been genuinely torn, such as a deictic word that could name two things.
    */
   needsReview: boolean;
   /**
    * Whether the deictic word that claimed this referent had a measured timing.
    * Pass 1's entire score is `word.start - candidate.t`, so an interpolated
-   * word yields a guessed proximity.
-   *
-   * Reported, deliberately NOT scored: this signal is new and has never been
-   * measured against a session. It earns a place in `confidence` once the data
-   * shows it predicts something, not before. Undefined for overlap bindings,
-   * which have no claiming word.
+   * word yields a guessed proximity. Reported but not scored. Undefined for
+   * overlap bindings, which have no claiming word.
    */
   anchoredTiming?: boolean;
 }
 
 export interface AlignmentResult {
   bindings: Binding[];
-  /** Candidates that never bound to speech. Expected and healthy: the recorder
-   *  over-captures on purpose so the narration can be the filter. */
+  /** Candidates that never bound to speech. Expected: the recorder
+   *  over-captures so the narration can be the filter. */
   unbound: string[];
 }
 
 /**
- * Below this, a binding the STRONG path produced is worth a second look.
- *
- * Exported because it was three separate literals — two bare `0.5`s in the
- * brief renderer and a `const` in the align harness — and a threshold that
- * lives away from the confidence it judges drifts from it.
+ * Below this, a binding from the strong (deictic) path is worth a second look.
+ * Exported so the renderer shares the value with the confidence it judges.
  */
 export const LOW_CONFIDENCE = 0.5;
 
 export interface AlignmentOptions {
-  /** How far BEFORE a deictic word a pointing act may sit — the user points
+  /** How far before a deictic word a pointing act may sit: the user points
    *  first and speaks as they arrive. */
   lookBackMs: number;
-  /** How far AFTER a deictic word a pointing act may sit — the user speaks
-   *  first, then moves to the thing. Intuition said this should be the smaller
-   *  side; real session data disagreed ("usko" spoken 1.4s before the settle
-   *  on the CBSE cell it named), so it is now the larger one. */
+  /** How far after a deictic word a pointing act may sit: the user speaks
+   *  first, then moves to the thing. It is the larger side because real
+   *  sessions showed speech leading the settle by more than a second. */
   lookAheadMs: number;
 }
 

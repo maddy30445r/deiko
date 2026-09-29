@@ -4,18 +4,15 @@ import type { Referent, ReferentPage } from "./types.js";
 /**
  * Build a stack from a recorded session's `events.jsonl`.
  *
- * The recorder emits a pointing act as TWO events seen from different angles:
- * a `candidate` carrying the noise features (dwell, approach speed, how long
- * since you switched apps), and a `probe` carrying what was actually grounded
- * (accessibility elements, crop, OCR). They are separate because grounding is
- * resolved asynchronously — a probe takes a few hundred milliseconds and must
- * not block the 60Hz sampler — so the probe lands slightly after its candidate.
- * Re-pairing them is this loader's main job.
+ * A pointing act arrives as two events: a `candidate` carrying the noise
+ * features (dwell, approach speed, time since an app switch) and a `probe`
+ * carrying what was grounded (accessibility elements, crop, OCR). Grounding
+ * resolves asynchronously, so the probe lands slightly after its candidate;
+ * re-pairing them is this loader's main job.
  *
- * Regions have no candidate at all: a drag is explicit, so the recorder skips
- * straight to a referent. Nor does a point that BEGAN as a drag — a flick too
- * small to enclose anything is demoted to a point by the recorder, and it too
- * arrives as a bare probe.
+ * Regions have no candidate: a drag is explicit. A flick too small to enclose
+ * anything is demoted to a point by the recorder and also arrives as a bare
+ * probe.
  */
 
 interface RawEvent {
@@ -26,9 +23,9 @@ interface RawEvent {
 
 const PAIRING_WINDOW_MS = 1000;
 
-/** A probe must also LAND where its candidate settled. Time alone once paired
- *  a settle with a degenerate-lasso probe 18px away that happened to commit a
- *  millisecond closer, and the settle's own probe fell off the stack. */
+/** A probe must also land where its candidate settled; time alone can pair a
+ *  settle with a nearby degenerate-lasso probe that committed a millisecond
+ *  closer. */
 const PAIRING_RADIUS_PX = 12;
 
 export function loadSession(events: RawEvent[]): ReferentStack {
@@ -37,10 +34,8 @@ export function loadSession(events: RawEvent[]): ReferentStack {
   const candidates = events.filter((e) => e.type === "candidate") as any[];
   const cursors = events.filter((e) => e.type === "cursor") as any[];
 
-  // Holds, from the wire. `holdStart`/`holdEnd` carry the hold number and its
-  // time range; a referent's hold is the range its `t` falls in. Candidates and
-  // probes deliberately do NOT carry a hold field themselves — the events that
-  // define the boundary are already in the file.
+  // Holds come from `holdStart` events; a referent's hold is the range its `t`
+  // falls in. Candidates and probes carry no hold field themselves.
   const holdStarts = new Map<number, number>();
   for (const e of events as any[]) {
     if (e.hold == null) continue;
@@ -48,8 +43,8 @@ export function loadSession(events: RawEvent[]): ReferentStack {
   }
   const holdAt = (t: number): number => {
     for (const [hold, start] of holdStarts) {
-      // A probe resolves asynchronously, so it can land after its hold's end —
-      // membership is "started within", closed by the NEXT hold's start.
+      // A probe resolves asynchronously and can land after its hold's end, so a
+      // hold is closed by the next hold's start.
       const nextStart = holdStarts.get(hold + 1) ?? Infinity;
       if (t >= start && t < nextStart) return hold;
     }
@@ -59,7 +54,7 @@ export function loadSession(events: RawEvent[]): ReferentStack {
   const usedProbes = new Set<number>();
   const drafts: Array<Omit<Referent, "id">> = [];
 
-  // ── points: candidate + its probe ────────────────────────────────────────
+  // Points: candidate + its probe.
   for (const candidate of candidates) {
     let bestIndex = -1;
     let bestGap = Infinity;
@@ -91,27 +86,23 @@ export function loadSession(events: RawEvent[]): ReferentStack {
       cropPath: probe?.crop?.path,
       mark: probe?.mark,
       ...extractPage(probe),
-      // Carried through verbatim: these are the recorder's honest notes on how
-      // suspicious the settle was, and the aligner is what decides.
+      // Carried through verbatim: the recorder's notes on how suspicious the
+      // settle was. The aligner decides.
       capture: candidate.features,
     });
   }
 
-  // ── probes with no candidate: regions, and demoted-lasso points ──────────
+  // Probes with no candidate: regions and demoted-lasso points.
   for (let i = 0; i < probes.length; i++) {
     const probe = probes[i];
 
     if (probe.shape.kind !== "region") {
       if (usedProbes.has(i)) continue;
-      // A flick demoted to a point: real referent — it grounded something and
-      // has a crop — just no candidate and no settle features. It used to be
-      // silently dropped, which lost h01-r005 of the reference session.
-      //
-      // Marked taps now carry the recorder's measured `span` too, same as
-      // regions — so where it's present, use it the same way: the midpoint is
-      // where the narration sits, not `probe.t`, which is the async probe's
-      // own emission time, 50-300ms after the tap actually happened. Legacy
-      // probes with no span fall back to the probe's own time, as before.
+      // A flick demoted to a point: it grounded something and has a crop, just
+      // no candidate and no settle features. Where the recorder measured a
+      // `span`, use its midpoint, which is where the narration sits; `probe.t`
+      // is the async probe's own emission time, 50-300ms after the tap.
+      // Probes with no span fall back to `probe.t`.
       const span: { start: number; end: number } | undefined = probe.span;
       drafts.push({
         hold: holdAt(span ? span.start : probe.t),
@@ -128,18 +119,16 @@ export function loadSession(events: RawEvent[]): ReferentStack {
       continue;
     }
 
-    // The drag interval. New recordings carry it measured (`span`), because
-    // the recorder saw dragBegan. Older ones fall back to reconstruction:
-    // swallowing the drag freezes the OS cursor at the drag origin, so the run
-    // of samples sitting on path[0] approximates the gesture — approximates,
-    // because a cursor parked there BEFORE pressing looks identical, which is
-    // exactly why the recorder now just says so.
+    // The drag interval: measured (`span`) in newer recordings. Older ones
+    // reconstruct it, since swallowing the drag freezes the OS cursor at the
+    // drag origin and the run of samples on path[0] approximates the gesture
+    // (a cursor parked there before pressing looks identical).
     const span: { start: number; end: number } =
       probe.span ?? { start: recoverDragStart(probe, cursors), end: probe.t };
 
     drafts.push({
       hold: holdAt(span.start),
-      // Midpoint of the gesture, not its end — that is where the narration sits.
+      // Midpoint of the gesture, not its end: the narration sits there.
       t: span.start + (span.end - span.start) / 2,
       span,
       kind: "region",
@@ -152,7 +141,7 @@ export function loadSession(events: RawEvent[]): ReferentStack {
     });
   }
 
-  // Chronological insertion, so `index` and `visit` mean what they claim.
+  // Chronological insertion.
   for (const draft of drafts.sort((a, b) => a.t - b.t)) stack.add(draft);
   return stack;
 }
@@ -194,7 +183,7 @@ function extractText(probe: any): { ax: string[]; ocr: string[]; axStart?: strin
   const ocr: string[] = (probe?.crop?.ocr ?? [])
     .map((o: any) => o.text)
     .filter((t: unknown): t is string => typeof t === "string" && t.trim().length > 0);
-  // Connector/trace only: the OTHER end of the stroke, read at gesture start.
+  // Connector/trace only: the other end of the stroke, read at gesture start.
   const axStart: string[] = (probe?.startSnapshot?.elements ?? [])
     .map((e: any) => e.value || e.title || e.elementDescription || e.selectedText)
     .filter((t: unknown): t is string => typeof t === "string" && t.trim().length > 0);

@@ -1,38 +1,19 @@
 /**
  * Stripping credentials out of anything destined for a model.
  *
- * Extracted from the brief renderer because it is no longer the only consumer:
- * the bridge appends crop paths AFTER the renderer's fail-closed guard has run,
- * so what actually reaches Claude Code was never the thing that got checked.
- * A guard that covers a draft rather than the delivered payload is decoration.
- *
- * This is not defensive tidiness — it is a hard requirement. Deiko reads the
- * screen, and screens have secrets on them. Session 20260728-112323 captured a
- * live Azure Storage account key into `events.jsonl` (via BOTH accessibility and
- * OCR) and burned it into its crops, purely because the developer pointed at a
- * Discord thread.
+ * Every consumer that builds a payload goes through here: a guard that covers
+ * a draft rather than the delivered payload is decoration. This is a hard
+ * requirement, not tidiness: Deiko reads the screen, and screens have secrets
+ * on them, in accessibility text, OCR and the pixels of a crop alike.
  */
 
-// ── Redaction ───────────────────────────────────────────────────────────────
-
-/**
- * Strip credentials before anything leaves the machine.
- *
- * This is not defensive tidiness — it is a hard requirement. Deiko reads the
- * screen, and screens have secrets on them. Session 20260728-112323 captured a
- * live Azure Storage account key into `events.jsonl` (via BOTH accessibility and
- * OCR) and burned it into all twelve crops, purely because the developer pointed
- * at a Discord thread. A brief is destined for a cloud model.
- */
 /**
  * Anything that announces a credential is nearby. Matching one of these makes
- * the WHOLE LINE suspect, which is the only approach that survives OCR.
- *
- * Pattern-matching the secret itself does not work. OCR substituted a Cyrillic
- * `І` (U+0406) into the middle of a base64 key, shattering it into fragments
- * that all fell below any sane length threshold — and 22 characters of a live
- * key sailed through a redactor built on `{15,}` and `{40,}` runs. Markers are
- * robust because OCR mangles the *key*, not the English word next to it.
+ * the whole line suspect, the only approach that survives OCR: pattern-matching
+ * the secret itself does not, because OCR can substitute a Cyrillic `І`
+ * (U+0406) into the middle of a base64 key and shatter it into fragments below
+ * any sane length threshold. Markers are robust because OCR mangles the key,
+ * not the English word next to it.
  */
 const SECRET_MARKER =
   /account\s*key|shared\s*access\s*signature|connection\s*string|\bsecrets?\b|\bpasswords?\b|\bpasswd\b|\bapi[_ -]?keys?\b|\btokens?\b|\bcredentials?\b|\bbearer\b|PRIVATE KEY/i;
@@ -40,21 +21,16 @@ const SECRET_MARKER =
 /**
  * Does this token look like an opaque blob rather than a word or identifier?
  *
- * Tuned against real captures to keep what a brief needs and drop what it must
- * not carry. Kept: `acmecompanionportal` (no case mix, no digits),
- * `DefaultEndpointsProtocol`, `generateUserSessionSummary`,
- * `acme_topic_completed_event_2026-04-09`. Dropped: `UzvkZx7oHzB3Kj`,
- * `MQULF+AStdFr/lA==`.
+ * Kept: `acmecompanionportal` (no case mix, no digits), `DefaultEndpointsProtocol`,
+ * `generateUserSessionSummary`. Dropped: `UzvkZx7oHzB3Kj`, `MQULF+AStdFr/lA==`.
  */
 function looksOpaque(token) {
   if (token.length < 12) return false;
   if (/[+/]/.test(token)) return true; // base64 punctuation
-  // THE CASE-MIX TEST BELOW HAS A HOLE THAT HEX WALKS THROUGH. Requiring
-  // upper AND lower AND digit means `0123456789abcdef0123456789abcdef` — the
-  // shape of a great many real keys — did not read as opaque, so it survived
-  // even with "api key" written beside it, and the 40-char standalone rule is
-  // too long to catch it. Pure hex is never an English word and never an
-  // identifier anybody types, so it is opaque and then takes the same rules as
+  // The case-mix test below has a hole that hex walks through:
+  // `0123456789abcdef0123456789abcdef`, the shape of many real keys, lacks
+  // upper case and would not read as opaque. Pure hex is never an English word
+  // or an identifier anybody types, so it is opaque and takes the same rules as
   // everything else: dropped next to a marker, dropped unmarked only past
   // `UNMARKED_MIN`. A short commit SHA still travels.
   if (/^[0-9a-f]+$/i.test(token)) return true;
@@ -75,12 +51,12 @@ const TOKEN_SPLIT = /([\s;,=<>"'`()[\]{}]+)/;
 const UNMARKED_MIN = 24;
 
 /**
- * A "+" followed by 8+ opaque-alphabet characters. `looksOpaque` only judges
- * a token past 12 characters, but `assertNoSecrets`'s base64-run rule rejects
- * this shape at any length — so a short one (a keybinding like "⌘+Shift+Tab",
- * a phone number like "+919876543") survived redaction and then made a brief
- * unrenderable when it later hit the guard. Caught here too, regardless of
- * length, so nothing redact() leaves standing can trip that guard downstream.
+ * A "+" followed by 8+ opaque-alphabet characters. `looksOpaque` only judges a
+ * token past 12 characters, but `assertNoSecrets`'s base64-run rule rejects
+ * this shape at any length, so a short one (a keybinding like "⌘+Shift+Tab", a
+ * phone number like "+919876543") would survive redaction and then make a
+ * brief unrenderable at the guard. Caught here regardless of length, so
+ * nothing `redact()` leaves standing can trip that guard downstream.
  */
 const PLUS_RUN = /\+[A-Za-z0-9+/Ѐ-ӿ]{8,}/;
 
@@ -125,14 +101,13 @@ export function redact(text) {
 }
 
 /**
- * A referent's captured text, redacted as ONE unit.
+ * A referent's captured text, redacted as one unit.
  *
- * The block is the right scope, not the line. OCR breaks a connection string
+ * The block is the right scope, not the line: OCR breaks a connection string
  * across visual lines at arbitrary points, so the line carrying the key's tail
- * (`MQULF+AStdFr/lA==;EndpointSuffix=…`) has no marker on it at all — 17
- * characters of a live key survived line-level redaction. A referent is one
- * screenshot: if a credential is visible anywhere in it, the whole thing is
- * suspect.
+ * (`MQULF+AStdFr/lA==;EndpointSuffix=…`) has no marker on it at all. A referent
+ * is one screenshot: if a credential is visible anywhere in it, the whole
+ * thing is suspect.
  */
 export function redactBlock(lines) {
   const stripped = lines.map(stripStandalone);
@@ -140,7 +115,6 @@ export function redactBlock(lines) {
   return stripped.map((l) => redactTokens(l, suspect));
 }
 
-/// A line that is just a file path, bulleted or not.
 /// A line that is only a file path: segments joined by "/", ending in a short
 /// real extension (`.swift`, `.tsx`) — never a JWT, whose last part after a
 /// dot is a long signature. Each segment is checked on its own, so a long
@@ -151,10 +125,10 @@ const plainPath = (line) => PATH_LINE.test(line)
     .every((seg) => stripStandalone(seg) === seg && !(seg.length >= 20 && looksOpaque(seg)));
 
 /**
- * Lines an agent wrote (an outcome's sections), redacted as ONE block like
+ * Lines an agent wrote (an outcome's sections), redacted as one block like
  * `redactBlock`, so a secret on the line after its label ("API key for
- * staging:") is still caught — while a line that is only a file path stays
- * one an agent can open: once the block is suspect, `looksOpaque` reads
+ * staging:") is still caught, while a line that is only a file path stays one
+ * an agent can open: once the block is suspect, `looksOpaque` reads
  * `src/…/Foo.tsx` as credential-shaped. A path line still loses a credential
  * that carries its own signature (a JWT, a key id).
  */
@@ -164,17 +138,13 @@ export function redactNote(lines) {
 }
 
 /**
- * Was a credential VISIBLE in this referent's capture?
+ * Was a credential visible in this referent's capture?
  *
- * Distinct from redacting its text, and the distinction is the whole point.
- * Redaction protects the words in the brief; it cannot touch the PNG, where the
- * key is pixels. Session 20260728-112323 burned a live Azure Storage account key
- * into all twelve crops. So the moment a crop travels as a PATH — which is
- * exactly what the bridge does, so an agent can read it — the text redaction
- * stops being sufficient and this is what decides whether the path goes at all.
- *
- * Scoped to the referent, matching `redactBlock`: one referent is one
- * screenshot, and a credential anywhere in it makes the whole image unsafe.
+ * Distinct from redacting its text: redaction protects the words in the brief
+ * but cannot touch the PNG, where the key is pixels. So once a crop travels as
+ * a path, text redaction is not sufficient and this decides whether the path
+ * goes at all. Scoped to the referent, matching `redactBlock`: one referent is
+ * one screenshot, and a credential anywhere in it makes the whole image unsafe.
  */
 export function carriesSecret(r) {
   const text = [
@@ -189,23 +159,14 @@ export function carriesSecret(r) {
   // block all announce themselves. Unconditional, and first.
   if (stripped !== text) return true;
 
-  // A MARKER ALONE IS NOT A SECRET, and treating it as one was costing this
-  // product its own audience. The union above is every scrap of text in a
-  // referent, so a single occurrence of "token" ANYWHERE in it withheld the
-  // whole screenshot — and the people Deiko is for spend their day looking at
-  // `auth.ts`, `getAccessToken`, `Bearer` in a header pane and a `password`
-  // field label. Three VS Code crops in session 20260730-004641 were withheld
-  // because `userAuth.ts` contains the word "token". Length is not opacity
-  // and vocabulary is not a credential.
-  //
-  // So a marker has to be near an opaque VALUE before it means anything. Same
-  // line, or the one after — because the thing this must never miss is a
-  // label above its own field, which is exactly how the Azure account key in
-  // session 20260728-112323 sat on screen.
-  //
-  // ponytail: a ±1-line window. OCR that shatters a value across a column
-  // boundary can push it out of reach and release where this used to
-  // withhold; widen the window if a real session shows that happening.
+  // A marker alone is not a secret. The union above is every scrap of text in a
+  // referent, so a single "token" anywhere in it would withhold the whole
+  // screenshot, and the people Deiko is for spend their day looking at
+  // `auth.ts`, `getAccessToken` and a `password` field label. So a marker has
+  // to be near an opaque value before it means anything: the same line or the
+  // one after, because the case that must never be missed is a label above its
+  // own field. OCR that shatters a value across a column boundary can push it
+  // out of reach; widen the window if that shows up.
   const lines = stripped.split("\n");
   return lines.some((line, i) => {
     if (!SECRET_MARKER.test(line)) return false;
@@ -217,10 +178,9 @@ export function carriesSecret(r) {
 /**
  * Fail closed. Refuses to write if anything credential-shaped survived.
  *
- * The check that matters is the first one: on any line that *announces* a
- * secret, no opaque token may remain. That is the exact bug class the original
- * guard missed — it only looked for 40+ character runs, so OCR-shattered key
- * fragments passed straight through it.
+ * The check that matters is the first one: on any line that announces a
+ * secret, no opaque token may remain. A guard that only looked for 40+
+ * character runs would let OCR-shattered key fragments through.
  */
 export function assertNoSecrets(markdown) {
   const fail = (why, sample) => {
@@ -230,8 +190,9 @@ export function assertNoSecrets(markdown) {
     );
   };
 
-  // Checked per fenced BLOCK, the same unit the redactor uses. Line-by-line is
-  // what let an OCR-split key tail through: the line carrying it had no marker.
+  // Checked per fenced block, the same unit the redactor uses: line by line
+  // would let an OCR-split key tail through, as the line carrying it has no
+  // marker.
   let block = null;
   for (const line of markdown.split("\n")) {
     if (line.startsWith("```")) {

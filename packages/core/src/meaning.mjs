@@ -7,13 +7,13 @@
  *                                                "failed <why>" and exit 1 on any failure
  *   node packages/core/src/meaning.mjs backfill [<root>] → "backfilled <n>"; "failed <why>" and exit 1 with no model
  *
- * The model is DEIKO_MEANING_MODEL (default harrier-oss-v1-270m; "off" turns
- * meaning off), kept under DEIKO_MODEL_DIR (default
+ * The model is DEIKO_MEANING_MODEL (default `DEFAULT_MODEL` in lib/meaning.mjs;
+ * "off" turns meaning off), kept under DEIKO_MODEL_DIR (default
  * ~/Library/Application Support/Deiko/models). Downloads come from Deiko's
  * own storage (DEIKO_MODEL_BASE_URL overrides it), or from Hugging Face with
  * --hf; every file is SHA-256 checked either way.
  *
- * BACKFILL WRITES INTO THE BOARD (<session>/meaning.f32). Only the app, once
+ * Backfill writes into the board (<session>/meaning.f32). Only the app, once
  * after a download, and the controller (`make meaning-backfill`) run it.
  */
 import { existsSync, readdirSync, rmSync } from "node:fs";
@@ -45,7 +45,7 @@ if (command === "status") {
         console.log(`progress ${done} ${total}`);
       },
     });
-    // A model this build no longer uses is a ~200 MB folder nothing reads.
+    // A model this build does not use is a ~200 MB folder nothing reads.
     for (const other of Object.keys(MODELS)) if (other !== key) rmSync(modelDir(other), { recursive: true, force: true });
     console.log(`ready ${key}`);
   } catch (err) {

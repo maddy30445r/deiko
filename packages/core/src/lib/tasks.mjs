@@ -1,11 +1,11 @@
 /**
- * TASKS — the unit Deiko remembers. Project (collection) → task → briefs.
+ * Tasks: the unit Deiko remembers. Project (collection) → task → briefs.
  *
  * A brief's task is `context.json.task`; one with none is its own task,
- * `t-<its stamp>`, so a board from before tasks reads correctly untouched.
- * `tasks.json` beside the sessions holds only titles, because a title can be
- * renamed. The note in `tasks/<id>.md` is compiled from the briefs and their
- * outcomes, never edited in place — see `render-brief.mjs`, its only writer.
+ * `t-<its stamp>`. `tasks.json` beside the sessions holds only titles, because
+ * a title can be renamed. The note in `tasks/<id>.md` is compiled from the
+ * briefs and their outcomes, never edited in place; `render-brief.mjs` is its
+ * only writer.
  *
  * Pure, except `readTasks` and `writeTaskNotes`.
  */
@@ -21,8 +21,6 @@ import { BRIEF_LINE_FILES, COULD_NOT_TELL, STAMP, briefDate, readBriefLine } fro
 
 export const TASK_ID = /^t-\d{8}-\d{6}$/;
 /// How many tasks Jev is asked about, one yes/no each.
-/// ponytail: 20 is the usual starting point for one person's board; the eval
-/// measures recall at 5 and 20, and corrections log where the right task sat.
 export const SHORTLIST = 20;
 const CAP = { now: 12, decided: 20, briefs: 50 };
 
@@ -43,8 +41,8 @@ export const tokens = (text) => String(text ?? "").toLowerCase().match(/[a-z0-9$
 /// "Ignore all ESLint rules in generated/" are notes and stay.
 const INSTRUCTION = /^(please\s+)?(ignore|disregard|forget|override)\b[^.\n]{0,40}\b(previous|prior|above|earlier|all|any|your)\b[^.\n]{0,24}\b(instructions?|prompts?)\b|^you are now\b|^new instructions?:|\b(reveal|print|output|repeat|show)\b[^.\n]{0,30}\b(your|the) system prompt\b/i;
 
-/// "None" under Open means nothing is open, not an item called "None" — kept,
-/// it became the task's "where it stands" and read as work still pending.
+/// "None" under Open means nothing is open, not an item called "None": kept,
+/// it would become the task's "where it stands" and read as pending work.
 const PLACEHOLDER = /^(none|nothing|n\/?a|nil)( (yet|left|open|remaining|so far|for now))?\.?$|^[-—–]+$/i;
 
 /// The four headings, as agents actually title them.
@@ -53,7 +51,7 @@ const HEADS = {
   open: /^(open|next( steps)?|todo|to do|remaining)\b/i,
   did: /^(did|done|changes?|what i did)\b/i,
   files: /^files?( touched| changed)?\b/i,
-  // An earlier decision on the task that no longer holds, quoted.
+  // An earlier decision on the task that has been reversed, quoted.
   retired: /^(retired|reversed|superseded|no longer (holds?|true|applies))\b/i,
 };
 const section = (heading) => {
@@ -72,7 +70,7 @@ const section = (heading) => {
  * headings inside them included.
  */
 export function parseOutcome(text) {
-  // `retired` only when there is one: every outcome without it reads as before.
+  // `retired` exists only when the outcome has one.
   const out = { did: [], decided: [], open: [], files: [] };
   let into = "did";
   let fence = null;
@@ -138,7 +136,7 @@ export function groupTasks(briefs) {
 /**
  * Newest-first briefs → where the task stands and what was done last.
  *
- * Only the NEWEST brief's outcome says where things stand: an older one
+ * Only the newest brief's outcome says where things stand: an older one
  * describes work a later ask has moved past, so it follows that ask, dated.
  * An outcome with nothing open is finished work and says what was done. A
  * "Last asked" line that only repeats `title` is dropped — the prompt and
@@ -179,12 +177,12 @@ export function taskText(title, briefs) {
   ].join(" ");
 }
 
-/// ponytail: starting values, tuned on the filing eval (evals/filing.mjs).
+/// How many tasks active in a window the brief names get a seat.
 export const TIME_SEATS = 5;
 /// A label on more than this many tasks ("App.tsx", "index.tsx") seats nobody.
 export const COMMON_LABEL = 5;
 /// The labels that hand out seats. Sites and code projects do not: one site
-/// or one repo holds most of a board, so they say nothing about WHICH task.
+/// or one repo holds most of a board, so they say nothing about which task.
 export const SEAT_KINDS = ["pages", "files", "urls", "errors", "tickets"];
 
 export function terms(text) {
@@ -217,24 +215,20 @@ export function bm25(query, docs) {
 }
 
 
-/// How much meaning counts against words in search (see `blendScores`).
-/// Measured 27 Sep 2026 on 100 realistic queries against the owner's board
-/// (search-queries.json beside the filing labels, `evals/search.mjs`):
-/// every weight from 0.78 to 0.9 scored 88–89 right at #1, rank fusion at
-/// best 84, today's RRF 80. Below ~0.76 paraphrases fall away.
+/// How much meaning counts against words in search (see `blendScores`). Much
+/// lower and paraphrases fall away.
 export const SEARCH_MEANING_WEIGHT = 0.8;
-/// The same for filing's shortlist. Measured the same day, the 100 queries as
-/// new briefs plus each real brief filed against its board: 0.7 put the right
-/// task first 87/100 and 15/15 (RRF 80 and 15/15); 0.8 dropped a real brief.
+/// The same for filing's shortlist, where words weigh a little more: a whole
+/// brief carries far more real words than a search.
 export const FILING_MEANING_WEIGHT = 0.7;
 
 /**
- * SEARCH: words and meaning blended by SCORE, not by rank. Each list is
- * scaled to 0–1 across the briefs and mixed. Rank fusion (what this replaced) kept only
- * positions, so one stray word on a screen that tops the word list counted as
- * much as a perfect match: "the graph thing" found a Sitemap brief with
- * "Graph" once in its screen text over the signups chart it meant. Missing
- * scores (no vector, no word) count as the bottom of their list.
+ * Search: words and meaning blended by score, not by rank. Each list is scaled
+ * to 0–1 across the briefs and mixed. Rank fusion keeps only positions, so one
+ * stray word on a screen that tops the word list would count as much as a
+ * perfect match: "the graph thing" would find a Sitemap brief with "Graph"
+ * once in its screen text over the signups chart it meant. Missing scores (no
+ * vector, no word) count as the bottom of their list.
  */
 export function blendScores(words, meaning, weight = SEARCH_MEANING_WEIGHT) {
   // Words from zero (no match), so on a board of two, the weaker of two real
@@ -260,9 +254,9 @@ const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "frida
  * The window a brief's time words name, from its own stamp: "today"/"aaj",
  * "this morning", "yesterday"/"kal", "last night" (the evening before),
  * "parso"/"day before yesterday", "this week" (from Monday), "last
- * week"/"pichle hafte", and
- * weekday names (the most recent one before today). Several words → their
- * union. "kal" also means tomorrow; said about past work it means yesterday.
+ * week"/"pichle hafte", and weekday names (the most recent one before today).
+ * Several words → their union. "kal" also means tomorrow; said about past work
+ * it means yesterday.
  */
 export function timeWindow(text, stamp) {
   // "day before yesterday" is parso, and must not also read as yesterday.
@@ -287,15 +281,15 @@ export function timeWindow(text, stamp) {
 }
 
 /** Whether a brief may describe its task: its founder, a hand placement of
- *  its TASK, or any v3 join. JOIN's own thresholds in context.mjs already
+ *  its task, or any v3 join. JOIN's own thresholds in context.mjs already
  *  gate what counts as one, so this asks only whether a join happened, not
- *  how sure it was. A legacy join (no `classifier`) or a local one is a
- *  guess, never a face — see `decide` and `decideLocally`. So is a join whose
- *  PROJECT alone was corrected by hand: that fixes a chip, not the task. */
+ *  how sure it was. A join with no `classifier` or a local one is a guess,
+ *  never a face (see `decide` and `decideLocally`), as is a join whose project
+ *  alone was corrected by hand: that fixes a chip, not the task. */
 export function firm(b, taskId) {
   if (taskIdFor(b.id) === taskId || b.taskBy === "you") return true;
-  // Before `taskBy`: `decidedBy: "you"` was a task placement unless the
-  // project was what the hand placed.
+  // Older contexts have no `taskBy`: there `decidedBy: "you"` is a task
+  // placement unless the project was what the hand placed.
   if (b.decidedBy === "you" && b.collectionBy !== "you") return true;
   return String(b.classifier ?? "").startsWith("v3") && typeof b.confidence?.task === "number";
 }
@@ -305,22 +299,22 @@ export function taskLabels(briefs) {
     new Set(briefs.flatMap((b) => b.keys?.[k] ?? []).map((s) => String(s).toLowerCase()))]));
 }
 
+/// How a task of many briefs is scored against a new one. "pile" (words over
+/// all its briefs at once, meaning by its closest brief) is the default;
+/// "best" (each brief alone, the best one counts) and "average" (each brief
+/// alone, averaged) are for the filing eval to compare.
+export const TASK_AGGREGATE = process.env.DEIKO_TASK_AGGREGATE ?? "pile";
+
 /**
- * THE SHORTLIST — up to twenty tasks Jev is asked about, one yes/no each.
+ * The shortlist: up to twenty tasks Jev is asked about, one yes/no each.
  * Seats given outright first: a task sharing an exact page, file, address,
  * error or ticket label with the brief (unless that label is on more than
  * COMMON_LABEL tasks), then up to TIME_SEATS tasks active in a window the
- * brief names, best score first. The rest by reciprocal-rank fusion of BM25
- * over words and 3-grams and, when vectors exist, the cosine to the task's
- * closest firm brief. Recency only breaks ties; the project gives nothing. A
- * seat is a chance to be checked, never a join.
+ * brief names, best score first. The rest by a score blend (`blendScores`) of
+ * BM25 over words and 3-grams and, when vectors exist, the cosine to the
+ * task's closest firm brief. Recency only breaks ties; the project gives
+ * nothing. A seat is a chance to be checked, never a join.
  */
-/// HOW A TASK OF MANY BRIEFS IS SCORED against a new one. "pile" (words over
-/// all its briefs at once, meaning by its closest brief) is what shipped; the
-/// filing eval compares "best" (each brief alone, the best one counts) and
-/// "average" (each brief alone, averaged) before any change of default.
-export const TASK_AGGREGATE = process.env.DEIKO_TASK_AGGREGATE ?? "pile";
-
 export function shortlist({ query, queryKeys = {}, window = null, queryVec = null, tasks, limit = SHORTLIST, aggregate = TASK_AGGREGATE }) {
   if (!tasks.length) return [];
   const q = terms(query);
@@ -329,7 +323,7 @@ export function shortlist({ query, queryKeys = {}, window = null, queryVec = nul
   if (aggregate === "pile" || !tasks.every((t) => t.texts?.length)) {
     grams = bm25(q, tasks.map((t) => terms(t.text)));
   } else {
-    // EACH BRIEF SCORED ON ITS OWN, against one corpus of every brief, then
+    // Each brief scored on its own, against one corpus of every brief, then
     // combined per task: its best brief, or the average of them all.
     const all = tasks.flatMap((t, i) => t.texts.map((x) => [i, terms(x)]));
     const s = bm25(q, all.map(([, t]) => t));
@@ -368,8 +362,6 @@ export function shortlist({ query, queryKeys = {}, window = null, queryVec = nul
   ].slice(0, limit).map(({ id, score, meaning: m, seat }) => ({ id, score, meaning: m, seat }));
 }
 
-/** The compiled note. `briefs` newest first. Every line from another
- *  session is redacted here, where it is written. */
 /**
  * Whether a quoted retired line names this decision. Loose on purpose: an
  * agent may copy the note's "Sep 18 (…): " prefix, change the punctuation, or
@@ -382,7 +374,7 @@ export const decisionKey = (s) => String(s ?? "").toLowerCase()
 export function sameDecision(retired, decision) {
   const [r, d] = [decisionKey(retired), decisionKey(decision)];
   if (!r || !d) return false;
-  // The quote must be the decision's START (or the decision the quote's):
+  // The quote must be the decision's start (or the decision the quote's):
   // retiring "Use Postgres" must not retire "Do not use Postgres for the cache".
   return r === d || (Math.min(r.length, d.length) >= 12 && (d.startsWith(r) || r.startsWith(d)));
 }
@@ -416,13 +408,13 @@ export function currentDecisions(briefs) {
 }
 
 /**
- * WHAT A NEW BRIEF'S PROMPT CARRIES ABOUT ITS TASK (render-brief.mjs):
- * where it stands, the decisions still holding, the newest three briefs, and
- * — for a browser chat, which can't open the note — the task brief by brief.
- * Firm briefs only (`firm`): a join Jev only guessed at never shows up
- * dressed as this task's own history; a task with no firm brief at all falls
- * back to every mate, as its face does in `prepare`. `mates` newest first,
- * every one older than the new brief.
+ * What a new brief's prompt carries about its task (render-brief.mjs): where
+ * it stands, the decisions still holding, the newest three briefs and, for a
+ * browser chat, which can't open the note, the task brief by brief. Firm
+ * briefs only (`firm`): a join Jev only guessed at never shows up dressed as
+ * this task's own history; a task with no firm brief at all falls back to
+ * every mate, as its face does in `prepare`. `mates` newest first, every one
+ * older than the new brief.
  */
 export function taskMemory({ root, id, title, mates }) {
   const firmMates = mates.filter((b) => firm(b, id));
@@ -439,14 +431,15 @@ export function taskMemory({ root, id, title, mates }) {
     recent: firmMates.slice(0, 3).reverse().map((b) => ({ date: briefDate(b.id), line: b.line })),
     // Shown so the agent can retire one word for word (`sameDecision`).
     decided: currentDecisions(face).decisions.slice(0, 5).map((d) => d.text),
-    // Measured 28 Sep on a 10-task test board (evals/memory/): a browser
-    // chat answered 5 of 10 history questions without it, 9 of 10 with it.
+    // The task brief by brief, for a browser chat that cannot open the note.
     history: face.slice(0, 12).reverse()
       .map((b) => ({ date: briefDate(b.id), line: b.line, did: redactNote((b.outcome?.did ?? []).slice(0, 2)) })),
     notePath: join(root, "tasks", `${id}.md`),
   };
 }
 
+/** The compiled note. `briefs` newest first. Every line from another
+ *  session is redacted here, where it is written. */
 export function renderTaskNote({ id, title, collection = null, briefs }) {
   const first = briefDate(briefs.at(-1).id);
   const last = briefDate(briefs[0].id);
@@ -457,24 +450,21 @@ export function renderTaskNote({ id, title, collection = null, briefs }) {
     // Rewritten whole on every render, so an edit here would not last.
     "Compiled by Deiko from each brief's outcome.md — edit those, not this file.",
   ];
-  // WHAT THE TASK SAYS comes from its confirmed briefs only (`firm`), like the
+  // What the task says comes from its confirmed briefs only (`firm`), like the
   // shortlist's face and the prompt's history: one brief guessed in here by
   // mistake must not become where the task stands. It is still listed below.
   const sure = briefs.filter((b) => firm(b, id));
   const said = sure.length ? sure : [briefs.at(-1)];
   const state = taskState(said, title);
   if (state.now.length) out.push("", "## Now", ...state.now, ...(state.from ? [`(from the brief of ${briefDate(state.from)}, ${state.from})`] : []));
-  // Each brief's decisions as one block, like its Now: see `redactNote`.
-  // EVERY LINE SAYS WHICH BRIEF IT CAME FROM, so an agent can open that brief
-  // (get_brief) rather than take a line on trust.
-  // RETIRED, NOT DELETED: a decision a LATER brief's agent quoted under
-  // "## Retired" no longer shows as current. It stays in its own outcome.md.
-  // ONE DECISION, ONE LINE, credited to the brief that made it. Agents read
-  // the note and copy decisions into their own write-backs; counting each copy
-  // as a new decision is how memory systems end up repeating themselves.
-  // RETIRED, NOT DELETED: a decision a later brief quotes under "## Retired"
-  // stops being current (it stays in its own outcome.md), and one made again
-  // after that is a new decision. So: walk the history oldest first.
+  // Each brief's decisions as one block, like its Now (see `redactNote`), and
+  // every line says which brief it came from so an agent can open it
+  // (get_brief) rather than take it on trust. One decision, one line, credited
+  // to the brief that made it: agents copy decisions into their own
+  // write-backs, and counting each copy would make memory repeat itself. A
+  // decision a later brief quotes under "## Retired" stops being current (it
+  // stays in its own outcome.md), and one made again after that is new, so walk
+  // the history oldest first.
   const { decisions: current, retiredCount } = currentDecisions(said);
   const decisions = current.map((d) => `- ${briefDate(d.id)} (${d.id}): ${d.text}`);
   const decided = decisions.slice(0, CAP.decided);
@@ -491,7 +481,7 @@ export function renderTaskNote({ id, title, collection = null, briefs }) {
     const apps = b.apps.length ? ` · ${b.apps.map(redact).join(", ")}` : "";
     const windows = b.windows.length ? ` · ${b.windows.slice(0, 3).map(redact).join(" · ")}` : "";
     out.push(`- ${briefDate(b.id)}, "${redact(b.line)}"${sure.includes(b) ? "" : " (not confirmed)"}${apps}${windows}`);
-    // TWO FILES BY NAME, NEVER THE FOLDER — see `prompt.mjs`.
+    // Two files by name, never the folder.
     out.push(`  ${b.dir}/prompt.txt${b.outcome ? ` · ${b.dir}/outcome.md` : ""}`);
   }
   if (n > CAP.briefs) out.push(`- … and ${n - CAP.briefs} earlier`);
@@ -510,23 +500,6 @@ export function readTasks(root) {
   }
 }
 
-/**
- * THE BOARD INDEX. Every brief folder under `root` as its `readBriefLine`,
- * in folder order — but read from disk only when one of the files it comes
- * from changed. Reading ~4 small files per brief is most of what a big board
- * costs (about 2.5 s at 10,000 briefs); checking them costs a tenth of that.
- *
- * A brief is re-read when any `BRIEF_LINE_FILES` entry changed inode, size or
- * mtime (ns) — the pipeline and the app replace files by rename, which moves
- * the inode, and an agent editing outcome.md in place moves the mtime. And
- * the whole index is dropped when any script in lib/ changes, so a change to
- * how a line is read never serves a line read the old way.
- *
- * `.board-index.json` beside the briefs is a cache only: deleting it, or two
- * processes writing it at once (last one wins), costs one slow read. The same
- * lines are kept in the process too, so a second read in one run is only the
- * checks. `save: false` never writes (the memory helper writes nothing).
- */
 const INDEX = ".board-index.json";
 const inProcess = new Map(); // root -> { name: { fp, line } }
 // Hashed as this module loads, so it names the code this process runs even
@@ -539,6 +512,23 @@ const CODE_KEY = (() => {
 })();
 const fingerprint = (dir) => BRIEF_LINE_FILES.map((f) => fileStamp(join(dir, f))).join("|");
 
+/**
+ * The board index: every brief folder under `root` as its `readBriefLine`, in
+ * folder order, re-read from disk only when a file it comes from changed (about
+ * four small files per brief is most of what a big board costs; checking them
+ * is a tenth of that).
+ *
+ * A brief is re-read when any `BRIEF_LINE_FILES` entry changed inode, size or
+ * mtime (ns): the pipeline and the app replace files by rename, which moves the
+ * inode, and an agent editing outcome.md in place moves the mtime. The whole
+ * index is dropped when any script in lib/ changes, so a change to how a line
+ * is read never serves a line read the old way.
+ *
+ * `.board-index.json` is a cache only: deleting it, or two processes writing it
+ * at once (last one wins), costs one slow read. Lines are also kept in the
+ * process, so a second read in one run is only the checks. `save: false` never
+ * writes (the memory helper writes nothing).
+ */
 export function readBriefLines(root, { save = true } = {}) {
   let known = inProcess.get(root);
   if (!known) {
@@ -580,11 +570,11 @@ export function readBriefLines(root, { save = true } = {}) {
 }
 
 /**
- * WHAT DEIKO REMEMBERS, AS YOU CORRECTED IT. "Forget" and "Edit" on a task's
- * notes in the app write `tasks/<id>.overrides.json`:
+ * Corrections to what Deiko remembers. "Forget" and "Edit" on a task's notes in
+ * the app write `tasks/<id>.overrides.json`:
  * `{ "forget": [line], "edit": { line: replacement } }`, keyed by a line's
  * text as the agent wrote it in outcome.md. Applied wherever an outcome is
- * read for memory — notes, prompts, filing, the memory helper — and never to
+ * read for memory (notes, prompts, filing, the memory helper) and never to
  * outcome.md itself, so the history stays and every change can be undone.
  */
 export function readOverrides(root) {
@@ -622,11 +612,11 @@ export function withOverrides(b, o) {
  *  line quoting a forgotten one goes, an edited one is replaced in place. */
 export function overrideText(text, o) {
   if (!o || text == null) return text;
-  // WHOLE LINES, compared the way they were written: a prompt quotes a note
-  // line redacted and with its spaces collapsed, behind a bullet or a
-  // "Still open from Sep 18:" / "- Sep 18 (id):" / "Last done:" lead-in.
-  // Never a substring: forgetting "Done" must not take out a sentence that
-  // merely contains it.
+  // Whole lines, compared the way they were written: a prompt quotes a note
+  // line redacted and with its spaces collapsed, behind a bullet or a "Still
+  // open from Sep 18:" / "- Sep 18 (id):" / "Last done:" lead-in. Never a
+  // substring: forgetting "Done" must not take out a sentence that merely
+  // contains it.
   const norm = (s) => redact(String(s)).replace(/\s+/g, " ").trim().replace(/[.!?]+$/, "").toLowerCase();
   const LEAD = /^(\s*(?:[-*]\s+)?(?:Still open from [^:]+:\s*|Last done:\s*|[A-Z][a-z]{2} \d{1,2}(?:, \d{4})?(?: \(\d{8}-\d{6}\))?:\s*)?)(.*)$/;
   const forget = new Set([...o.forget].map(norm).filter(Boolean));
@@ -662,13 +652,12 @@ export function readBoard(root) {
 }
 
 /**
- * THE ONLY WRITER OF TASK NOTES. Compiles every task with two or more briefs
+ * The only writer of task notes. Compiles every task with two or more briefs
  * and writes the ones whose text changed, so a note that lost a brief to a
- * board move but still has two or more left heals on the next render of
- * anything. A single brief has nothing to carry, and hundreds of one-line
- * notes would be clutter — but that also means a task a board move drops
- * back below two briefs keeps its last note exactly as it was, stale,
- * rather than losing or updating it.
+ * board move but still has two or more left heals on the next render. A
+ * single brief has nothing to carry, and hundreds of one-line notes would be
+ * clutter; the cost is that a task a board move drops below two briefs keeps
+ * its last note as it was, stale.
  */
 export function writeTaskNotes(root) {
   const titles = readTasks(root);
@@ -699,9 +688,9 @@ export function writeTaskNotes(root) {
     writeAtomic(path, text);
     written += 1;
   }
-  // A NOTE OUTLIVING ITS TASK kept the words of briefs that were moved out or
-  // deleted, and prompts still pointed agents at it. A task under two briefs
-  // has no note; only files named like a task are touched.
+  // Remove notes whose task is gone: they would keep the words of briefs that
+  // were moved out or deleted, and prompts would still point agents at them.
+  // Only files named like a task are touched.
   let files = [];
   try {
     files = readdirSync(dir);

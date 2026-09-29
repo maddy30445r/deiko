@@ -10,23 +10,15 @@ import {
 } from "./types.js";
 
 /**
- * THE ALIGNMENT ENGINE
+ * Binds spoken utterances to pointing events.
  *
- * Binds spoken utterances to pointing events. This is the core mechanic: if it
- * cannot reach ~80% accuracy the product does not exist, which is why it is a
- * gate before M1 rather than a feature inside it.
- *
- * The shape of the problem: the recorder deliberately over-captures. Every
- * cursor settle becomes a candidate, including hands resting mid-transit,
- * cursors landing after an app switch, and pauses while the page scrolls
- * underneath. Cursor data alone cannot separate those from real pointing acts.
- * Speech can — so the narration is the filter, and this file applies it.
- *
- * Two passes:
- *   1. Deictic words claim their nearest plausible candidate. Strong signal.
+ * The recorder over-captures: every cursor settle becomes a candidate,
+ * including hands resting mid-transit, landings after an app switch and pauses
+ * while the page scrolls. Cursor data alone cannot separate those from real
+ * pointing acts, so the narration is the filter, in two passes:
+ *   1. Deictic words claim their nearest plausible candidate (strong signal).
  *   2. Candidates with no deictic nearby fall back to whatever was being said
- *      while they were dwelt on. Weaker, but a user who says "the padding is
- *      too big" while pointing has still pointed.
+ *      while they were dwelt on (weaker, but still a pointing act).
  */
 export function align(
   candidates: Candidate[],
@@ -37,7 +29,7 @@ export function align(
   const bindings: Binding[] = [];
   const claimed = new Set<string>();
 
-  // ── Pass 1: deictic words claim candidates ────────────────────────────────
+  // Pass 1: deictic words claim candidates.
   for (let i = 0; i < words.length; i++) {
     const word = words[i]!;
     if (!isDeictic(word.text)) continue;
@@ -51,10 +43,9 @@ export function align(
     const best = scored[0];
     if (!best) continue;
 
-    // The MARGIN over the runner-up is the real confidence signal, not the raw
-    // score. Two candidates a few hundred milliseconds apart both score well
-    // against "this" — and that ambiguity, not the absolute distance, is what
-    // the review UI needs to flag.
+    // The margin over the runner-up, not the raw score, is the confidence
+    // signal: two candidates close in time both score well against "this", and
+    // that ambiguity is what the review UI needs to flag.
     const runnerUp = scored[1]?.score ?? 0;
     const margin = (best.score - runnerUp) / best.score;
     const confidence = clamp01(best.score * (0.6 + 0.4 * margin));
@@ -69,26 +60,22 @@ export function align(
       utteranceStart: around.utteranceStart,
       confidence,
       reason: "deictic",
-      // The strong path was still unsure — two candidates nearly tied, or the
-      // one it picked sat far from the word. That is worth a human's attention
-      // in a way "this was an overlap binding" is not.
+      // Still unsure: two candidates nearly tied, or the pick sat far from the word.
       needsReview: confidence < LOW_CONFIDENCE,
-      // Spread rather than assigned: `exactOptionalPropertyTypes` forbids
-      // writing an explicit `undefined` into an optional field, and it is right
-      // to — a transcript predating `anchored` must leave this ABSENT rather
-      // than claim the timing was interpolated.
+      // Spread rather than assigned: `exactOptionalPropertyTypes` forbids an
+      // explicit `undefined`, and a transcript predating `anchored` must leave
+      // this absent rather than claim the timing was interpolated.
       ...(word.anchored !== undefined && { anchoredTiming: word.anchored }),
     });
   }
 
-  // ── Pass 2: overlap fallback ──────────────────────────────────────────────
+  // Pass 2: overlap fallback.
   for (const candidate of candidates) {
     if (claimed.has(candidate.id)) continue;
 
-    // What was being said while the cursor rested here? Bounded by the same
-    // hard hold rule as everywhere else — without the check, a candidate just
-    // after a release once absorbed the previous hold's trailing words into
-    // its "utterance", the exact merge pass 1 forbids.
+    // What was being said while the cursor rested here. The hold check keeps a
+    // candidate just after a release from absorbing the previous hold's
+    // trailing words, the merge pass 1 forbids.
     const dwellStart = candidate.t - candidate.features.dwellMs;
     const spoken = words.filter(
       (w) => w.end >= dwellStart && w.start <= candidate.t && sameHold(w, candidate),
@@ -100,15 +87,13 @@ export function align(
       candidateId: candidate.id,
       utterance: joinWords(spoken.map((w) => w.text)),
       utteranceStart: spoken[0]!.start,
-      // Capped below the deictic path on purpose: overlapping speech is real
-      // evidence but weaker than a word that explicitly points.
+      // Capped below the deictic path: overlapping speech is weaker evidence
+      // than a word that explicitly points.
       confidence: clamp01(0.45 * noiseMultiplier(candidate)),
       reason: "overlap",
-      // Never flagged individually. 0.45 with at most a ×1.1 and a ×1.05 lift
-      // cannot reach 0.5, so a raw threshold marked EVERY overlap binding —
-      // seventeen of seventeen in one real session, alongside rows that
-      // displayed "0.50" beside a "below 0.50" warning. The class is weaker;
-      // the brief says so once, in a sentence.
+      // Never flagged individually: 0.45 with at most a ×1.1 and a ×1.05 lift
+      // cannot reach 0.5, so a raw threshold would flag every overlap binding.
+      // The class is weaker; the brief says so once.
       needsReview: false,
     });
   }
@@ -119,16 +104,10 @@ export function align(
   };
 }
 
-/**
- * How well one candidate explains one deictic word. Zero means "outside the
- * window, not a possibility at all".
- */
-/** The hold rule, shared by both passes: known-and-different never bind, and an
- *  unknown hold binds freely. `hold` is optional on both sides because this
- *  package is scored in isolation — its tests build candidates with no hold at
- *  all — while the recorder always writes one. Tightening this to strict
- *  equality would therefore change nothing in the product and break the suite
- *  that proves the boundary rule. */
+/** The hold rule shared by both passes: known-and-different holds never bind,
+ *  and an unknown hold binds freely. `hold` is optional on both sides because
+ *  this package is tested in isolation, without holds, while the recorder
+ *  always writes one. */
 function sameHold(word: Word, candidate: Candidate): boolean {
   return (
     word.hold === undefined ||
@@ -137,6 +116,10 @@ function sameHold(word: Word, candidate: Candidate): boolean {
   );
 }
 
+/**
+ * How well one candidate explains one deictic word. Zero means "outside the
+ * window, not a possibility at all".
+ */
 function scoreCandidate(
   candidate: Candidate,
   word: Word,
@@ -148,7 +131,7 @@ function scoreCandidate(
   const delta = word.start - candidate.t;
 
   // Asymmetric on purpose: people move the cursor first and speak as they
-  // arrive, so a pointing act well BEFORE the word is normal, while one long
+  // arrive, so a pointing act well before the word is normal, while one long
   // after it is not.
   if (delta > opts.lookBackMs) return 0;
   if (delta < -opts.lookAheadMs) return 0;
@@ -168,9 +151,8 @@ function scoreCandidate(
 }
 
 /**
- * Penalties for the noise the recorder measured but refused to filter at
- * capture time. Each one describes a settle that is probably not a pointing
- * act, and each is cheap to compute because the recorder already wrote it down.
+ * Penalties for noise the recorder measured but did not filter at capture time;
+ * each describes a settle that is probably not a pointing act.
  */
 function noiseMultiplier(candidate: Candidate): number {
   const { dwellMs, approachSpeed, msSinceAppSwitch, msSinceScroll } = candidate.features;
@@ -195,8 +177,7 @@ function noiseMultiplier(candidate: Candidate): number {
 
 /**
  * The utterance a deictic word belongs to: the sentence around it, bounded by a
- * conversational pause. A referent's step should read as the phrase the user
- * actually said, not as one bare word.
+ * conversational pause.
  */
 function utteranceAround(
   words: Word[],

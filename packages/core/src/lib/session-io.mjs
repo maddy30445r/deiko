@@ -1,10 +1,6 @@
 /**
- * Reading a recorded session off disk.
- *
- * Every script that touches a session needs the same first step, and by the
- * fourth one there were three slightly different copies of it — one that threw
- * a different message, one that skipped the existence check. Nothing was broken
- * yet; this is here so nothing has to be.
+ * Reading a recorded session off disk. Every script that touches a session
+ * needs the same first step; it lives here so there is one copy.
  */
 
 import { copyFileSync, readFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -45,16 +41,17 @@ export function fileStamp(path) {
 }
 
 /**
- * ONE WRITER AT A TIME for the board's shared lists (`tasks.json`,
+ * One writer at a time for the board's shared lists (`tasks.json`,
  * `collections.json`). The app renames a task while a filing adds one: both
  * read, both write, and one change is lost. A lock folder beside them, taken
  * the same way by `BoardLock` in the app. Waits up to `waitMs`, then goes
  * ahead anyway (a filing must never fail over this); a lock older than
  * `staleMs` was left by a crash and is broken.
- * ponytail: two writers breaking the same crashed lock in the same instant
- * can both get in (the break doesn't check whose lock it removes) — that
- * loses one edit, as before the lock existed. A lock is held for
- * milliseconds, so it needs a crash inside one and two writers right after.
+ *
+ * Two writers breaking the same crashed lock in the same instant can both get
+ * in (the break doesn't check whose lock it removes), and one edit is lost.
+ * That needs a crash inside a lock held for milliseconds and two writers right
+ * after.
  */
 export function withBoardLock(root, fn, { waitMs = 3000, staleMs = 15000 } = {}) {
   const lock = join(root, ".lists.lock");
@@ -80,14 +77,14 @@ export function withBoardLock(root, fn, { waitMs = 3000, staleMs = 15000 } = {})
 }
 
 /**
- * A JSON list that is about to be REWRITTEN (`tasks.json`, `collections.json`).
+ * A JSON list that is about to be rewritten (`tasks.json`, `collections.json`).
  *
  * `[]` when the file does not exist yet, or is empty (a crash already lost it;
- * refusing would block every write from then on). A file with text that will not
- * parse (half-written by a crash mid-save, or edited by hand) is `null`, and the
- * caller must skip its write: treating it as empty and appending one row used
- * to replace every task title, or every project, with that single row. Readers
- * that never write can stay forgiving; this one cannot.
+ * refusing would block every write from then on). A file with text that will
+ * not parse (half-written by a crash mid-save, or edited by hand) is `null`,
+ * and the caller must skip its write: treating it as empty and appending one
+ * row would replace every task title, or every project, with that single row.
+ * Readers that never write can stay forgiving; this one cannot.
  */
 export function readListToRewrite(path) {
   let text;
@@ -109,10 +106,10 @@ export function readListToRewrite(path) {
 /**
  * Parse `events.jsonl` into an array of events.
  *
- * Malformed lines are skipped rather than fatal. The recorder appends from
- * detached tasks while the session runs, so a file read at the wrong moment can
- * end mid-line — losing the tail of a crash is very different from refusing to
- * read the 400 good events before it.
+ * Malformed lines are skipped rather than fatal: the recorder appends from
+ * detached tasks while the session runs, so a file read at the wrong moment
+ * can end mid-line, and losing the tail beats refusing to read the good
+ * events before it.
  */
 export function loadEvents(sessionDir) {
   const path = join(sessionDir, "events.jsonl");
@@ -142,7 +139,7 @@ export function loadFile(sessionDir, file) {
 export const TIMINGS_DONE = "timings.done";
 
 /**
- * A hold's timing file, which the app is recognising WHILE this script uploads.
+ * A hold's timing file, which the app is recognising while this script uploads.
  * Resolves with the path once it is there; null once the app has finished
  * without it (or the deadline passes), so the caller takes its own path.
  */

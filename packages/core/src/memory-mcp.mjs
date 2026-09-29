@@ -1,38 +1,33 @@
 #!/usr/bin/env node
 /**
- * DEIKO MEMORY, FOR A CODING AGENT — a stdio MCP server that runs only on
- * this Mac. Your agent spawns it (Settings → "Give your agent your Deiko
- * memory", or "Copy setup" for any other MCP agent) and can then search past
- * briefs, open a task's history, or open one brief.
+ * Deiko memory for a coding agent: a stdio MCP server that runs only on this
+ * Mac. Your agent spawns it (Settings → "Give your agent your Deiko memory", or
+ * "Copy setup" for any other MCP agent) and can then search past briefs, open a
+ * task's history, or open one brief.
  *
- * SEARCH SEES EVERYTHING HERE, EXCEPT A REMOVED SCREENSHOT; ANSWERS CARRY
- * LITTLE. The index covers the screen text and the event log, redacted the
- * same way an answer would be (see `everything`) — a query cannot confirm a
- * guessed secret, and searching still happens only on this Mac. A screenshot
- * the developer removed (`crops.excluded.json`) is invisible to the index
- * too, not only to answers: a match alone would tell the agent something
- * about a screenshot the person chose to hide, so its probe (OCR and all) is
- * skipped whole when building the search text.
+ * Search sees everything here except a removed screenshot; answers carry
+ * little. The index covers the screen text and the event log, redacted the same
+ * way an answer would be (see `everything`), so a query cannot confirm a
+ * guessed secret. A screenshot the developer removed (`crops.excluded.json`) is
+ * invisible to the index too, since a match alone would tell the agent
+ * something about a screenshot the person chose to hide.
  *
- * Every tool answer goes to the agent's cloud model, so answers carry only
- * what a brief already shares: the prompt (which already carries whatever
- * scrubbed screen text the brief kept), the agent's outcome note, task
- * notes, the brief's summary through `redact`, and the paths of screenshots
- * the developer kept. Never a screenshot they removed, never the raw event
- * log, never audio.
+ * Every tool answer goes to the agent's cloud model, so answers carry only what
+ * a brief already shares: the prompt, the agent's outcome note, task notes, the
+ * brief's summary through `redact`, and the paths of screenshots the developer
+ * kept. Never a removed screenshot, the raw event log or audio.
  *
  * Every path this hands back or reads is checked against symlinks and against
- * leaving the board — see `insideRoot`. A coding agent can write inside the
- * board (it is told to leave `outcome.md`), so this cannot trust a path found
- * on disk the way the app, running under its own sandbox, can.
+ * leaving the board (see `insideRoot`): a coding agent can write inside the
+ * board, so this cannot trust a path found on disk the way the app, running
+ * under its own sandbox, can.
  *
- * READS EVERYTHING, WRITES ONE THING: `save_outcome` writes a brief's own
- * outcome.md — the write-back the prompt asks for. Through the helper rather
- * than the agent's own file tools because the board is outside the agent's
- * project, so a file write there stops for a permission prompt most people
- * decline, and the memory of what was done never lands (measured 28 Sep: 0 of
- * 21 real briefs had one). Only inside that brief's folder, never through a
- * link. The board is DEIKO_ROOT (default ~/Library/Application Support/Deiko).
+ * Reads everything, writes one thing: `save_outcome` writes a brief's own
+ * outcome.md, the write-back the prompt asks for. It goes through the helper
+ * because the board is outside the agent's project, so the agent's own file
+ * write would stop for a permission prompt most people decline. Only inside
+ * that brief's folder, never through a link. The board is DEIKO_ROOT (default
+ * ~/Library/Application Support/Deiko).
  */
 import { lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -53,10 +48,8 @@ const ROOT = (process.env.DEIKO_ROOT ?? DEIKO_HOME).replace(/^~/, homedir());
 // to ROOT unresolved if it doesn't exist yet — nothing lives under it either way.
 let ROOT_REAL;
 try { ROOT_REAL = realpathSync(ROOT); } catch { ROOT_REAL = ROOT; }
-/// Labels that may leave (see packages/core/src/lib/labels.mjs): all but `components`.
-/// What a brief's labels may say to an agent — the same as travels for
-/// sorting: never `components`, never `errors` (an error label is a line of
-/// screen text from any app, a chat included).
+/// Labels that may leave (see labels.mjs): never `components`, never `errors`
+/// (an error label is a line of screen text from any app, a chat included).
 const SENT_KEYS = ["pages", "sites", "urls", "files", "repo", "docs", "tickets"];
 /// Protocol version this server actually speaks — never echoed from a client.
 const PROTOCOL_VERSION = "2025-06-18";
@@ -64,12 +57,12 @@ const PROTOCOL_VERSION = "2025-06-18";
 const readJSON = (p) => { try { return JSON.parse(readFileSync(p, "utf8")); } catch { return null; } };
 
 /** A real file, no symlink and no hard link, that resolves to somewhere under
- *  the board root. A hard link passes every path check — it IS a plain file
- *  under the root — while being the same file as one outside it; nothing Deiko
- *  writes has a second name, so a count above one is refused.
- *  Returns its resolved path, or null. Every read of a path found on disk
- *  (prompt.txt, outcome.md, a crop) goes through this — a coding agent can
- *  write inside the board, so a symlink planted there is not trustworthy. */
+ *  the board root. A hard link passes every path check (it is a plain file
+ *  under the root) while being the same file as one outside it; nothing Deiko
+ *  writes has a second name, so a count above one is refused. Returns its
+ *  resolved path, or null. Every read of a path found on disk (prompt.txt,
+ *  outcome.md, a crop) goes through this, since a coding agent can write
+ *  inside the board and a symlink planted there is not trustworthy. */
 function insideRoot(p) {
   try {
     const st = lstatSync(p);
@@ -110,9 +103,9 @@ const removed = (dir) => new Set(readJSON(join(dir, "crops.excluded.json")) ?? [
 const events = (dir) => { try { return loadEvents(dir).filter((e) => e.type === "probe"); } catch { return []; } };
 const said = (text) => redact(String(text ?? "")).replace(/\s+/g, " ").trim().slice(0, 200);
 
-/** Every word this Mac has about a brief, redacted, EXCEPT a removed crop's
- *  probe. FOR SEARCH ONLY — never returned, but still redacted: a query for
- *  a guessed secret must not confirm it sits on screen somewhere. */
+/** Every word this Mac has about a brief, redacted, except a removed crop's
+ *  probe. For search only: never returned, but still redacted, so a query for
+ *  a guessed secret cannot confirm it sits on screen somewhere. */
 function everything(dir, me) {
   const skip = removed(dir);
   const words = [me.summaryText ?? me.summaryLine, me.narration, ...me.windows, ...me.screenTerms, ...Object.values(me.keys ?? {}).flat()].map(redact);
@@ -128,7 +121,7 @@ function everything(dir, me) {
 }
 
 /// Index text is cached per process, refreshed when a session's own files
-/// change — reparsing every events.jsonl (60 Hz cursor samples, retention
+/// change: reparsing every events.jsonl (60 Hz cursor samples, retention
 /// "never" by default) on every search does not scale to a long-lived board.
 const indexCache = new Map(); // dir -> { fp, text }
 function fingerprint(dir) {
@@ -161,8 +154,8 @@ function screenshots(dir) {
     .filter((p) => typeof p === "string" && !skip.has(basename(p)) && dirname(p) === cropsDir && insideRoot(p));
 }
 
-/// The model loads once per process and is reused by every search — reloading
-/// it per call cost about 0.4s and roughly 900MB resident per helper.
+/// The model loads once per process and is reused by every search; reloading
+/// it per call is slow and memory-heavy.
 let modelP;
 async function meaningModel() {
   return (modelP ??= loadModel());
@@ -174,13 +167,13 @@ async function searchBriefs({ query, limit = 8 } = {}) {
   const q = String(query ?? "").trim();
   if (!q) throw new Error("query is required");
   const n = Math.min(Math.max(1, Number(limit) || 8), 20);
-  // Not mic checks and scraps (odds and ends): a vague query sits closest,
-  // by meaning, to a brief that says nothing — "Hello, hello" topped "graph".
+  // Not mic checks and scraps (odds and ends): a vague query sits closest, by
+  // meaning, to a brief that says nothing.
   const briefs = lines().map((me) => ({ id: me.id, dir: join(ROOT, me.id), me }))
     .filter((b) => b.me.narration != null && !b.me.odds);
-  // WORDS THAT FIND EVERYTHING are left to the meaning half: in "the graph
-  // thing", "thing" matched a sitemap brief's screen text thirteen times over
-  // and outranked the one word that mattered. The model still reads it all.
+  // Words that match everything are left to the meaning half: a filler like
+  // "thing" can match a screen's text many times over and outrank the one word
+  // that mattered. The model still reads it all.
   const kept = q.replace(FILLER, " ").trim();
   const words = bm25(terms(kept || q), briefs.map((b) => terms(everythingCached(b.dir, b.me))));
   let meaning = briefs.map(() => null);
@@ -286,9 +279,9 @@ function listTasks({ project = null, open_only = false } = {}) {
   };
 }
 
-/** `outcome.md`, redacted as ONE block so a secret on the line after its
+/** `outcome.md`, redacted as one block so a secret on the line after its
  *  label is still caught, while a "Files touched" line stays a path an agent
- *  can open — `redactNote`, the same rule the task notes use, which also
+ *  can open: `redactNote`, the same rule the task notes use, which also
  *  scrubs a line that is nothing but a token (a JWT is not a path). */
 function redactOutcome(text) {
   return redactNote(text.split("\n")).join("\n");
@@ -322,7 +315,7 @@ function getBrief({ id } = {}) {
 /** An agent's write-back for one brief, as the outcome.md the prompt asks
  *  for: the same four headings (plus Retired when there is one), so every
  *  reader parses it the way it parses a hand-written one. Replaces an earlier
- *  save — the prompt says "rewrite". */
+ *  save. */
 function saveOutcome({ brief, did = [], decided = [], open = [], files = [], retired = [] }) {
   if (!STAMP.test(String(brief ?? ""))) throw new Error("brief must be a brief id like 20260918-155836");
   const dir = join(ROOT, brief);

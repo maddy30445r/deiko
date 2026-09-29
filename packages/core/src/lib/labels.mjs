@@ -1,13 +1,12 @@
 /**
- * LABELS — the exact names a brief is about: its page, site, web address,
- * file, code project, document, component, error and ticket. Read from what
- * the recorder already captured; no model, no network. Two briefs on page
- * "Signups" are far likelier the same job than two that both say "chart",
- * and a label is exact the way an email's reply thread is.
+ * Labels: the exact names a brief is about (page, site, web address, file,
+ * code project, document, component, error, ticket), read from what the
+ * recorder already captured; no model, no network. Two briefs on page
+ * "Signups" are far likelier the same job than two that both say "chart".
  *
  * Every value is cleaned so two visits to the same page match, and passed
  * through `redact`. `pages/sites/urls/files/repo/docs/tickets` may travel to
- * the classifier — the same class as the window titles they come from.
+ * the classifier, the same class as the window titles they come from.
  * `components` (headings and element ids) and `errors` (a line read off the
  * screen) stay on this Mac: both are screen text.
  */
@@ -25,36 +24,32 @@ export const BROWSER = /^(google chrome|chrome|safari|arc|firefox|microsoft edge
 export const EDITOR = /^(code|visual studio code|cursor|windsurf|zed|xcode|sublime text|nova|intellij idea|webstorm|pycharm|android studio)$/i;
 export const TERMINAL = /^(terminal|iterm2?|warp|ghostty|kitty|alacritty|wezterm)$/i;
 /// Apps whose window titles name a conversation or the system, never a document.
-/// ponytail: a list; grow it when a real board shows another chat app as a project.
 const NOT_A_DOC = /^(finder|dock|deiko|deiko capture|usernotificationcenter|screenshot|system settings|dictionary|discord|slack|messages|mail|spotlight|control center|notification center|zoom\.us|facetime|microsoft teams|webex)$/i;
 
 const GENERIC = new Set(["new tab", "dashboard", "home", "untitled", "loading", "loading…", "loading...", "index", "start page", "about:blank", "blank"]);
 const SEPARATOR = / (?:—|–|-|\||·) /;
 const COUNT = /^\(\d+\)\s*|\s*\(\d+\)$/g;
 const ID_SEGMENT = /^(\d+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{16,})$/i;
-/// A token in a path — an invite, share or reset token, a webhook secret, a
-/// document key: 12+ characters mixing cases and digits, or a 10+ run of
-/// letters and digits that has both. ponytail: a shape test, so a slug like
+/// A token in a path (an invite, share or reset token, a webhook secret, a
+/// document key): 12+ characters mixing cases and digits, or a 10+ run of
+/// letters and digits that has both. A shape test, so a slug like
 /// "iphone15promax" goes to `*` too; a slug of words and dates stays.
 const isToken = (seg) =>
   (seg.length >= 12 && /^[\w-]+$/.test(seg) && /\d/.test(seg) && /[a-z]/.test(seg) && /[A-Z]/.test(seg))
   || seg.split(/[-_.~]/).some((p) => p.length >= 10 && /^[a-z0-9]+$/i.test(p) && /\d/.test(p) && /[a-z]/i.test(p));
 // A real address: localhost/127.0.0.1, a dotted host, or anything with a
-// port — never a bare "word/word" like "N/A" or "TCP/IP", which the old
-// `[\w.-]+/\S*` shape matched by accident (no dot, no port, still "looked
-// like" a path).
+// port; never a bare "word/word" like "N/A" or "TCP/IP".
 const LOOKS_LIKE_URL = /^(https?:\/\/)?((localhost|127\.0\.0\.1)(:\d+)?|[\w-]+(\.[\w-]+)+(:\d+)?|[\w-]+:\d+)\/\S*/i;
 const TICKET = /\b([A-Z][A-Z0-9]{1,9}-\d{1,6})\b|(?<![\w&])#(\d{1,6})\b/g;
-/// Standards and encodings shaped like tickets. ponytail: a list.
+/// Standards and encodings shaped like tickets.
 const NOT_A_TICKET = /^(UTF|ISO|SHA|MD|RFC|TLS|SSL|GPT|ES|IPV|HTTP|COVID|WCAG|PEP|AES|RSA|DES|HMAC|IEEE|ECMA|CVE|MPEG|USB|DDR|WPA)-/;
-/// A line that STARTS with an error's signature — never one that merely
+/// A line that starts with an error's signature, never one that merely
 /// mentions one ("hey getting a TypeError when …" is a message, not an error).
 const ERROR_LINE = /^(Uncaught\b|Traceback\b|panic:|[A-Z]\w*(Error|Exception)\b|(error|Error|ERROR)\b)/;
 const BROWSER_TAIL = /\s[-–—]\s(Google Chrome|Mozilla Firefox|Firefox|Microsoft Edge|Brave|Chromium|Opera|Vivaldi)\b.*$/;
 /// Chrome appends one of these as an extra trailing segment while a tab is
-/// actively capturing camera/mic/audio — not part of the page's own title,
-/// or it reads as the site name. ponytail: a short, known list; grow it when
-/// a real board shows another one.
+/// capturing camera, mic or audio. It is not part of the page's own title, or
+/// it reads as the site name.
 const TAB_STATE = /\s[-–—]\s(Camera and microphone recording|Camera recording|Microphone recording|Audio playing|Audio muted|Recording|Sharing your screen|Picture-in-picture)$/i;
 
 export function splitTitle(title) {
@@ -99,8 +94,8 @@ function cleanError(text) {
 }
 
 function cleanFile(text) {
-  // VS Code's unsaved-changes dot ("● App.tsx") is chrome round the name, the
-  // same as the "(Working Tree)" suffix below — not part of it.
+  // VS Code's unsaved-changes dot ("● App.tsx") is chrome round the name, like
+  // the "(Working Tree)" suffix below.
   let s = String(text).trim().replace(/^●\s*/, "").split(/[\\/]/).pop() ?? "";
   while (/\s*\([^()]*\)\s*$/.test(s)) s = s.replace(/\s*\([^()]*\)\s*$/, "");
   return /^[\w.@+-]+\.[A-Za-z0-9]{1,8}$/.test(s) ? s : null;
@@ -122,15 +117,14 @@ export function normaliseLabel(text, kind, { site = null } = {}) {
     }
   }
   if (!out) return null;
-  // AN ADDRESS IS REDACTED SEGMENT BY SEGMENT. Whole, any path of 24+
+  // An address is redacted segment by segment: whole, any path of 24+
   // characters reads as one opaque run ("/" is base64 punctuation) and the
   // label is lost; per segment, a token in the path is still caught.
   return kind === "url" ? out.split("/").map(redact).join("/") : redact(out);
 }
 
-/// Never a project's name: the tools and sites work happens IN, and the
-/// folders a terminal sits in between projects. ponytail: a list; grow it when
-/// a real board names a project after another one.
+/// Never a project's name: the tools and sites work happens in, and the
+/// folders a terminal sits in between projects.
 const TOOL = /^(github|gitlab|bitbucket|jira|linear|notion|figma|slack|discord|mail|gmail|outlook|messages|calendar|notes|youtube|stack overflow|chatgpt|claude|bing|duckduckgo|google (search|docs|sheets|slides|drive|meet|calendar))$/i;
 const HOLDING_FOLDER = /^(~|desktop|documents|downloads|developer|projects|code|src|repos|personal)$/i;
 const holding = (name) => HOLDING_FOLDER.test(name) || name.toLowerCase() === basename(homedir()).toLowerCase();
@@ -149,10 +143,10 @@ const NOT_A_REPO =
 
 /**
  * Guess repo names from window titles. Editors render `App.tsx — acme-portal`
- * (EM dash, U+2014); browsers render `Pull requests — acme-api-service —
+ * (em dash, U+2014); browsers render `Pull requests — acme-api-service —
  * Bitbucket - Google Chrome – Sam`, where the trailing en dash is the Chrome
- * profile. So: split on em dashes, drop segments naming an app, take what's left.
- * (Moved here unchanged from render-brief.mjs.)
+ * profile. So: split on em dashes, drop segments naming an app, take what's
+ * left.
  */
 export function repoHints(titles) {
   const hints = new Map();
@@ -176,12 +170,11 @@ export function briefKeys({ referents = [], narration = "" } = {}) {
   const add = (kind, text, opts) => {
     const v = normaliseLabel(text, ONE[kind], opts);
     if (!v) return;
-    // A REDACTED PLACEHOLDER IS NEVER A LABEL. `redact` turns a long
-    // mixed-case name (`UserProfileSettingsV2.tsx`) or a secret pattern
-    // (an AWS key id) into "<REDACTED...>" — unrelated briefs would then
-    // share the same fake label. `urls` is the one exception: there a
-    // redacted PATH SEGMENT is a deliberate wildcard, kept the same way an
-    // id segment already is.
+    // A redacted placeholder is never a label: `redact` turns a long
+    // mixed-case name (`UserProfileSettingsV2.tsx`) or a secret pattern into
+    // "<REDACTED...>", and unrelated briefs would share that fake label.
+    // `urls` is the exception: there a redacted path segment is a deliberate
+    // wildcard, like an id segment.
     if (kind !== "urls" && v.includes("<REDACTED")) return;
     if (!found[kind].some((x) => x.toLowerCase() === v.toLowerCase())) found[kind].push(v);
   };
@@ -198,9 +191,9 @@ export function briefKeys({ referents = [], narration = "" } = {}) {
     const window = r.window ?? "";
     pageTitle(r.page?.title);
     // The app name comes from the settle's candidate, the window title from
-    // its probe — pairing that can land slightly apart (see `session.ts`), so
-    // an app that lost the race (e.g. a database client) can carry a window
-    // that is plainly a browser's, tail and all. Trust the tail either way.
+    // its probe, and the pairing can land slightly apart (see `session.ts`), so
+    // an app that lost the race can carry a window that is plainly a browser's,
+    // tail and all. Trust the tail either way.
     if (BROWSER.test(app) || BROWSER_TAIL.test(window)) {
       pageTitle(browserTitle(window));
     } else if (EDITOR.test(app)) {

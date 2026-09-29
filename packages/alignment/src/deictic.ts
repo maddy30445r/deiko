@@ -1,16 +1,14 @@
 /**
- * Deictic words — the ones that point.
+ * Deictic words: the ones that point.
  *
  * "Add a status key to *this* response" is only interpretable if you know what
- * "this" was aimed at. Detecting these words is what turns a stream of cursor
- * settles into referents: a settle with "yeh" landing on it is a pointing act,
- * a settle inside three seconds of silence is a resting hand. Cursor data alone
- * cannot tell those apart.
+ * "this" was aimed at. Detecting these words is what turns cursor settles into
+ * referents: a settle with "yeh" landing on it is a pointing act, a settle
+ * inside three seconds of silence is a resting hand.
  *
- * Bilingual from the first line, not as a later feature. The product's users
- * think out loud in mixed English and Hindi — "yeh wala key expose karna hai" —
- * and an English-only lexicon would score that utterance as having no pointing
- * words at all, in the exact sessions we most need to bind correctly.
+ * The lexicon is bilingual: users think out loud in mixed English and Hindi
+ * ("yeh wala key expose karna hai"), and an English-only lexicon would score
+ * such an utterance as having no pointing words.
  */
 
 /** English pointing words. */
@@ -25,12 +23,10 @@ const ENGLISH = [
 ] as const;
 
 /**
- * Hindi/Hinglish pointing words, in the Latin spellings people actually type
- * and that code-switching ASR actually returns.
- *
- * Several spellings map to one word on purpose (`yeh`/`ye`/`yah`): ASR output
- * is not orthographically stable for transliterated Hindi, and a missed variant
- * is a missed binding.
+ * Hindi/Hinglish pointing words, in the Latin spellings people type and
+ * code-switching ASR returns. Several spellings map to one word on purpose
+ * (`yeh`/`ye`/`yah`): ASR output for transliterated Hindi is not
+ * orthographically stable.
  */
 const HINGLISH = [
   // yeh / this
@@ -42,7 +38,7 @@ const HINGLISH = [
   // wahan / there
   "wahan", "waha", "udhar", "wahaan",
   // isko / iska / ismein — oblique forms of "this"
-  // ("issko" is a real ASR spelling — Sarvam produced it in a live session)
+  // ("issko" is a spelling ASR actually produces)
   "isko", "issko", "iska", "iski", "ise", "inko", "inka", "inhe",
   "ismein", "isme", "ismei",
   // usko / uska / usmein — oblique forms of "that"
@@ -51,30 +47,20 @@ const HINGLISH = [
 ] as const;
 
 /**
- * Deliberately EXCLUDED, though they are genuine Hindi deictics: `is`, `us`,
- * `use`. Each is a homograph of a very common English word — "the padding IS
- * too big", "show US the response", "USE this endpoint" — and this lexicon runs
- * over code-switched speech where both languages are live in the same sentence.
- *
- * Including them made "the padding is too big" register as a pointing act. In
- * Hinglish these words are almost always spoken joined anyway (`iska`, `isko`,
- * `usko`), and those forms are kept above. A missed binding costs one referent;
- * a false one steals a referent from the utterance that deserved it.
+ * Deliberately excluded, though they are genuine Hindi deictics: `is`, `us`,
+ * `use`. Each is a homograph of a very common English word ("the padding IS too
+ * big", "show US the response", "USE this endpoint") and this lexicon runs over
+ * code-switched speech. In Hinglish they are almost always spoken joined anyway
+ * (`iska`, `isko`, `usko`), and those forms are kept above. A missed binding
+ * costs one referent; a false one steals a referent from the utterance that
+ * deserved it.
  */
 const EXCLUDED_HOMOGRAPHS = ["is", "us", "use"] as const;
 
 /**
- * The same words in Devanagari.
- *
- * Needed because the script we get back depends on the recogniser and its mode:
- * Sarvam's `codemix` returns Devanagari, `translit` returns Latin, and a
- * Hindi-locale on-device recogniser returns Devanagari. Matching only Latin
- * would silently score a real Hinglish session as having no pointing words at
- * all — the failure would look like "alignment doesn't work" rather than "we
- * read the wrong alphabet".
- *
- * Verbatim from a real recorded session: "यह जो data है इसमें taxonomy ... उसको
- * हमको change करना है ... और फिर यहां जो tenant का यह check लगा हुआ है".
+ * The same words in Devanagari. The script returned depends on the recogniser
+ * and its mode, and matching only Latin would silently score a real Hinglish
+ * session as having no pointing words.
  */
 const DEVANAGARI = [
   // yeh / this
@@ -94,16 +80,13 @@ const DEVANAGARI = [
 /**
  * Mandarin pointing words, as Whisper tokenises them.
  *
- * Chinese has no spaces, so what counts as a "word" is whatever the recogniser
- * emits as one timed token. Measured on a real clip, whisper-large-v3 returned
- * `这个` as ONE token (0.00–0.18s) and then split the noun after it character
- * by character — so both the two-character forms and the bare demonstratives
- * are listed, since either can arrive on its own.
+ * Chinese has no spaces, so a "word" is whatever the recogniser emits as one
+ * timed token. whisper-large-v3 returns `这个` as one token and splits the noun
+ * after it character by character, so both the two-character forms and the bare
+ * demonstratives are listed.
  *
- * `该` ("that / should") and `其` are deliberately absent: `该` is far more often
- * the modal "should" in spoken Mandarin, and a pointing word that fires on
- * "should" would bind screenshots to instructions rather than to referents —
- * the same homograph trap `EXCLUDED_HOMOGRAPHS` guards for English.
+ * `该` and `其` are deliberately absent: `该` is far more often the modal
+ * "should", the same homograph trap `EXCLUDED_HOMOGRAPHS` guards for English.
  */
 const CHINESE = [
   // 这 / this
@@ -133,12 +116,10 @@ for (const word of EXCLUDED_HOMOGRAPHS) {
 /**
  * Strip punctuation and case so `"this,"` and `"This"` both match.
  *
- * `\p{M}` — combining marks — is kept, and that is not a detail. Devanagari
- * vowel signs and anusvara are marks, not letters, so dropping them mangles
- * every word that has one: `इसमें` became `इसम`, `उसको` became `उसक`, and
- * `यहां` silently collapsed into `यह` — a different word that happened to be in
- * the lexicon, which is worse than a miss because it matches the wrong thing.
- * In Devanagari a matra changes the word; it is not decoration.
+ * `\p{M}` (combining marks) is kept: Devanagari vowel signs and anusvara are
+ * marks, not letters, so dropping them would mangle words (`इसमें` becomes
+ * `इसम`) or collapse one word into another (`यहां` into `यह`), which is worse
+ * than a miss.
  */
 export function normalizeWord(word: string): string {
   return word.toLowerCase().replace(/[^\p{L}\p{N}\p{M}]/gu, "");
@@ -151,12 +132,11 @@ export function isDeictic(word: string): boolean {
 const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
 
 /**
- * Words back into a sentence. A space between tokens is right for every script
- * that writes with spaces, and wrong for the ones that do not: Whisper hands
- * Chinese back a character or two at a time, and `join(" ")` turned
- * 这个按钮 into "这个 按 钮" in the first Mandarin brief. No space where both
- * sides are CJK, or where CJK is followed by punctuation; a space everywhere
- * else, so "这个 button" keeps the gap a mixed sentence actually has.
+ * Words back into a sentence. A space between tokens is right for scripts
+ * written with spaces but wrong for CJK, where Whisper returns a character or
+ * two at a time and `join(" ")` would turn 这个按钮 into "这个 按 钮". No space
+ * where both sides are CJK or CJK is followed by punctuation; a space
+ * everywhere else, so "这个 button" keeps its gap.
  */
 export function joinWords(words: readonly string[]): string {
   let out = "";
