@@ -43,7 +43,7 @@ let package = Package(
             path: "Tests/DeikoHandoffTests"
         ),
 
-        // No external dependencies, so `make dev` builds offline.
+        // No external dependencies, so the package builds offline.
         .executableTarget(
             name: "DeikoCapture",
             dependencies: ["DeikoGesture", "DeikoVoice", "DeikoGrounding", "DeikoHandoff"],

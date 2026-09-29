@@ -6,7 +6,7 @@ import DeikoGesture
 import DeikoHandoff
 
 // deiko-capture: the capture binary. Subcommand parsing is hand-rolled to avoid a dependency that
-// would make `make dev` need the network.
+// would make a build need the network.
 
 struct Args {
     let subcommand: String

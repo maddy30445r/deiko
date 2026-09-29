@@ -223,7 +223,7 @@ enum DeikoStyle {
         if let resources = Bundle.main.resourceURL {
             candidates.append(resources.appendingPathComponent("Bricolage.ttf"))
         }
-        // `make dev` runs the bare binary out of `.build`, which has no Resources directory. The
+        // A binary run straight out of `.build`, which has no Resources directory. The
         // compile-time path of this file is the checkout it was built from: right for a developer's
         // build, and a path that does not exist elsewhere (hence the `fileExists` below).
         candidates.append(
