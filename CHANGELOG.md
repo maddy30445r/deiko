@@ -3,6 +3,11 @@
 Notable changes to Deiko. Earlier releases are on
 [deiko.app/changelog](https://deiko.app/changelog).
 
+## [0.5.9] — 2026-09-30
+
+### Changed
+- Free installs get two hours of Deiko's hosted transcription every month, instead of 30 minutes once. The app shows what's left this month and when it resets.
+
 ## [0.5.8] — 2026-09-30
 
 ### Added
@@ -50,6 +55,7 @@ Notable changes to Deiko. Earlier releases are on
 - Task notes only state what comes from confirmed briefs, and cite the brief behind each line.
 - Large boards re-read only the briefs that changed.
 
+[0.5.9]: https://github.com/maddy30445r/deiko/releases/tag/v0.5.9
 [0.5.8]: https://github.com/maddy30445r/deiko/releases/tag/v0.5.8
 [0.5.7]: https://github.com/maddy30445r/deiko/releases/tag/v0.5.7
 [0.5.6]: https://github.com/maddy30445r/deiko/releases/tag/v0.5.6
