@@ -1,39 +1,11 @@
 import Foundation
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GIVING WHATEVER AGENT IS ON THIS MAC THE DEIKO MEMORY
-//
-// One click in Settings writes ONE entry — `deiko-memory` — into the user-level
-// MCP config of every agent found here. Each agent spells the file its own way
-// (`mcpServers`, `servers`, a TOML table), so the list below says where each
-// one keeps it and in what shape; the paths are the ones each vendor's own
-// docs name (checked Sept 2026). Left out on purpose, so "Copy setup" covers
-// them: Windsurf (now Devin Desktop — its docs name three different paths),
-// Zed (settings.json is JSONC; a round trip would drop the owner's comments),
-// Cline (its settings file is moving from VS Code's storage to ~/.cline) and
-// Roo Code (archived).
-//
-// The same rules for every file, because every one belongs to another app:
-//   - a file that exists but will not parse is left alone, never replaced;
-//   - only our entry changes, everything else is carried across
-//     (`ClientConfig.merge` / `TomlConfig.merge`, both tested);
-//   - symlinks are followed, so a dotfiles setup is written through to the
-//     real file rather than replaced at the link;
-//   - temp file then rename, with the original file's permissions, and a
-//     one-time backup beside it;
-//   - the write is read back before it counts.
-// One agent failing does not stop the others.
-//
-// Takes `home` and the environment as parameters so the tests run the whole
-// thing against a temp directory, never the owner's real configs.
-// ─────────────────────────────────────────────────────────────────────────────
-
 public struct AgentTarget: Sendable {
     public enum Format: Sendable, Equatable {
         /// Servers under `container`. `typed` adds `"type": "stdio"`, which VS
-        /// Code requires; `env` adds an empty `env`, the shape Deiko has always
-        /// written for Claude Code and Cursor (changing it would read as "not
-        /// set up" for everyone who already is).
+        /// Code requires; `env` adds an empty `env`, the shape already written
+        /// for Claude Code and Cursor (changing it would read as "not set up"
+        /// for existing installs).
         case json(container: String, typed: Bool, env: Bool)
         /// Codex's `[mcp_servers.<name>]`.
         case toml
@@ -44,10 +16,26 @@ public struct AgentTarget: Sendable {
     public let format: Format
 }
 
+/// Sets up `deiko-memory` in the user-level MCP config of every agent found on
+/// this Mac. Each agent spells its file its own way (`mcpServers`, `servers`, a
+/// TOML table), and `detect` records where each keeps it. Left to "Copy setup":
+/// Windsurf (its docs name three different paths), Zed (`settings.json` is
+/// JSONC, so a round trip would drop comments), Cline (its settings location is
+/// moving) and Roo Code (archived).
+///
+/// The same rules apply to every file, because each belongs to another app:
+/// - a file that exists but will not parse is left alone, never replaced;
+/// - only our entry changes (`ClientConfig.merge`, `TomlConfig.merge`);
+/// - symlinks are followed, so a dotfiles setup is written through to the real
+///   file;
+/// - temp file then rename, keeping the original permissions, with a one-time
+///   backup beside it;
+/// - the write is read back before it counts.
+///
+/// One agent failing does not stop the others. `home` and the environment are
+/// parameters so tests run against a temp directory.
 public enum AgentSetup {
     public static let serverKey = "deiko-memory"
-
-    // ── Which agents are here ──────────────────────────────────────────────
 
     /// Every agent whose config folder (or file) exists. An agent that is
     /// installed but has never been opened has no folder yet; it gets set up
@@ -77,8 +65,8 @@ public enum AgentSetup {
 
         add("Cursor", if: exists(at(".cursor")), at(".cursor/mcp.json"),
             .json(container: "mcpServers", typed: true, env: true))
-        // By the app, not the folder: `~/.gemini/config` is exactly what an
-        // old Fovea build created on Macs that never had Antigravity at all.
+        // Detected by the app rather than the folder: `~/.gemini/config` can
+        // exist on Macs that never had Antigravity.
         add("Antigravity", if: exists(applications.appendingPathComponent("Antigravity.app"))
                 || exists(at("Applications/Antigravity.app")),
             at(".gemini/config/mcp_config.json"),
@@ -89,8 +77,6 @@ public enum AgentSetup {
             .json(container: "servers", typed: true, env: false))
         return found
     }
-
-    // ── Is it set up ────────────────────────────────────────────────────────
 
     public static func isRegistered(_ target: AgentTarget, command: String, arguments: [String]) -> Bool {
         switch target.format {
@@ -105,8 +91,6 @@ public enum AgentSetup {
                 containerKey: container)
         }
     }
-
-    // ── Setting it up, and taking it out ────────────────────────────────────
 
     public struct Outcome: Sendable {
         /// Agents set up (or cleared), including ones that already were.
@@ -162,8 +146,6 @@ public enum AgentSetup {
         return outcome
     }
 
-    // ── For any other agent ─────────────────────────────────────────────────
-
     /// What "Copy setup" puts on the clipboard: the command line, for an agent
     /// that asks for one, and the JSON most config files take.
     public static func setupText(command: String, arguments: [String]) -> String {
@@ -180,8 +162,6 @@ public enum AgentSetup {
             \(json)
             """
     }
-
-    // ── Mechanics ───────────────────────────────────────────────────────────
 
     struct Refusal: Error { let reason: String; init(_ reason: String) { self.reason = reason } }
 

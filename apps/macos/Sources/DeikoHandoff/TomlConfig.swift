@@ -2,21 +2,15 @@ import Foundation
 
 /// Adding and removing Deiko's entry in Codex's TOML MCP config, as pure logic.
 ///
-/// Codex CLI is the odd one out: every other client here keeps its MCP servers
-/// in JSON, and Codex keeps them in `~/.codex/config.toml` under
-/// `[mcp_servers.<name>]`. The rule does not change — **read, change exactly
-/// one thing, put everything else back** — but the mechanics do, because that
-/// file also holds the user's model choice, approval policy, sandbox settings
-/// and profiles, all of it hand-written and often commented.
+/// Codex keeps its servers in `~/.codex/config.toml` under
+/// `[mcp_servers.<name>]`, in a file that also holds hand-written, commented
+/// settings. So this is deliberately not a TOML parser: re-emitting the file
+/// would reformat it and drop its comments. It finds our one table, replaces it
+/// through to the next top-level header, or appends it, and never looks at
+/// another byte.
 ///
-/// So this is deliberately NOT a TOML parser. Parsing and re-emitting would
-/// reformat a file somebody maintains by hand and throw away every comment in
-/// it. Instead it finds our one table, replaces it through to the next
-/// top-level table header, or appends it — and never looks at another byte.
-///
-/// Kept here, away from `FileManager`, so the edit can be tested against
-/// fixtures without a real config on disk — the same arrangement as
-/// `ClientConfig`.
+/// Kept away from `FileManager` so the edit is testable against fixtures; the
+/// same arrangement as `ClientConfig`.
 public enum TomlConfig {
 
     /// Add or update `[mcp_servers.<serverKey>]`. Every line outside our
@@ -44,8 +38,8 @@ public enum TomlConfig {
         }
 
         guard let range = tableRange(in: existing, serverKey: serverKey) else {
-            // Exactly one blank line before it — enough to separate our table
-            // from whatever precedes it, not enough to grow on every run.
+            // Exactly one blank line before it, so repeated runs do not grow
+            // the gap.
             var trimmed = existing
             while trimmed.hasSuffix("\n") { trimmed.removeLast() }
             return trimmed + "\n\n" + table
@@ -99,27 +93,22 @@ public enum TomlConfig {
         }
         var lines = existing.components(separatedBy: "\n")
         lines.removeSubrange(range)
-        // A trailing blank line left where the table was is untidy but
-        // harmless; a run of them is not, and disconnect/connect cycles would
-        // accumulate them.
+        // A single leftover blank line is harmless, but a run of them would
+        // accumulate over connect/disconnect cycles.
         while lines.count > 1, lines.last == "", lines[lines.count - 2] == "" {
             lines.removeLast()
         }
         return lines.joined(separator: "\n")
     }
 
-    /// The raw lines of `[mcp_servers.<serverKey>]`, if it exists — for a
-    /// caller that needs to look at what is actually IN the table before
-    /// deciding whether to touch it, without this becoming a TOML parser.
-    /// `LegacyMCP` uses this to check the table looks like one Deiko itself
-    /// wrote before removing it; nobody else needs to see inside a table this
-    /// file itself never interprets.
+    /// The raw lines of `[mcp_servers.<serverKey>]`, if it exists, for a caller
+    /// that needs to inspect the table without this becoming a TOML parser.
+    /// `LegacyMCP` uses it to check a table looks like one Deiko wrote before
+    /// removing it.
     public static func lines(of serverKey: String, in existing: String) -> [String]? {
         guard let range = tableRange(in: existing, serverKey: serverKey) else { return nil }
         return Array(existing.components(separatedBy: "\n")[range])
     }
-
-    // ── Mechanics ───────────────────────────────────────────────────────────
 
     /// The line range our table occupies: its header, through to the line
     /// before the next top-level `[` — which is how TOML delimits tables.
@@ -133,10 +122,9 @@ public enum TomlConfig {
         var end = start + 1
         while end < lines.count {
             let trimmed = lines[end].trimmingCharacters(in: .whitespaces)
-            // Any new table header ends ours — including
-            // `[mcp_servers.fovea.env]`, which belongs to us but which we never
-            // write, so leaving it behind would leave a fragment of a table
-            // whose parent is gone.
+            // Any new table header ends ours, except a sub-table such as
+            // `[mcp_servers.<serverKey>.env]`: leaving one behind would orphan
+            // it.
             if trimmed.hasPrefix("["), !trimmed.hasPrefix("[mcp_servers.\(serverKey).") { break }
             if trimmed.hasPrefix("[mcp_servers.\(serverKey).") { end += 1; continue }
             end += 1

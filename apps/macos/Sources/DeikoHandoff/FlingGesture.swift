@@ -1,36 +1,25 @@
-/// THE FLING, as pure logic.
-///
-/// The orb is the last step of a session: press it, drag it onto the window
-/// running Claude Code, let go, and the brief lands in that live session.
+/// The fling as pure logic. The orb is the last step of a session: press it,
+/// drag it onto the window running Claude Code, let go, and the brief lands in
+/// that live session.
 ///
 ///   click (no travel)  → open the options
 ///   drag and release   → hand the brief to whatever is under the cursor
 ///   release on the orb → cancelled
 ///   Escape             → cancelled
 ///
-/// **This is deliberately not an `NSDraggingSession`** — with one measured
-/// exception, added later and gated to it.
+/// This is deliberately not an `NSDraggingSession`. A real drag needs the
+/// destination to accept a pasteboard type, and a terminal accepts none, so the
+/// cursor would show a rejection badge over the window being aimed at. A fling
+/// asks the destination for nothing; it is a way of pointing.
 ///
-/// A real drag needs the destination to accept a pasteboard type, and a
-/// terminal accepts none: the cursor would show a rejection badge over the
-/// exact window we mean to hit. A fling asks the destination for nothing; it
-/// is a way of *pointing*, and the app underneath never learns it happened.
-/// That is still how every fling begins, and the only way one ever ends
-/// anywhere but a browser.
+/// The one exception: a chat composer attaches a file that is dropped on it and
+/// ignores the same file pasted. When a fling is over a browser and the session
+/// has a persona file, `OrbController` upgrades it to a real drag mid-flight
+/// (see `upgradeToSystemDrag`).
 ///
-/// THE EXCEPTION: a chat composer attaches a file that is DROPPED on it and
-/// ignores the same file pasted (measured on Gemini; a drop works on Claude.ai,
-/// ChatGPT and Gemini alike). So when — and only when — a fling is over a
-/// BROWSER and the session has a persona file, `OrbController` upgrades it to
-/// a real drag mid-flight, which is precisely the case where the destination
-/// does accept the type and no rejection badge appears. Everything else keeps
-/// the pointing gesture this file describes. See `upgradeToSystemDrag`.
-///
-/// Lives apart from the orb for the same reason `SessionGesture` lives apart
-/// from `Hotkey`: everything that resolves what is under the cursor needs a
-/// window server and a running app to point at, so none of it can be tested.
-/// Distance arrives as a scalar and the target arrives already resolved, which
-/// leaves this file with only the decisions in it.
+/// Lives apart from the orb because resolving what is under the cursor needs a
+/// window server. Distance arrives as a scalar and the target already resolved,
+/// so only decisions are here.
 public struct FlingGesture: Sendable {
 
     public enum Decision: Equatable, Sendable {
@@ -48,10 +37,9 @@ public struct FlingGesture: Sendable {
 
     /// How far the cursor must travel before a press stops being a click.
     ///
-    /// macOS's own drag threshold is 3pt for text selection, which is far too
-    /// eager here: the two gestures do completely different things, and a click
-    /// that accidentally sends the brief to whatever is behind the orb is much
-    /// worse than a fling that has to be started again.
+    /// macOS's own 3pt drag threshold is too eager here: a click that sends the
+    /// brief to whatever is behind the orb is much worse than a fling that has
+    /// to be restarted.
     public let travelThreshold: Double
 
     /// Whether the orb will accept a fling at all. False while the pipeline is
@@ -92,10 +80,8 @@ public struct FlingGesture: Sendable {
     ///   - overOrb: whether the cursor is back inside the orb's resting frame.
     ///   - target: what is under the cursor, already resolved.
     ///
-    /// Crossing the threshold is one-way. A fling that wanders back within 12pt
-    /// of its origin is still a fling — reverting to `.pressed` would turn the
-    /// release into `openOptions`, popping the panel open in the middle of a
-    /// gesture that was clearly meant to send something.
+    /// Crossing the threshold is one-way: reverting to `.pressed` would turn
+    /// the release into `openOptions` in the middle of a fling.
     public mutating func drag(distance: Double, overOrb: Bool, target: HandoffTarget?) -> Decision {
         switch state {
         case .idle:
@@ -106,9 +92,8 @@ public struct FlingGesture: Sendable {
         case .flinging:
             state = .flinging(overOrb ? nil : target)
         }
-        // Over the orb reads as no target, not as the app the orb happens to be
-        // covering. The orb is always on top of *something*, and that something
-        // is never what the user meant.
+        // Over the orb reads as no target, not as the app the orb happens to
+        // be covering.
         return .aiming(overOrb ? nil : target)
     }
 

@@ -1,24 +1,12 @@
 import Foundation
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ONE RECORD PER FLING, WITH AN OUTCOME YOU CAN GREP FOR
-//
-// Everything a fling knew used to be prose: 22 `note(...)` lines through
-// `Handoff.trace` into the log, narrating each step. Good for reading a failure
-// once you already suspect one — and useless for the question actually asked in
-// the field, which is "how often does this work, and when it doesn't, why".
-//
-// Worse, the failing case was the quiet one. A refusal throws a `HandoffError`
-// that becomes a sentence in the orb and is then dropped; no terminal line was
-// ever written, so a log could end mid-narration with nothing saying how it
-// came out. A fling that was never armed, or cancelled over empty space, said
-// nothing at all.
-//
-// This lives in the library rather than beside `Handoff` because the executable
-// target cannot be linked into a test binary — the same reason `SessionClaims`
-// is here, and the same payoff: the two functions worth guaranteeing are pure.
-// ─────────────────────────────────────────────────────────────────────────────
-
+/// One record per fling, with an outcome that can be grepped for. A refusal
+/// throws a `HandoffError` that becomes a sentence in the orb and is then
+/// dropped, so every fling, including one never armed or cancelled over empty
+/// space, needs a terminal record.
+///
+/// Lives in the library because the executable target cannot be linked into a
+/// test binary; the two functions worth guaranteeing are pure.
 public struct FlingReport: Codable, Sendable, Equatable {
 
     public enum Outcome: String, Codable, Sendable {
@@ -37,9 +25,9 @@ public struct FlingReport: Codable, Sendable, Equatable {
     public var appName: String?
     public var pid: Int32?
     public var bundleID: String?
-    /// Whether THIS fling issued the AXManualAccessibility poke, or found the
-    /// process already poked. The distinction is what tells a slow Electron
-    /// tree apart from a stale poke record — they look identical otherwise.
+    /// Whether this fling issued the AXManualAccessibility poke or found the
+    /// process already poked. Tells a slow Electron tree apart from a stale
+    /// poke record.
     public var pokeIssued: Bool
     /// How long the target's accessibility tree took to answer, in ms. Nil
     /// means it never did within the deadline and the fling proceeded blind.
@@ -78,21 +66,17 @@ public struct FlingReport: Codable, Sendable, Equatable {
     /// Is a system-wide focus reading good enough to act on?
     ///
     /// "Belongs to the target", not merely "something is focused". Activation
-    /// has already been polled to completion by the time this is asked, so a
-    /// focused element owned by another app means the read is stale — and a
-    /// bare non-nil check would accept exactly that and click anyway.
+    /// has already been polled to completion, so a focused element owned by
+    /// another app means the read is stale.
     public static func treeIsReady(focusedPid: pid_t, targetPid: pid_t) -> Bool {
         focusedPid != 0 && focusedPid == targetPid
     }
 
-    /// The single line `Diagnostics.report()` prints.
-    ///
-    /// CARRIES A SLUG, NEVER THE SENTENCE, and that is the whole reason this is
-    /// a function rather than string interpolation at the call site. A refusal's
-    /// message names the session's `prompt.txt` so the developer can find their
-    /// work — and the diagnostics block is pasted into group chats. Session ids
-    /// are timestamps, and a timestamp is a record of when somebody was working.
-    /// Same rule this file's neighbour `SessionClaims` is built around.
+    /// The single line `Diagnostics.report()` prints. Carries a slug, never the
+    /// user-facing sentence: a refusal's message names the session's
+    /// `prompt.txt`, and diagnostics get pasted into group chats, where a
+    /// session id (a timestamp) records when somebody was working. Same rule as
+    /// `SessionClaims`.
     public var diagnosticLine: String {
         var parts: [String] = [outcome.rawValue]
         if let appName { parts.append("→ \(appName)") }

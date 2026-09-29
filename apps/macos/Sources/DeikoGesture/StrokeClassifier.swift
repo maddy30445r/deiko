@@ -8,7 +8,7 @@ public struct StrokePoint: Sendable {
     public init(x: Double, y: Double) { self.x = x; self.y = y }
 }
 
-/// What a modifier-held stroke MEANT. Classification only dresses the ink and
+/// What a modifier-held stroke meant. Classification only dresses the ink and
 /// picks the verb — it never changes what is captured — so a misread mislabels
 /// a verb rather than losing evidence.
 public enum StrokeKind: String, Sendable, CaseIterable {
@@ -17,7 +17,6 @@ public enum StrokeKind: String, Sendable, CaseIterable {
 
 public enum StrokeClassifier {
     /// A stroke whose bounding box is smaller than this is a tap, not a shape.
-    /// Same constant as the recorder's old flick demotion (`minimumRegionArea`).
     public static let minMarkArea: Double = 400
     /// Chord shorter than this fraction of path length reads as closed → lasso.
     public static let closedChordFraction = 0.35

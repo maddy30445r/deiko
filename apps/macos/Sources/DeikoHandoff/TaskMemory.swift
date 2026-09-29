@@ -2,13 +2,12 @@ import Foundation
 
 /// Whether a brief's memory of its task is older than the task.
 ///
-/// A brief carries what its task's earlier briefs wrote back AT THE MOMENT IT
-/// RENDERED. Rendered at 10:05 while the agent was still on the brief before
-/// it, then thrown at 10:25 after that agent wrote back at 10:20, it handed
-/// over 10:05's state — "still open" for work that was done. Checked just
-/// before a brief goes out, so it is re-rendered only when that happened.
+/// A brief carries what its task's earlier briefs had written back when it
+/// rendered. If an earlier brief's agent writes back after that, handing it
+/// over would report stale state ("still open" for finished work). Checked just
+/// before a brief goes out, so it is re-rendered only then.
 ///
-/// In `DeikoHandoff` so it can be tested — see `TaskTitles`.
+/// In `DeikoHandoff` so it can be tested; see `TaskTitles`.
 public enum TaskMemory {
 
     /// True when any of `mates` wrote an `outcome.md` after `sessionDir`'s
@@ -31,10 +30,10 @@ public enum TaskMemory {
 public enum Sorting {
 
     /// `env` with the classifier pointed at `relay` while sorting is on, and at
-    /// nothing while it is off — not even the transcription relay, which
-    /// `classify.mjs` falls back to and a keyless install carries for its
-    /// audio, so off is said outright as `DEIKO_SORT_BRIEFS=0`. Briefs that
-    /// need no relay are still placed on this Mac either way.
+    /// nothing while it is off. Off is stated outright as `DEIKO_SORT_BRIEFS=0`
+    /// because `classify.mjs` would otherwise fall back to the transcription
+    /// relay a keyless install carries. Briefs that need no relay are still
+    /// placed on this Mac either way.
     public static func environment(
         _ env: [String: String], relay: String?, on: Bool, token: () -> String
     ) -> [String: String] {
@@ -52,9 +51,9 @@ public enum Sorting {
         return env
     }
 
-    /// Whether to tell somebody on their own key that filing sends what they
-    /// said to the relay — which it did not before sorting reached own-key
-    /// users. Only while it does, and yes once only: the answer is remembered.
+    /// Whether to tell someone on their own key that filing sends what they said
+    /// to the relay. Only while it does, and yes once only: the answer is
+    /// remembered.
     public static func noticeDue(
         ownKey: @autoclosure () -> Bool, files: @autoclosure () -> Bool,
         defaults: UserDefaults = .standard

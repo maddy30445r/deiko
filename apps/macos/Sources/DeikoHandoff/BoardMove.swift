@@ -1,13 +1,12 @@
 import Foundation
 
-/// THE BOARD MOVES ONCE: out of `~/Documents/Deiko`, which iCloud's Desktop &
-/// Documents sync carries off the Mac, into Application Support.
+/// One-time move of the board out of `~/Documents/Deiko`, which iCloud's
+/// Desktop & Documents sync carries off the Mac, into Application Support.
 ///
-/// Each entry is renamed across (the same volume, so it is instant), never
-/// over something already there. Sessions store their paths absolute — a crop
-/// in `events.jsonl` and `brief.json`, a persona in `persona.txt`, a note's
-/// links — so every text file that names the old folder is rewritten to name
-/// the new one. The old folder goes once it is empty.
+/// Each entry is renamed across (same volume, so instant), never over something
+/// already there. Sessions store absolute paths, so every text file that names
+/// the old folder is rewritten to name the new one. The old folder goes once it
+/// is empty.
 public enum BoardMove {
     /// How many entries moved; 0 when there was no old folder.
     @discardableResult

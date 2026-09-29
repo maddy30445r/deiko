@@ -1,28 +1,7 @@
 import Foundation
 
-// ─────────────────────────────────────────────────────────────────────────────
-// WHERE A WRITE-UP GOES, AND WHO CAN TAKE IT THERE
-//
-// Every tracker worth filing to now ships an official OAuth MCP server, and
-// every destination Deiko hands a brief to can consume one. So Deiko needs no
-// API key, no webhook and no server of its own: it only has to tell the agent
-// to use what it already has, and — for the app's own UI — to know what that is.
-//
-// TWO HALVES, DELIBERATELY SEPARATED. This file is pure: it takes an already
-// parsed config and answers "which of these tools does it name". Reading the
-// files is `AgentConfigs` in the app target, because that is I/O and this is a
-// decision, and only one of the two can be tested.
-//
-// Matching is three attempts, most reliable first: the URL of a remote server
-// (an exact host, minted by the vendor), then the command and arguments of a
-// stdio server (a package name), then the server's own key. The last one is
-// greedy on purpose — a server called `github-docs` reads as GitHub — because
-// the cost of a wrong guess is one line of UI copy, and the prompt is written
-// to be right either way.
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// A place a brief can be filed. Not "an integration": the persona picks a
-/// DESTINATION, and whether anything can reach it is a separate question.
+/// A place a brief can be filed. The persona picks a destination; whether
+/// anything can reach it is a separate question.
 public enum Tracker: String, CaseIterable, Codable, Sendable {
     case jira, confluence, linear, github, notion
 
@@ -57,9 +36,9 @@ public enum Tracker: String, CaseIterable, Codable, Sendable {
         }
     }
 
-    /// What the connector is called where somebody would go looking for it —
-    /// Atlassian sells one connector that covers Jira AND Confluence, so the
-    /// name a user recognises is not always the tracker's own.
+    /// What the connector is called where somebody would look for it. Atlassian
+    /// has one connector covering Jira and Confluence, so the name a user
+    /// recognises is not always the tracker's own.
     public var connectorName: String {
         switch self {
         case .jira, .confluence: return "Atlassian"
@@ -102,8 +81,6 @@ public enum Tracker: String, CaseIterable, Codable, Sendable {
         case .codeChange: return []
         }
     }
-
-    // ── The matching vocabulary ─────────────────────────────────────────────
 
     /// Hosts the vendor mints. Jira and Confluence share one server, so either
     /// destination is reachable the moment Atlassian is connected.
@@ -152,6 +129,15 @@ public enum AgentClient: String, CaseIterable, Sendable {
     }
 }
 
+/// Which trackers an agent on this Mac can already reach. Pure: it takes an
+/// already parsed config, and reading the files is `AgentConfigs` in the app
+/// target, since only the decision can be tested.
+///
+/// Matching is three attempts, most reliable first: a remote server's URL (an
+/// exact host the vendor mints), then a stdio server's command and arguments (a
+/// package name), then the server's own key. The last is greedy on purpose (a
+/// server called `github-docs` reads as GitHub) because a wrong guess costs one
+/// line of UI copy.
 public enum Integrations {
 
     /// One server entry, by the three signals in order of how much they prove.
@@ -172,9 +158,9 @@ public enum Integrations {
 
     /// An `mcpServers` object, as Claude Code, Cursor and Gemini all spell it.
     ///
-    /// Anything that is not the shape we expect is skipped rather than trapped:
-    /// these are other applications' files, maintained by hand, and a malformed
-    /// one is a config somebody is midway through editing — not a crash.
+    /// Anything that is not the expected shape is skipped rather than trapped:
+    /// these are other applications' hand-maintained files, and a malformed one
+    /// may be mid-edit.
     public static func trackers(inServers servers: Any?) -> Set<Tracker> {
         guard let servers = servers as? [String: Any] else { return [] }
         var found: Set<Tracker> = []
@@ -210,13 +196,9 @@ public enum Integrations {
         return found
     }
 
-    /// Codex's `config.toml`, walked rather than parsed.
-    ///
-    /// The same judgement `TomlConfig` makes and for the same reason: that file
-    /// holds somebody's model choice, approval policy and profiles, all written
-    /// by hand and often commented. We are reading three keys out of one kind
-    /// of table, and a parser that re-emitted the file would be a liability we
-    /// have no use for.
+    /// Codex's `config.toml`, walked rather than parsed, for the reason
+    /// `TomlConfig` gives: it is hand-written and often commented, and only
+    /// three keys of one kind of table are read.
     public static func trackers(inCodexTOML text: String?) -> Set<Tracker> {
         guard let text else { return [] }
         var found: Set<Tracker> = []

@@ -35,12 +35,10 @@ public enum BoardTimeline {
         return out
     }
 
-    /// A day's cards, and the set-aside briefs folded out of them: any two
-    /// or more in a row fold into the day's one quiet "N set aside" line, so
-    /// mic checks and unfinished recordings never stack above the work or
-    /// break its grid. A lone one stays a card where it fell.
-    /// EVERY set-aside brief folds, a lone one included: one "Scrap" card
-    /// left among the real briefs read as a brief that had escaped the chip.
+    /// A day's cards and the set-aside briefs folded out of them, so mic checks
+    /// and unfinished recordings never stack above the work or break its grid.
+    /// Every set-aside brief folds, a lone one included: a single "Scrap" card
+    /// among the real briefs reads as one that escaped the chip.
     public static func fold<T>(_ items: [T], setAside: (T) -> Bool) -> (cards: [T], folded: [T]) {
         var cards: [T] = [], folded: [T] = []
         for item in items { if setAside(item) { folded.append(item) } else { cards.append(item) } }
@@ -54,12 +52,11 @@ public enum BoardTimeline {
         tasks.reduce(into: [:]) { tally, task in if let task { tally[task, default: 0] += 1 } }
     }
 
-    /// THE TWO QUESTIONS EVERY CARD ASKS — "is anyone else in this task?" and
-    /// "what is this task called?" — answered once per board instead of once
-    /// per card. Each used to walk every brief, so a board of n cards did n²
-    /// work on every redraw. Same answers exactly: odds and ends are in no
-    /// task, and a task's fallback title is its OLDEST brief's (the first of
-    /// equal dates, as `min(by:)` picks).
+    /// The two questions every card asks, "is anyone else in this task?" and
+    /// "what is this task called?", answered once per board rather than once
+    /// per card, which would be n² work per redraw. Odds and ends are in no task,
+    /// and a task's fallback title is its oldest brief's (the first of equal
+    /// dates, as `min(by:)` picks).
     public struct TaskIndex: Sendable {
         public struct Brief: Sendable {
             public let id: String, task: String, odds: Bool, date: Date, title: String
@@ -113,8 +110,6 @@ public enum BoardTimeline {
         return target.setAside ? (target.own, true) : (target.task, false)
     }
 
-    // ── Work names ──────────────────────────────────────────────────────────
-
     /// What a task's tag calls it. Task titles are summaries ("They want an
     /// explanation of the content and what a sitemap XML is"), which make a
     /// chip that reads "Added to They want an exp…"; a tag wants a name.
@@ -165,10 +160,9 @@ public enum BoardTimeline {
         guard let file = mostSaid(w.files) else { return nil }
         let base = (file as NSString).lastPathComponent
         let stem = (base as NSString).deletingPathExtension
-        // A FILE ONLY NAMES THE WORK WHEN WHAT WAS ASKED MENTIONS IT, or several
-        // briefs were on it. An editor's open tab is often not the file being
-        // talked about: "analytics.html" was open while the pricing page's
-        // background was asked for, and the work was tagged "Analytics".
+        // A file only names the work when what was asked mentions it, or
+        // several briefs were on it: an editor's open tab is often not the file
+        // being talked about.
         let words = stem.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
         let asked = (w.title ?? "").lowercased()
         guard w.files.filter({ $0 == file }).count >= 2 || words.contains(where: { $0.count >= 3 && asked.contains($0) })
@@ -262,8 +256,6 @@ public enum BoardTimeline {
     private static func capitalized(_ text: String) -> String {
         text.prefix(1).uppercased() + text.dropFirst()
     }
-
-    // ── A work's notes ──────────────────────────────────────────────────────
 
     /// An agent's `outcome.md`, by the four headings the brief asks for —
     /// the Swift twin of `parseOutcome` in `packages/core/src/lib/tasks.mjs`. Text
@@ -397,8 +389,8 @@ public enum BoardTimeline {
         public var wroteBack: Date?
     }
 
-    /// Where a piece of work stands. Only the NEWEST write-back says what is
-    /// open — an older one describes work a later ask moved past — while
+    /// Where a piece of work stands. Only the newest write-back says what is
+    /// open (an older one describes work a later ask moved past), while
     /// decisions hold until somebody says otherwise, so all of them count.
     public static func workState(_ briefs: [WorkBrief]) -> WorkState {
         let newest = briefs.sorted { $0.date > $1.date }

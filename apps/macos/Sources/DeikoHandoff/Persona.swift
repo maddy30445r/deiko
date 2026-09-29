@@ -1,54 +1,34 @@
 import Foundation
 
-// ─────────────────────────────────────────────────────────────────────────────
-// PERSONAS — "write it up like this"
-//
-// A persona is the paragraph a developer would otherwise type at the bottom of
-// every brief: who they are, and what shape they want the answer in. It is a
-// markdown file on disk (`<board>/personas/<id>.md`) that travels
-// with the brief — read by path where the agent can open files, pasted beside
-// it where it cannot.
-//
-// WHAT A PERSONA IS NOT: it is not a second renderer. `prompt.mjs` is emphatic
-// that the pipeline hands over what was said and shown and never writes the
-// task — the one hand-written brief that phrased work as imperatives presumed
-// work that already existed. A persona asks for a SHAPE; the evidence rule at
-// the bottom of every built-in is what keeps that from becoming an invitation
-// to invent the contents. Every template ends with it, and `render` appends it
-// whether or not the author remembered to.
-//
-// THE FORM IS THE PRODUCT, not the file. Somebody who writes QA tickets for a
-// living should be able to say "P0–P3, Jira markup, no Environment field"
-// without reading a prompt, so the options below are the vocabulary of the job
-// rather than of the model. `overrideText` is the escape hatch for the person
-// who wants the prose itself, and it wins completely when set — a form that
-// silently re-shaped somebody's hand-written prompt would be the worst of both.
-//
-// Pure logic, no file system: `Personas` in the app target owns the folder, the
-// seeding and the hand-edit detection. This is the part that can be tested.
-// ─────────────────────────────────────────────────────────────────────────────
-
+/// A persona is the paragraph a developer would otherwise type at the bottom of
+/// every brief: who they are, and what shape they want the answer in. It is a
+/// markdown file (`<board>/personas/<id>.md`) that travels with the brief, read
+/// by path where the agent can open files and pasted beside it where it cannot.
+///
+/// A persona asks for a shape, not contents. `prompt.mjs` hands over what was
+/// said and shown and never writes the task, and the evidence rule at the end of
+/// every built-in keeps a persona from inviting invention; `render` appends it
+/// whether or not the author remembered to.
+///
+/// The form uses the vocabulary of the job (QA severities, Jira markup) rather
+/// than of the model. `overrideText` is the escape hatch and wins completely
+/// when set.
+///
+/// Pure logic, no file system: `Personas` in the app target owns the folder,
+/// the seeding and the hand-edit detection.
 public struct Persona: Codable, Identifiable, Equatable, Sendable {
 
     /// The three shapes a brief is asked to take. The base picks the form's
     /// fields and the template; the name is free text, so "QA ticket v2" is
     /// still a `.qaTicket` underneath and keeps its options.
-    ///
-    /// THERE WAS A FOURTH. "Bug report" was the same artefact as a QA ticket in
-    /// a second vocabulary — Expected/Actual where the other said Want/Saw —
-    /// and two built-ins that produce the same document is a choice nobody can
-    /// make well. It is gone; `init(from:)` below is what keeps that from
-    /// costing anybody their personas.
     public enum Base: String, Codable, CaseIterable, Sendable {
         case qaTicket, codeChange, analysis
 
         /// A value this build does not know becomes a QA ticket.
         ///
-        /// NOT A NICETY. `Personas.stored()` decodes the whole list with
-        /// `try?` and falls back to the built-ins when ANY element fails, so a
-        /// leftover `"bugReport"` would have silently deleted every persona
-        /// somebody had written. Decoding leniently costs six lines; the
-        /// alternative costs somebody their work.
+        /// `Personas.stored()` decodes the whole list with `try?` and falls back
+        /// to the built-ins when any element fails, so one stale raw value would
+        /// silently delete every persona somebody had written.
         public init(from decoder: Decoder) throws {
             let raw = try decoder.singleValueContainer().decode(String.self)
             self = Base(rawValue: raw) ?? .qaTicket
@@ -62,8 +42,8 @@ public struct Persona: Codable, Identifiable, Equatable, Sendable {
             }
         }
 
-        /// One line under the name in the picker — what this shape is FOR,
-        /// not what it contains.
+        /// One line under the name in the picker: what this shape is for, not
+        /// what it contains.
         public var purpose: String {
             switch self {
             case .qaTicket: return "for the board: what broke, where, and how to see it"
@@ -116,19 +96,13 @@ public struct Persona: Codable, Identifiable, Equatable, Sendable {
         overrideText ?? PersonaTemplate.render(self, connected: connected)
     }
 
-    /// The same instruction, in a few lines, for a chat that cannot open a
-    /// file and will not fold a long paste away.
+    /// The same instruction in a few lines, for a chat that cannot open a file.
+    /// A brief should look like something a person typed, so what travels to a
+    /// browser is the shape, the house style and the evidence rule, without the
+    /// markdown scaffolding.
     ///
-    /// MEASURED, NOT ASSUMED. The plan for this feature said browsers fold a
-    /// long paste into a "pasted text" tile, so the whole file could travel.
-    /// Gemini does not: 839, 4,010 and 20,000 characters all went into the
-    /// composer as text. A brief is supposed to look like something a person
-    /// typed, so what travels to a browser is this — the shape, the house
-    /// style and the evidence rule, and none of the markdown scaffolding.
-    ///
-    /// A hand-written persona has no summary: those are somebody's own words
-    /// and truncating them would drop instructions silently, so the whole
-    /// thing travels and the length is their call.
+    /// A hand-written persona has no summary: truncating somebody's own words
+    /// would drop instructions silently, so the whole thing travels.
     public func summary(connected: Set<Tracker> = []) -> String? {
         overrideText == nil ? PersonaTemplate.summarise(self, connected: connected) : nil
     }
@@ -148,7 +122,7 @@ public struct Persona: Codable, Identifiable, Equatable, Sendable {
 
     /// The destination this persona files to, or nil for the chat.
     ///
-    /// Checked against what the base ALLOWS, not just what is stored: a QA
+    /// Checked against what the base allows, not just what is stored: a QA
     /// ticket duplicated into an analysis keeps `tracker = "github"` in its
     /// options, and an analysis has no business filing a GitHub issue.
     public var destination: Tracker? {
@@ -157,8 +131,6 @@ public struct Persona: Codable, Identifiable, Equatable, Sendable {
         return t
     }
 }
-
-// ── The form ────────────────────────────────────────────────────────────────
 
 /// The options a persona exposes, in the language of the job rather than of
 /// the prompt. Rendered as a form in Settings; consumed by `PersonaTemplate`.
@@ -192,12 +164,12 @@ public enum PersonaForm {
         public let help: String?
         public let kind: Kind
         public let defaultValue: String
-        /// Other fields' values this one waits for — `["tracker": "jira"]`
-        /// means "only when the destination is Jira". Empty means always.
+        /// Other fields' values this one waits for: `["tracker": "jira"]` means
+        /// "only when the destination is Jira". Empty means always.
         ///
-        /// The form keeps every field's VALUE regardless: hiding a control is
-        /// a question about the screen, not about storage, so switching from
-        /// Jira to Linear and back finds the project key still there.
+        /// The form keeps every field's value regardless: hiding a control is a
+        /// question about the screen, not storage, so switching from Jira to
+        /// Linear and back finds the project key still there.
         public let onlyWhen: [String: String]
 
         public init(
@@ -213,18 +185,18 @@ public enum PersonaForm {
         }
     }
 
-    /// A group of fields under one heading — the form is long enough that a
-    /// flat list of fourteen controls would be a wall.
+    /// A group of fields under one heading, so the form is not a flat wall of
+    /// controls.
     public struct Group: Equatable, Sendable, Identifiable {
         public let id: String
         public let title: String
         public let fields: [Field]
     }
 
-    // The sections everything shares. Language is deliberately NOT a list of
-    // languages: `prompt.mjs` already asks for a reply language from the
-    // narration setting, and a second, contradictory answer here is how a
-    // Hinglish brief comes back in a language nobody picked.
+    // Language is deliberately not a list of languages: `prompt.mjs` already
+    // asks for a reply language from the narration setting, and a second,
+    // contradictory answer here would return a brief in a language nobody
+    // picked.
     private static var voice: Group {
         Group(id: "voice", title: "Voice", fields: [
             Field(
@@ -358,11 +330,8 @@ public enum PersonaForm {
         )
     }
 
-    /// WHERE THE WRITE-UP GOES, which used to be only how it was FORMATTED.
-    ///
-    /// The id is still `tracker`, so a persona saved by the previous build
-    /// keeps its answer: the values `plain`, `jira`, `linear` and `github`
-    /// meant the same places then as they do now.
+    /// Where the write-up goes. Keep the id `tracker` and the values `plain`,
+    /// `jira`, `linear` and `github` stable: saved personas store them.
     private static func destination(for base: Persona.Base) -> Group {
         let places = Tracker.allowed(for: base)
         let field = Field(
@@ -415,16 +384,13 @@ public enum PersonaForm {
     }
 }
 
-// ── The file a persona becomes ──────────────────────────────────────────────
-
 /// Renders a persona's options into the markdown that ships beside the brief.
 ///
-/// THE LAST SECTION IS NOT OPTIONAL. Every persona ends with the same evidence
-/// rule, appended here rather than written into each template, because it is
-/// the one thing that keeps a persona an instruction about SHAPE. `prompt.mjs`
-/// hands over what was said and shown and never writes the task; a QA ticket
-/// with invented reproduction steps would undo that from the other end, and a
-/// rule the author has to remember is a rule that goes missing.
+/// Every persona ends with the same evidence rule, appended here rather than
+/// written into each template, so that a persona stays an instruction about
+/// shape: `prompt.mjs` never writes the task, and a QA ticket with invented
+/// reproduction steps would undo that. A rule the author has to remember goes
+/// missing.
 public enum PersonaTemplate {
 
     /// The browser form: one instruction, the format as a single line, and
@@ -446,14 +412,11 @@ public enum PersonaTemplate {
         return out.joined(separator: "\n\n")
     }
 
-    /// `connected` is PASSED IN, never read from disk here.
-    ///
-    /// What the file says depends on what this Mac can reach — if Jira is
-    /// already set up, telling somebody how to set it up is noise. But a
-    /// renderer that went and looked would be untestable, would do I/O on the
-    /// path that writes a brief, and would make the file's digest depend on
-    /// the weather. So the caller looks, and this stays a function of its
-    /// arguments.
+    /// `connected` is passed in, never read from disk here. What the file says
+    /// depends on what this Mac can reach (no setup advice for a tracker that
+    /// is already connected), but a renderer that looked would be untestable,
+    /// would do I/O on the path that writes a brief, and would make the file's
+    /// digest vary. So the caller looks.
     public static func render(_ p: Persona, connected: Set<Tracker> = []) -> String {
         if let text = p.overrideText { return text }
 
@@ -484,14 +447,11 @@ public enum PersonaTemplate {
 
     /// The filing instruction, in one paragraph, or nil for the chat.
     ///
-    /// TWO WORDINGS, AND THE DIFFERENCE IS WHETHER WE NAG. When the tool is
-    /// already connected somewhere on this Mac, the sentence is an
-    /// instruction. When nothing is connected it becomes conditional — never
-    /// "write it in the chat", because a browser chat's connectors are
-    /// server-side and invisible from here, and somebody whose Claude.ai has
-    /// Atlassian should still get their ticket filed. Either way the file says
-    /// nothing about how to set anything up: that belongs in Deiko's own
-    /// window, where it can be copied, not in the middle of somebody's brief.
+    /// Two wordings. When the tool is connected somewhere on this Mac the
+    /// sentence is an instruction; otherwise it is conditional, never "write it
+    /// in the chat", because a browser chat's connectors are server-side and
+    /// invisible from here. Either way the file says nothing about setup, which
+    /// belongs in Deiko's own window where it can be copied.
     static func whereItGoes(_ p: Persona, connected: Set<Tracker>) -> String? {
         guard let t = p.destination else { return nil }
         let place = self.place(p, t)
@@ -533,10 +493,9 @@ public enum PersonaTemplate {
         return text.isEmpty ? nil : text
     }
 
-    /// First person, because that is who the brief is from. A persona that
-    /// addresses the agent in the third person ("the user wants…") reads as a
-    /// system prompt, and the whole point is that this is the paragraph the
-    /// developer would have typed themselves.
+    /// First person, because that is who the brief is from: a third-person
+    /// persona ("the user wants…") reads as a system prompt, and this should be
+    /// the paragraph the developer would have typed.
     static func opening(_ p: Persona) -> String {
         var line: String
         switch p.base {
@@ -620,8 +579,8 @@ public enum PersonaTemplate {
         }
     }
 
-    /// The floor. Same words for every persona, including a hand-written one
-    /// that forgot them — see the type's comment.
+    /// The evidence rule, the same words for every persona; see the type's
+    /// comment.
     private static func rules(_ p: Persona) -> [String] {
         [
             "- Use only what I said and what the screenshots show. This is evidence, not a starting point for guesses.",

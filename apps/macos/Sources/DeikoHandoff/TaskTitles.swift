@@ -2,14 +2,11 @@ import Foundation
 
 /// A rename of one row of `tasks.json`, losing nothing else in the file.
 ///
-/// The app used to decode the whole list, change one title and encode it
-/// again — so one row it could not decode emptied the list, and the rename
-/// wrote the file back with a single row: every other task lost its name.
-/// Keys it did not model (`from`, and whatever the scripts add next) went the
-/// same way. Here the file is edited as JSON rather than as the app's type.
+/// The file is edited as JSON rather than decoded into the app's type, so a row
+/// the app cannot decode, or a key it does not model, is kept as read.
 ///
-/// In `DeikoHandoff` so it can be tested — `DeikoCapture` cannot be linked
-/// into a test binary (see `SessionClaims`).
+/// In `DeikoHandoff` so it can be tested: `DeikoCapture` cannot be linked into
+/// a test binary (see `SessionClaims`).
 public enum TaskTitles {
 
     /// `existing` with task `id` titled `title`, marked `from: "you"` so

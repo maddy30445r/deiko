@@ -1,17 +1,10 @@
 import Foundation
 
-/// Turning a pipeline stage's output into something worth reading.
-///
-/// The orb used to show raw stdout+stderr in a monospace box. What that
-/// actually put in front of people: shell instructions for a `.env` they do not
-/// have, four hundred characters of the provider's JSON, or a Node stack trace ending
-/// in "Fix looksOpaque / SECRET_MARKER in packages/core/src/lib/redact.mjs" — an
-/// instruction to edit source code, naming a file that is inside the app bundle.
-///
-/// Every case here was read off the strings the scripts actually print
-/// (`packages/core/src/transcribe.mjs`, `packages/core/src/render-brief.mjs`, `packages/core/src/lib/redact.mjs`),
-/// not imagined. The raw text is always kept: it is the only thing worth having
-/// in a bug report, and the orb shows it behind a disclosure.
+/// Turns a pipeline stage's output into a short, actionable message. Every
+/// case matches strings the scripts actually print
+/// (`packages/core/src/transcribe.mjs`, `render-brief.mjs` and
+/// `lib/redact.mjs`). The raw text is always kept for bug reports; the orb
+/// shows it behind a disclosure.
 ///
 /// Pure string work, so the whole taxonomy is testable without a pipeline.
 public struct PipelineFailure: Equatable, Sendable {
@@ -51,10 +44,7 @@ public struct PipelineFailure: Equatable, Sendable {
     }
 
     /// Classify a stage failure.
-    ///
-    /// Ordered most specific first. The API-key check precedes the auth check
-    /// because "no key" and "bad key" are different problems with different
-    /// fixes, and only one of them is the user's first five minutes.
+    /// Ordered most specific first.
     public static func classify(stage: String, output: String) -> PipelineFailure {
         let text = output.lowercased()
 
@@ -62,27 +52,20 @@ public struct PipelineFailure: Equatable, Sendable {
             PipelineFailure(kind: kind, message: message, opensSettings: settings, raw: output)
         }
 
-        // Every sentence says what happened to the WORK — "saved", "will
-        // finish on its own", "nothing was sent". A failed session must never
-        // leave the developer wondering whether 43 seconds of narration
-        // evaporated. It never does: the session is on disk before any of
-        // these stages run.
+        // Every sentence says what happened to the work ("saved", "will finish
+        // on its own", "nothing was sent"), so a failed session never leaves
+        // the developer wondering whether the narration evaporated. The session
+        // is on disk before any of these stages run.
 
-        // THE RELAY'S OWN REFUSALS COME FIRST, and they are the only ones here
-        // that are not a fault at all.
+        // The relay's own refusals come first, and they are not faults: each
+        // means the session already fell back to Apple's on-device words and
+        // rendered (`transcribe.mjs` treats them as degraded, not failed). They
+        // reach here only when something else then failed the stage, so the
+        // sentence must stop the user chasing a problem they do not have, and
+        // must not name the provider, which they have no relationship with.
         //
-        // Each of these means the session already fell back to Apple's
-        // on-device words and rendered — `transcribe.mjs` treats them as a
-        // degraded session rather than a failed one, and the review window says
-        // which happened in its own line. They reach this taxonomy only when
-        // something ELSE then failed the stage, so the sentence's job is to
-        // stop the user chasing a problem they do not have. None of them is a
-        // bug report, and none of them is the provider: the user has no
-        // relationship with it, and naming a vendor they have never heard of is
-        // rate-limiting explains nothing they can act on.
-        //
-        // Strings from services/relay/src/quota.mjs and relay.mjs; the mapping they
-        // belong to lives in packages/core/src/lib/cloud.mjs and is tested there.
+        // Strings from services/relay/src/quota.mjs and relay.mjs; the mapping
+        // lives in packages/core/src/lib/cloud.mjs.
         if text.contains("fair-use limit") {
             return make(
                 .quotaExhausted,
@@ -105,11 +88,10 @@ public struct PipelineFailure: Equatable, Sendable {
             )
         }
 
-        // The provider's own errors arrive as `Groq <status>: <body>`, and
-        // reach a user only when they brought their OWN key — so naming the
-        // vendor here is correct, and naming it above was not. `sarvam` is
-        // still matched because a session recorded before the switch can be
-        // re-rendered afterwards, and its cached failure text says Sarvam.
+        // Provider errors arrive as `Groq <status>: <body>` and reach a user
+        // only with their own key, so naming the vendor is correct here and not
+        // above. `sarvam` is still matched because re-rendering an older
+        // session replays its cached failure text.
         if text.contains("groq 401") || text.contains("groq 403")
             || text.contains("sarvam 401") || text.contains("sarvam 403") {
             return make(
@@ -129,8 +111,7 @@ public struct PipelineFailure: Equatable, Sendable {
         }
 
         // `fetch failed` is Node's undici wrapper for every network-layer
-        // problem; the specific cause arrives in the cause chain, which does not
-        // survive into stderr.
+        // problem; the specific cause does not survive into stderr.
         if text.contains("fetch failed") || text.contains("enotfound") || text.contains("econnrefused")
             || text.contains("network is unreachable") || text.contains("etimedout") {
             return make(
@@ -164,9 +145,9 @@ public struct PipelineFailure: Equatable, Sendable {
         }
 
         // BriefPipeline's watchdog writes this when a stage never finishes. The
-        // commonest cause is a quarantined Node runtime — macOS refuses the
-        // spawned binary and nothing ever comes back — which is why the fix
-        // names the Terminal command rather than describing a timeout.
+        // commonest cause is a quarantined Node runtime (macOS refuses the
+        // spawned binary), so the fix names the Terminal command rather than
+        // describing a timeout.
         if text.contains("timed out after") {
             return make(
                 .timedOut,
