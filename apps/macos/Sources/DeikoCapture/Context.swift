@@ -72,6 +72,10 @@ struct SessionContext: Codable, Equatable {
     /// from `decidedBy`: a collection-only change never sets it. See
     /// `placeTask`, the one place that does.
     var taskBy: String?
+    /// `"reference"` when Deiko joined this brief to its task because the
+    /// brief pointed back at that work ("in that task", "the fix we did…").
+    /// Read-only here: `classify.mjs` writes it, the card explains the join.
+    var because: String?
 
     var isOdds: Bool { pile == "odds" }
 
@@ -206,6 +210,7 @@ extension SessionContext {
         pile = try c.decodeIfPresent(String.self, forKey: .pile)
         related = try c.decodeIfPresent(String.self, forKey: .related)
         taskBy = try c.decodeIfPresent(String.self, forKey: .taskBy)
+        because = try c.decodeIfPresent(String.self, forKey: .because)
     }
 }
 

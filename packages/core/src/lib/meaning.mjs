@@ -136,7 +136,7 @@ export async function loadModel(key = currentModel()) {
  *  its window titles. Never the screen's words — they would drag every vector
  *  towards whatever app was open. */
 export function briefText(me) {
-  return [me?.summaryLine, me?.narration, ...(me?.windows ?? [])].filter(Boolean).join("\n").slice(0, 4000);
+  return [me?.summaryText ?? me?.summaryLine, me?.narration, ...(me?.windows ?? [])].filter(Boolean).join("\n").slice(0, 4000);
 }
 
 const digest = (text) => createHash("sha256").update(String(text)).digest("hex").slice(0, 16);

@@ -127,7 +127,11 @@ export const MAX_SUMMARY_BYTES = 64 * 1024;
 // client silently degrades over. Mirrors MODEL in scripts/summarize.mjs.
 const SUMMARY_MODEL = "openai/gpt-oss-20b";
 const SUMMARY_TEMPERATURE = 0.2;
-const SUMMARY_MAX_COMPLETION_TOKENS = 200;
+/// A REASONING MODEL SPENDS THIS BEFORE IT WRITES A WORD. At 200 it thought
+/// for 181-198 tokens and returned nothing on 2 of 3 real narrations (measured
+/// 29 Sep), which is why a third of briefs had no summary; the playground call
+/// below learned the same thing. Low effort plus room fixes it.
+const SUMMARY_MAX_COMPLETION_TOKENS = 600;
 
 /// The longest narration we will hand the model. One long enough to exceed
 /// this is already past the point where three lines help.
@@ -410,6 +414,11 @@ export const RELATION_RUBRIC = [
 ];
 
 const GATE_QUESTION = "The current brief is a real request: the speaker asks for something to be built, fixed, changed, checked or explained. Microphone checks (\"testing, testing\", \"can you hear me\"), greetings, thank-yous, and filler with no request in it are not real requests.";
+const REFERS_BACK = "The brief explicitly says it continues or builds on specific earlier work the developer did (for example \"in that task\", \"the fix we did yesterday\", \"do you remember when we … now let's …\"). Only asking about the past (\"what did we decide?\"), or a brand-new request, is not this.";
+/// Local search's top few, asked which one a back-reference points at: five, so
+/// two look-alikes (two apps' "price bug") both get compared. MIRRORED
+/// by `REFERENCE.candidates` in scripts/lib/context.mjs.
+export const REFERENCE_CANDIDATES = 5;
 const SAME_JOB = "the same goal on the same page, feature or bug, picked up again, corrected or extended. Working in the same app, product or project is not enough, and topical similarity alone is insufficient.";
 
 export function classifyRequest(sent) {
@@ -454,7 +463,7 @@ export function classifyRequest(sent) {
       outcome: str(t.outcome, L.outcome),
       // What its confirmed briefs asked, newest first. Without an agent's
       // outcome a task is otherwise only its first brief's title.
-      recent: strings(t.recent, 3, 200),
+      recent: strings(t.recent, 3, 400),
     }]));
 
   const questions = {
@@ -479,6 +488,20 @@ export function classifyRequest(sent) {
       type: "noul",
       instructions: `Earlier task ${id} ("${t.title}", in state.tasks) is the same piece of work as the current brief: ${SAME_JOB}`,
     };
+  }
+  // AN EXPLICIT POINT BACK OUTRANKS "SAME GOAL", as an email's reply header
+  // outranks a matching subject. "Do you remember the pricing fixes… in that
+  // task, make the page pink" scored 0.13 on same_: a new goal, by the rule.
+  // So ask separately whether the brief points back, and at which of the
+  // local search's top three it points; the app decides (context.mjs `decide`).
+  if (Object.keys(tasks).length) {
+    questions.refers_back = { type: "noul", instructions: REFERS_BACK };
+    for (const [id, t] of Object.entries(tasks).slice(0, REFERENCE_CANDIDATES)) {
+      questions[`ref_${id}`] = {
+        type: "noul",
+        instructions: `The brief refers back to earlier task ${id} ("${t.title}", in state.tasks): it names or describes work done in that task, whatever it now asks for.`,
+      };
+    }
   }
   return { state: { brief, collections, tasks }, questions };
 }
@@ -1350,6 +1373,7 @@ export async function handle({ method, path, query = "", token, contentType, bod
         { role: "user", content: `<transcript>\n${narration}\n</transcript>` },
       ],
       temperature: SUMMARY_TEMPERATURE,
+      reasoning_effort: "low",
       max_completion_tokens: SUMMARY_MAX_COMPLETION_TOKENS,
     }));
     if (out.providerFault) await uncountCalls(spent.rows).catch(() => {});

@@ -1378,6 +1378,11 @@ struct ReviewView: View {
     @ViewBuilder private var sameRow: some View {
         if model.joinUnconfirmed, let id = model.context?.task {
             HStack(spacing: 6) {
+                if model.context?.because == "reference" {
+                    Text("You pointed back to this.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(DeikoStyle.ink2)
+                }
                 Text("Same work?")
                     .font(.system(size: 11))
                     .foregroundStyle(DeikoStyle.ink2)

@@ -508,7 +508,8 @@ test("the caller does not get to choose the model, the token budget or the promp
   });
   const sent = JSON.parse(upstreamBodies.at(-1));
   assert.equal(sent.model, "openai/gpt-oss-20b", "the model is ours to pick");
-  assert.equal(sent.max_completion_tokens, 200, "and so is the completion budget");
+  assert.equal(sent.max_completion_tokens, 600, "and so is the completion budget");
+  assert.equal(sent.reasoning_effort, "low", "low effort: at 200 and default effort it thought and wrote nothing");
   assert.equal(sent.messages.length, 2, "one system turn and the transcript, nothing else");
   assert.match(sent.messages[0].content, /^You summarise a developer's spoken description/, "and so is the prompt");
   assert.doesNotMatch(JSON.stringify(sent), /novel/, "the caller's system turn never reaches the model");
@@ -614,7 +615,7 @@ test("a legacy body never gets a second look, and its answer passes straight thr
 const tasksOf = (n) => Array.from({ length: n }, (_, i) => ({
   id: `t-202609${String(i + 10).padStart(2, "0")}-100000`, title: `task ${i}`, now: "where it stands",
   windows: ["Orb.swift — Deiko"], keys: { pages: ["Signups"], files: ["Orb.swift"], components: ["never sent"] },
-  recent: ["why does week 32 dip", "x".repeat(300), "third", "a fourth is one too many"],
+  recent: ["why does week 32 dip", "x".repeat(500), "third", "a fourth is one too many"],
   lastActive: "2 days ago", sameRepo: true,
 }));
 const [A, B, C] = ["t-20260910-100000", "t-20260911-100000", "t-20260912-100000"];
@@ -640,7 +641,9 @@ test("round one asks every question in one request, and the caller cannot add an
   const same = Object.keys(sent.questions).filter((k) => k.startsWith("same_"));
   assert.equal(same.length, 20, "twenty tasks at most");
   assert.equal(same.some((k) => k.includes("..") || k === "same_new"), false);
-  assert.deepEqual(Object.keys(sent.questions).filter((k) => !k.startsWith("same_")).sort(), ["collection", "is_work_brief", "tier"]);
+  const refs = Object.keys(sent.questions).filter((k) => k.startsWith("ref_"));
+  assert.equal(refs.length, 5, "the pointing-back question covers local search's top five only");
+  assert.deepEqual(Object.keys(sent.questions).filter((k) => !k.startsWith("same_") && !k.startsWith("ref_")).sort(), ["collection", "is_work_brief", "refers_back", "tier"]);
   assert.equal("task" in sent.questions, false, "a v3 body never gets a task question");
   assert.equal(sent.questions.is_work_brief.type, "noul");
   assert.match(sent.questions.is_work_brief.instructions, /testing, testing/);
@@ -650,7 +653,7 @@ test("round one asks every question in one request, and the caller cannot add an
   assert.equal(sent.questions.collection.criteria.none, "None of these — a different project");
   assert.equal(Object.keys(sent.state.tasks).length, 20, "tasks are keyed by id");
   assert.deepEqual(sent.state.tasks[A].keys, { pages: ["Signups"], sites: [], files: ["Orb.swift"], tickets: [] });
-  assert.deepEqual(sent.state.tasks[A].recent, ["why does week 32 dip", "x".repeat(200), "third"], "three, each capped");
+  assert.deepEqual(sent.state.tasks[A].recent, ["why does week 32 dip", "x".repeat(400), "third"], "three, each capped at 400: a whole three-line summary");
   assert.equal(sent.state.tasks[A].lastActive, undefined, "recency is not a clue");
   assert.equal(sent.state.tasks[A].sameRepo, undefined, "nor is the project name");
   assert.deepEqual(sent.state.brief.keys.pages, ["Signups"]);

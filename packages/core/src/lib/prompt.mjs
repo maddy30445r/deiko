@@ -409,6 +409,15 @@ export function buildPrompt({
     out.push("", attached ? head : `${head} History: ${related.notePath}${related.id ? ` · task id ${related.id}` : ""}`);
   }
 
+  // NO MEMORY CAME WITH THIS BRIEF, so say where it lives. Asked "do you
+  // remember the pricing fixes…" with nothing here, an agent found the file
+  // from the editor and never searched (29 Sep). Local agents only: a browser
+  // chat has no tools. "If", as above: whether the helper is connected is the
+  // destination's to know.
+  if (!task && !maybe?.length && !related && outcomePath && !attached) {
+    out.push("", "If this refers to earlier work, the deiko-memory tools can look it up (search_briefs, list_tasks) if they are connected.");
+  }
+
   // No headings, no paths — just the redacted content a secret could actually
   // hide in. Speech first (the narration, then every quote that reached a path
   // line), then the screen text.
@@ -471,7 +480,7 @@ export function buildPrompt({
     // The helper's save_outcome first: the board is outside the agent's
     // project, so a file write there stops for a permission prompt.
     const brief = basename(dirname(outcomePath));
-    out.push("", `When you are done — and again if we keep going — save what you did, decided and left open: with the deiko-memory save_outcome tool if it is connected (brief ${brief}), or else by rewriting ${outcomePath} under four headings — ## Did, ## Decided, ## Open, ## Files — a few lines each. If a decision above no longer holds, list it under Retired, copied exactly. Deiko folds it into this task's memory for the next brief.`);
+    out.push("", `When you are done — and again if we keep going — save what you did, decided and left open: with the deiko-memory save_outcome tool if it is connected (brief ${brief}), or else by rewriting ${outcomePath} under four headings — ## Did, ## Decided, ## Open, ## Files — a few lines each; Open is only what is still to do on this task. If a decision above no longer holds, list it under Retired, copied exactly. Deiko folds it into this task's memory for the next brief.`);
   }
 
   return { text: out.join("\n") + "\n", evidence };

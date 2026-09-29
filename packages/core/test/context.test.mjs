@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import {
-  ASK, CLASSIFIER, COULD_NOT_TELL, FLOORS, GATE, JOIN, RELATIONS, TIERS, briefDate, decide, level,
+  ASK, CLASSIFIER, COULD_NOT_TELL, FLOORS, GATE, JOIN, REFERENCE, RELATIONS, TIERS, briefDate, decide, level,
   projectFromKeys, readBriefLine, relativeAge, saysNothing, slug, unplaceable, wantsQuickHint, yes,
 } from "../lib/context.mjs";
 import { EMPTY_KEYS } from "../lib/labels.mjs";
@@ -278,6 +278,7 @@ test("a sibling is read with its summary line, task, windows, terms and outcome"
     id: "20260918-155717", dir,
     narration: "hey so fix the drag on the board",
     summaryLine: "Fix the drag on the board.",
+    summaryText: "Fix the drag on the board.; It sticks.",
     line: "Fix the drag on the board.",
     collection: "deiko", task: "t-20260915-100000", odds: false,
     decidedBy: null, taskBy: null, collectionBy: null, classifier: null, confidence: {},
@@ -364,5 +365,58 @@ test("decide takes other numbers only when handed them (the eval's --sweep)", as
   };
   assert.notEqual(decide(input).task, "t-20260918-100000", "today's numbers: 0.55 is short of a join");
   assert.equal(decide({ ...input, rules: { ...RULES, join: { ...RULES.join, first: 0.5 } } }).task, "t-20260918-100000");
-  assert.deepEqual(RULES, { gate: 0.5, join: RULES.join, ask: 0.35 });
+  assert.deepEqual(RULES, { gate: 0.5, join: RULES.join, ask: 0.35, reference: RULES.reference });
+});
+
+// ── Pointing back ("in that task", "do you remember the fix we did… now…") ──
+
+const back = (p, refs = {}) => ({ refers_back: { noul: p }, ...Object.fromEntries(Object.entries(refs).map(([id, r]) => [`ref_${id}`, { noul: r }])) });
+
+test("a brief that points back clearly at one task joins it, though Jev calls the goal new", () => {
+  // The real miss (29 Sep): same_ 0.13 for the pricing task, because a pink
+  // background is a new goal; the brief said "in that task".
+  const out = decide({ ...base, answers: { ...r1({ [A]: 0.13, [B]: 0.15 }), ...back(0.9, { [A]: 0.85, [B]: 0.2, [C]: 0.1 }) } });
+  assert.equal(out.task, A);
+  assert.equal(out.why, "join-reference");
+  assert.equal(out.confidence.task, 0.85, "the pointer's own confidence, so the brief counts as firm");
+  assert.equal(out.newTask, null);
+  assert.deepEqual(out.jev.refs, { [A]: 0.85, [B]: 0.2, [C]: 0.1 });
+});
+
+test("pointing back at two tasks about equally asks which one", () => {
+  const out = decide({ ...base, answers: { ...r1({ [A]: 0.1, [B]: 0.1 }), ...back(0.9, { [A]: 0.7, [B]: 0.62 }) } });
+  assert.equal(out.why, "ask-reference");
+  assert.deepEqual(out.candidates, [A, B]);
+  assert.equal(out.task, OWN);
+});
+
+test("asking about the past is not pointing back: no join on the reference", () => {
+  const out = decide({ ...base, answers: { ...r1({ [A]: 0.1 }), ...back(0.3, { [A]: 0.9 }) } });
+  assert.equal(out.why, "new");
+  assert.equal(out.task, OWN);
+});
+
+test("only local search's top few can be pointed at, and a ticket that differs still blocks", () => {
+  const more = ["t-20260918-130000", "t-20260918-140000", "t-20260918-150000"];
+  const deep = decide({ ...base, shortlist: [A, B, C, ...more], answers: { ...r1({}), ...back(0.9, { [more[2]]: 0.95 }) } });
+  assert.equal(deep.task, OWN, "a sixth task is past the top five the relay asks about");
+  const blocked = decide({ ...base, keys: keys({ tickets: ["ABC-2"] }), taskKeys: { [A]: tk({ tickets: ["ABC-1"] }) }, answers: { ...r1({}), ...back(0.9, { [A]: 0.9 }) } });
+  assert.notEqual(blocked.task, A);
+});
+
+test("a normal join is untouched by the reference rule", () => {
+  const out = decide({ ...base, answers: { ...r1({ [A]: 0.8, [B]: 0.1 }), ...back(0.9, { [B]: 0.9 }) }, second: r2(A, 0.8) });
+  assert.equal(out.task, A);
+  assert.equal(out.why, "join");
+  assert.deepEqual(REFERENCE, { back: 0.6, join: 0.6, gap: 0.25, candidates: 5 });
+});
+
+test("a brief reads every summary line for matching, and its first for a title", () => {
+  const dir = mkdtempSync(join(tmpdir(), "deiko-sumtext-"));
+  writeFileSync(join(dir, "brief.json"), JSON.stringify({ summary: { narration: "pricing fixes" } }));
+  writeFileSync(join(dir, "review-summary.txt"), "Default to annual on load.\nFix the yearly total from $180 to $192.\n\nHighlight the Growth pack button.\n");
+  const me = readBriefLine(dir);
+  assert.equal(me.summaryLine, "Default to annual on load.");
+  assert.equal(me.line, "Default to annual on load.");
+  assert.equal(me.summaryText, "Default to annual on load.; Fix the yearly total from $180 to $192.; Highlight the Growth pack button.");
 });

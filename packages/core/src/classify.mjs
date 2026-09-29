@@ -373,6 +373,9 @@ async function main() {
       ...(decision.candidates && { candidates: decision.candidates }),
       // "Related to …" — linked, never merged.
       ...(decision.related && { related: decision.related }),
+      // Joined because the brief pointed back at this work ("in that task"):
+      // the card says so beside its "Same work?".
+      ...(decision.why === "join-reference" && { because: "reference" }),
       // Every probability, and the shortlist in the order sent, for tuning.
       jev: decision.jev,
     };

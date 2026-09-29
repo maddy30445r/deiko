@@ -85,7 +85,7 @@ export function olderBoard(root, id) {
 }
 
 const queryOf = (me, summary, windowTitles) =>
-  [me.summaryLine, me.narration, ...windowTitles, ...(summary.repoHints ?? []), ...me.screenTerms].join(" ");
+  [me.summaryText ?? me.summaryLine, me.narration, ...windowTitles, ...(summary.repoHints ?? []), ...me.screenTerms].join(" ");
 const titler = (groups, taskTitles) => (tid) => taskTitles.get(tid) ?? titleFor(groups.get(tid).at(-1));
 
 /** THE SHORT-BRIEF PATH: word BM25 over every member of every task, best first. */
@@ -148,14 +148,14 @@ export function prepare({ id, me, summary, windowTitles, board, taskTitles, coll
       // outcomes has nothing else to say what a task became after its first
       // brief: measured, a QA task whose follow-ups were all about the price
       // display scored 0.2 against a price brief without these, 0.75 with.
-      recent: face.slice(0, 3).map((b) => redact(b.summaryLine || b.narration || "").slice(0, 200)).filter(Boolean),
+      recent: face.slice(0, 3).map((b) => redact(b.summaryText || b.narration || "").slice(0, 400)).filter(Boolean),
     };
   });
 
   const narration = (summary.narration ?? "").trim();
   const body = {
     narration: redact(narration),
-    summary: me.summaryLine ? redact(me.summaryLine) : "",
+    summary: me.summaryText ? redact(me.summaryText) : "",
     // REDACTED LIKE THE TITLES THEY COME FROM. `repoHints` is built by
     // splitting window titles (`render-brief.mjs`), so sending it raw put the
     // same screen-read string on the wire twice — once cleaned, once not.

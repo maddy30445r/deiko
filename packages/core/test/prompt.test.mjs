@@ -715,12 +715,16 @@ test("a browser chat gets the task brief by brief, since it can't open the note;
 });
 
 const OUTCOME = "/Users/dev/Documents/Deiko/20260923-161205/outcome.md";
-const WRITE_BACK = `When you are done — and again if we keep going — save what you did, decided and left open: with the deiko-memory save_outcome tool if it is connected (brief 20260923-161205), or else by rewriting ${OUTCOME} under four headings — ## Did, ## Decided, ## Open, ## Files — a few lines each. If a decision above no longer holds, list it under Retired, copied exactly. Deiko folds it into this task's memory for the next brief.`;
+const WRITE_BACK = `When you are done — and again if we keep going — save what you did, decided and left open: with the deiko-memory save_outcome tool if it is connected (brief 20260923-161205), or else by rewriting ${OUTCOME} under four headings — ## Did, ## Decided, ## Open, ## Files — a few lines each; Open is only what is still to do on this task. If a decision above no longer holds, list it under Retired, copied exactly. Deiko folds it into this task's memory for the next brief.`;
 
-test("the write-back asks only a destination that can write a file", () => {
+const SEARCH_HINT = "If this refers to earlier work, the deiko-memory tools can look it up (search_briefs, list_tasks) if they are connected.";
+
+test("the write-back asks only a destination that can write a file; with no memory attached, it says where memory lives", () => {
   const plain = buildPrompt(oneShot());
   const local = buildPrompt({ ...oneShot(), outcomePath: OUTCOME });
-  assert.equal(local.text.slice(plain.text.length - 1), `\n\n${WRITE_BACK}\n`);
+  assert.equal(local.text.slice(plain.text.length - 1), `\n\n${SEARCH_HINT}\n\n${WRITE_BACK}\n`);
+  // A brief that carries its task's memory needs no hint.
+  assert.equal(buildPrompt({ ...oneShot(), outcomePath: OUTCOME, task: priceTask() }).text.includes(SEARCH_HINT), false);
   assert.equal(local.evidence, plain.evidence);
   const attached = buildPrompt({ ...oneShot(), attached: true, outcomePath: OUTCOME });
   assert.equal(attached.text, buildPrompt({ ...oneShot(), attached: true }).text);

@@ -134,7 +134,15 @@ export const JOIN = { first: 0.6, second: 0.4, gap: 0.2, recent: 0.5, recentMs: 
 export const ASK = 0.35;
 /// The three together, as `decide` takes them. Only the filing eval's
 /// `--sweep` passes others, to show what different numbers would have done.
-export const RULES = { gate: GATE, join: JOIN, ask: ASK };
+/// AN EXPLICIT POINT BACK ("in that task", "do you remember the fix we did…
+/// now…"), which outranks "same goal" the way an email's reply header outranks
+/// a matching subject. Jev says whether the brief points back (`back`) and
+/// which of local search's top `candidates` it points at; one clear answer
+/// (`join`, ahead of the next by `gap`) joins, a close call asks.
+/// ponytail: starting values, measured on the filing eval and the
+/// back-reference set (scripts/eval-memory/references.mjs).
+export const REFERENCE = { back: 0.6, join: 0.6, gap: 0.25, candidates: 5 };
+export const RULES = { gate: GATE, join: JOIN, ask: ASK, reference: REFERENCE };
 /// The relation levels, in order. MIRRORS `RELATION_RUBRIC` in the relay.
 export const RELATIONS = ["different", "related", "same"];
 
@@ -270,9 +278,33 @@ export function decide({
     why = candidates.length ? "ask" : related ? "related" : "new";
   }
 
+  // THE POINT BACK, only when nothing above already joined or asked about a page.
+  const refRules = rules.reference ?? REFERENCE;
+  const back = yes(answers.refers_back);
+  let refScore = null;
+  if (!task && why !== "ask-page" && back >= refRules.back) {
+    const refs = shortlist.slice(0, refRules.candidates).filter((id) => open.includes(id))
+      .map((id) => [id, yes(answers[`ref_${id}`])]).sort((a, b) => b[1] - a[1]);
+    const [top, r1 = 0] = refs[0] ?? [];
+    const r2 = refs[1]?.[1] ?? 0;
+    jev.back = back;
+    jev.refs = Object.fromEntries(refs);
+    if (top && r1 >= refRules.join && r1 - r2 >= refRules.gap) {
+      task = top;
+      refScore = r1;
+      why = "join-reference";
+      candidates = [];
+      related = null;
+    } else if (top && r1 >= rules.ask) {
+      candidates = refs.filter(([, r]) => r >= rules.ask).map(([id]) => id).slice(0, MAX_CANDIDATES);
+      related = null;
+      why = "ask-reference";
+    }
+  }
+
   if (task) {
     out.task = task;
-    out.confidence.task = p(task);
+    out.confidence.task = refScore ?? p(task);
     jev.rank = shortlist.indexOf(task) + 1;
   } else if (sessionId) {
     out.task = `t-${sessionId}`;
@@ -337,7 +369,8 @@ export function readBriefLine(sessionDir) {
   const summary = json("brief.json")?.summary ?? {};
   const context = json("context.json") ?? {};
   const narration = typeof summary.narration === "string" ? summary.narration : null;
-  const summaryLine = (text("review-summary.txt") ?? "").split("\n").map((l) => l.trim()).find(Boolean) ?? null;
+  const summaryLines = (text("review-summary.txt") ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
+  const summaryLine = summaryLines[0] ?? null;
   const said = (narration ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
   const outcomeText = text("outcome.md");
   const outcome = outcomeText?.trim() ? parseOutcome(outcomeText) : null;
@@ -347,6 +380,11 @@ export function readBriefLine(sessionDir) {
     dir: sessionDir,
     narration,
     summaryLine,
+    // EVERY LINE OF IT, for matching and for describing a task to Jev. A
+    // summary is up to three lines, one per thing asked; the first alone is a
+    // title. Cut to it, a pricing task lost "fixed the $192 yearly price" and
+    // "highlighted the Growth pack" — the very fixes a later brief named.
+    summaryText: summaryLines.length ? summaryLines.join("; ") : null,
     line: summaryLine && !COULD_NOT_TELL.test(summaryLine) ? summaryLine : said,
     collection: context.collection ?? null,
     task: TASK_ID.test(context.task ?? "") ? context.task : null,

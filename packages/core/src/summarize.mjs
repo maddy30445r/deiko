@@ -20,7 +20,7 @@
  * simply absent and the window shows no summary. Nothing downstream waits on it.
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { writeAtomic } from "./lib/session-io.mjs";
 import { resolve, join } from "node:path";
 import { homedir } from "node:os";
@@ -137,34 +137,46 @@ async function main() {
         ],
         // Low, not zero. Zero is not more accurate here, just more repetitive.
         temperature: 0.2,
-        max_completion_tokens: 200,
+        // Low effort and room: at 200 the model spent it all thinking and
+        // wrote nothing (see SUMMARY_MAX_COMPLETION_TOKENS in the relay).
+        reasoning_effort: "low",
+        max_completion_tokens: 600,
       }
     : { narration, mode: MODE };
 
-  let text;
-  try {
-    // A slow summary is worth less than a fast window. If Groq is having a bad
-    // day the developer should get their brief and go, not watch a spinner.
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!response.ok) {
-      console.error(`· ${apiKey ? "groq" : "deiko relay"} ${response.status} — skipping the summary`);
-      return;
+  // ONE RETRY, AND A NOTE WHEN IT STILL FAILS. A failure used to leave
+  // nothing behind: a third of real briefs had no summary and nobody could say
+  // why (29 Sep). `summary.skipped` says why; a later success removes it.
+  const attempt = async () => {
+    try {
+      // A slow summary is worth less than a fast window. If Groq is having a bad
+      // day the developer should get their brief and go, not watch a spinner.
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!response.ok) return { why: `${apiKey ? "groq" : "deiko relay"} ${response.status}`, retry: response.status === 429 || response.status >= 500 };
+      const choice = (await response.json())?.choices?.[0];
+      const text = choice?.message?.content?.trim();
+      return text ? { text } : { why: `empty answer (${choice?.finish_reason ?? "no reason"})`, retry: true };
+    } catch (err) {
+      return { why: `request failed (${err.message.slice(0, 80)})`, retry: true };
     }
-    text = (await response.json())?.choices?.[0]?.message?.content?.trim();
-  } catch (err) {
-    console.error(`· summary failed (${err.message.slice(0, 80)}) — skipping`);
+  };
+  let got = await attempt();
+  if (!got.text && got.retry) {
+    await new Promise((r) => setTimeout(r, 1500));
+    got = await attempt();
+  }
+  if (!got.text) {
+    console.error(`· ${got.why} — skipping the summary`);
+    writeAtomic(join(dir, "summary.skipped"), JSON.stringify({ at: new Date().toISOString(), why: got.why }) + "\n");
     return;
   }
-
-  if (!text) {
-    console.error("· groq returned nothing — skipping the summary");
-    return;
-  }
+  const text = got.text;
+  rmSync(join(dir, "summary.skipped"), { force: true });
 
   const out = join(dir, "review-summary.txt");
   writeAtomic(out, `${text}\n`);

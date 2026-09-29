@@ -115,7 +115,7 @@ const said = (text) => redact(String(text ?? "")).replace(/\s+/g, " ").trim().sl
  *  a guessed secret must not confirm it sits on screen somewhere. */
 function everything(dir, me) {
   const skip = removed(dir);
-  const words = [me.summaryLine, me.narration, ...me.windows, ...me.screenTerms, ...Object.values(me.keys ?? {}).flat()].map(redact);
+  const words = [me.summaryText ?? me.summaryLine, me.narration, ...me.windows, ...me.screenTerms, ...Object.values(me.keys ?? {}).flat()].map(redact);
   if (me.outcome) words.push(...Object.values(me.outcome).flat().map(redact));
   for (const e of events(dir)) {
     // A removed screenshot is invisible to search too — see the file header.

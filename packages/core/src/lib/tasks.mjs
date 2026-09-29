@@ -172,7 +172,8 @@ export function taskText(title, briefs) {
   return [
     title,
     ...briefs.flatMap((b) => [
-      b.line, ...b.windows, ...b.apps, ...b.screenTerms,
+      // Every summary line where the line is the summary's first.
+      b.summaryText && b.line === b.summaryLine ? b.summaryText : b.line, ...b.windows, ...b.apps, ...b.screenTerms,
       ...(b.outcome ? [...b.outcome.did, ...b.outcome.decided, ...b.outcome.open, ...b.outcome.files] : []),
     ]),
   ].join(" ");

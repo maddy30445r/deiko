@@ -16,16 +16,16 @@
 // Baseline 28 Sep 2026: fresh 22/22 (21/22 before list_tasks — "what's open in
 // shopfront" missed a Hinglish task search didn't surface), heavy 8/8, brief
 // 10/10, browser 9/10 (5/10 before brief-by-brief history).
-import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { buildPrompt } from "../lib/prompt.mjs";
-import { DEIKO_HOME } from "../lib/meaning.mjs";
-import { groupTasks, readBoard, readTasks, taskMemory, titleFor, writeTaskNotes } from "../lib/tasks.mjs";
-import { overrides, projects, tasks } from "./board-spec.mjs";
+import { groupTasks, readBoard, readTasks, taskMemory, titleFor } from "../lib/tasks.mjs";
+import { buildBoard } from "./board.mjs";
+import { projects } from "./board-spec.mjs";
 import { questions } from "./questions.mjs";
 
 const SCRIPTS = fileURLToPath(new URL("..", import.meta.url));
@@ -38,28 +38,7 @@ const BOARD = join(work, "board");
 const CWD = join(work, "cwd");
 mkdirSync(CWD, { recursive: true });
 
-// ── The test board, as the files readBriefLine reads ────────────────────────
-mkdirSync(join(BOARD, "tasks"), { recursive: true });
-const models = join(DEIKO_HOME.replace(/^~/, homedir()), "models");
-if (existsSync(models)) symlinkSync(models, join(BOARD, "models")); // meaning search, if downloaded
-writeFileSync(join(BOARD, "collections.json"), JSON.stringify(projects));
-const ids = {};
-for (const t of tasks) {
-  const id = ids[t.key] = `t-${t.briefs[0].at}`;
-  for (const [n, b] of t.briefs.entries()) {
-    const dir = join(BOARD, b.at);
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "brief.json"), JSON.stringify({ summary: { narration: b.said, apps: b.apps, windows: b.windows, repoHints: [b.repo], screenTerms: [], keys: { repo: [b.repo] } }, referents: [] }));
-    // The founder, then v3 joins with a confidence: every brief is firm.
-    writeFileSync(join(dir, "context.json"), JSON.stringify({ collection: t.project, task: id, decidedBy: n ? "jev" : "new", classifier: "v3.0", confidence: { task: n ? 0.9 : null } }));
-    writeFileSync(join(dir, "review-summary.txt"), b.summary + "\n");
-    if (b.outcome) writeFileSync(join(dir, "outcome.md"), b.outcome + "\n");
-  }
-}
-writeFileSync(join(BOARD, "tasks.json"), JSON.stringify(tasks.map((t) => ({ id: ids[t.key], title: t.title, from: "summary" }))));
-for (const [key, o] of Object.entries(overrides)) writeFileSync(join(BOARD, "tasks", `${ids[key]}.overrides.json`), JSON.stringify(o));
-writeTaskNotes(BOARD);
-if (existsSync(models)) execFileSync(process.execPath, [join(SCRIPTS, "meaning.mjs"), "backfill", BOARD], { stdio: "ignore" });
+const ids = buildBoard(BOARD);
 
 /** Both prompts a new brief filed into `key`'s task would get, as render-brief builds them. */
 const NEW_BRIEF = "20260927-100000";
