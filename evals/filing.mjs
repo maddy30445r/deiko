@@ -12,14 +12,14 @@
  *   node evals/filing.mjs --from-corrections [--write]
  *     every brief placed by hand since, proposed as new answer-key entries
  *
- * READ-ONLY. Nothing under --board is written, ever. Briefs are replayed oldest
- * first against an in-memory board on which every earlier brief sits where the
- * ANSWER KEY puts it (not where a classifier put it), so each brief is judged
- * on its own and one miss cannot cascade into the next.
+ * Read-only: nothing under --board is written. Briefs are replayed oldest first
+ * against an in-memory board on which every earlier brief sits where the answer
+ * key puts it (not where a classifier put it), so each brief is judged on its
+ * own and one miss cannot cascade into the next.
  *
- * --replay guessed is the other half: every earlier brief sits where THIS RUN
- * filed it, as on a real board. A wrong join then describes its task badly for
- * the briefs after it — snowballing — and the score shows it. Full mode only.
+ * --replay guessed instead puts every earlier brief where this run filed it, as
+ * on a real board, so a wrong join describes its task badly for the briefs
+ * after it. Full mode only.
  *
  * --shortlist-only needs no network: recall of the right task in the top 5 and
  * top 20. Full mode calls the relay exactly as classify.mjs does (same body,
@@ -28,19 +28,17 @@
  * is DEIKO_CLASSIFY_TOKEN or DEIKO_RELAY_TOKEN. --draft prints a starting key.
  *
  * --model picks which meaning model blends into the shortlist (default
- * whatever DEIKO_MEANING_MODEL names; "off" turns it off for this run
- * whatever the environment says) — THE BAKE-OFF. Vectors are computed in
- * memory only, from this run's own briefs; nothing is read from or written to
- * a brief's meaning.f32, so either model can be compared without touching
- * the board.
+ * whatever DEIKO_MEANING_MODEL names; "off" turns it off for this run).
+ * Vectors are computed in memory only, from this run's own briefs, so models
+ * can be compared without touching the board.
  *
- * THE SWEEP (4.3). --record saves every relay answer of a full run; --answers
- * replays them instead of asking the relay (no network, no allowance), and
- * --sweep then scores a grid of join and ask numbers on those same answers.
- * It prints; a person picks. Valid because on the answer key's board what
- * Jev is asked never depends on how earlier briefs were filed. Two limits:
- * the relay asks its second look only above its own floor (0.35), so asks
- * below that and gates below 0.5 can't be judged offline.
+ * --record saves every relay answer of a full run; --answers replays them
+ * instead of asking the relay (no network, no allowance), and --sweep then
+ * scores a grid of join and ask numbers on those same answers. It only prints;
+ * a person picks. This is valid because on the answer key's board what Jev is
+ * asked never depends on how earlier briefs were filed. Limit: the relay asks
+ * its second look only above its own floor (0.35), so asks below that and gates
+ * below 0.5 cannot be judged offline.
  */
 import { copyFileSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
@@ -107,8 +105,8 @@ if (replayGuessed && shortlistOnly) {
   console.error("✗ --replay guessed needs the classifier's answers — drop --shortlist-only");
   process.exit(2);
 }
-/// Gap between briefs in full mode. Each brief is up to three Jev requests,
-/// and the gateway answers a burst with 429s. ponytail: a fixed pause.
+/// Gap between briefs in full mode: each brief is up to three Jev requests and
+/// a burst draws 429s. A fixed pause.
 const paceMs = Number(value("--pace", "1500"));
 const relay = value("--relay", process.env.DEIKO_CLASSIFY_URL || process.env.DEIKO_RELAY_URL);
 const token = process.env.DEIKO_CLASSIFY_TOKEN || process.env.DEIKO_RELAY_TOKEN || null;
@@ -124,7 +122,7 @@ if (!shortlistOnly && !recorded && process.env.DEIKO_SORT_BRIEFS === "0" && !fla
 }
 
 async function ask(body, pause = 0, stamp = null) {
-  // SAVED WITH THE SHORTLIST IT ANSWERED: replayed against another one (a
+  // Saved with the shortlist it answered: replayed against another one (a
   // different --model, a changed board) its answers would be read for the
   // wrong tasks, so it is refused instead.
   const asked = body.tasks.map((t) => t.id).join(",");
@@ -154,9 +152,9 @@ const readable = (stamp) => {
 };
 const exp = expectations(readLabels(labelsPath).briefs, readable);
 
-// THE BAKE-OFF. --model off forces none whatever the environment says;
-// otherwise the flag names a model, or DEIKO_MEANING_MODEL does. Loaded once,
-// up front, never written to the board — vectors live only in `docs` below.
+// --model off forces none whatever the environment says; otherwise the flag
+// names a model, or DEIKO_MEANING_MODEL does. Loaded once up front and never
+// written to the board; vectors live only in `docs` below.
 const modelArg = value("--model");
 const modelKey = modelArg === undefined ? currentModel() : modelArg === "off" ? null : modelArg;
 const model = modelKey ? await loadModel(modelKey) : null;
@@ -167,13 +165,13 @@ const done = [];
 const taskTitles = new Map();
 const collections = [];
 const docs = new Map();
-// THE AGGREGATION BAKE-OFF (29 Sep): how a many-brief task is scored — "pile"
-// (shipped), "best" or "average" — and the look-alike check (a cosine, or off).
+// --aggregate: how a many-brief task is scored ("pile", "best" or "average");
+// --lookalike: the look-alike check (a cosine, or off).
 const aggregate = value("--aggregate", undefined);
 const lookalike = value("--lookalike", undefined) != null ? Number(value("--lookalike")) : undefined;
 const rowsPath = value("--rows", null);
 // --judge-from <stamp>: earlier briefs go on the board as the key places them,
-// with no relay call — so a comparison spends only on the briefs it judges.
+// with no relay call, so a comparison spends only on the briefs it judges.
 const judgeFrom = value("--judge-from", null);
 // --local-ask floor,lead | off: try the "Same work?" rule's numbers on a run.
 const localArg = value("--local-ask", null);
@@ -232,15 +230,15 @@ for (const [stamp, e] of exp) {
     if (vec) docs.set(stamp, vec);
   }
   if (replayGuessed && row.out) {
-    // THE GUESS goes on the board, stamped as a v3 filing so it describes its
-    // task (`firm`) exactly as a real one would.
+    // The guess goes on the board, stamped as a v3 filing so it describes its
+    // task (`firm`) as a real one would.
     const odds = row.out.got === "odds";
     done.push({ ...me, task: odds ? null : row.out.task, odds, decidedBy: "jev", classifier: "v3.0", confidence: { task: 1 } });
     if (!odds && row.out.got !== "join") taskTitles.set(row.out.task, titleFor(me));
   } else {
-    // THE KEY, NOT THE GUESS, goes on the in-memory board. A placement the key
-    // makes is a hand placement of the TASK — which is also what lets it
-    // describe its task (`firm` in tasks.mjs), as a corrected brief would.
+    // The key, not the guess, goes on the in-memory board. A placement the key
+    // makes is a hand placement of the task, which lets it describe its task
+    // (`firm` in tasks.mjs) as a corrected brief would.
     done.push({ ...me, task: e.task, odds: e.want === "odds", decidedBy: "you", taskBy: "you" });
     if (e.want === "new") taskTitles.set(e.task, titleFor(me));
   }

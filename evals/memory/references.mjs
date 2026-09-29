@@ -1,15 +1,14 @@
 #!/usr/bin/env node
-// DOES A BRIEF THAT POINTS BACK FILE WHERE IT POINTS? The filing side of
-// "do you remember the pricing fixes… in that task, make it pink" (29 Sep):
-// each case below is a new brief against the synthetic board (board-spec.mjs),
-// summarised and filed exactly as classify.mjs would (same summary, same
-// prepare, same relay call, same decide), and checked against what it should do.
+// Does a brief that points back file where it points? Each case below is a new
+// brief against the synthetic board (board-spec.mjs), summarised and filed as
+// classify.mjs would (same summary, same prepare, same relay call, same
+// decide), and checked against what it should do.
 //
 //   node evals/memory/references.mjs --relay http://127.0.0.1:8793
 //
-// Uses the relay's classify and summary; with the local relay (`make
-// relay-dev`) that is the owner's own keys. Token: DEIKO_CLASSIFY_TOKEN or a
-// dev token for a local relay.
+// Uses the relay's classify and summary; with a local relay (`make relay-dev`)
+// that means your own provider keys. Token: DEIKO_CLASSIFY_TOKEN, or a dev
+// token for a local relay.
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

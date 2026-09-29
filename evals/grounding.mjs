@@ -1,31 +1,20 @@
 #!/usr/bin/env node
 /**
- * Score how well a session GROUNDED — and check M1's done-when.
+ * Scores how well a session grounded: whether each referent knows what it is.
  *
  *   node evals/grounding.mjs ~/Library/Application\ Support/Deiko/<id>
  *
- * `align-session.mjs` scores the other half: which utterance bound to which
- * referent. This scores the half underneath it — whether the referent knows
- * what it is. A perfectly bound referent that resolved to `Caret Right Icon`
- * tells a coding agent nothing, and until now nothing measured that.
- *
- * It exists because "grounding felt weak in that session" is not a finding.
- * Session 20260728-230442 read as fine — 16 referents, 16 crops, everything
- * bound — and was in fact carrying nothing usable for 11 of them. That is only
- * visible if you count it.
+ * A perfectly bound referent that resolved to `Caret Right Icon` tells a coding
+ * agent nothing, so this counts how many referents carry something usable.
  */
 
 import { resolve, basename } from "node:path";
 import { loadEvents } from "@deiko/core/lib/session-io.mjs";
 
-// ── The grade ───────────────────────────────────────────────────────────────
-
 /**
  * Mirrors `groundsContent` in
- * apps/macos/Sources/DeikoGrounding/Grounding.swift — deliberately, and it is
- * the one duplicated rule in this repo. Keeping it here means the report can
- * grade sessions recorded BEFORE the Swift fix, which is the whole point of
- * having a before-and-after number. If you change the Swift, change this.
+ * apps/macos/Sources/DeikoGrounding/Grounding.swift; change both. Kept here so
+ * the report can grade sessions recorded before the Swift rule existed.
  */
 const PRESENTATIONAL = new Set(["AXImage", "AXDisclosureTriangle"]);
 
@@ -37,18 +26,18 @@ function groundsContent(el) {
   return !PRESENTATIONAL.has(el.role);
 }
 
-/** Any non-empty string at all, which is the test this replaced. */
+/** Any non-empty string at all. */
 function hasAnyText(el) {
   return [el.value, el.title, el.elementDescription, el.selectedText].some(present);
 }
 
 /**
- * content  — accessibility named something the agent can act on
- * ornament — accessibility answered, but with furniture (a caret, an icon label)
- * ocr-only — accessibility gave nothing; the pixels carried the meaning
- * nothing  — neither. This referent is lost, and it is the number that matters.
+ * Grades: content (accessibility named something the agent can act on),
+ * ornament (accessibility answered with furniture such as a caret or icon
+ * label), ocr-only (the pixels carried the meaning), nothing (the referent is
+ * lost, the number that matters). Marks: ✓ accessibility did its job, ~ the
+ * crop saved it, ✗ the referent is lost.
  */
-/** ✓ accessibility did its job · ~ the crop saved it · ✗ the referent is lost. */
 const MARKS = {
   content: "✓",
   "ocr-only": "~",
@@ -66,8 +55,6 @@ function grade(probe) {
   if (elements.some(hasAnyText)) return "ornament";
   return "nothing";
 }
-
-// ── Main ────────────────────────────────────────────────────────────────────
 
 const arg = process.argv[2];
 if (!arg) {
@@ -122,8 +109,6 @@ for (const [i, probe] of probes.entries()) {
   );
 }
 
-// ── Verdict ─────────────────────────────────────────────────────────────────
-
 const order = ["content", "ocr-only", "ornament+ocr", "ornament", "nothing"];
 console.log("\ngrades:");
 for (const g of order) {
@@ -137,8 +122,8 @@ console.log(
     `  ·  accessibility named content: ${counts.content ?? 0}/${probes.length}`
 );
 
-// M1's done-when, checked rather than asserted: "point across 3 apps → a
-// populated referent stack, with correct app/element/crop per referent."
+// Checks that a session pointed across 3+ apps into a populated referent stack,
+// with correct app/element/crop per referent.
 console.log("\nM1 done-when:");
 const checks = [
   [apps.size >= 3, `3+ apps in one session — ${apps.size} (${[...apps].join(", ") || "none"})`],

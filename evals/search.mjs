@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 /**
  * How well the board's search (and agents' search_briefs) finds past work,
- * against a hand-made set of queries. READ-ONLY.
+ * against a hand-made set of queries. Read-only.
  *
  *   node evals/search.mjs [--board ~/Library/Application\ Support/Deiko]
  *     [--queries ~/Documents/Deiko-eval/search-queries.json] [--model <key>|off] [--all]
  *
  * Each query is `{ kind, q, want: [task ids] }`; a hit is any brief of a
  * wanted task. Runs the shipped ranking itself (`searchBriefs` in
- * memory-mcp.mjs), so what this scores is what people get. Kinds, as the set
- * was written on 27 Sep 2026: paraphrase, vague, matching, exact, garbled,
- * hinglish. --all lists every query that missed #1.
+ * memory-mcp.mjs), so what this scores is what people get. Kinds: paraphrase,
+ * vague, matching, exact, garbled, hinglish. --all lists every query that
+ * missed #1.
  */
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";

@@ -1,12 +1,11 @@
 #!/usr/bin/env node
-// How long the board's readers take on a big board, before and after a speed
-// change. Builds a made-up board of N briefs (default 10000) in a temp folder
-// and times what one new brief costs today:
+// Times the board's readers on a large made-up board: builds N briefs (default
+// 10000) in a temp folder and measures what one new brief costs.
 //
 //   node evals/bench-board.mjs [N] [--keep]
 //
-// Nothing here touches the real board. `--keep` leaves the folder for a
-// look afterwards. It also checks the board index against reading every brief.
+// Never touches the real board. `--keep` leaves the folder behind. It also
+// checks the board index against reading every brief.
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -102,7 +101,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   await time("readBoard (no index yet)", () => readBoard(root));
   await time("readBoard (index on disk, new process)", () => readBoard(`${root}/.`));
   await time("readBoard (again in this process)", () => readBoard(root));
-  // GOLDEN: the index must give exactly what reading every brief gives.
+  // The index must give exactly what reading every brief gives.
   const direct = readdirSync(root).filter((n) => STAMP.test(n)).map((n) => readBriefLine(join(root, n)));
   assert.deepEqual(readBriefLines(`${root}/./.`), direct, "the index differs from reading every brief");
   console.log("golden: the index matches reading every brief");

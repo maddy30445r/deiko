@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// DOES AN AGENT ACTUALLY REMEMBER, measured from the agent's side. Builds a
+// Does an agent actually remember, measured from the agent's side. Builds a
 // realistic test board (board-spec.mjs: four projects, ten tasks, five weeks,
 // reversed decisions, a forgotten line, a planted note, Hinglish) in a temp
 // folder, asks every question in questions.mjs through headless Claude Code,
@@ -13,9 +13,6 @@
 //
 // Opt-in and slow (it spends the Claude plan it runs under; never in npm test):
 //   node evals/memory/run.mjs [--only Q01,Q02] [--cond browser] [--out results.json]
-// Baseline 28 Sep 2026: fresh 22/22 (21/22 before list_tasks — "what's open in
-// shopfront" missed a Hinglish task search didn't surface), heavy 8/8, brief
-// 10/10, browser 9/10 (5/10 before brief-by-brief history).
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -51,7 +48,6 @@ function briefPrompts(key, narration) {
   return { text: buildPrompt(args).text, attached: buildPrompt({ ...args, attached: true }).text };
 }
 
-// ── Running an agent ────────────────────────────────────────────────────────
 function claudeBin() {
   const ext = join(homedir(), ".vscode/extensions");
   const vscode = existsSync(ext) ? readdirSync(ext).filter((d) => /^anthropic\.claude-code-.*darwin-arm64$/.test(d))

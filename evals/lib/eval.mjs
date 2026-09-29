@@ -1,7 +1,7 @@
 /**
- * THE FILING EVAL'S ARITHMETIC — the answer key, what a decision counts as,
- * and the report. Pure except `readLabels`. The answer key lives OUTSIDE the
- * repo (it holds real narrations): ~/Documents/Deiko-eval/filing-labels.json,
+ * The filing eval's arithmetic: the answer key, what a decision counts as, and
+ * the report. Pure except `readLabels`. The answer key lives outside the repo
+ * because it holds real narrations, at ~/Documents/Deiko-eval/filing-labels.json:
  * `{ version: 1, groups: { slug: title }, briefs: { "<stamp>": slug | "odds" | "skip" } }`.
  */
 import { readFileSync } from "node:fs";
@@ -30,7 +30,7 @@ export function readLabels(path) {
 }
 
 /// `has(stamp)` says whether the brief can be replayed at all. A missing one is
-/// left out BEFORE firsts are counted, so the next brief of its group is the
+/// left out before firsts are counted, so the next brief of its group is the
 /// group's new task rather than a join to a task that never reaches the board.
 export function expectations(briefs, has = () => true) {
   const out = new Map();
@@ -86,7 +86,7 @@ export function tally(rows) {
     const of = judged.filter((r) => r.exp.want === w);
     byWant[w] = [of.filter(right).length, of.length];
   }
-  // THE ASK RATE is over real briefs — ones the key says are not odds.
+  // The ask rate is over real briefs: ones the key says are not odds.
   const real = judged.filter((r) => r.exp.want !== "odds");
   return {
     n: judged.length,
@@ -132,7 +132,7 @@ export function formatReport({ rows, shortlistOnly, errored = 0, all = false }) 
   return out.join("\n");
 }
 
-/** A starting key from where the board has things now — the owner corrects it once. */
+/** A starting key from where the board has things now, for a person to correct once. */
 export function draftLabels(briefs) {
   const groups = {};
   const out = {};
@@ -151,10 +151,10 @@ export function draftLabels(briefs) {
 }
 
 /**
- * EVERY CORRECTION IS A TEST CASE. A brief somebody placed by hand (moved,
- * "Which one?" answered, "Not this one", dragged) is ground truth about where
- * it belongs. Returns the answer-key entries those add — nothing already in
- * the key is touched — with a reason each, for the owner to accept.
+ * Every correction is a test case. A brief placed by hand (moved, "Which one?"
+ * answered, "Not this one", dragged) is ground truth about where it belongs.
+ * Returns the answer-key entries those add, with a reason each, for a person to
+ * accept; nothing already in the key is touched.
  *
  * A hand-placed brief joins the group its task already has in the key (the
  * group most of that task's labelled briefs carry); a task the key has never
