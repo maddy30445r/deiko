@@ -92,6 +92,15 @@ release to `/Applications` and launches it ([read it first](scripts/install.sh))
 A first-run window asks for four permissions and explains each one. For the
 disk image, updating and uninstalling, see [docs/install.md](docs/install.md).
 
+> [!IMPORTANT]
+> **Security note.** Deiko asks for Accessibility, Screen Recording, Microphone
+> and Speech Recognition, and captures only while a session runs (a red bar stays
+> on screen the whole time). Screenshots never leave your Mac; your voice goes to
+> Whisper on Groq or stays on-device ([details](docs/privacy.md)). The app is
+> signed with its own certificate and not yet notarized by Apple, so read the
+> [install script](scripts/install.sh) before running it, or build from source.
+> Report vulnerabilities privately: [SECURITY.md](SECURITY.md).
+
 ## How it works
 
 <picture>
