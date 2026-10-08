@@ -82,6 +82,14 @@ say "uploading $NAME ($(du -h "$DMG" | cut -f1))"
 s3 cp "$DMG" "s3://$BUCKET/download/$NAME" \
   --cache-control "public,max-age=31536000,immutable" >/dev/null
 
+# version.json must never point at a file that isn't there: 0.5.10's pointer went
+# up without its DMG and every install failed for eight days. Check the stored
+# size before writing the pointer.
+STORED=$(aws s3api --endpoint-url "$ENDPOINT" head-object --bucket "$BUCKET" --key "download/$NAME" \
+  --query ContentLength --output text 2>/dev/null || true)
+[ "$STORED" = "$(stat -f %z "$DMG")" ] || {
+  echo "✗ $NAME is not in the bucket at full size (got '${STORED:-nothing}') — version.json left unchanged"; exit 1; }
+
 # The pointer. Cached for a minute only: it is the one file that must be fresh.
 TMP=$(mktemp)
 trap 'rm -f "$TMP"' EXIT
@@ -105,15 +113,16 @@ s3 cp "$TMP" "s3://$BUCKET/download/version.json" \
 # VERIFY_ORIGIN: the same Pages project through another of its hosts, for a
 # network that intercepts $SITE_ORIGIN's TLS. What ships still says $SITE_ORIGIN.
 VERIFY="${VERIFY_ORIGIN:-$SITE_ORIGIN}"
-say "verifying $VERIFY/download/version.json"
+say "verifying $VERIFY/download/version.json and $NAME"
 for attempt in 1 2 3 4 5; do
-  if curl -fsI --max-time 10 "$VERIFY/download/version.json" >/dev/null 2>&1; then
+  if curl -fsI --max-time 10 "$VERIFY/download/version.json" >/dev/null 2>&1 \
+    && curl -fsI --max-time 10 "$VERIFY/download/$NAME" >/dev/null 2>&1; then
     verified=1; break
   fi
   sleep 5
 done
 [ "${verified:-}" = 1 ] || {
-  echo "✗ $SITE_ORIGIN does not serve /download/version.json."
+  echo "✗ $SITE_ORIGIN does not serve /download/version.json and /download/$NAME."
   echo "  The files are uploaded, but the host every install will ask is wrong —"
   echo "  SITE_URL must be the Pages domain whose /download/* reads this bucket."
   exit 1
