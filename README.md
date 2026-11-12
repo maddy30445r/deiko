@@ -20,7 +20,8 @@
   <a href="https://github.com/maddy30445r/deiko/releases"><img src="https://img.shields.io/github/v/release/maddy30445r/deiko?color=4a5bac&label=release" alt="Latest release"></a>
   <img src="https://img.shields.io/badge/macOS-14%2B-161618?logo=apple&logoColor=white" alt="macOS 14 or later">
   <a href="https://github.com/maddy30445r/deiko/actions/workflows/ci.yml"><img src="https://github.com/maddy30445r/deiko/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://mcpservers.org/servers/maddy30445r/deiko"><img src="https://img.shields.io/badge/MCP-memory%20server-4a5bac" alt="MCP memory server, listed on mcpservers.org"></a>
+  <a href="docs/memory.md"><img src="https://img.shields.io/badge/MCP-memory%20server-4a5bac?logo=modelcontextprotocol&logoColor=white" alt="MCP memory server"></a>
+  <a href="https://mcpservers.org/servers/maddy30445r/deiko"><img src="https://img.shields.io/badge/listed%20on-mcpservers.org-4a5bac" alt="Listed on mcpservers.org"></a>
 </p>
 
 <p align="center">
